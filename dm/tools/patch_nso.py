@@ -288,6 +288,12 @@ CUTS = {
 # ---- Registered observation gates: {NSO build ID: [(offset, number, original instruction word, reason)]}. Numbers match OBS_* in the host's hle.h;
 # the original instruction must be position independent (no PC-relative / branch / anything involving x18 or tpidr), asserted offline; when the host has no callback attached the gate block goes in and out once and returns ----
 OBS = {
+  # BotW 1.9.0: sead::Projection::updateMatrixImpl_ checks dirty flags then calls doUpdateMatrix (vtable +0x58).
+  # x0 is the projection. Apply the host aspect on this guest thread before either matrix is read or recalculated.
+  'cd57b23fa4bbad65803d9788c01821ee': [
+    (0xeb4468, 21, 'a9be7bfd', 'projection update: apply the display aspect to the main camera before checking dirty flags'),
+    (0xd44a2c, 22, 'a94a2269', 'UI 3D camera update: x19 owns the source lens at +0xa0 and projection at +0xa8; apply aspect before copying lens parameters'),
+  ],
   # Metroid Dread 2.1.0 main: the movie player posts "link / unlink holders" requests into the dispatcher thread's request ring (main+0x222cc8) and goes on without waiting for them (after an unlink it frees the wrapper object and builds a new one in place).
   # On hardware the dispatcher thread (priority 30, core 0 only) preempts the main thread (priority 44, core 0) at once and finishes first; the host waits for the ring to empty after each post (hle_movie.c movie_ring_wait). The gates sit on the add x22, x22, #8 after the bl
   '646761f643afebb379edd5e6a5151af2': [
@@ -961,10 +967,11 @@ obs = list(OBS.get(BUILD_ID, []))
 for off, oid, ow, why in obs:
     w = struct.unpack_from('<I', IMG, off)[0]
     assert f'{w:08x}' == ow, f'observation gate original instruction mismatch {off:#x}: {w:08x}'
-    # Function entries, or the instruction right after a bl, only: dm_gate writes back only x0–x8 / x30, and host C code may modify x9–x17; at entry these carry no values under AAPCS64 (arguments are only in x0–x7 / x8),
+    # Function entries, or the instruction right after a bl / blr, only: the gate stub may modify x9–x17; at entry these carry no values under AAPCS64 (arguments are only in x0–x7 / x8),
     # and right after a call returns the callee was free to clobber them anyway (x16 / x17 are the veneer registers)
-    after_bl = off >= 4 and struct.unpack_from('<I', IMG, off - 4)[0] >> 26 == 0x25
-    assert off in set(starts) or after_bl, f'observation gate neither at a function entry nor after a bl {off:#x}'
+    prev = struct.unpack_from('<I', IMG, off - 4)[0] if off >= 4 else 0
+    after_call = prev >> 26 == 0x25 or prev & 0xfffffc1f == 0xd63f0000
+    assert off in set(starts) or after_call, f'observation gate neither at a function entry nor after a bl / blr {off:#x}'
     assert off < TEXT_END and off not in kinds and not any(lo <= off < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'observation gate conflicts with a rewrite site {off:#x}'
     put_branch(off, site_obs(off, oid, w)); stat('obs')
 

@@ -1,14 +1,21 @@
 // Present crop regression: colored 8×8 texture, closed-form RGBA expectations; real Metal rendering, no dependence on the game or on cross-run determinism.
 // nvn_mtl.m's nvn_game_fps is a weak default and hle_nvn.c gives the strong definition; in one translation unit that is a redefinition, so the weak one is renamed (this test does not look at the frame-rate target)
+#define NVN_ASPECT_HOST
 #define nvn_game_fps nvn_game_fps_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
+#define g_ft g_flush_tex
 #include "../nvn/hle_nvn.c"
+#undef g_ft
+#include "../../host/hle_aspect.c"
+void gate_obs_set(int id, void (*fn)(const uint64_t *)) { (void)id; (void)fn; }
+int gate_obs_present(int id) { (void)id; return 0; }
 uint64_t g_t0_ns;   // process start time from host main.c (used by hle_nvn's per-frame @t_s); unit test stub
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
 module_t g_mod[MAX_MOD]; int g_nmod;
 void svc_thread_dump(void) {}
+int dm_guest_as_contains(uintptr_t address) { (void)address; return 0; }
 uint64_t now_ns(void) { return bp_now(); }
 #ifdef CROP_LEGACY_HEADER
 #include CROP_LEGACY_HEADER
@@ -17,7 +24,7 @@ uint64_t now_ns(void) { return bp_now(); }
 #define ENCODE present_encode
 #endif
 static int failed, cases;
-#define EXPECT(n, w, v) do { int a=(w),b=(v); cases++; printf("%s expected %d → got %d %s\n",n,a,b,a==b?"✓":"✗");failed+=a!=b; } while(0)
+#define EXPECT(n, w, v) do { int want_=(w),got_=(v); cases++; printf("%s expected %d → got %d %s\n",n,want_,got_,want_==got_?"✓":"✗");failed+=want_!=got_; } while(0)
 static const uint8_t colors[4][4]={{255,0,0,255},{0,255,0,255},{0,0,255,255},{255,255,0,255}};
 
 static void check(id<MTLTexture> src, const char *name, const int crop[4], int w, int h, int color) {
@@ -45,6 +52,7 @@ static void check(id<MTLTexture> src, const char *name, const int crop[4], int w
 }
 
 int main(void) { @autoreleasepool {
+    setenv("DM_ASPECT", "0", 1);
     mtl_init();
     MTLTextureDescriptor *d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:8 height:8 mipmapped:NO];d.storageMode=MTLStorageModeShared;d.usage=MTLTextureUsageShaderRead;
     id<MTLTexture> src=[g_dev newTextureWithDescriptor:d];uint8_t px[8*8*4];
@@ -95,5 +103,45 @@ int main(void) { @autoreleasepool {
     EXPECT("real QueuePresent: the frame's crop copy does not change with the window",1,saved);
 #endif
     mtl_present_wait(tk);mtl_present_test_stall(0);
+#if DM_GAME_ASPECT_NATIVE
+    // Native aspect: every font/layout variant is transformed at the final canvas, including masks and captured panes.
+    g_on = 1; dm_aspect_set_display(20.f / 9); // enable the native path after the legacy presentation checks
+    tex_t canvas = {.serial = 50001}; R.rt.n = 1; R.rt.color[0] = &canvas; g_ui_tex = canvas.serial;
+    NvProg *layout = [NvProg new]; layout->sh[0] = [NvShader new];
+    char *keys = strdup(DM_GAME_ASPECT_UI), *save = NULL;
+    for (char *key = strtok_r(keys, " ", &save); key; key = strtok_r(NULL, " ", &save)) {
+        strcpy(layout->sh[0]->key, key); double ux, uy;
+        EXPECT("each font/layout variant corrected", 1, ui_squeeze_scale(layout, &ux, &uy));
+        EXPECT("20:9 UI x scale", 1250, lround(ux * 1000)); EXPECT("20:9 UI y scale", 1000, lround(uy * 1000));
+    }
+    free(keys); double ux, uy;
+    dm_aspect_set_display(16.f / 9);
+    EXPECT("16:9 leaves viewport/scissor exactly unchanged", 0, ui_squeeze_scale(layout, &ux, &uy));
+    dm_aspect_set_display(4.f / 3);
+    EXPECT("4:3 layout corrected vertically", 1, ui_squeeze_scale(layout, &ux, &uy));
+    EXPECT("4:3 UI x unchanged", 1000, lround(ux * 1000)); EXPECT("4:3 UI y scale", 1333, lround(uy * 1000));
+    dm_aspect_set_display(20.f / 9);
+    R.rt.color[0] = &tex;
+    EXPECT("offscreen capture remains unscaled (no double transform)", 0, ui_squeeze_scale(layout, &ux, &uy));
+    R.rt.color[0] = &canvas; strcpy(layout->sh[0]->key, "0000000000000000_b");
+    EXPECT("3D composite remains unscaled", 0, ui_squeeze_scale(layout, &ux, &uy));
+    memcpy(layout->sh[0]->key, DM_GAME_ASPECT_UI, 16); layout->sh[0]->key[16] = 0;
+    tex_t picture = {.magic=MAGIC('T','E','X',0), .serial=60001};
+    picture.d.width=320; picture.d.height=180; picture.d.depth=picture.d.samples=picture.d.levels=1;
+    picture.d.format=NVN_FORMAT_RGBA8; picture.d.target=NVN_TEXTURE_TARGET_2D;
+    mtl_sub_begin(); tex_mtl(&picture); // a render target already exists on this storage
+    picture.serial++; // the game's new transient object has not been resolved yet
+    EXPECT("transient serial is unresolved before its first draw", 0, mtl_tex_gpu_owned(picture.serial));
+    mtl_reg_tex(1200, &picture, NULL); S.tex[1][0] = 1200;
+    EXPECT("first sample of an aliased screen picture is not transformed twice", 0, ui_squeeze_scale(layout, &ux, &uy));
+    EXPECT("transient serial resolves to GPU content", 1, mtl_tex_gpu_owned(picture.serial));
+    EXPECT("texture setup completes", 1, mtl_wait(mtl_sub_commit(), 5000000000ull));
+    // An illustration of the same size, uploaded by the CPU, remains in layout coordinates.
+    MTLTextureDescriptor *pd=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:320 height:180 mipmapped:NO];
+    pd.usage=MTLTextureUsageShaderRead; serial_put(++picture.serial, [g_dev newTextureWithDescriptor:pd]);
+    mtl_reg_tex(1201, &picture, NULL); S.tex[1][0] = 1201;
+    EXPECT("CPU illustration keeps its proportions", 1, ui_squeeze_scale(layout, &ux, &uy));
+    check(src, "native present fills its target", tl, 20, 9, 0);
+#endif
     printf("== %d checks, %d failed ==\n",cases,failed);return failed!=0;
 } }

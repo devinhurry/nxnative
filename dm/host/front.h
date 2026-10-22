@@ -17,6 +17,11 @@ int front_text_input(const char *title, const char *sub, const char *guide, cons
 // the dm_main / main called afterwards waits for it to finish. For call timing and preconditions see the comments in main.c (set DM_ROMFS and the other environment variables and the cwd first; arguments identical item by item to those of the later main).
 void dm_host_preload_start(int argc, char **argv);
 
+// Native display (hle_aspect.c): the game view fills the screen instead of a centred 16:9 picture; the host stretches the 16:9 canvas and squeezes UI draws.
+int dm_aspect_native(void);
+void dm_aspect_set_display(float ratio);
+void dm_aspect_touch_rect(float w, float h, float rect[4]);
+
 // Touchscreen (implemented by the host's hle_touch.c; called by the iOS / Mac front end): whenever the set of touch points changes (down / move / up / cancel) the whole set is pushed once; n = 0 = all lifted.
 // id = finger slot number 0–15 (the lowest free slot on down, unchanged until up; used directly as finger_id); x / y = normalized coordinates [0,1) on the output frame, origin at top left.
 // The host converts to the panel coordinates the game reads, 1280x720 (x·1280, y·720), and latches short taps (a down and up between two reads is reported at least once). May be called from any thread.

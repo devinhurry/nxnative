@@ -641,7 +641,8 @@ def ue_legacy_shaders(path, rel, names, out):
     pk = _PAKS.get(path) or _PAKS.setdefault(path, uepak.Pak(path))
     for name in names:
         d = pk.read(name, decode=oodle)
-        ue_inline_shaders(d, f'/{rel}#{re.sub(r"^(\.\./)+", "", os.path.normpath(pk.mount + name))}', out)
+        label = re.sub(r"^(\.\./)+", "", os.path.normpath(pk.mount + name))
+        ue_inline_shaders(d, f'/{rel}#{label}', out)
 
 ZLIB_HEAD = re.compile(b'\x78[\x01\x5e\x9c\xda]')
 def ue_inline_shaders(d, label, out):

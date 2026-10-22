@@ -69,13 +69,22 @@ static void pads_changed(void) {   // every connected pad reports (the last one 
 // not a window-wide event monitor, so clicks on the title bar, the window buttons and the resize edges still reach AppKit.
 @interface DmGameView : NSView @end
 @implementation DmGameView
+- (void)setFrameSize:(NSSize)b {
+    [super setFrameSize:b];
+    if (b.width <= 0 || b.height <= 0) return;
+    if ([self.layer isKindOfClass:CAMetalLayer.class]) {
+        CAMetalLayer *l = (CAMetalLayer *)self.layer;
+        l.drawableSize = CGSizeMake(b.width * l.contentsScale, b.height * l.contentsScale);
+    }
+    dm_aspect_set_display((float)(b.width / b.height));
+}
 - (void)mouseDown:(NSEvent *)e { [self mouseDragged:e]; }
 - (void)mouseDragged:(NSEvent *)e {
     NSPoint p = [self convertPoint:e.locationInWindow fromView:nil]; NSSize b = self.bounds.size;
     double w = b.width, h = b.height;
     if (w <= 0 || h <= 0) return;
-    if (w / h > 16.0 / 9.0) w = h * 16.0 / 9.0; else h = w * 9.0 / 16.0;   // the centered 16:9 picture the present fits into the view, as on the iPhone (DmGamepad.m)
-    double x0 = (b.width - w) / 2, y0 = (b.height - h) / 2;
+    float rect[4]; dm_aspect_touch_rect(w, h, rect);
+    double x0 = rect[0], y0 = rect[1]; w = rect[2]; h = rect[3];
     dm_touch t = {0, (float)fmin(fmax((p.x - x0) / w, 0), 0.999), (float)fmin(fmax(1 - (p.y - y0) / h, 0), 0.999)};   // The AppKit view origin is at bottom left, the touchscreen origin is at top left
     dm_touch_set(&t, 1);
 }
@@ -94,7 +103,11 @@ void front_run(void (*guest)(void)) {
     @autoreleasepool {
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
-        NSRect r = NSMakeRect(0, 0, 1280, 720);
+        int ww = 1280, wh = 720;
+        const char *ws = getenv("DM_WINDOW_SIZE");
+        if (ws) { int w, h; if (sscanf(ws, "%dx%d", &w, &h) == 2 && w >= 320 && h >= 240) { ww = w; wh = h; } }
+        dm_aspect_set_display((float)ww / wh);
+        NSRect r = NSMakeRect(0, 0, ww, wh);
         NSWindow *win = [[NSWindow alloc] initWithContentRect:r
                                                     styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                                       backing:NSBackingStoreBuffered defer:NO];
@@ -109,6 +122,7 @@ void front_run(void (*guest)(void)) {
         g_layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
         g_layer.contentsScale = win.backingScaleFactor;
         v.layer = g_layer;
+        [v setFrameSize:v.frame.size];   // size the first drawable explicitly (AppKit also calls this during initial fullscreen setup)
         [win center];
         [win makeKeyAndOrderFront:nil];
         g_screen_fps = (int)(win.screen ?: NSScreen.mainScreen).maximumFramesPerSecond;
@@ -120,7 +134,8 @@ void front_run(void (*guest)(void)) {
         [[bar addItemWithTitle:@"Window" action:nil keyEquivalent:@""] setSubmenu:wm];
         [wm addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"].keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagCommand;
         NSApp.mainMenu = bar;
-        if (getenv("DM_FULLSCREEN")) dispatch_async(dispatch_get_main_queue(), ^{ [win toggleFullScreen:nil]; });   // start in fullscreen
+        const char *fs = getenv("DM_FULLSCREEN");
+        if (fs && *fs && strcmp(fs, "0")) dispatch_async(dispatch_get_main_queue(), ^{ [win toggleFullScreen:nil]; });   // start in fullscreen (DM_FULLSCREEN=0 keeps the window)
         for (NSNotificationName nm in @[GCControllerDidConnectNotification, GCControllerDidDisconnectNotification])
             [NSNotificationCenter.defaultCenter addObserverForName:nm object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
                 GCController *c = n.object; LOG("controller %s: %s%s", n.name == GCControllerDidConnectNotification ? "connected" : "disconnected",
