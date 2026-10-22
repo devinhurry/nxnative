@@ -48,6 +48,10 @@ typedef struct { const char *name; void *fn; const char *why; } hle_force_ent;
 
 // Operation mode (0 handheld / 1 docked): owned by hle_oe.c, and the hid controller style follows it; the front end can switch it at runtime
 int dm_opmode(void);
+// Native display (hle_aspect.c): the profile's aspect_native / camera_aspect; the front end makes the game view full-screen, nvn_mtl.m stretches the canvas and squeezes the UI
+int dm_aspect_native(void);
+float dm_aspect_ratio(void);
+void dm_aspect_set_display(float ratio);
 void dm_set_opmode(int m);          // On change, push notification 30 / 31 according to the switches the game has turned on
 // Focus (1 foreground / 2 focus lost / 3 background): called by the front end on lifecycle changes; a change pushes notification 15
 void dm_focus_set(int st);

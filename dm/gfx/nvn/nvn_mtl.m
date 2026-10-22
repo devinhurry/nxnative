@@ -25,6 +25,13 @@
 #include "nvn_cover.h"
 #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree (in the game profile folder, -I from the Makefile)
 #include "game_profile.h"   // game profile constants (profile id, the profile's switches)
+int dm_aspect_native(void); float dm_aspect_ratio(void); float dm_aspect_custom_ratio(void);   // hle_aspect.c
+#ifndef NVN_ASPECT_HOST
+// Standalone graphics tests have no host; real hosts link the strong implementations in hle_aspect.c.
+__attribute__((weak)) int dm_aspect_native(void) { return 0; }
+__attribute__((weak)) float dm_aspect_ratio(void) { return 0; }
+__attribute__((weak)) float dm_aspect_custom_ratio(void) { return 0; }
+#endif
 // Texture slot table per stage: 0-127 the combined handles (nvnCommandBufferBindTexture), 128-255 the separate texture binds (NVN_SEPTEX_SLOT0, nvn_obj.h)
 #define NTEX 256
 // The NVN driver's constant segments, one layout in every game (dm/gfx/tools/dmsh_build.py), byte offsets: c2 holds the combined handles at 0x20 + 8 r (41 slots up to the separate table:
@@ -6384,6 +6391,39 @@ static int lc_keeps(uint32_t op) {
     }
 }
 
+// Transform font/layout draws at the final UI canvas. Offscreen captures keep their original
+// coordinates; sampled GPU screen pictures already carry screen coordinates. The profile identifies font/layout shaders.
+static uint64_t g_ui_tex;
+static int ui_squeeze_scale(NvProg *pr, double *ux, double *uy) {
+    *ux = *uy = 1;
+    if (!dm_aspect_native() || R.rt.n <= 0 || !R.rt.color[0]) return 0;
+    if (xv_present(R.rt.color[0]->serial)) {
+        if (pr->sh[1] && *DM_GAME_ASPECT_CANVAS && !strncmp(pr->sh[1]->key, DM_GAME_ASPECT_CANVAS, 16)) {
+            int tid = (int)(S.tex[1][0] & 0xfffff);
+            if (tid <= 0 || tid >= g_ntreg || !g_treg[tid].ok) die("[RED] aspect: UI composite has no canvas texture");
+            g_ui_tex = g_treg[tid].t.serial;
+        }
+        return 0;
+    }
+    if (!g_ui_tex || R.rt.color[0]->serial != g_ui_tex || !pr->sh[0]) return 0;
+    char key[17]; memcpy(key, pr->sh[0]->key, 16); key[16] = 0;
+    int layout = strstr(DM_GAME_ASPECT_UI, key) != NULL;
+    if (!layout) return 0;
+    // GPU canvas pictures (including aliases and filtered masks) already carry screen coordinates. Local pane
+    // captures and CPU-uploaded illustrations retain layout coordinates and are transformed once below.
+    int tid = (int)(S.tex[1][0] & 0xfffff);
+    const tex_t *t = tid > 0 && tid < g_ntreg && g_treg[tid].ok ? &g_treg[tid].t : NULL;
+    if (t && t->d.width >= 320 && t->d.height && fabs((double)t->d.width / t->d.height * 9.0 / 16.0 - 1) < 0.02) {
+        // Transient NVN objects can alias an existing render target without having a serial-table entry yet.
+        // Resolve first, as sampling will: otherwise its first draw is mistaken for a CPU illustration.
+        tex_mtl(t);
+        if (mtl_tex_gpu_owned(t->serial)) return 0;
+    }
+    double f = dm_aspect_ratio() / (double)(16.0f / 9.0f);
+    if (fabs(f - 1) < 1e-6) return 0;
+    if (f > 1) *ux = f; else if (f > 0 && f < 1) *uy = 1.0 / f;
+    return *ux != 1 || *uy != 1;
+}
 static void draw(const p_draw *dw, const p_draw_idx *di) {
     g_draw_binst = (uint32_t)(dw ? dw->base_instance : di ? di->base_instance : 0);   // c0 + 0x644 of the stages that read the driver segment (encode_args)
     int mdx_on = (dw && dw->mdi_cnt) || (di && di->mdi_cnt) ? mdx_wanted(dw, di) : 0;   // an indirect-count multi-draw's record masked on the GPU (mdx_run), else read after a wait
@@ -6434,6 +6474,8 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
         static int once3; if (!once3++) MLOG("readable-tile pass merge: a draw of the later pass is not provable; back to separate passes (first case pass %llu)", g_stat_pass);
         g_fz_fallback++; rp_end(); }
     fb_prepare(pr);   // same-pass feedback sampling: copy the snapshot first (see fb_prepare)
+    // Resolving a newly sampled picture can upload it or end the current pass. Do this before opening/binding the encoder.
+    double sux = 1, suy = 1; int sq = ui_squeeze_scale(pr, &sux, &suy);
     if (R.has_sc && !g_enc) {
         NSUInteger tw0 = 0, th0 = 0; rt_dims(&tw0, &th0);
         long x0 = R.sc.x < 0 ? 0 : R.sc.x, y0 = R.sc.y < 0 ? 0 : R.sc.y, x1 = (long)R.sc.x + R.sc.w, y1 = (long)R.sc.y + R.sc.h;
@@ -6481,6 +6523,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     // Viewport / scissor (clamped within the target size)
     NSUInteger tw = g_pass.tw, th = g_pass.th;
     { MTLViewport v = S.has_vp ? (MTLViewport){S.vp[0][0], S.vp[0][1], S.vp[0][2], S.vp[0][3], S.dr[0], S.dr[1]} : (MTLViewport){0, 0, tw, th, 0, 1};
+      if (sq) { v.originX = tw / 2.0 + (v.originX - tw / 2.0) / sux; v.width /= sux; v.originY = th / 2.0 + (v.originY - th / 2.0) / suy; v.height /= suy; }
       if (atomic_load_explicit(&g_origin_ll, memory_order_relaxed)) { v.originY += v.height; v.height = -v.height; }   // lower-left origin (see g_origin_ll)
       // Viewport swizzle: NEGATIVE_Y negates clip y, the same as the viewport flipped about its centre; facing is decided after it on the GPU as in Metal, so the winding stays.
       // Other swizzles (axis exchanges, negated x / z / w) are no viewport change and are drawn unswizzled
@@ -6492,6 +6535,11 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     if (R.has_sc) {
         long x0 = R.sc.x < 0 ? 0 : R.sc.x, y0 = R.sc.y <= 0 ? 0 : R.sc.y, x1 = (long)R.sc.x + R.sc.w, y1 = (long)R.sc.y + R.sc.h;
         if (x1 > (long)tw) x1 = tw; if (y1 > (long)th) y1 = th;
+        if (sq) {
+            x0 = (long)floor(tw / 2.0 + (x0 - tw / 2.0) / sux); x1 = (long)ceil(tw / 2.0 + (x1 - tw / 2.0) / sux);
+            y0 = (long)floor(th / 2.0 + (y0 - th / 2.0) / suy); y1 = (long)ceil(th / 2.0 + (y1 - th / 2.0) / suy);
+            if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0; if (x1 > (long)tw) x1 = tw; if (y1 > (long)th) y1 = th;
+        }
         if (x1 <= x0 || y1 <= y0) { PD("Z %llu draw skipped: empty scissor (%d,%d %dx%d, target %lux%lu)", g_stat_pass, R.sc.x, R.sc.y, R.sc.w, R.sc.h, (unsigned long)tw, (unsigned long)th); return; }
         sc = (MTLScissorRect){(NSUInteger)x0, (NSUInteger)y0, (NSUInteger)(x1 - x0), (NSUInteger)(y1 - y0)};
     }
@@ -7702,6 +7750,11 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTex
     double dw = dst.width, dh = dst.height, s = fmin(dw / cw, dh / ch);
     MTLViewport vp = {floor((dw - cw * s) / 2), floor((dh - ch * s) / 2), round(cw * s), round(ch * s), 0, 1};
     if (fabs((dw / dh) / ((double)cw / ch) - 1) < 0.01) vp = (MTLViewport){0, 0, dw, dh, 0, 1};
+    if (dm_aspect_native()) {
+        float cr = dm_aspect_custom_ratio();
+        if (cr > 0) { double w = fmin(dw, dh * cr), h = w / cr; vp = (MTLViewport){floor((dw - w) / 2), floor((dh - h) / 2), round(w), round(h), 0, 1}; }
+        else vp = (MTLViewport){0, 0, dw, dh, 0, 1};   // native display: the camera holds the wide view, the canvas is stretched (UI squeezed in draw)
+    }
     int full = vp.originX == 0 && vp.originY == 0 && vp.width == dw && vp.height == dh;
     static double last_vp[4];   // Log one line when the viewport changes (used by the real-device screen-level acceptance screen_check.py to check the aspect ratio)
     if (memcmp(last_vp, &vp, sizeof last_vp)) { memcpy(last_vp, &vp, sizeof last_vp);
@@ -7733,6 +7786,11 @@ static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MT
     double dw = dst.width, dh = dst.height, s = fmin(dw / cw, dh / ch);
     MTLViewport vp = {floor((dw - cw * s) / 2), floor((dh - ch * s) / 2), round(cw * s), round(ch * s), 0, 1};
     if (fabs((dw / dh) / ((double)cw / ch) - 1) < 0.01) vp = (MTLViewport){0, 0, dw, dh, 0, 1};
+    if (dm_aspect_native()) {
+        float cr = dm_aspect_custom_ratio();
+        if (cr > 0) { double w = fmin(dw, dh * cr), h = w / cr; vp = (MTLViewport){floor((dw - w) / 2), floor((dh - h) / 2), round(w), round(h), 0, 1}; }
+        else vp = (MTLViewport){0, 0, dw, dh, 0, 1};   // native display: the camera holds the wide view, the canvas is stretched (UI squeezed in draw)
+    }
     int full = vp.originX == 0 && vp.originY == 0 && vp.width == dw && vp.height == dh;
     MTL4RenderPassDescriptor *rp = [MTL4RenderPassDescriptor new];
     rp.colorAttachments[0].texture = dst;

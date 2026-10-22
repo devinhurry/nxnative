@@ -116,6 +116,17 @@ def header(g):
     tds = g.get('tex_dyn_slots', 'off')   # shaders whose texture handle the translator could not trace to one slot: slot indices in c2, the bound slots in the fallback arrays (nvn_mtl.m): on / off
     if tds not in ('on', 'off'): sys.exit(f'{g.id}: tex_dyn_slots must be on or off: {tds}')
     vcr = g.get('vconv_range', 'off')   # vertex attributes converted on the CPU only over the vertices each draw reads (nvn_mtl.m vc_draw_range): on / off
+    an = g.get('aspect_native', 'off')   # native display: the camera aspect follows the screen, the 16:9 canvas is stretched over it and UI quads are squeezed back (hle_aspect.c, nvn_mtl.m): on / off
+    if an not in ('on', 'off'): sys.exit(f'{g.id}: aspect_native must be on or off: {an}')
+    ca = g.get('camera_aspect', '')   # the main camera's projection for aspect_native: build ID, singleton offset, projection offset, vtable offset, aspect field, dirty flag (hex)
+    if ca and not re.fullmatch(r'[0-9a-f]{32}(:0x[0-9a-f]+){5}', ca): sys.exit(f'{g.id}: camera_aspect must be <build>:<singleton>:<projection>:<vtable>:<aspect>:<dirty> in hex: {ca}')
+    cu = g.get('camera_ui_aspect', '')
+    if cu and not re.fullmatch(r'(?:[0-9]|1[0-9]|2[0-8])(:0x[0-9a-f]+){3}', cu): sys.exit(f'{g.id}: camera_ui_aspect must be <register 0..28>:<source pointer>:<projection pointer>:<source fovy> (hex offsets)')
+    au = g.get('aspect_ui', '')   # vertex shader identities of the game's font and layout libraries; runtime viewport transform only
+    ac = g.get('aspect_canvas', '')   # fragment shader that composites the UI canvas into the present target
+    if any(not re.fullmatch(r'[0-9a-f]{16}', k) for k in au.split()): sys.exit(f'{g.id}: aspect_ui must list full 16-digit shader keys')
+    if ac and not re.fullmatch(r'[0-9a-f]{16}', ac): sys.exit(f'{g.id}: aspect_canvas must be one full 16-digit shader key')
+    if an == 'on' and not (ca and au and ac): sys.exit(f'{g.id}: aspect_native requires camera_aspect, aspect_ui and aspect_canvas')
     if vcr not in ('on', 'off'): sys.exit(f'{g.id}: vconv_range must be on or off: {vcr}')
     mml = g.get('mem_map_limit', 'off')   # MapPhysicalMemory refused beyond the application pool, as on Horizon (hle_svc.c): on / off
     if mml not in ('on', 'off'): sys.exit(f'{g.id}: mem_map_limit must be on or off: {mml}')
@@ -163,6 +174,11 @@ def header(g):
          f'#define DM_GAME_TEX_DYN_SLOTS {int(tds == "on")}',
          f'#define DM_GAME_GPU_TS_SEGMENT {int(gts == "segment")}',
          f'#define DM_GAME_VCONV_RANGE {int(vcr == "on")}',
+         f'#define DM_GAME_ASPECT_NATIVE {int(an == "on")}',
+         f'#define DM_GAME_ASPECT_UI {q(au)}',
+         f'#define DM_GAME_ASPECT_CANVAS {q(ac)}',
+         f'#define DM_GAME_CAMERA_ASPECT {q(ca)}',
+         f'#define DM_GAME_CAMERA_UI_ASPECT {q(cu)}',
          *([f'#define DM_GAME_NVN_API_MAJOR {api.split(".")[0]}', f'#define DM_GAME_NVN_API_MINOR {api.split(".")[1]}'] if g.get('device_api', '') else []),   # without the key: by the SDK version (hle_nvn.c nvn_api)
          '']
     return '\n'.join(L)

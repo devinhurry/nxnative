@@ -16,6 +16,16 @@ app_category	public.app-category.adventure-games
 pad_layout	full
 
 # ---- Graphics ----
+# Native aspect: 3D follows the display; font and layout draws retain their proportions in a centered 16:9 region. DM_ASPECT=0 disables it.
+# These are all vertex shaders of main's font (BNSH@0x1d7a000) and layout (BNSH@0x1d83000) libraries, from shader_map.tsv.
+# The final agl composite samples the UI canvas; captures inside that canvas remain in their original coordinate system.
+aspect_native	on
+aspect_ui	21fe759b8114941c 60e2041ed375cae1 9f8de48697e031b5 71018be49e22ab4a 5275c47bd2f93f12 86208e96540877ab 51deaed0b27374b9 4fb3d55c47745276
+aspect_canvas	ecb4242efaf4042b
+# The main camera is a sead::PerspectiveProjection at +0x38 in the singleton at main+0x1e39d10 (vtable main+0x1d05380, aspect +0xb0, dirty +8); 1.9.0 build cd57b23fa4bbad65803d9788c01821ee.
+# UI model camera update at main+0xd44a2c: x19 owns the source camera (+0xa0) and projection (+0xa8); source fovy/offsets are at +0x74.
+camera_ui_aspect	19:0xa0:0xa8:0x74
+camera_aspect	cd57b23fa4bbad65803d9788c01821ee:0x1e39d10:0x38:0x1d05380:0xb0:0x8
 # The frame-interval controller (60 fps cuts in patch_nso.py) and dynamic resolution read the GPU time between the frame's two timestamp reports: each report takes its segment's GPU start / end
 gpu_timestamps	segment
 # 60 fps (30 on the Switch): the host decides each frame's step in whole vsyncs and holds the frame that long (rewriter stubs at setWaitVsyncInterval and VFR::updateInterval,
