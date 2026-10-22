@@ -455,7 +455,7 @@ def survey(nsp_dir, app, fam, keys, repo, py, env):
     if S['ue_decode'][0]:   # the manifest has no pak footers, so both kinds are named; the build tells them apart by the footer's version (uepak.py)
         notes.append(f'{rom["exts"].get(".pak", 0)} Unreal pak(s): version 11 paks keep the shaders Oodle-compressed in shader code archives (Octopath Traveler 0), decoded by booting the game on the Mac; '
                      'legacy paks (version 4, DRAGON QUEST XI S) keep them inline in the cooked packages, which the shader split reads through the game\'s own decoder (LZ5) in the Mac host')
-    if extra: notes.append(f'modules besides main / sdk: {", ".join(f"{n} ({mods[n]["kind"]})" for n in extra)}; the provisional profile loads {G["modules"][0]} (load order main, subsdk*, sdk)')
+    if extra: notes.append(f'modules besides main / sdk: {", ".join(n + " (" + mods[n]["kind"] + ")" for n in extra)}; the provisional profile loads {G["modules"][0]} (load order main, subsdk*, sdk)')
     if rom['mags']['UnityFS'] or 'Unity IL2CPP' in F['markers']: notes.append('Unity: the shaders are Shader objects in UnityFS bundles and data.unity3d, which shader_split.py reads through unityfs.py (written for Unity 2020.3\'s Switch format, also read for 2017.4, 2018.3 and 2022.3; check other Unity versions first)')
     if F['glslc']: notes.append(f'main has {F["glslc"]} GLSLC compiler output magics (0x19866891): shader_split.py takes those that are whole outputs (13 Sentinels and the KTGL games compile their shaders into main; Unity\'s player has 11 of its own)')
     if rom['mags']['Trinity pack']: notes.append('Trinity packs (Game Freak, arc/data.trpfs with its index data.trpfd): the shaders are BNSH inside Oodle Mermaid streams; shader_split.py decodes them with the game\'s own OodleLZ_Decompress in the Mac host, which dm/host/hle_oodle.c finds by the library\'s name string')
@@ -602,6 +602,18 @@ def package_key(pkg):   # the shader package's content (file names and bytes): w
 
 def profile_files(g):   # every file of the game profile (game.tsv and its tables)
     return sorted(p for p in g.dir.iterdir() if p.is_file())
+
+
+def split_tool_files(repo):   # the split reads no tool fingerprints: a changed lock does not change its output
+    return [p for p in tool_files(repo) if p.name != 'dmsh_chain.lock']
+
+
+def split_profile_files(g):   # the split writes the shader tables; the chain header, the c1/cb tables and the warm-up list are not its inputs
+    return [p for p in profile_files(g) if p.name not in ('dmsh_chain.h', 'c1_full.tsv', 'cb_extent.tsv', 'pso_manifest.tsv')]
+
+
+def shader_profile_files(g):   # the translated shader libraries do not depend on the c1/cb tables generated from their MSL or on the warm-up list
+    return [p for p in profile_files(g) if p.name not in ('c1_full.tsv', 'cb_extent.tsv', 'pso_manifest.tsv')]
 
 
 # ---- Steps ----
@@ -983,7 +995,7 @@ def split_shaders(py, repo, roms, mains, pkg, env, logs, g, provisional=False, o
     names = ('shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv')
     PROG.stage('shader split', step='checking the inputs')   # then a spinner: shader_split.py writes the package and the tables only at the end
     kf = pkg.with_name(pkg.name + '.key')
-    key = None if provisional or ALLOW_DAMAGED else fingerprint(('files', tool_files(repo)), ('files', profile_files(g)),
+    key = None if provisional or ALLOW_DAMAGED else fingerprint(('files', split_tool_files(repo)), ('files', split_profile_files(g)),
         *[x for r, m in zip(roms, mains) for x in (('files', [m]), ('tree', r), ('files', sorted((r.parent / 'glslc_capture').glob('*.glslc'))),
                                                    ('files', sorted((r.parent / 'ue_shaders').glob('*.ushaderbytecode'))))])
     if key and pkg.is_dir() and (note := reused(kf, key)) is not None:
@@ -1067,7 +1079,7 @@ def build_shaders(py, repo, sh, xlate, env, logs, g, provisional=False, pkg_key=
     libs = ios / f'b-{chain}'; kf = libs.with_name(libs.name + '.key')
     if pkg_key:
         PROG.set(step='checking the inputs')
-        key = fingerprint(pkg_key, ('files', chain_files(repo)), ('stat', xlate.parent), ('files', profile_files(g)), *toolchain(), str(xlate),
+        key = fingerprint(pkg_key, ('files', chain_files(repo)), ('stat', xlate.parent), ('files', shader_profile_files(g)), *toolchain(), str(xlate),
                           {k: env.get(k) for k in ('XLATE_DEBUG', 'XLATE_REDUCED')}, env=env)
         if next(libs.glob('*_b.metallib'), None) and (note := reused(kf, key)) is not None:
             PROG.end(f'{note}, reused (inputs unchanged)'); return ios

@@ -166,15 +166,145 @@ HLE_FORCE("_ZN2nn3hid21ShowControllerSupportEPNS0_27ControllerSupportResultInfoE
 // Space on the Mac; DM_KEYS Shake) it moves side to side, x acceleration ±SHAKE_G with a yaw of ±SHAKE_REV, in whole cycles that end where they began. Samples are 5 ms apart on the
 // guest clock, as the sensor's 200 Hz, and numbered by time, so a history read returns the samples at those times. Super Mario Odyssey reads all 16 entries of GetSixAxisSensorStates
 // whatever count comes back (main+0x93fd84), takes the newest entry's acceleration for its swing detection (main+0x626244) and its angular velocity, angle and direction (main+0x5d72d4)
+//
+// Device motion (iOS CoreMotion, dm_motion_set): the front end pushes the phone's acceleration, angular velocity and attitude. The first sample becomes the neutral pose, and the
+// phone's screen frame at that pose becomes the virtual controller's frame: X is screen right, Y points into the screen, Z is world up. So at rest the sensor reads (0, 0, -1) G, a
+// forward/back tilt is pitch about the controller's X axis and a left/right turn is yaw about its Z axis, as on a controller held normally. Every later sample is reported relative to
+// that frame. Without samples (Mac, sensor off, or a sensor that stopped) the synthetic at-rest / shake sensor below is used; DM_KEYS Shake keeps working on both paths. The direction
+// matrix keeps the synthetic sensor's memory order (the transpose of the standard attitude), which the games were tested against.
 typedef struct { int64_t delta_ns, sampling; float acc[3], gyro[3], angle[3], dir[9]; uint32_t attributes, _pad; } SixAxisState;
 _Static_assert(sizeof(SixAxisState) == 0x60, "SixAxisState");
 enum { SIX_PERIOD_NS = 5000000 };
 #define SHAKE_G 3.0
 #define SHAKE_REV 1.5
+typedef struct { uint64_t t_ns; float acc[3], gyro[3], angle[3], dir[9], quat[4]; } MotionSample;   // quat = (w, x, y, z), relative to the neutral pose
+enum { MOTION_HIST = 128, MOTION_STALE_NS = 200000000 };
+static MotionSample g_mhist[MOTION_HIST];
+static int g_mhead, g_mcount, g_motion_live, g_frame_ok, g_motion_logged;
+static float g_qdc[4], g_rdc[9];   // device -> controller (qdc: quaternion, rdc: matrix)
+static pthread_mutex_t g_ml = PTHREAD_MUTEX_INITIALIZER;
 static int shaking(uint64_t t) { return t >= atomic_load(&g_shake_t0) && t < atomic_load(&g_shake_end); }
-static void six_sample(SixAxisState *s, int64_t samp) {
+static void qnorm(float q[4]) {
+    float n = sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    if (n < 1e-6f) { q[0] = 1; q[1] = q[2] = q[3] = 0; return; }
+    for (int i = 0; i < 4; i++) q[i] /= n;
+}
+static void qmul(const float a[4], const float b[4], float o[4]) {   // Hamilton product, (w, x, y, z)
+    float w = a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3];
+    float x = a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2];
+    float y = a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1];
+    float z = a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0];
+    o[0] = w; o[1] = x; o[2] = y; o[3] = z;
+}
+static void qmat(const float q[4], float m[9]) {   // row-major device -> world
+    float w = q[0], x = q[1], y = q[2], z = q[3];
+    m[0] = 1 - 2 * (y * y + z * z); m[1] = 2 * (x * y - w * z);     m[2] = 2 * (x * z + w * y);
+    m[3] = 2 * (x * y + w * z);     m[4] = 1 - 2 * (x * x + z * z); m[5] = 2 * (y * z - w * x);
+    m[6] = 2 * (x * z - w * y);     m[7] = 2 * (y * z + w * x); m[8] = 1 - 2 * (x * x + y * y);
+}
+static void matquat(const float m[9], float q[4]) {   // row-major rotation -> quaternion (w, x, y, z)
+    float tr = m[0] + m[4] + m[8];
+    if (tr > 0) {
+        float s = sqrtf(tr + 1.0f) * 2;
+        q[0] = 0.25f * s; q[1] = (m[7] - m[5]) / s; q[2] = (m[2] - m[6]) / s; q[3] = (m[3] - m[1]) / s;
+    } else if (m[0] > m[4] && m[0] > m[8]) {
+        float s = sqrtf(1.0f + m[0] - m[4] - m[8]) * 2;
+        q[0] = (m[7] - m[5]) / s; q[1] = 0.25f * s; q[2] = (m[1] + m[3]) / s; q[3] = (m[2] + m[6]) / s;
+    } else if (m[4] > m[8]) {
+        float s = sqrtf(1.0f + m[4] - m[0] - m[8]) * 2;
+        q[0] = (m[2] - m[6]) / s; q[1] = (m[1] + m[3]) / s; q[2] = 0.25f * s; q[3] = (m[5] + m[7]) / s;
+    } else {
+        float s = sqrtf(1.0f + m[8] - m[0] - m[4]) * 2;
+        q[0] = (m[3] - m[1]) / s; q[1] = (m[2] + m[6]) / s; q[2] = (m[5] + m[7]) / s; q[3] = 0.25f * s;
+    }
+    qnorm(q);
+}
+static void matvec(const float m[9], const float v[3], float o[3]) {
+    float x = m[0] * v[0] + m[1] * v[1] + m[2] * v[2];
+    float y = m[3] * v[0] + m[4] * v[1] + m[5] * v[2];
+    float z = m[6] * v[0] + m[7] * v[1] + m[8] * v[2];
+    o[0] = x; o[1] = y; o[2] = z;
+}
+static void euler_zyx(const float m[9], float out[3]) {   // yaw / pitch / roll in revolutions, from a row-major attitude
+    float sy = sqrtf(m[0] * m[0] + m[3] * m[3]), x, y, z;
+    if (sy > 1e-6f) { x = atan2f(m[7], m[8]); y = atan2f(-m[6], sy); z = atan2f(m[3], m[0]); }
+    else { x = atan2f(-m[5], m[4]); y = atan2f(-m[6], sy); z = 0; }
+    const float k = (float)(1.0 / (2.0 * M_PI));
+    out[0] = x * k; out[1] = y * k; out[2] = z * k;
+}
+void dm_motion_set(const dm_motion *m) {
+    if (!m) { pthread_mutex_lock(&g_ml); g_motion_live = 0; g_frame_ok = 0; pthread_mutex_unlock(&g_ml); return; }
+    float q[4] = { m->quat[0], m->quat[1], m->quat[2], m->quat[3] };
+    qnorm(q);
+    uint64_t t = guest_ns();
+    pthread_mutex_lock(&g_ml);
+    if (!g_frame_ok || (m->flags & DM_MOTION_RESET)) {
+        g_mhead = g_mcount = 0;   // history from the previous frame would mix two neutral poses
+        float r0[9]; qmat(q, r0);
+        // The controller frame is the phone's screen frame: X = screen right, Y = into the screen, Z = world up. It is built in
+        // device coordinates from the device's screen normal (-Z is into the screen) and world up at the neutral pose.
+        float z[3] = { r0[6], r0[7], r0[8] };   // world up in device coordinates (the third row of device -> world)
+        float zn = sqrtf(z[0] * z[0] + z[1] * z[1] + z[2] * z[2]);
+        if (zn < 1e-6f) { z[0] = 0; z[1] = 1; z[2] = 0; zn = 1; }
+        for (int i = 0; i < 3; i++) z[i] /= zn;
+        float y[3] = {0, 0, -1};                 // into the screen in device coordinates
+        float yd = y[0] * z[0] + y[1] * z[1] + y[2] * z[2];
+        for (int i = 0; i < 3; i++) y[i] -= yd * z[i];
+        float yn = sqrtf(y[0] * y[0] + y[1] * y[1] + y[2] * y[2]);
+        if (yn < 0.2f) {                         // held nearly flat: the screen has no up reference, keep the old world-aligned frame
+            memcpy(g_rdc, r0, sizeof r0); memcpy(g_qdc, q, sizeof q);
+        } else {
+            for (int i = 0; i < 3; i++) y[i] /= yn;
+            float x[3] = { y[1] * z[2] - y[2] * z[1], y[2] * z[0] - y[0] * z[2], y[0] * z[1] - y[1] * z[0] };
+            g_rdc[0] = x[0]; g_rdc[1] = x[1]; g_rdc[2] = x[2];   // rows: controller X / Y / Z axes in device coordinates
+            g_rdc[3] = y[0]; g_rdc[4] = y[1]; g_rdc[5] = y[2];
+            g_rdc[6] = z[0]; g_rdc[7] = z[1]; g_rdc[8] = z[2];
+            matquat(g_rdc, g_qdc);
+        }
+        g_frame_ok = 1;
+        if (!g_motion_logged++) LOG("six-axis: device motion, neutral screen frame from the first sample (acc %.2f %.2f %.2f G)", m->acc[0], m->acc[1], m->acc[2]);
+    }
+    float qc[4] = { g_qdc[0], -g_qdc[1], -g_qdc[2], -g_qdc[3] };
+    float qr[4], r[9], acc[3], gyro[3], angle[3];
+    qmul(q, qc, qr); qnorm(qr);
+    qmat(qr, r);
+    matvec(g_rdc, m->acc, acc); matvec(g_rdc, m->gyro, gyro); euler_zyx(r, angle);
+    MotionSample *s = &g_mhist[g_mhead];
+    s->t_ns = t; memcpy(s->acc, acc, sizeof acc); memcpy(s->gyro, gyro, sizeof gyro);
+    memcpy(s->angle, angle, sizeof angle); memcpy(s->quat, qr, sizeof qr);
+    s->dir[0] = r[0]; s->dir[1] = r[3]; s->dir[2] = r[6];   // transpose: same memory order as the synthetic sensor
+    s->dir[3] = r[1]; s->dir[4] = r[4]; s->dir[5] = r[7];
+    s->dir[6] = r[2]; s->dir[7] = r[5]; s->dir[8] = r[8];
+    g_mhead = (g_mhead + 1) % MOTION_HIST; if (g_mcount < MOTION_HIST) g_mcount++;
+    g_motion_live = 1;
+    pthread_mutex_unlock(&g_ml);
+}
+static int motion_sample(MotionSample *out, uint64_t t) {   // newest sample at or before t; the oldest when t is older than the history
+    int ok = 0;
+    pthread_mutex_lock(&g_ml);
+    if (g_motion_live && g_mcount > 0) {
+        int newest = (g_mhead - 1 + MOTION_HIST) % MOTION_HIST;
+        if (t > g_mhist[newest].t_ns + MOTION_STALE_NS) { pthread_mutex_unlock(&g_ml); return 0; }
+        int idx = (g_mhead - g_mcount + MOTION_HIST) % MOTION_HIST;
+        for (int i = 0; i < g_mcount; i++) {
+            int k = (g_mhead - 1 - i + MOTION_HIST) % MOTION_HIST;
+            if (g_mhist[k].t_ns <= t) { idx = k; break; }
+        }
+        *out = g_mhist[idx]; ok = 1;
+    }
+    pthread_mutex_unlock(&g_ml);
+    return ok;
+}
+static int six_at_rest(uint64_t t) {
+    MotionSample m;
+    if (!shaking(t) && motion_sample(&m, t)) {
+        float g = sqrtf(m.gyro[0] * m.gyro[0] + m.gyro[1] * m.gyro[1] + m.gyro[2] * m.gyro[2]);
+        return g < 0.05f;   // about 18 degrees / s
+    }
+    return !shaking(t);
+}
+static void six_synthetic(SixAxisState *s, int64_t samp, uint64_t t) {
     memset(s, 0, sizeof *s);
-    uint64_t t = (uint64_t)samp * SIX_PERIOD_NS;
     s->delta_ns = SIX_PERIOD_NS; s->sampling = samp; s->attributes = 1;   // IsConnected
     s->acc[2] = -1;
     double yaw = 0;
@@ -186,6 +316,18 @@ static void six_sample(SixAxisState *s, int64_t samp) {
     }
     float c = (float)cos(2 * M_PI * yaw), sn = (float)sin(2 * M_PI * yaw);
     s->dir[0] = c; s->dir[1] = sn; s->dir[3] = -sn; s->dir[4] = c; s->dir[8] = 1;
+}
+static void six_sample(SixAxisState *s, int64_t samp) {
+    uint64_t t = (uint64_t)samp * SIX_PERIOD_NS;
+    MotionSample m;
+    if (!shaking(t) && motion_sample(&m, t)) {   // real device motion; a scripted shake still uses the synthetic cycle
+        memset(s, 0, sizeof *s);
+        s->delta_ns = SIX_PERIOD_NS; s->sampling = samp; s->attributes = 1;
+        memcpy(s->acc, m.acc, sizeof m.acc); memcpy(s->gyro, m.gyro, sizeof m.gyro);
+        memcpy(s->angle, m.angle, sizeof m.angle); memcpy(s->dir, m.dir, sizeof m.dir);
+        return;
+    }
+    six_synthetic(s, samp, t);
 }
 // SixAxisSensorHandle: byte 0 the style's bit number, byte 1 the npad id, byte 2 the device (left / right Joy-Con of a pair). The styles made of two Joy-Cons (handheld, dual) have
 // two sensors, the others one. A handle reads as connected while its controller is connected in that style; otherwise its entries are zero (not connected) and the count 0
@@ -286,15 +428,34 @@ HLE_FORCE("_ZN2nn3hid16GetGestureStatesEPNS0_12GestureStateEi", "gesture states:
 // Six-axis details: the current state, at rest unless shaking, fusion off
 HLE_FORCE("_ZN2nn3hid17StopSixAxisSensorERKNS0_19SixAxisSensorHandleE", "six-axis sensor; always sampling on the host", void, h_hid_SixStop, const uint32_t *h) { (void)h; }
 HLE_FORCE("_ZN2nn3hid21GetSixAxisSensorStateEPNS0_18SixAxisSensorStateERKNS0_19SixAxisSensorHandleE", "six-axis sensor current state", void, h_hid_SixState, SixAxisState *s, const uint32_t *h) { six_states(s, 1, *h); }
-HLE_FORCE("_ZN2nn3hid21IsSixAxisSensorAtRestERKNS0_19SixAxisSensorHandleE", "six-axis sensor at rest: yes unless shaking", unsigned, h_hid_SixRest, const uint32_t *h) { (void)h; return !shaking(guest_ns()); }
-// The console's own six-axis sensor (SevenSixAxisSensor, the body's orientation in handheld mode; The Legend of Zelda: Breath of the Wild): takes a work buffer and is switched through the hid service. The host provides none: switching succeeds, 0 states
-HLE_FORCE("_ZN2nn3hid28InitializeSevenSixAxisSensorEPvm", "console six-axis sensor initialization; not provided by the host", Result, h_hid_SevenInit, void *buf, size_t n) { (void)buf; (void)n; return RES_OK; }
+HLE_FORCE("_ZN2nn3hid21IsSixAxisSensorAtRestERKNS0_19SixAxisSensorHandleE", "six-axis sensor at rest: no motion on the device (or no shake)", unsigned, h_hid_SixRest, const uint32_t *h) { (void)h; return six_at_rest(guest_ns()); }
+// The console's own six-axis sensor (SevenSixAxisSensor, the body's orientation in handheld mode; The Legend of Zelda: Breath of the Wild): takes a work buffer and is switched through the hid service.
+// SevenSixAxisSensorState (0x40): two timestamps, one counter, acceleration, angular velocity and the attitude quaternion (x, y, z, w). The host only answers when device motion is live; without it
+// (Mac, DM_MOTION=0) it keeps the old "no states" behaviour, so games that never used it see no change.
+typedef struct { uint64_t t0, sampling, unknown; float acc[3], gyro[3], quat[4]; } SevenState;
+_Static_assert(sizeof(SevenState) == 0x40, "SevenState");
+static int seven_states(SevenState *out, int n) {
+    if (n <= 0) return 0;
+    uint64_t now = guest_ns();
+    MotionSample m;
+    if (!motion_sample(&m, now)) return 0;
+    int64_t samp = (int64_t)(now / SIX_PERIOD_NS);
+    for (int i = 0; i < n; i++) {
+        int64_t si = samp - i; MotionSample s = m;
+        motion_sample(&s, (uint64_t)si * SIX_PERIOD_NS);
+        out[i].t0 = (uint64_t)si * SIX_PERIOD_NS; out[i].sampling = (uint64_t)si; out[i].unknown = 1;
+        memcpy(out[i].acc, s.acc, sizeof s.acc); memcpy(out[i].gyro, s.gyro, sizeof s.gyro);
+        out[i].quat[0] = s.quat[1]; out[i].quat[1] = s.quat[2]; out[i].quat[2] = s.quat[3]; out[i].quat[3] = s.quat[0];
+    }
+    return n;
+}
+HLE_FORCE("_ZN2nn3hid28InitializeSevenSixAxisSensorEPvm", "console six-axis sensor initialization; device motion feeds it", Result, h_hid_SevenInit, void *buf, size_t n) { (void)buf; (void)n; return RES_OK; }
 HLE_FORCE("_ZN2nn3hid26FinalizeSevenSixAxisSensorEv", "console six-axis sensor", Result, h_hid_SevenFini, void) { return RES_OK; }
-HLE_FORCE("_ZN2nn3hid23StartSevenSixAxisSensorEv", "console six-axis sensor; not provided by the host", Result, h_hid_SevenStart, void) { return RES_OK; }
+HLE_FORCE("_ZN2nn3hid23StartSevenSixAxisSensorEv", "console six-axis sensor; device motion feeds it", Result, h_hid_SevenStart, void) { return RES_OK; }
 HLE_FORCE("_ZN2nn3hid22StopSevenSixAxisSensorEv", "console six-axis sensor", Result, h_hid_SevenStop, void) { return RES_OK; }
 HLE_FORCE("_ZN2nn3hid32ResetSevenSixAxisSensorTimestampEv", "console six-axis sensor timestamp", void, h_hid_SevenReset, void) {}
-HLE_FORCE("_ZN2nn3hid27GetSevenSixAxisSensorStatesEPNS0_23SevenSixAxisSensorStateEi", "console six-axis sensor states: 0 entries", int, h_hid_SevenStates, void *out, int n) { (void)out; (void)n; return 0; }
-HLE_FORCE("_ZN2nn3hid26IsSevenSixAxisSensorAtRestEv", "console six-axis sensor at rest: yes (Super Mario Odyssey)", unsigned, h_hid_SevenRest, void) { return 1; }
+HLE_FORCE("_ZN2nn3hid27GetSevenSixAxisSensorStatesEPNS0_23SevenSixAxisSensorStateEi", "console six-axis sensor states: device motion when live", int, h_hid_SevenStates, void *out, int n) { return seven_states(out, n); }
+HLE_FORCE("_ZN2nn3hid26IsSevenSixAxisSensorAtRestEv", "console six-axis sensor at rest: no motion on the device (or no shake)", unsigned, h_hid_SevenRest, void) { return six_at_rest(guest_ns()); }
 // The development debug pad (Super Mario Odyssey initializes and polls it): never connected, all zero
 HLE_FORCE("_ZN2nn3hid18InitializeDebugPadEv", "debug pad; the host has none", void, h_hid_DbgPadInit, void) {}
 HLE_FORCE("_ZN2nn3hid16GetDebugPadStateEPNS0_13DebugPadStateE", "debug pad state: not connected (all 0)", void, h_hid_DbgPadState, void *st) { memset(st, 0, 32); }   // sampling number, attributes, buttons, two sticks
