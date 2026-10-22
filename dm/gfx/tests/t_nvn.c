@@ -124,6 +124,39 @@ int main(void) {
         P(nvnTextureFinalize)(&original); P(nvnTextureFinalize)(&replacement);
     }
 
+    // Flushed ranges (nvn_flushed): a texture's storage flushed before its first use is filled from memory (tex_init_fill). Spans merge when they overlap or touch, and go with their pool
+    {
+        P(nvnMemoryPoolFlushMappedRange)(&pool, 0x1000, 0x100);
+        EXPECT("flushed: the flushed range", 1, nvn_flushed(poolmem + 0x1000, 0x100));
+        EXPECT("flushed: its last byte", 1, nvn_flushed(poolmem + 0x10ff, 1));
+        EXPECT("flushed: a range ending at its start", 0, nvn_flushed(poolmem + 0xf00, 0x100));
+        EXPECT("flushed: a range starting at its end", 0, nvn_flushed(poolmem + 0x1100, 0x100));
+        P(nvnMemoryPoolFlushMappedRange)(&pool, 0x1100, 0x100);
+        EXPECT("flushed: a touching flush merges (1 span)", 1, (long long)g_nfl);
+        P(nvnMemoryPoolFlushMappedRange)(&pool, 0x3000, 0x10);
+        EXPECT("flushed: a separate flush (2 spans)", 2, (long long)g_nfl);
+        EXPECT("flushed: the gap between them", 0, nvn_flushed(poolmem + 0x1200, 0x1e00));
+        P(nvnMemoryPoolFlushMappedRange)(&pool, 0x1080, 0x40);
+        EXPECT("flushed: a flush inside a span (still 2)", 2, (long long)g_nfl);
+        P(nvnMemoryPoolFlushMappedRange)(&pool, 0, 0x4000);
+        EXPECT("flushed: a flush over both (1 span)", 1, (long long)g_nfl);
+        fl_drop(poolmem + 0x1000, 0x1000);   // a pool inside the span: split
+        EXPECT("flushed: a pool dropped from inside a span (2 spans)", 2, (long long)g_nfl);
+        EXPECT("flushed: the dropped part", 0, nvn_flushed(poolmem + 0x1000, 0x1000));
+        EXPECT("flushed: before it", 1, nvn_flushed(poolmem + 0xfff, 1));
+        EXPECT("flushed: after it", 1, nvn_flushed(poolmem + 0x2000, 1));
+        static uint8_t smem[0x2000] __attribute__((aligned(4096))); NVNmemoryPool sp;
+        P(nvnMemoryPoolBuilderSetStorage)(&pb, smem, sizeof smem);
+        P(nvnMemoryPoolInitialize)(&sp, &pb);
+        P(nvnMemoryPoolFlushMappedRange)(&sp, 0x800, 0x800);
+        EXPECT("flushed: a second pool's flush", 1, nvn_flushed(smem + 0x800, 1));
+        P(nvnMemoryPoolFinalize)(&sp);
+        EXPECT("flushed: gone with its pool", 0, nvn_flushed(smem, sizeof smem));
+        fl_drop(poolmem, sizeof poolmem);
+        EXPECT("flushed: the first pool's spans dropped", 0, (long long)g_nfl);
+        P(nvnMemoryPoolBuilderSetStorage)(&pb, poolmem, sizeof poolmem);
+    }
+
     // 5. Command buffer: record uniform updates / events / counters / buffer copies / nested calls, with memory in 256 B segments to force multi-segment linking
     NVNcommandBuffer cb; P(nvnCommandBufferInitialize)(&cb, &dev);
     NVNmemoryPoolBuilder cpb; P(nvnMemoryPoolBuilderSetDefaults)(&cpb); P(nvnMemoryPoolBuilderSetStorage)(&cpb, g_cmdmem, sizeof g_cmdmem);

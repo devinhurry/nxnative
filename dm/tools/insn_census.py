@@ -42,6 +42,8 @@ def main():
             for reg in ('tpidrro_el0', 'tpidr_el0', 'cntpct_el0', 'cntvct_el0', 'cntfrq_el0', 'cntpctss_el0', 'cntvctss_el0'):
                 if reg in ops: kind = '%s %s' % (mn, reg); break
         if kind is None and X18.search(ops): kind = 'x18 use'
+        # sub sp, sp, xN: may leave sp misaligned, which Apple's kernel faults (patch_nso.py site_sp_align)
+        if kind is None and mn == 'sub' and re.fullmatch(r'sp, sp, x\d+', ops): kind = 'sub sp, sp, xN'
         if kind: c[kind] += 1; sites.append((addr, kind, mn, ops))
     print('%s: %d instructions decoded (%d undecodable words)' % (path, total, undecoded))
     if data: print('  data blocks left out: %s' % ', '.join('%#x..%#x' % b for b in data))

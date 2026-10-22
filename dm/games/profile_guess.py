@@ -138,9 +138,12 @@ def guess(F, hooks=None):
     # Memory: the guest block is 256 MB in front + alias region + stack region + heap region (hle_svc.c mem_init)
     giant = sum(m['bss'] for n, m in mods.items() if n in keep and m['far'])
     heap_api = HEAP_API in imp
-    if va_heap(F['sysres'], imp):   # virtual address memory and a heap: Engage's 5 GB block, the heap check moves the alias / heap split once it sees the heap the game asks for (Wonder, Tears of the Kingdom)
-        mem = (0x140000000, 0x118000000, APP_POOL, f'the NPDM declares {F["sysres"] // MiB} MB of system resource (virtual address memory) and main sets a heap: '
-                                                   'a 5 GB block with a large alias region; the heap check sizes the heap region from the heap the game asks for')
+    if F['sysres']:   # virtual address memory: Engage's 5 GB block. With a heap, the heap check moves the alias / heap split once it sees the heap the game asks for (Wonder, Tears of the Kingdom);
+        # without one the game maps everything in the alias region itself (Hollow Knight: Silksong's Unity 6 through AllocateAddressRegion / AllocateMemoryPages, 1.5 GB in its first room;
+        # Absolum's and Pokémon Legends: Z-A's StandardAllocator), which a 256 MB alias region cannot hold
+        mem = (0x140000000, 0x118000000, APP_POOL, f'the NPDM declares {F["sysres"] // MiB} MB of system resource (virtual address memory) and main ' +
+               ('sets a heap: a 5 GB block with a large alias region; the heap check sizes the heap region from the heap the game asks for' if heap_api else
+                'never sets a heap: a 5 GB block with a 4.375 GB alias region, where the game maps its memory itself'))
     else:
         heap = max(0x10000000, -(-(APP_POOL - 64 * MiB - giant) // 0x10000000) * 0x10000000) if heap_api else 0x10000000
         mem = (0x30000000 + heap, 0x10000000, APP_POOL,
@@ -278,7 +281,7 @@ def check(root):
             want, got = g.get(k, DEFAULTS.get(k, '')), G.get(k, (DEFAULTS.get(k, ''),))[0]
             if k.startswith('mem_') or k == 'app_pool': want, got = int(want, 0), int(got, 0)
             if want == got: continue
-            if k in ('mem_alias', 'app_pool') and va_heap(F['sysres'], F['mods']['main']['imports']): later.append((k, got, want))
+            if k in ('mem_alias', 'app_pool') and F['sysres']: later.append((k, got, want))
             elif k in NO_SIGNAL and k not in G: unknown.append((k, got, want))
             else: diff.append((k, got, want))
         fmt = lambda v: f'{v:#x}' if isinstance(v, int) else v
