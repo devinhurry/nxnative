@@ -23,6 +23,20 @@ static void capture(const void *obj) {
     LOG("glslc: saved a run-time compile output %s (%u bytes)", path, n);
 }
 
+// The GPU code version the game's own GLSLC writes (glslcGetVersion returns GLSLCversion {apiMajor, apiMinor, gpuCodeVersionMajor, gpuCodeVersionMinor, package, …}, 0x34 bytes, through x8),
+// 0 when the game carries no GLSLC. nvnDeviceGetInteger reports at least this as the driver's newest supported GPU code version (hle_nvn.c): a game's driver, in the same SDK, runs that code
+int dm_glslc_gpu_code(int *major, int *minor) {
+    static int v[2] = {-1, -1};
+    if (v[0] < 0) {
+        typedef struct { uint32_t w[16]; } glslc_version_t;
+        glslc_version_t (*get)(void) = (glslc_version_t (*)(void))guest_sym("glslcGetVersion");
+        v[0] = v[1] = 0;
+        if (get) { glslc_version_t r = get(); v[0] = (int)r.w[2]; v[1] = (int)r.w[3]; LOG("glslc: GLSLC API %u.%u, GPU code version %d.%d", r.w[0], r.w[1], v[0], v[1]); }
+    }
+    *major = v[0]; *minor = v[1];
+    return v[0] > 0;
+}
+
 HLE_FORCE("glslcCompile", "run-time GLSL compile (the game's own GLSLC compiles as usual; with DM_GLSLC_CAPTURE the outputs are saved to disk for offline translation)", uint8_t, h_glslc_Compile, void *obj) {
     static uint8_t (*orig)(void *);
     if (!orig && !(orig = guest_sym("glslcCompile"))) die("glslcCompile missing");

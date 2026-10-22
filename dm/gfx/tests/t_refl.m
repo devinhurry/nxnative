@@ -58,6 +58,18 @@ int main(void) { @autoreleasepool {
             check("B vertex: binding[0] uniform slot 0", 0, r.b[0].reg); check("B vertex: binding[1] uniform slot 3", 3, r.b[1].reg);
             printf("%-60s %s\n", "B vertex vs_models_v#0: 4 attributes (attribute = MSL attribute)", fail == f1 ? "✓" : "✗");
         } }
+    {   int f1 = fail;   // an array of handles in a uniform buffer (Paper Mario: The Thousand-Year Door b352f7af1c86e9fa_b, its last four bindings): array<…, 32> takes 32 argument entries each
+        NSDictionary *j = @{@"route": @"B", @"bindings": @[
+            @{@"kind": @"tex_ubo", @"reg": @11, @"off": @16, @"arg_id": @14, @"msl_name": @"fp_t_cb14_4", @"msl_type": @"texture2d<float>"},
+            @{@"kind": @"samp_ubo", @"reg": @11, @"off": @16, @"arg_id": @15, @"msl_name": @"fp_t_cb14_4Smplr", @"msl_type": @"sampler"},
+            @{@"kind": @"tex_ubo", @"reg": @11, @"off": @0, @"arg_id": @16, @"msl_name": @"fp_t2d_cb14_0", @"msl_type": @"array<texture2d<float>, 32>"},
+            @{@"kind": @"samp_ubo", @"reg": @11, @"off": @0, @"arg_id": @48, @"msl_name": @"fp_t2d_cb14_0Smplr", @"msl_type": @"array<sampler, 32>"}]};
+        check("B handle array: conversion succeeds", 0, nvn_refl_from_json(j, &r, err, sizeof err));
+        check("B handle array: single texture n", 0, r.b[0].n); check("B handle array: single texture offset", 16, r.b[0].off); check("B handle array: single sampler n", 0, r.b[1].n);
+        check("B handle array: texture kind", NVN_RB_TEXU, r.b[2].kind); check("B handle array: texture n", 32, r.b[2].n); check("B handle array: texture dummy type 2D", 2, r.b[2].dtt); check("B handle array: texture slot", 11, r.b[2].reg);
+        check("B handle array: sampler kind", NVN_RB_SAMPU, r.b[3].kind); check("B handle array: sampler n", 32, r.b[3].n); check("B handle array: bindless", 1, r.bindless);
+        printf("%-60s %s\n", "B array of 32 handles in uniform slot 11 (texture + sampler)", fail == f1 ? "✓" : "✗");
+    }
     {   int f1 = fail;
         NSDictionary *b1 = @{@"route": @"B", @"bindings": @[@{@"kind": @"foo", @"arg_id": @0, @"msl_name": @"x", @"msl_type": @"constant _16*"}]};
         NSDictionary *b2 = @{@"route": @"B", @"bindings": @[@{@"kind": @"tex", @"reg": [NSNull null], @"arg_id": @0, @"msl_name": @"fp_t_x", @"msl_type": @"texture2d<float>"}]};
