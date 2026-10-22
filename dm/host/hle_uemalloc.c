@@ -5,14 +5,27 @@
 // The FMalloc slots (the engine's FMalloc interface, measured from the vtable and the thread-local callbacks): 0-1 destructors, 2-5 FExec, 6 Malloc, 7 TryMalloc, 8 Realloc, 9 TryRealloc, 10 Free, 11 QuantizeSize, 12 GetAllocationSize, 13 Trim, 14 SetupTLSCachesOnCurrentThread,
 // 15 ClearAndDisableTLSCachesOnCurrentThread, 16 InitializeStatsMetadata, 17 UpdateStats, 18 GetAllocatorStats, 19 DumpAllocatorStats, 20 IsInternallyThreadSafe, 21 ValidateHeap,
 // 22 GetDescriptiveName, 23-25 OnMallocInitialized / OnPreFork / OnPostFork (the thread-local callbacks main+0x12e80 / main+0x12ec0 call +0x30 and +0x50).
+// Unreal Engine 4.27 (DRAGON QUEST VII Reimagined) has one FExec slot and no fork callbacks: 0-1 destructors, 2 Exec, 3 Malloc, 4 TryMalloc, 5 Realloc, 6 TryRealloc, 7 Free, 8 QuantizeSize,
+// 9 GetAllocationSize, 10 Trim, 11 SetupTLSCachesOnCurrentThread, 12 ClearAndDisableTLSCachesOnCurrentThread, 13 InitializeStatsMetadata, 14 UpdateStats, 15 GetAllocatorStats,
+// 16 DumpAllocatorStats, 17 IsInternallyThreadSafe, 18 ValidateHeap, 19 GetDescriptiveName, 20 OnMallocInitialized (main+0x5e4c0e8: TryMalloc / TryRealloc call +0x18 / +0x28, GCreateMalloc
+// calls +0x88 and +0xa0; Free is main+0x10, which reads the pool base as GetAllocationSize does). Its allocator object is made at run time (GCreateMalloc mallocs it), so the host puts the
+// vtable in at an observation gate right after the cut constructor call (patch_nso.py OBS, OBS_UE_MALLOC: x19 = the object)
 // Fixed addresses: each row runs only on the main build it was found in (AGENTS.md)
 #include "hle.h"
 #include <malloc/malloc.h>
 #include <stdatomic.h>
 
-static const struct { const char *build, *what; uint64_t obj, vtable, cut; } k_ue[] = {
+// Slot layouts: which slots the host fills and which do nothing; the others keep the guest's own functions
+enum { UE5, UE4_27 };
+static const struct { int nslot, malloc_, try_malloc, realloc_, try_realloc, free_, quantize, get_size, nothing[4]; } k_lay[] = {
+    [UE5] = { 26, 6, 7, 8, 9, 10, 11, 12, { 13, 14, 15, 19 } },      // Trim, the TLS cache setup and teardown, DumpAllocatorStats
+    [UE4_27] = { 21, 3, 4, 5, 6, 7, 8, 9, { 10, 11, 12, 16 } },
+};
+static const struct { const char *build, *what; int layout; uint64_t obj, vtable, cut; } k_ue[] = {
     // Octopath Traveler 0 1.0.5: the FMallocBinned3 object (main+0x68022c8, bss), its vtable (main+0x5b06f38, 26 slots), the cut constructor call (main+0x12e40, a nop after the rewrite)
-    { "9fe60a212cff9b9a3656ab63d4f882e5", "Octopath Traveler 0 1.0.5", 0x68022c8, 0x5b06f38, 0x12e40 },
+    { "9fe60a212cff9b9a3656ab63d4f882e5", "Octopath Traveler 0 1.0.5", UE5, 0x68022c8, 0x5b06f38, 0x12e40 },
+    // DRAGON QUEST VII Reimagined 1.2.0: no fixed object (0: made by GCreateMalloc, given at the gate), its vtable (main+0x5e4c0e8, 21 slots), the cut constructor call (main+0x32758dc)
+    { "f7ec03e4cb9de3bd8319d4e899d2e9cc", "DRAGON QUEST VII Reimagined 1.2.0", UE4_27, 0, 0x5e4c0e8, 0x32758dc },
 };
 enum { NSLOT = 26 };
 
@@ -57,18 +70,28 @@ static size_t m_QuantizeSize(void *self, size_t n, uint32_t a) { (void)self; (vo
 static bool m_GetAllocationSize(void *self, void *p, size_t *out) { (void)self; if (!p) return false; *out = malloc_size(p); return true; }
 static void m_Nothing(void *self) { (void)self; }   // Trim (its bool argument is ignored), the thread-local cache setup and teardown, DumpAllocatorStats
 static void *g_vt[NSLOT];
+static const char *g_what;
+
+// Observation gate OBS_UE_MALLOC: the allocator object GCreateMalloc just made (x19), before anything calls it
+static void obj_made(const uint64_t *regs) {
+    *(void **)(uintptr_t)regs[19] = g_vt;
+    static int once; if (!once++) LOG("%s: Unreal's allocator (FMallocBinned3, made at run time at %#llx) runs on a host malloc zone", g_what, (unsigned long long)regs[19]);
+}
 
 // Called once the modules are loaded and relocated, before any guest code runs
 void dm_ue_malloc_install(void) {
     for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main"))
         for (int k = 0; k < (int)(sizeof k_ue / sizeof k_ue[0]); k++) if (!strcmp(g_mod[i].build_id, k_ue[k].build)) {
-            uint8_t *b = g_mod[i].base;
+            uint8_t *b = g_mod[i].base; int L = k_ue[k].layout;
             if (*(uint32_t *)(b + k_ue[k].cut) != 0xd503201f) { LOG("[RED] %s: main is rewritten without the allocator cut (patch_nso.py): Unreal's own FMallocBinned3 runs", k_ue[k].what); return; }
-            memcpy(g_vt, b + k_ue[k].vtable, sizeof g_vt);   // the relocated vtable: the trivial slots stay the guest's
-            g_vt[6] = (void *)m_Malloc; g_vt[7] = (void *)m_TryMalloc; g_vt[8] = (void *)m_Realloc; g_vt[9] = (void *)m_TryRealloc; g_vt[10] = (void *)m_Free;
-            g_vt[11] = (void *)m_QuantizeSize; g_vt[12] = (void *)m_GetAllocationSize;
-            g_vt[13] = g_vt[14] = g_vt[15] = g_vt[19] = (void *)m_Nothing;
-            g_zone = malloc_create_zone(0, 0); malloc_set_zone_name(g_zone, "guest Unreal heap");
+            if (!k_ue[k].obj && !gate_obs_present(OBS_UE_MALLOC)) { LOG("[RED] %s: main is rewritten without the allocator gate (patch_nso.py OBS): the allocator would have no vtable", k_ue[k].what); return; }
+            memcpy(g_vt, b + k_ue[k].vtable, sizeof g_vt[0] * k_lay[L].nslot);   // the relocated vtable: the trivial slots stay the guest's
+            g_vt[k_lay[L].malloc_] = (void *)m_Malloc; g_vt[k_lay[L].try_malloc] = (void *)m_TryMalloc; g_vt[k_lay[L].realloc_] = (void *)m_Realloc;
+            g_vt[k_lay[L].try_realloc] = (void *)m_TryRealloc; g_vt[k_lay[L].free_] = (void *)m_Free;
+            g_vt[k_lay[L].quantize] = (void *)m_QuantizeSize; g_vt[k_lay[L].get_size] = (void *)m_GetAllocationSize;
+            for (int s = 0; s < 4; s++) g_vt[k_lay[L].nothing[s]] = (void *)m_Nothing;
+            g_zone = malloc_create_zone(0, 0); malloc_set_zone_name(g_zone, "guest Unreal heap"); g_what = k_ue[k].what;
+            if (!k_ue[k].obj) { gate_obs_set(OBS_UE_MALLOC, obj_made); continue; }
             *(void **)(b + k_ue[k].obj) = g_vt;
             LOG("%s: Unreal's allocator (FMallocBinned3 at main+%#llx) runs on a host malloc zone", k_ue[k].what, (unsigned long long)k_ue[k].obj);
         }
