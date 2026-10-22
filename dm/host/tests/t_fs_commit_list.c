@@ -70,7 +70,9 @@ int main(void) {
     CHECK(commit(one, 1) != RES_OK && same(path, "new"), "poisoned list commit fails without publishing bad bytes");
     CHECK(dm_fs_commit_count() == n && g_nfail == nf + 1, "refused transaction not counted; front end notified");
     CHECK(write_save("save:/a", "good") == RES_OK && commit(one, 1) == RES_OK && same(path, "good"), "next clean transaction succeeds");
+    CHECK(write_save("save:/a", "pending0") == RES_OK, "stage a write before the alias is mounted");
     CHECK(h_fs_MountSave("alias", NULL) == RES_OK, "mount an alias of the same host transaction");
+    CHECK(read_save("alias:/a", got, sizeof got) && !strcmp(got, "pending0") && same(path, "good"), "the alias shares the pending write instead of recloning over it");
     const char *aliases[] = {"save", "alias", "save"};
     CHECK(write_save("alias:/a", "alias-new") == RES_OK, "write through alias"); n = dm_fs_commit_count();
     CHECK(commit(aliases, 3) == RES_OK && same(path, "alias-new"), "aliases sharing one backing transaction commit together");

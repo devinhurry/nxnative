@@ -82,16 +82,37 @@ static font_t font_first(const char *env, const char *file, const char *fallback
     }
     return (font_t){0};
 }
+static pthread_mutex_t font_mu = PTHREAD_MUTEX_INITIALIZER;
+static font_t std_f, ext_f;
 static font_t font_get(int type) {
-    static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER; static font_t std_f, ext_f; static int std_done, ext_done;
-    pthread_mutex_lock(&mu);
+    static int std_done, ext_done;
+    pthread_mutex_lock(&font_mu);
     if (!std_done) { std_done = 1; std_f = font_first("DM_SHARED_FONT", "standard.ttf", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf");
                      if (!std_f.p) LOG("[RED] cannot open the standard shared font (point DM_SHARED_FONT or DM_FONT_DIR/standard.ttf at a TTF)"); }
     if (type == 5 && !ext_done) { ext_done = 1; ext_f = font_first("DM_SHARED_FONT_EXT", "nintendo_ext.ttf", NULL);
                                   if (!ext_f.p) LOG("[YELLOW] Nintendo extended shared font missing (dm/tools/make_ext_font.py generates nintendo_ext.ttf): button icons will be drawn as '?'"); }
     font_t f = type == 5 && ext_f.p ? ext_f : std_f;
-    pthread_mutex_unlock(&mu);
+    pthread_mutex_unlock(&font_mu);
     return f;
+}
+// ScalableFontEngine::LoadFont takes the TTF itself, so a game that imports Decode (and gets the header, font_skip below) but hands the address straight to LoadFont gets it past the header:
+//   The Legend of Zelda: Echoes of Wisdom (1.1.0, SDK 20.5.1) records shared fonts as type 0, calls no Decode for them, and with the header LoadFont failed with 403 and SetFont with 301 on every font,
+//   every glyph lookup then returned null and main+0x8b37c crashed at address 0x38 (GitHub PR #55). Only the host's own BFTTF bases qualify; Decode's result (base + 8), game-owned font data and NULL pass as is.
+static const void *font_payload(const void *p) {
+    pthread_mutex_lock(&font_mu);
+    const void *r = p && (p == std_f.p || p == ext_f.p) ? (const uint8_t *)p + 8 : p;
+    pthread_mutex_unlock(&font_mu);
+    return r;
+}
+static uint32_t (*font_load)(void *, char *, const void *, unsigned, unsigned);
+static pthread_once_t font_load_once = PTHREAD_ONCE_INIT;
+static void font_load_init(void) {
+    font_load = guest_sym("_ZN2nn6fontll18ScalableFontEngine8LoadFontEPcPKvjj");
+    if (!font_load) die("ScalableFontEngine::LoadFont not found in the guest");
+}
+HLE_FORCE("_ZN2nn6fontll18ScalableFontEngine8LoadFontEPcPKvjj", "shared font BFTTF allocation base → TTF payload; parsing and errors stay in the SDK", uint32_t, h_font_LoadFont, void *self, char *name, const void *data, unsigned index, unsigned capacity) {
+    pthread_once(&font_load_once, font_load_init);
+    return font_load(self, name, font_payload(data), index, capacity);
 }
 // The address points straight at the TTF (past the 8-byte header) and the size excludes the header, except for a game on SDK 11 or later whose main imports ScalableFontEngineHelper::Decode
 //   (dm_sdk_major, dm_main_imports; the profile's shared_font overrides). Super Mario 3D World + Bowser's Fury (SDK 10) records shared fonts as type 0 (main+0x975658), calls no Decode and hands the address

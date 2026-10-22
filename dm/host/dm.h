@@ -60,7 +60,10 @@ module_t *module_of(const void *p);
 // Gate dispatch: rewritten svc / timer reads come in through the common entry, ret_addr = the return point of that gate block, regs points to the saved x0..x30
 uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs);
 // Observation gates (rewriter OBS table; numbering matches patch_nso.py): register-preserving callbacks, called on a gate hit once attached
-enum { OBS_MOVIE_RING_LINK = 19, OBS_MOVIE_RING_UNLINK = 20, OBS_ASPECT_PROJECTION = 21, OBS_ASPECT_UI_CAMERA = 22, OBS_MAX = 23 };   // movie ring synchronization (hle_movie.c), guest camera updates (hle_aspect.c)
+enum { OBS_MOVIE_RING_LINK = 19, OBS_MOVIE_RING_UNLINK = 20,   // Metroid Dread 2.1.0's movie request ring (hle_movie.c)
+       OBS_UE_MALLOC = 21,                                  // DRAGON QUEST VII Reimagined 1.2.0: Unreal's allocator object just made (hle_uemalloc.c)
+       OBS_ASPECT_PROJECTION = 22, OBS_ASPECT_UI_CAMERA = 23, // BOTW guest camera updates (hle_aspect.c)
+       OBS_MAX = 24 };
 void gate_obs_set(int id, void (*fn)(const uint64_t *regs));
 int gate_obs_present(int id);
 void dm_aspect_install(void);

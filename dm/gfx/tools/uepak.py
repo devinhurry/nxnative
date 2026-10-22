@@ -3,6 +3,9 @@
 # (DM_OODLE_JOB, dm/host/hle_oodle.c). Octopath Traveler 0 keeps everything in one pak, Octopath_Traveler0/Content/Paks/pakchunk0-Switch.pak (1.5 GB, 159,757 files): its index is AES-256 encrypted,
 # its files are stored or Oodle-compressed in blocks. Its two shader code archives are stored, but every shader inside is Oodle-compressed (Mermaid, block header 8C 0A), which no decoder in this
 # repository can undo, so the game's own OodleLZ_Decompress decodes them in the Mac host (the NSP script's decode_ue_shaders, for any game with Unreal paks).
+# Unreal Engine 4.27 (DRAGON QUEST VII Reimagined) keeps its packages in IoStore containers (.utoc / .ucas) and the rest in pakchunk0-Switch.pak (3,972 files, index not encrypted), among them
+#   two stored shader code archives (ShaderArchive-Global-SF_GLSL_SWITCH, 1,764 shaders, and ShaderArchive-DOLL_Chunk0-SF_GLSL_SWITCH, 63,185): every shader in them is an LZ4 block, the
+#   engine's default shader compression since 4.26, decoded here (lz4_shaders) without the host.
 # The AES key is in main (Unreal embeds it): the 32-byte window of main's read-only or data segment that decrypts the index start to its mount point ("../../../"; Octopath Traveler 0: one window of
 #   116,287 tried). It is only kept in memory, never printed or written.
 # Pak footer (version 11, the last 0xdd bytes): encryption key GUID (16), encrypted index flag (u8), magic 0x5A6F12E1, version (u32), index offset (u64), index size (u64), index SHA-1 (20),
@@ -23,7 +26,7 @@
 #   entries {u64 offset, u32 size, u32 raw size, u8 frequency} (17 bytes, packed), preload entries (16 each), shader indices (u32): each array is a u32 count and its elements; the code follows,
 #   offsets relative to its start. A shader whose size differs from its raw size is compressed.
 # Usage: uepak.py list <pak> <main NSO> <out tsv>                       every file in the pak: path, raw size, stored size, compression, encrypted, blocks
-#        uepak.py job <RomFS> <main NSO> <work dir>                     the shader code archives of every pak, and an Oodle job of their compressed shaders
+#        uepak.py job <RomFS> <main NSO> <work dir>                     the shader code archives of every pak, and an Oodle job of their Oodle-compressed shaders (LZ4 ones decoded at once)
 #        uepak.py finish <work dir> <out dir>                           after the host has run the job: the archives with every shader decoded
 import ctypes, json, os, struct, sys
 
@@ -67,21 +70,25 @@ class R:
 LEGACY = (4,)   # legacy pak versions read (the per-file index); 11 has the encoded one
 LEGACY_METHODS = {1: 'Zlib', 2: 'Gzip', 3: 'LZ5', 4: 'Custom'}   # compression flags of a legacy pak (3: DRAGON QUEST XI S's engine, see the header)
 
-def pak_version(f):
-    """The version of a pak: a legacy footer is the last 0x2d bytes (magic 0x2c from the end); version 11's is 0xdd bytes, the magic 0xc8 from the end"""
-    for back in (0x2c, 0xc8):
+def magic_back(f):
+    """(how far from the end the footer's magic is, the pak version): a legacy footer is the last 0x2d bytes (magic 0x2c from the end); version 11's magic is 0xc8 from the end in
+    Octopath Traveler 0 (UE5) and 0xcc in Unreal Engine 4.27 (DRAGON QUEST VII Reimagined: five whole 32-byte compression method names after the SHA-1)"""
+    for back in (0x2c, 0xc8, 0xcc):
         f.seek(-back, 2); m, ver = struct.unpack('<II', f.read(8))
-        if m == PAK_MAGIC: return ver
+        if m == PAK_MAGIC: return back, ver
     raise ValueError('no pak footer')
+
+def pak_version(f):
+    return magic_back(f)[1]
 
 def footer(f):
     """(encrypted index, index offset, index size, compression method names by number from 1, version)"""
-    ver = pak_version(f)
+    back, ver = magic_back(f)
     if ver in LEGACY:
         f.seek(-0x2d, 2); ft = f.read(0x2d); ioff, isz = struct.unpack_from('<QQ', ft, 9)
         return ft[0], ioff, isz, [LEGACY_METHODS.get(i, f'flags {i}') for i in range(1, 8)], ver
     if ver != 11: raise ValueError(f'pak version {ver}, only {", ".join(map(str, LEGACY))} and 11 are read')
-    f.seek(-0xdd, 2); ft = f.read(0xdd); k = 0xdd - 0xc8
+    f.seek(-(back + 21), 2); ft = f.read(back + 21); k = 21
     ioff, isz = struct.unpack_from('<QQ', ft, k + 8)
     methods = [ft[k + 44 + 32 * i:k + 76 + 32 * i].rstrip(b'\0').decode('latin1') for i in range(5)]
     return ft[k - 1], ioff, isz, methods, ver
@@ -174,6 +181,20 @@ def decoded_archive(b, raws):
         ents += struct.pack('<QIIB', off, raw, raw, fr); off += raw
     return head + bytes(ents) + b[tail_at:a['code']] + b''.join(raws)
 
+def lz4_shaders(b, a):
+    """Every shader of an archive decoded as an LZ4 block (Unreal Engine 4.26 and later compress shaders with LZ4 unless the project picks another format: DRAGON QUEST VII Reimagined's
+    64,949), or None when one of the compressed ones is no LZ4 block that decodes to its raw size as an LSLG record (Octopath Traveler 0's Oodle: the game's own decoder is needed)"""
+    import lz4.block
+    out = []
+    for off, size, raw, _ in a['shaders']:
+        c = b[a['code'] + off:a['code'] + off + size]
+        if size == raw: out.append(c); continue
+        try: d = lz4.block.decompress(c, uncompressed_size=raw)
+        except Exception: return None
+        if len(d) != raw or d[:4] != b'LSLG': return None
+        out.append(d)
+    return out
+
 def paks(romfs):
     """Every pak under the RomFS"""
     return sorted(os.path.join(dp, f) for dp, _, fs in os.walk(romfs) for f in fs if f.endswith('.pak'))
@@ -201,11 +222,14 @@ def job(romfs, main_nso, work):
         p = Pak(pak, key)
         for path in sorted(x for x in p.files if x.endswith('.ushaderbytecode')):
             b = p.read(path); a = archive(b); name = os.path.basename(path)
-            open(os.path.join(work, 'archives', name), 'wb').write(b)
             comp = [i for i, (_, size, raw, _) in enumerate(a['shaders']) if size != raw]
+            raws = lz4_shaders(b, a)
+            if comp and raws: b = decoded_archive(b, raws); comp, how = [], 'LZ4'   # decoded here: the Oodle job gets none of them
+            else: how = 'Oodle' if comp else ''
+            open(os.path.join(work, 'archives', name), 'wb').write(b)
             for i in comp:
                 off, size, raw, _ = a['shaders'][i]; recs.append((name, i, b[a['code'] + off:a['code'] + off + size], raw))
-            listing.append(dict(name=name, pak=os.path.relpath(pak, romfs), path=path, shaders=len(a['shaders']), compressed=len(comp)))
+            listing.append(dict(name=name, pak=os.path.relpath(pak, romfs), path=path, shaders=len(a['shaders']), compressed=len(comp), compression=how))
     with open(os.path.join(work, 'oodle.job'), 'wb') as f:
         f.write(struct.pack('<II', JOB_MAGIC, len(recs)))
         for _, _, c, raw in recs: f.write(struct.pack('<II', len(c), raw)); f.write(c)
@@ -215,7 +239,7 @@ def job(romfs, main_nso, work):
 def finish(work, out):
     """The decoded archives into out, from <work>/oodle.job.out (the host's results, in job order)"""
     meta = json.load(open(os.path.join(work, 'job.json')))
-    b = open(os.path.join(work, 'oodle.job.out'), 'rb').read()
+    b = open(os.path.join(work, 'oodle.job.out'), 'rb').read() if meta['records'] else struct.pack('<II', OUT_MAGIC, 0)   # no Oodle shader: no host run
     magic, n = struct.unpack_from('<II', b)
     if magic != OUT_MAGIC or n != len(meta['records']): raise ValueError('the job output does not match the job')
     o, dec = 8, {}

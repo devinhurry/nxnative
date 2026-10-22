@@ -81,6 +81,12 @@ HLE_FORCE("_ZN2nn7account42NintendoAccountAuthorizationRequestContext34GetResult
 HLE_FORCE("_ZN2nn7account42NintendoAccountAuthorizationRequestContext10GetIdTokenEPmPcm", "authorization token; always fails", Result, h_acc_NaGetTok, void *self, uint64_t *n, char *buf, uint64_t sz) {
     (void)self; (void)buf; (void)sz; if (n) *n = 0; return RES_FAIL;
 }
+HLE_FORCE("_ZN2nn7account42NintendoAccountAuthorizationRequestContext20GetAuthorizationCodeEPmPcm", "authorization code; always fails", Result, h_acc_NaGetCode, void *self, uint64_t *n, char *buf, uint64_t sz) {
+    (void)self; (void)buf; (void)sz; if (n) *n = 0; return RES_FAIL;
+}
+HLE_FORCE("_ZN2nn7account42NintendoAccountAuthorizationRequestContext8GetStateEPmPcm", "authorization state string; always fails", Result, h_acc_NaGetState, void *self, uint64_t *n, char *buf, uint64_t sz) {
+    (void)self; (void)buf; (void)sz; if (n) *n = 0; return RES_FAIL;
+}
 
 // ---------- Account interfaces used by newer SDKs: user enumeration / existence / profile image, the remaining AsyncContext members ----------
 HLE_FORCE("_ZN2nn7account12GetUserCountEPi", "user count; always the one local user", Result, h_acc_UserCount, int *n) { *n = 1; return RES_OK; }

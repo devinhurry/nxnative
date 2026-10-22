@@ -246,6 +246,19 @@ CUTS = {
   '9fe60a212cff9b9a3656ab63d4f882e5': [
     (0x12e40, '90310294', '1f2003d5', 'nninitStartup: bl 0x9f480 (FMallocBinned3 constructor, 37 GB of address space) → nop; the host allocator is in the object already (hle_uemalloc.c)'),
   ],
+  # DRAGON QUEST VII Reimagined 1.2.0 (v131072) main: Unreal Engine 4.27's FMallocBinned3 likewise takes 37 GB of the engine's address region (nninitStartup reserves 62 GB at main+0xe8a2c0
+  # unless -SwitchVirtualAddressSpaceSize= caps it; the allocator's pools are cut out of that region, so a capped region would starve them). Here the allocator is made on the first allocation,
+  # during the static constructors: GCreateMalloc (main+0x32758b0) mallocs 0x1c38 bytes, constructs them (main+0x32758dc → main+0x291714) and stores GMalloc (main+0x77767e0). The constructor
+  # call is cut, and observation gate OBS_UE_MALLOC (OBS below) puts the host allocator's vtable into the new object, which is still in x19 (dm/host/hle_uemalloc.c). No code outside the
+  # allocator's own reads its pools (the pool base main+0x7744770 is read only there) or calls its methods directly: every FMemory call goes through the vtable
+  'f7ec03e4cb9de3bd8319d4e899d2e9cc': [
+    (0x32758dc, '8e6f4097', '1f2003d5', 'GCreateMalloc: bl 0x291714 (FMallocBinned3 constructor, 37 GB of address space) → nop; the host allocator\'s vtable is put in at the gate after it (hle_uemalloc.c)'),
+  ],
+  # DRAGON QUEST VII Reimagined 1.2.0 (v131072) sdk (SDK 19.3.1): the same AddressRegionManager constructor as Octopath Traveler 0's SDK 19.3.13 build below, at the same offsets
+  '145dde94fb574acc9e09780a11995bd3': [
+    (0x1423fc, '08fca752', '087ca052', 'AddressRegionManager constructor: node area limit mov w8,#0x3fe00000 → mov w8,#0x3e00000'),
+    (0x142468, '09fca752', '097ca052', 'AddressRegionManager constructor: length of the node area registered as an occupied region mov w9,#0x3fe00000 → mov w9,#0x3e00000'),
+  ],
   # DRAGON QUEST XI S 1.0.4 (v262144) sdk (SDK 7.3.2, the same build as Super Mario Odyssey 1.4.1's, which has no virtual address memory and never allocates an address region): the node
   # area cut, and regions of 1 GB and more aligned to 32 MB, as Absolum's. Unreal Engine 4.18's nninitStartup takes one region for the whole engine, which a NumberLineAllocator
   # (main+0x177c4d0) hands out (16 GB by default, -SwitchVirtualAddressSpaceSize= in MB caps it: the profile's game_args); the 1 GB alignment would have put it 1 GB into the alias region.
@@ -291,14 +304,18 @@ OBS = {
   # BotW 1.9.0: sead::Projection::updateMatrixImpl_ checks dirty flags then calls doUpdateMatrix (vtable +0x58).
   # x0 is the projection. Apply the host aspect on this guest thread before either matrix is read or recalculated.
   'cd57b23fa4bbad65803d9788c01821ee': [
-    (0xeb4468, 21, 'a9be7bfd', 'projection update: apply the display aspect to the main camera before checking dirty flags'),
-    (0xd44a2c, 22, 'a94a2269', 'UI 3D camera update: x19 owns the source lens at +0xa0 and projection at +0xa8; apply aspect before copying lens parameters'),
+    (0xeb4468, 22, 'a9be7bfd', 'projection update: apply the display aspect to the main camera before checking dirty flags'),
+    (0xd44a2c, 23, 'a94a2269', 'UI 3D camera update: x19 owns the source lens at +0xa0 and projection at +0xa8; apply aspect before copying lens parameters'),
   ],
   # Metroid Dread 2.1.0 main: the movie player posts "link / unlink holders" requests into the dispatcher thread's request ring (main+0x222cc8) and goes on without waiting for them (after an unlink it frees the wrapper object and builds a new one in place).
   # On hardware the dispatcher thread (priority 30, core 0 only) preempts the main thread (priority 44, core 0) at once and finishes first; the host waits for the ring to empty after each post (hle_movie.c movie_ring_wait). The gates sit on the add x22, x22, #8 after the bl
   '646761f643afebb379edd5e6a5151af2': [
     (0x2247a4, 19, '910022d6', 'link request posted (loop at main+0x224728, x19 = request ring): wait for the dispatcher; orig add x22, x22, #8'),
     (0x2248e4, 20, '910022d6', 'unlink request posted (loop at main+0x224868, x19 = request ring): wait for the dispatcher before the object is freed; orig add x22, x22, #8'),
+  ],
+  # DRAGON QUEST VII Reimagined 1.2.0 main: right after the cut FMallocBinned3 constructor call (CUTS above), x19 = the new allocator object; the host writes its vtable there (hle_uemalloc.c)
+  'f7ec03e4cb9de3bd8319d4e899d2e9cc': [
+    (0x32758e4, 21, 'aa1303e0','GCreateMalloc: the allocator object is in x19, before it is used: the host puts its vtable in; orig mov x0, x19'),
   ],
 }
 BUILD_ID = d[0x40:0x50].hex()
@@ -845,15 +862,18 @@ def jump_adr_offsets(insl, j):
         # The base register was loaded further away (main+0x5f2a9c: hoisted out of the dispatch block): take every adrp + add pair in the function that builds it,
         # and accept the table only if exactly one candidate makes every target an instruction of this function
         fa, fb = insl[0].address, insl[-1].address + 4
-        cands = set()
-        for k, p in enumerate(insl):
-            if p.mnemonic != 'adrp' or not p.op_str.startswith(tb_reg + ','): continue
-            q = next((x for x in insl[k + 1:k + 9] if any(x.reg_name(r) == tb_reg for r in x.regs_access()[1])), None)
-            m = re.fullmatch(rf'{tb_reg}, {tb_reg}, #(0x[0-9a-f]+|\d+)', q.op_str) if q is not None and q.mnemonic == 'add' else None
-            if m: cands.add(p.operands[1].imm + int(m.group(1), 0))
-        ok = [tb for tb in sorted(cands) if (t := targets(tb)) and all(fa <= x < fb and x % 4 == 0 for x in t)]
+        ok = [tb for tb in table_cands(insl, tb_reg) if (t := targets(tb)) and all(fa <= x < fb and x % 4 == 0 for x in t)]
         return targets(ok[0]) if len(ok) == 1 else None
     return None
+def table_cands(insl, rb):
+    """Every address an adrp rb + add rb,rb,#lo pair in the function builds, sorted"""
+    cands = set()
+    for k, p in enumerate(insl):
+        if p.mnemonic != 'adrp' or not p.op_str.startswith(rb + ','): continue
+        q = next((x for x in insl[k + 1:k + 9] if any(x.reg_name(r) == rb for r in x.regs_access()[1])), None)
+        m = re.fullmatch(rf'{rb}, {rb}, #(0x[0-9a-f]+|\d+)', q.op_str) if q is not None and q.mnemonic == 'add' else None
+        if m: cands.add(p.operands[1].imm + int(m.group(1), 0))
+    return sorted(cands)
 def tail_call(insl, j):
     """The br x18 is an indirect tail call, not a jump table: the last write of x18 before it is a plain pointer load and the br ends the function. Ace Attorney Investigations Collection
     (Unity 2022.3 IL2CPP) main+0x1d271bc: ldr x18,[x0,#0x18]; ...; ldr x16,[sp]; ...; br x18, a thunk that moves stack arguments and jumps to the method pointer at +0x18"""
@@ -875,7 +895,35 @@ def jump_bytes_far(insl, j):
     base = next((q.operands[1].imm for q in reversed(ctx[:k]) if q.mnemonic == 'adr' and q.op_str.startswith('x18,')), None)
     ld = next((q for q in reversed(ctx[:k]) if q.mnemonic in ('ldrb', 'ldrsb', 'ldrh', 'ldrsh') and num(q.reg_name(q.operands[0].reg)) == idx), None)
     if base is None or ld is None: return None
-    return base, 256 if ld.mnemonic in ('ldrb', 'ldrsb') else 65536
+    return base, 256 if ld.mnemonic in ('ldrb', 'ldrsb') else half_count(insl, ld, base) or 65536
+def half_count(insl, ld, base):
+    """Landing pads a halfword table needs (ldrh wE,[xT,xI,lsl #1]; ...; adr x18,#L; add x18,x18,xE,lsl #2; br x18: target = L + 4 × entry). site_br gives every possible entry a pad,
+    65,536 of them (768 KB), whatever the switch's size: Animal Crossing: New Horizons 3.0.3 main has 51 such tables, 40 MB, which put its patch area's end beyond the ±128 MB a B reaches
+    (a B() assertion at its spin waits), and Tears of the Kingdom's main has 11. The table is read as jump_adr_offsets reads one: the index's bounds check (following register copies),
+    then the table base from adrp + add, or the one candidate in the function whose every target is an instruction of it → the largest entry + 1, or None (all 65,536, as before).
+    Byte tables keep their 256 pads (3 KB)"""
+    m = re.fullmatch(r'w\d+, \[(x\d+), [wx](\d+), (?:lsl|uxtw) #1\]', ld.op_str) if ld.mnemonic == 'ldrh' else None
+    if not m: return None
+    tb_reg, k = m.group(1), insl.index(ld)
+    idx, cmp = {'w' + m.group(2)}, None
+    for p in reversed(insl[max(0, k - 32):k]):   # walk back from the load to the bounds check
+        mm = re.fullmatch(r'(w\d+), (w\d+)', p.op_str) if p.mnemonic == 'mov' else None
+        if mm and mm.group(1) in idx: idx.add(mm.group(2)); continue
+        mm = re.fullmatch(r'(w\d+), #(0x[0-9a-f]+|\d+)', p.op_str) if p.mnemonic == 'cmp' else None
+        if mm and mm.group(1) in idx: cmp = p; break
+        if any('w' + p.reg_name(r)[1:] in idx for r in p.regs_access()[1]): return None   # the index changes after the check
+    kc = insl.index(cmp) if cmp is not None else -1
+    if kc < 0 or insl[kc + 1].mnemonic not in ('b.hi', 'b.hs', 'b.cs'): return None   # only a compare that guards the dispatch bounds the index (b.hs: one entry more than needed)
+    n = int(cmp.op_str.split('#')[1], 0) + 1
+    fa, fb = insl[0].address, insl[-1].address + 4
+    def entries(tb): return struct.unpack_from(f'<{n}H', IMG, tb) if 0 <= tb and tb + 2 * n <= len(IMG) else None
+    def fits(e): return e is not None and all(fa <= base + 4 * x < fb for x in e)
+    tb = table_base(insl, k, tb_reg)
+    if tb is None:
+        ok = [c for c in table_cands(insl, tb_reg) if fits(entries(c))]
+        tb = ok[0] if len(ok) == 1 else None
+    e = entries(tb) if tb is not None else None
+    return max(e) + 1 if fits(e) else None
 def disasm_fn(fa, fb):
     """A function's instructions. Capstone stops at the first word it cannot decode, so go on after it: Monster Hunter Rise main+0x6b34540 is a trap word (0xe7ffdefe)
     in the middle of a function, and the br x18 jump table after it (main+0x6b346d0) was never seen"""
@@ -903,7 +951,7 @@ for fa, fb in funcs:
                     rn = p.reg_name(p.operands[2].reg); idx = {'lr': 30, 'fp': 29}.get(rn, num(rn))
                     for q in reversed(ctx):
                         if q.mnemonic in ('ldrb', 'ldrsb') and num(q.reg_name(q.operands[0].reg)) == idx: width = 256
-                        if q.mnemonic in ('ldrh', 'ldrsh') and num(q.reg_name(q.operands[0].reg)) == idx: width = 65536
+                        if q.mnemonic in ('ldrh', 'ldrsh') and num(q.reg_name(q.operands[0].reg)) == idx: width = half_count(insl, q, base) or 65536 if base else 65536
                         if width: break
                     break
             if not (base and width):
@@ -963,15 +1011,28 @@ for a in sorted(kinds):
         struct.pack_into('<I', IMG, a, 0xD2A00080 | arg); stat(k); continue
     put_branch(a, st)
 
+def scratch_dead(off):
+    """x9–x17 carry nothing at off: from off on, every one of them is written before it is read, up to a bl (a call clobbers them all; DRAGON QUEST VII Reimagined's gate sits on the
+    mov x0, x19 before one). Only straight-line code is followed: a branch, a blr or a ret before the bl answers no"""
+    written = set()
+    for a in range(off, min(off + 4 * 16, TEXT_END), 4):
+        ins = dis(struct.unpack_from('<I', IMG, a)[0], a)
+        if ins.mnemonic == 'bl': return True
+        if ins.mnemonic in ('b', 'br', 'blr', 'ret', 'cbz', 'cbnz', 'tbz', 'tbnz') or ins.mnemonic.startswith('b.'): return False
+        rd, wr = regset(ins)
+        if any(9 <= (num(r) or -1) <= 17 and num(r) not in written for r in rd): return False
+        written |= {num(r) for r in wr}
+    return False
+
 obs = list(OBS.get(BUILD_ID, []))
 for off, oid, ow, why in obs:
     w = struct.unpack_from('<I', IMG, off)[0]
     assert f'{w:08x}' == ow, f'observation gate original instruction mismatch {off:#x}: {w:08x}'
-    # Function entries, or the instruction right after a bl / blr, only: the gate stub may modify x9–x17; at entry these carry no values under AAPCS64 (arguments are only in x0–x7 / x8),
-    # and right after a call returns the callee was free to clobber them anyway (x16 / x17 are the veneer registers)
+    # Function entries or the instruction after a bl / blr: the gate stub may modify x9–x17, which carry no live values there under AAPCS64.
+    # Elsewhere, accept only sites where none of these registers are read before the next call (scratch_dead).
     prev = struct.unpack_from('<I', IMG, off - 4)[0] if off >= 4 else 0
     after_call = prev >> 26 == 0x25 or prev & 0xfffffc1f == 0xd63f0000
-    assert off in set(starts) or after_call, f'observation gate neither at a function entry nor after a bl / blr {off:#x}'
+    assert off in set(starts) or after_call or scratch_dead(off), f'observation gate neither at a function entry, after a bl / blr nor before a call with x9–x17 unread {off:#x}'
     assert off < TEXT_END and off not in kinds and not any(lo <= off < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'observation gate conflicts with a rewrite site {off:#x}'
     put_branch(off, site_obs(off, oid, w)); stat('obs')
 

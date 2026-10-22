@@ -2108,7 +2108,8 @@ static void decode_residue(vorb *f, float *residue_buffers[], int ch, int n, int
    int rtype = f->residue_types[rn];
    int c = r->classbook;
    int classwords = f->codebooks[c].dimensions;
-   unsigned int actual_size = rtype == 2 ? n*2 : n;
+   // Type 2 interleaves all channels in this submap, not just a stereo pair.
+   unsigned int actual_size = rtype == 2 ? n*ch : n;
    unsigned int limit_r_begin = (r->begin < actual_size ? r->begin : actual_size);
    unsigned int limit_r_end   = (r->end   < actual_size ? r->end   : actual_size);
    int n_read = limit_r_end - limit_r_begin;
@@ -4162,6 +4163,8 @@ static int start_decoder(vorb *f)
       for (i=0; i < f->residue_count; ++i) {
          Residue *r = f->residue_config + i;
          unsigned int actual_size = f->blocksize_1 / 2;
+         // A type-2 submap can contain every channel; budget for that upper bound.
+         if (f->residue_types[i] == 2) actual_size *= f->channels;
          unsigned int limit_r_begin = r->begin < actual_size ? r->begin : actual_size;
          unsigned int limit_r_end   = r->end   < actual_size ? r->end   : actual_size;
          int n_read = limit_r_end - limit_r_begin;
