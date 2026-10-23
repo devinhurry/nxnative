@@ -1,6 +1,6 @@
 // Mac front end: with DM_WINDOW=1 open a window (CAMetalLayer, for the graphics backend to present frames) + keyboard and controllers → dm_input; the guest runs on a large-stack thread instead and the main thread belongs to AppKit.
 // Without DM_WINDOW: the guest runs directly on the current thread, behaving the same as with no front end (windowless tests use this).
-// The window is fullscreen-capable (the green button and ⌃⌘F); DM_FULLSCREEN starts it that way. ⌘Q quits; the left mouse button is the touchscreen.
+// The window is fullscreen-capable (the green button and ⌃⌘F); DM_FULLSCREEN starts it that way. ⌘Q quits; the left mouse button is the touchscreen, except BOTW uses it for look while enabled.
 // Key map (Nintendo layout): WASD left stick, arrow keys D-pad, J=A K=B U=X I=Y, Q=L E=R, Z=ZL C=ZR, F=press left stick G=press right stick, Return=+ Tab=−, Space=shake the controller.
 // Controllers: buttons by position as on the iPhone (right A, bottom B, top X, left Y), shoulders L R, triggers ZL ZR, Menu + Options −, both sticks and their presses.
 #import <Cocoa/Cocoa.h>
@@ -65,21 +65,64 @@ static void pads_changed(void) {   // every connected pad reports (the last one 
     if (!any) dm_pad_set(0, 0, 0, 0, 0);
 }
 
-// Mouse as a single-point touchscreen (front.h dm_touch_set): left button down / drag = finger 0, release = lifted. The content view takes the clicks,
-// not a window-wide event monitor, so clicks on the title bar, the window buttons and the resize edges still reach AppKit.
-@interface DmGameView : NSView @end
+// Mouse input stays on the content view, so titlebar, window-button and resize-edge clicks remain native AppKit events.
+// With look disabled, the left button is touchscreen finger 0; BOTW uses its held drag for relative camera look instead.
+@interface DmGameView : NSView {
+    NSSize _lookSize;
+    NSPoint _lookLastPoint;
+    BOOL _hasLookSize, _lookHeld, _lookCanceled;
+}
+- (void)cancelLook;
+@end
 @implementation DmGameView
 - (void)setFrameSize:(NSSize)b {
     [super setFrameSize:b];
     if (b.width <= 0 || b.height <= 0) return;
+    if (_hasLookSize && !NSEqualSizes(_lookSize, b)) [self cancelLook];
+    _lookSize = b; _hasLookSize = YES;
     if ([self.layer isKindOfClass:CAMetalLayer.class]) {
         CAMetalLayer *l = (CAMetalLayer *)self.layer;
         l.drawableSize = CGSizeMake(b.width * l.contentsScale, b.height * l.contentsScale);
     }
     dm_aspect_set_display((float)(b.width / b.height));
 }
-- (void)mouseDown:(NSEvent *)e { [self mouseDragged:e]; }
+- (void)cancelLook {
+    if (_lookHeld || (dm_look_enabled() && !_lookCanceled)) dm_look_input(DM_LOOK_CANCEL, 0, 0);
+    if (_lookHeld) _lookCanceled = YES;
+    _lookHeld = NO;
+}
+- (NSPoint)lookPoint:(NSEvent *)e {
+    return [self convertPoint:e.locationInWindow fromView:nil];
+}
+- (void)moveLookToPoint:(NSPoint)p {
+    NSSize b = self.bounds.size;
+    double scale = fmin(b.width, b.height);
+    if (scale <= 0) return;
+    // AppKit's view coordinates grow upward; look deltas grow downward.
+    float dx = (float)((p.x - _lookLastPoint.x) / scale);
+    float dy = (float)((_lookLastPoint.y - p.y) / scale);
+    _lookLastPoint = p;
+    if (dx != 0 || dy != 0) dm_look_input(DM_LOOK_MOVE, dx, dy);
+}
+- (void)mouseDown:(NSEvent *)e {
+    if (_lookHeld) [self cancelLook];
+    _lookCanceled = NO;
+    if (dm_look_enabled()) {
+        _lookLastPoint = [self lookPoint:e];
+        _lookHeld = YES;
+        dm_look_input(DM_LOOK_BEGIN, 0, 0);
+        return;
+    }
+    [self mouseDragged:e];
+}
 - (void)mouseDragged:(NSEvent *)e {
+    if (_lookCanceled) return;
+    if (_lookHeld) {
+        if (!dm_look_enabled()) { [self cancelLook]; return; }
+        [self moveLookToPoint:[self lookPoint:e]];
+        return;
+    }
+    if (dm_look_enabled()) return;
     NSPoint p = [self convertPoint:e.locationInWindow fromView:nil]; NSSize b = self.bounds.size;
     double w = b.width, h = b.height;
     if (w <= 0 || h <= 0) return;
@@ -88,7 +131,15 @@ static void pads_changed(void) {   // every connected pad reports (the last one 
     dm_touch t = {0, (float)fmin(fmax((p.x - x0) / w, 0), 0.999), (float)fmin(fmax(1 - (p.y - y0) / h, 0), 0.999)};   // The AppKit view origin is at bottom left, the touchscreen origin is at top left
     dm_touch_set(&t, 1);
 }
-- (void)mouseUp:(NSEvent *)e { (void)e; dm_touch_set(NULL, 0); }
+- (void)mouseUp:(NSEvent *)e {
+    if (_lookCanceled) { _lookCanceled = NO; return; }
+    if (!_lookHeld) { (void)e; dm_touch_set(NULL, 0); return; }
+    if (dm_look_enabled()) {
+        [self moveLookToPoint:[self lookPoint:e]];
+        dm_look_input(DM_LOOK_END, 0, 0);
+        _lookHeld = NO;
+    } else [self cancelLook];
+}
 @end
 
 typedef struct { void (*fn)(void); } guest_arg;
@@ -157,9 +208,9 @@ void front_run(void (*guest)(void)) {
         // content view by itself; only the scale factor has to be carried over to the screen the window ended up on.
         [nc addObserverForName:NSWindowDidEnterFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; g_layer.contentsScale = win.backingScaleFactor; }];
         [nc addObserverForName:NSWindowDidExitFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; g_layer.contentsScale = win.backingScaleFactor; }];
-        [nc addObserverForName:NSWindowDidResignKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; if (!win.miniaturized) dm_focus_set(2); }];
+        [nc addObserverForName:NSWindowDidResignKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; [(DmGameView *)v cancelLook]; if (!win.miniaturized) dm_focus_set(2); }];
         [nc addObserverForName:NSWindowDidBecomeKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_focus_set(1); }];
-        [nc addObserverForName:NSWindowDidMiniaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_focus_set(3); dm_audio_suspend(1); dm_gfx_suspend(1); }];
+        [nc addObserverForName:NSWindowDidMiniaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; [(DmGameView *)v cancelLook]; dm_focus_set(3); dm_audio_suspend(1); dm_gfx_suspend(1); }];
         [nc addObserverForName:NSWindowDidDeminiaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_gfx_suspend(0); dm_audio_suspend(0); dm_focus_set(2); }];
         // Guest thread: 64 MiB stack (the Switch main thread stack is specified by npdm; the host gives plenty)
         static guest_arg ga; ga.fn = guest;

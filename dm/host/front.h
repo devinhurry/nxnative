@@ -28,6 +28,14 @@ void dm_aspect_touch_rect(float w, float h, float rect[4]);
 typedef struct { uint32_t id; float x, y; } dm_touch;
 void dm_touch_set(const dm_touch *t, int n);
 
+// Relative pointer look (implemented by the host's hle_look.c; Mac front end):
+// deltas are normalized by the smaller logical view dimension, with right and down positive.
+// BEGIN starts a session, MOVE adds displacement, END preserves the last unconsumed displacement,
+// and CANCEL clears held and pending input. May be called from any thread.
+enum { DM_LOOK_BEGIN, DM_LOOK_MOVE, DM_LOOK_END, DM_LOOK_CANCEL };
+int dm_look_enabled(void);
+void dm_look_input(int phase, float dx, float dy);
+
 // Device motion (implemented by the host's hle_hid.c; called by the iOS front end): one sample per CoreMotion update.
 // acc = acceleration in G in the device frame (gravity included); gyro = angular velocity in revolutions/s in the device frame;
 // quat = device -> reference attitude as (w, x, y, z). The first sample (or one with DM_MOTION_RESET) defines the neutral pose:

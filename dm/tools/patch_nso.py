@@ -83,6 +83,8 @@ CUTS = {
   # and stepping down stops at < 3 → < 2. On hardware the same logic starting from 1 would also be 60 fps; it falls back to 30 by itself only when its input shows a slow frame (the last two cuts make that input include the GPU time).
   # With the frame step (FRAME_STEP below) the host's step replaces the controller's interval, except while the game's own VFR override is set (and at fps_target 0): the framework then keeps the controller's
   'cd57b23fa4bbad65803d9788c01821ee': [
+    # CameraTail's mode-change branch skipped the observer on stable frames. Redirect its taken edge to the existing mode reload at c1d0b4 so OBS25 runs each update, then the original ldrb reloads mode.
+    (0xc1d098, '00010054', 'e0000054', 'CameraTail steady-state update: b.eq main+0xc1d0b8 → b.eq main+0xc1d0b4 so OBS25 runs every frame'),
     (0x112670c, '6041201e', '4041201e', 'lower bound of the candidate interval: fmov s0,s11 (2.0) → fmov s0,s10 (1.0)'),
     (0x1126710, '7f0b0071', '7f070071', 'lower bound of the candidate interval: cmp w27,#2 → cmp w27,#1'),
     (0x112665c, '78008052', '58008052', 'step-down target recorded when stepping up, max(candidate, w24) − 1: mov w24,#3 → mov w24,#2'),
@@ -306,6 +308,8 @@ OBS = {
   'cd57b23fa4bbad65803d9788c01821ee': [
     (0xeb4468, 22, 'a9be7bfd', 'projection update: apply the display aspect to the main camera before checking dirty flags'),
     (0xd44a2c, 23, 'a94a2269', 'UI 3D camera update: x19 owns the source lens at +0xa0 and projection at +0xa8; apply aspect before copying lens parameters'),
+    (0xbf64ec, 24, 'fc1b0fec', 'CameraChase polar input: apply relative manual yaw/pitch before subsequent camera processing'),
+    (0xc1d0b4, 25, '394ab698', 'CameraTail update: apply relative yaw/pitch to native state before camera processing'),
   ],
   # Metroid Dread 2.1.0 main: the movie player posts "link / unlink holders" requests into the dispatcher thread's request ring (main+0x222cc8) and goes on without waiting for them (after an unlink it frees the wrapper object and builds a new one in place).
   # On hardware the dispatcher thread (priority 30, core 0 only) preempts the main thread (priority 44, core 0) at once and finishes first; the host waits for the ring to empty after each post (hle_movie.c movie_ring_wait). The gates sit on the add x22, x22, #8 after the bl
@@ -1035,6 +1039,19 @@ for off, oid, ow, why in obs:
     assert off in set(starts) or after_call or scratch_dead(off), f'observation gate neither at a function entry, after a bl / blr nor before a call with x9–x17 unread {off:#x}'
     assert off < TEXT_END and off not in kinds and not any(lo <= off < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'observation gate conflicts with a rewrite site {off:#x}'
     put_branch(off, site_obs(off, oid, w)); stat('obs')
+
+# CameraTail's stable-frame edge must enter the per-frame observer, not bypass it.
+# Keep this check beside OBS installation so a future cut or gate move cannot silently disable drag input.
+if BUILD_ID == 'cd57b23fa4bbad65803d9788c01821ee':
+    branch_off, obs_off = 0xc1d098, 0xc1d0b4
+    branch_word = struct.unpack_from('<I', IMG, branch_off)[0]
+    assert branch_word & 0xff000010 == 0x54000000, f'CameraTail observer edge is not b.cond at {branch_off:#x}: {branch_word:08x}'
+    imm19 = (branch_word >> 5) & 0x7ffff
+    if imm19 & 0x40000: imm19 -= 0x80000
+    target = branch_off + imm19 * 4
+    assert target == obs_off, f'CameraTail stable-frame edge targets {target:#x}, expected OBS25 at {obs_off:#x}'
+    assert any(off == obs_off and oid == 25 for off, oid, _, _ in obs), f'CameraTail stable-frame target {obs_off:#x} is not OBS25'
+    assert any(kind == 'obs' and arg == 25 and orig == obs_off for _, kind, arg, orig in gates), 'CameraTail OBS25 gate was not installed at the stable-frame target'
 
 # ---- Frame step in whole vsyncs (The Legend of Zelda: Tears of the Kingdom 1.4.3, Breath of the Wild 1.9.0, Hyrule Warriors: Age of Calamity 1.3.0 and Paper Mario: The Thousand-Year Door 1.0.1 main, host only) ----
 # The games step their game time by a whole number of vsyncs (1/60 s) per frame that their own interval logic picks. With the stubs the host picks it (hle_nvn.c fstep_tick,
