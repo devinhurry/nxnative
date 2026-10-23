@@ -11,6 +11,8 @@
 #include <pthread.h>
 #include <time.h>
 #include <math.h>
+#include <ctype.h>
+#include <errno.h>
 
 enum { NPAD_NO1 = 0, NPAD_HANDHELD = 0x20 };
 enum { STYLE_FULLKEY = 1u << 0, STYLE_HANDHELD = 1u << 1, STYLE_JOYDUAL = 1u << 2, STYLE_JOYLEFT = 1u << 3, STYLE_JOYRIGHT = 1u << 4 };
@@ -136,6 +138,22 @@ static void *ctl_main(void *arg) {
                 if (!strncmp(line, "cvari ", 6)) { void dm_ctl_cvar_i32(uint64_t off, int32_t v); char *e2; uint64_t off = strtoull(line + 6, &e2, 16); dm_ctl_cvar_i32(off, (int32_t)strtol(e2, NULL, 0)); continue; }
                 if (!strncmp(line, "cvarf ", 6)) { void dm_ctl_cvar_f32(uint64_t off, float v); char *e2; uint64_t off = strtoull(line + 6, &e2, 16); dm_ctl_cvar_f32(off, strtof(e2, NULL)); continue; }
                 if (!strncmp(line, "env ", 4)) { char *eq = strchr(line + 4, '='); if (eq) { *eq = 0; setenv(line + 4, eq + 1, 1); LOG("DM_CTL: env %s=%s", line + 4, eq + 1); } continue; }
+                if (!strncmp(line, "look ", 5)) {
+                    if (!dm_look_enabled()) die("[RED] DM_CTL look requested while relative look is disabled");
+                    char *p = line + 5, *end; errno = 0; long phase = strtol(p, &end, 10);
+                    if (errno || end == p || phase < DM_LOOK_BEGIN || phase > DM_LOOK_CANCEL || !isspace((unsigned char)*end)) die("[RED] DM_CTL invalid look phase: %s", line);
+                    p = end; while (isspace((unsigned char)*p)) p++;
+                    errno = 0; float dx = strtof(p, &end);
+                    if (errno || end == p || !isspace((unsigned char)*end) || !isfinite(dx)) die("[RED] DM_CTL invalid look dx: %s", line);
+                    p = end; while (isspace((unsigned char)*p)) p++;
+                    errno = 0; float dy = strtof(p, &end);
+                    if (errno || end == p || !isfinite(dy)) die("[RED] DM_CTL invalid look dy: %s", line);
+                    p = end; while (isspace((unsigned char)*p)) p++;
+                    if (*p) die("[RED] DM_CTL trailing text in look command: %s", line);
+                    dm_look_input((int)phase, dx, dy);
+                    LOG("DM_CTL: look phase=%ld delta=(%.5f,%.5f)", phase, dx, dy);
+                    continue;
+                }
                 if (!strncmp(line, "texdump ", 8)) { void dm_gfx_texdump_next(const char *path); dm_gfx_texdump_next(line + 8); LOG("DM_CTL: colour targets of the next frame → %s (as DM_NVN_TEXDUMP)", line + 8); continue; }
                 if (!strncmp(line, "passdump ", 9)) { void dm_gfx_passdump_next(long n); dm_gfx_passdump_next(atol(line + 9)); LOG("DM_CTL: passes of the next %ld frames (as DM_NVN_PASSDUMP)", atol(line + 9)); continue; }
                 key_step st = {0, 0.15, 0}; char *h = strchr(line, '~'); if (h) { *h = 0; st.hold = atof(h + 1); }
