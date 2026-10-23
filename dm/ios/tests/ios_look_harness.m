@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <GameController/GameController.h>
+#import <CoreMotion/CoreMotion.h>
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -8,6 +9,10 @@
 #include "dm_input.h"
 #include "front.h"
 UIView *dm_gamepad_view(CGRect frame);
+void dm_test_motion_reset(void);
+void dm_test_motion_recenter(void);
+void dm_test_motion_publish(CMQuaternion q, CMAcceleration a, CMRotationRate r);
+void dm_gamepad_geometry_changed(UIInterfaceOrientation orientation);
 
 @interface DmGamepad : UIView
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event;
@@ -40,6 +45,8 @@ static uint64_t g_buttons;
 static int32_t g_lx, g_ly, g_rx, g_ry;
 static dm_touch g_last_touch;
 static int g_touch_count, g_touch_sets;
+static dm_motion g_motion_samples[16];
+static int g_motion_count;
 
 int dm_look_enabled(void) { return g_look_enabled; }
 void dm_look_input(int phase, float dx, float dy) {
@@ -66,7 +73,10 @@ void dm_touch_set(const dm_touch *touches, int count) {
     if (count > 0 && touches) g_last_touch = touches[0];
 }
 void dm_aspect_touch_rect(float w, float h, float rect[4]) { rect[0] = rect[1] = 0; rect[2] = w; rect[3] = h; }
-void dm_motion_set(const dm_motion *motion) { (void)motion; }
+void dm_motion_set(const dm_motion *motion) {
+    if (g_motion_count >= (int)(sizeof g_motion_samples / sizeof g_motion_samples[0])) abort();
+    g_motion_samples[g_motion_count++] = *motion;
+}
 
 #define CHECK(condition, description) do { \
     if (condition) printf("PASS: %s\n", description); \
@@ -84,6 +94,20 @@ static void reset_look(void) {
 }
 static void near_value(float got, float want, const char *description) {
     CHECK(fabsf(got - want) < 1e-6f, description);
+}
+static CMQuaternion motion_mul(CMQuaternion a, CMQuaternion b) {
+    return (CMQuaternion){
+        .w = a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z,
+        .x = a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y,
+        .y = a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
+        .z = a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w,
+    };
+}
+static BOOL motion_quaternion_matches(CMQuaternion got, CMQuaternion expected) {
+    double gn = sqrt(got.w*got.w + got.x*got.x + got.y*got.y + got.z*got.z);
+    double en = sqrt(expected.w*expected.w + expected.x*expected.x + expected.y*expected.y + expected.z*expected.z);
+    double dot = (got.w*expected.w + got.x*expected.x + got.y*expected.y + got.z*expected.z) / (gn * en);
+    return fabs(fabs(dot) - 1.0) < 1e-6;
 }
 static void sum_moves(float *dx, float *dy) {
     *dx = *dy = 0;
@@ -213,7 +237,62 @@ static void test_cancel_and_modes(DmGamepad *view) {
     [view layoutIfNeeded]; [view setFull:YES];
 }
 
+static void test_motion_orientation(void) {
+    dm_test_motion_reset(); g_motion_count = 0;
+    // An upright landscape pose (world up is device X) with a nonzero arbitrary heading.
+    CMQuaternion right = {.w = 0.3535534, .x = 0.3535534, .y = -0.6123724, .z = 0.6123724};
+    CMQuaternion quarter_turn = motion_mul(right, (CMQuaternion){.w = M_SQRT1_2, .z = M_SQRT1_2});
+    CMQuaternion inverted = motion_mul(right, (CMQuaternion){.z = 1});
+    CMAcceleration accel = {.x = 0.25, .y = -0.5, .z = -1};
+    CMRotationRate rate = {.x = 0.1, .y = 0.2, .z = 0.3};
+
+    // Model a physical 180-degree handset turn: the interface flips halfway through,
+    // then the pose settles. A frame change remaps samples but is not a new neutral pose.
+    dm_gamepad_geometry_changed(UIInterfaceOrientationLandscapeRight);
+    dm_test_motion_publish(right, accel, rate);
+    dm_test_motion_publish(quarter_turn, accel, rate); // before UIKit reports the new geometry
+    dm_gamepad_geometry_changed(UIInterfaceOrientationLandscapeLeft);
+    dm_test_motion_publish(quarter_turn, accel, rate); // first sample with the refreshed frame
+    dm_test_motion_publish(inverted, accel, rate);     // physical turn settles at 180 degrees
+    CHECK(g_motion_count == 4, "motion pipeline publishes the right-to-left physical rotation sequence");
+    CHECK(g_motion_samples[0].flags == DM_MOTION_RESET && g_motion_samples[1].flags == 0 &&
+          g_motion_samples[2].flags == 0 && g_motion_samples[3].flags == 0,
+          "landscape frame changes do not recenter at an intermediate physical angle");
+    CMQuaternion mapped_pose = {.w = g_motion_samples[3].quat[0], .x = g_motion_samples[3].quat[1],
+                                .y = g_motion_samples[3].quat[2], .z = g_motion_samples[3].quat[3]};
+    CHECK(motion_quaternion_matches(mapped_pose, right),
+          "settled inverted-landscape pose maps back to the original neutral frame");
+    CHECK(fabsf(g_motion_samples[3].acc[0] + 0.25f) < 1e-6f && fabsf(g_motion_samples[3].acc[1] - 0.5f) < 1e-6f &&
+          fabsf(g_motion_samples[3].gyro[0] + (float)(0.1 / (2 * M_PI))) < 1e-6f &&
+          fabsf(g_motion_samples[3].gyro[1] + (float)(0.2 / (2 * M_PI))) < 1e-6f,
+          "settled sample acceleration and angular rate use the refreshed landscape frame");
+
+    // Reverse transition, including a physical quarter-turn before the UI frame changes.
+    dm_test_motion_reset(); g_motion_count = 0;
+    dm_gamepad_geometry_changed(UIInterfaceOrientationLandscapeLeft);
+    dm_test_motion_publish(inverted, accel, rate);
+    dm_test_motion_publish(quarter_turn, accel, rate);
+    dm_gamepad_geometry_changed(UIInterfaceOrientationLandscapeRight);
+    dm_test_motion_publish(quarter_turn, accel, rate);
+    dm_test_motion_publish(right, accel, rate);
+    CHECK(g_motion_count == 4 && g_motion_samples[0].flags == DM_MOTION_RESET &&
+          g_motion_samples[1].flags == 0 && g_motion_samples[2].flags == 0 && g_motion_samples[3].flags == 0,
+          "left-to-right rotation also preserves the existing neutral frame");
+    mapped_pose = (CMQuaternion){.w = g_motion_samples[3].quat[0], .x = g_motion_samples[3].quat[1],
+                                 .y = g_motion_samples[3].quat[2], .z = g_motion_samples[3].quat[3]};
+    CHECK(motion_quaternion_matches(mapped_pose, right),
+          "settled right-landscape pose after reverse rotation remains neutral");
+
+    g_motion_count = 4;
+    dm_test_motion_recenter();
+    dm_test_motion_publish(right, accel, rate);
+    dm_test_motion_publish(right, accel, rate);
+    CHECK(g_motion_samples[4].flags == DM_MOTION_RESET && g_motion_samples[5].flags == 0,
+          "requested recenter remains one-shot and independent of orientation changes");
+}
+
 static void run_tests(DmGamepad *view) {
+    test_motion_orientation();
     test_look_drag(view);
     test_priority_and_multitouch(view);
     test_cancel_and_modes(view);

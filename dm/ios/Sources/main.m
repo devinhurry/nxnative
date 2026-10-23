@@ -11,6 +11,7 @@ int dm_main(int argc, char **argv);   // dm/host/main.c compiled in with -Dmain=
 void dm_host_preload_start(int argc, char **argv);
 UIViewController *front_ios_root(void);
 void front_ios_focus_event(int ev);
+void dm_gamepad_geometry_changed(UIInterfaceOrientation orientation);
 
 static char *g_argv[4]; static int g_argc;
 
@@ -111,6 +112,10 @@ int front_ios_boot_ok(void) { return g_boot_ok; }
 - (void)sceneDidEnterBackground:(UIScene *)s { front_ios_focus_event(1); }
 - (void)sceneWillEnterForeground:(UIScene *)s { front_ios_focus_event(2); }
 - (void)sceneDidBecomeActive:(UIScene *)s { front_ios_focus_event(3); }
+- (void)windowScene:(UIWindowScene *)scene didUpdateEffectiveGeometry:(UIWindowSceneGeometry *)previous {
+    (void)previous;
+    dm_gamepad_geometry_changed(scene.effectiveGeometry.interfaceOrientation);
+}
 @end
 
 int main(int argc, char **argv) {

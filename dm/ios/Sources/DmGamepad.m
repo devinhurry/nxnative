@@ -79,36 +79,46 @@ static void motion_start(void) {
 static CMMotionManager *g_devmotion;
 static _Atomic int g_motion_flip = -1;     // -1 = the interface orientation is not known yet, 0 = right, 1 = left
 static _Atomic int g_motion_recenter;      // the next sample becomes the neutral pose
-static void motion_update_flip(UIWindowScene *scene) {
-    if (!scene) return;
-    UIInterfaceOrientation o = scene.effectiveGeometry.interfaceOrientation;
+static int g_motion_published_first;       // motion_publish runs on one serial queue
+static void motion_update_flip_value(UIInterfaceOrientation o) {
     if (o == UIInterfaceOrientationLandscapeLeft) atomic_store(&g_motion_flip, 1);
     else if (o == UIInterfaceOrientationLandscapeRight) atomic_store(&g_motion_flip, 0);   // portrait during launch: wait for a landscape
+}
+static void motion_update_flip(UIWindowScene *scene) {
+    if (scene) motion_update_flip_value(scene.effectiveGeometry.interfaceOrientation);
 }
 static void motion_first_input(void) {     // the player is holding the phone as they play: take that pose as neutral
     static _Atomic int done;
     if (!atomic_exchange(&done, 1)) atomic_store(&g_motion_recenter, 1);
 }
-static void motion_publish(CMDeviceMotion *m) {
-    int flip = atomic_load(&g_motion_flip);
-    if (flip < 0) return;
-    CMQuaternion q = m.attitude.quaternion;
+static void motion_publish_values(CMQuaternion q, CMAcceleration a, CMRotationRate r, int flip) {
     double w = q.w, x = q.x, y = q.y, z = q.z;
-    CMAcceleration a = {m.gravity.x + m.userAcceleration.x, m.gravity.y + m.userAcceleration.y, m.gravity.z + m.userAcceleration.z};
-    CMRotationRate r = m.rotationRate;
     if (flip) {   // q' = q * (0, 0, 1, 0); vectors turn with it: (x, y, z) -> (-x, -y, z)
         double w2 = -z, x2 = y, y2 = -x, z2 = w;
         w = w2; x = x2; y = y2; z = z2;
         a.x = -a.x; a.y = -a.y;
         r.x = -r.x; r.y = -r.y;
     }
-    static BOOL first = YES;
     uint32_t flags = atomic_exchange(&g_motion_recenter, 0) ? DM_MOTION_RESET : 0;
-    if (first) { first = NO; flags |= DM_MOTION_RESET; }
+    if (!g_motion_published_first) { g_motion_published_first = 1; flags |= DM_MOTION_RESET; }
     dm_motion mm = {{(float)a.x, (float)a.y, (float)a.z}, {(float)(r.x / (2 * M_PI)), (float)(r.y / (2 * M_PI)), (float)(r.z / (2 * M_PI))},
                     {(float)w, (float)x, (float)y, (float)z}, flags};
     dm_motion_set(&mm);
 }
+static void motion_publish(CMDeviceMotion *m) {
+    int flip = atomic_load(&g_motion_flip);
+    if (flip < 0) return;
+    CMAcceleration a = {m.gravity.x + m.userAcceleration.x, m.gravity.y + m.userAcceleration.y, m.gravity.z + m.userAcceleration.z};
+    motion_publish_values(m.attitude.quaternion, a, m.rotationRate, flip);
+}
+#ifdef DM_TEST_HOOKS
+void dm_test_motion_reset(void) { g_motion_published_first = 0; atomic_store(&g_motion_flip, -1); atomic_store(&g_motion_recenter, 0); }
+void dm_test_motion_recenter(void) { atomic_store(&g_motion_recenter, 1); }
+void dm_test_motion_publish(CMQuaternion q, CMAcceleration a, CMRotationRate r) {
+    int flip = atomic_load(&g_motion_flip);
+    if (flip >= 0) motion_publish_values(q, a, r, flip);
+}
+#endif
 static void motion_device_start(void) {
     if (g_devmotion) return;
     const char *off = getenv("DM_MOTION");
@@ -151,6 +161,7 @@ static const int k_btns[] = {B_ZL, B_L, B_ZR, B_R, B_MINUS, B_PLUS, B_LS, B_RS};
 static NSString *const k_layout_key = @"DmPadLayout";   // NSUserDefaults: 1 = 3D, 0 = 2D
 
 @interface DmGamepad : UIView
+- (void)checkLookGeometry;
 @end
 static __weak DmGamepad *g_view;
 
@@ -547,6 +558,10 @@ static void read_pad(GCExtendedGamepad *g) {
 @end
 
 UIView *dm_gamepad_view(CGRect frame) { DmGamepad *v = [[DmGamepad alloc] initWithFrame:frame]; g_view = v; return v; }
+void dm_gamepad_geometry_changed(UIInterfaceOrientation orientation) {
+    motion_update_flip_value(orientation);
+    [g_view checkLookGeometry];
+}
 void dm_gamepad_reset(void) {   // On resign active: release everything (a key held while switching away and released in background gets no "release")
     dispatch_async(dispatch_get_main_queue(), ^{ [g_view reset]; });
     pthread_mutex_lock(&g_mu); g_pad_btn = 0; g_shake_btn = 0; g_pad_lx = g_pad_ly = g_pad_rx = g_pad_ry = 0; pthread_mutex_unlock(&g_mu); publish();

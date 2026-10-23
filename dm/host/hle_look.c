@@ -24,6 +24,16 @@ typedef struct {
     uint64_t yaw_base, yaw_history_a, yaw_history_b;
 } camera_look_tail_t;
 static camera_look_tail_t g_tail;
+// CameraAiming (rune aiming) and CameraAiming2 (bow / rune wheel) use the same relative input.
+// Their pitch source is a persistent field; their yaw is modified in a result register before
+// the game wraps, clamps and smooths it.
+typedef struct {
+    uint64_t aiming_vtable, aiming2_vtable;
+    uint64_t pitch_aiming, pitch_aiming2;
+    uint64_t yaw_aiming, yaw_aiming_mode1, yaw_aiming2;
+    uint64_t pitch_field;
+} camera_look_aim_t;
+static camera_look_aim_t g_aim;
 #ifdef DM_TEST_HOOKS
 static void *(*g_test_camera_getter)(void *);
 static void (*g_test_state_init)(void *);
@@ -122,28 +132,46 @@ void dm_look_input(int phase, float dx, float dy) {
 
 // Called by the build-specific guest camera callback. Inactive modes and gaps discard queued movement,
 // but preserve a held drag so fresh movement can apply after returning to ordinary third-person camera.
-static void dm_look_consume(uint64_t frame, int manual_camera, float *dx, float *dy) {
+static void dm_look_consume_axes(uint64_t frame, int manual_camera, int axes, float *dx, float *dy) {
     if (!dx || !dy) die("[RED] look: null consume output");
     if (manual_camera != 0 && manual_camera != 1) die("[RED] look: manual-camera state must be 0 or 1");
+    if (axes < 1 || axes > 3) die("[RED] look: invalid relative-look axis mask %d", axes);
     pthread_mutex_lock(&g_look_mu);
     if (g_have_frame && frame < g_last_frame) { pthread_mutex_unlock(&g_look_mu); die("[RED] look: guest frame moved backwards"); }
     int gap = g_have_frame && frame - g_last_frame > 1;
     if (!manual_camera || gap || (!g_have_frame && (g_dx != 0 || g_dy != 0) && frame > g_pending_frame + 1)) g_dx = g_dy = 0;
-    *dx = g_dx; *dy = g_dy;
-    g_dx = g_dy = 0;
+    *dx = axes & 1 ? g_dx : 0; *dy = axes & 2 ? g_dy : 0;
+    if (axes & 1) g_dx = 0;
+    if (axes & 2) g_dy = 0;
     g_last_frame = frame; g_have_frame = 1;
     pthread_mutex_unlock(&g_look_mu);
+}
+
+static void dm_look_consume(uint64_t frame, int manual_camera, float *dx, float *dy) {
+    dm_look_consume_axes(frame, manual_camera, 3, dx, dy);
+}
+
+static int look_aim_action(uint64_t action_vtable) {
+    if (!*DM_GAME_CAMERA_LOOK_AIM) return 0;
+    uint64_t base = (uint64_t)(uintptr_t)g_camera.main->base;
+    return action_vtable == base + g_aim.aiming_vtable || action_vtable == base + g_aim.aiming2_vtable;
 }
 
 static void camera_look_update(const uint64_t *regs) {
     uint8_t *action = (uint8_t *)(uintptr_t)regs[0];
     float *polar = (float *)(uintptr_t)regs[1];
     if (!action) die("[RED] look: camera update supplied a null action");
-    if (*(uint64_t *)action != (uint64_t)(g_camera.main->base + g_camera.chase_vtable)) {
+    uint64_t action_vtable = *(uint64_t *)action;
+    if (action_vtable != (uint64_t)(g_camera.main->base + g_camera.chase_vtable)) {
+        // The shared camera update also runs for aiming actions. Their own callbacks consume the
+        // movement, so do not discard it here before they run.
+        if (look_aim_action(action_vtable)) return;
         float ignored_dx, ignored_dy;
         dm_look_consume(dm_guest_frame(), 0, &ignored_dx, &ignored_dy);
         return;
     }
+    uint8_t current_mode;
+    memcpy(&current_mode, action + g_camera.state_mode, sizeof current_mode);
     if (!polar) die("[RED] look: CameraChase supplied a null polar tuple");
 
     uint8_t *camera = look_camera_get(action + g_camera.camera_member);
@@ -154,8 +182,6 @@ static void camera_look_update(const uint64_t *regs) {
     int32_t control_mode; uint8_t camera_status;
     memcpy(&control_mode, (void *)(uintptr_t)control_ptr, sizeof control_mode);
     memcpy(&camera_status, camera + g_camera.camera_status, sizeof camera_status);
-    uint8_t current_mode;
-    memcpy(&current_mode, action + g_camera.state_mode, sizeof current_mode);
     int manual = control_mode == 1 && (current_mode == 2 || current_mode == 3) && !(camera_status & 1);
     uint64_t frame = dm_guest_frame();
     float dx, dy;
@@ -252,8 +278,60 @@ static void camera_look_tail_update(const uint64_t *regs) {
                             (unsigned long long)g_camera.injections, (unsigned long long)frame, dx, dy, next_pitch, next_yaw, *mode);
 }
 
+// The aiming updates read their pitch from a persistent field and compute a wrapped yaw in the
+// target register. The gates run before the native instruction, so changing the saved register
+// or the field here feeds the game's own clamp, gyro and smoothing afterwards.
+static void camera_aim_pitch(const uint64_t *regs, int aiming2) {
+    uint8_t *action = (uint8_t *)(uintptr_t)regs[19];
+    if (!action) return;
+    uint64_t vtable; memcpy(&vtable, action, sizeof vtable);
+    uint64_t expected = (uint64_t)(g_camera.main->base + (aiming2 ? g_aim.aiming2_vtable : g_aim.aiming_vtable));
+    if (vtable != expected) return;
+    float dx, dy;
+    dm_look_consume_axes(dm_guest_frame(), 1, 2, &dx, &dy);
+    if (dy == 0) return;
+    float pitch;
+    memcpy(&pitch, action + g_aim.pitch_field, sizeof pitch);
+    if (!isfinite(pitch) || !isfinite(dy) || !isfinite(g_camera.gain) || g_camera.gain <= 0)
+        die("[RED] look: invalid aim pitch field or gain");
+    float next = pitch + dy * g_camera.gain;
+    if (!isfinite(next)) die("[RED] look: aim pitch overflow");
+    memcpy(action + g_aim.pitch_field, &next, sizeof next);
+    g_camera.injections++;
+    if (g_camera.trace)
+        LOG("look: #%llu aim-pitch vtable=%#llx d=%.5f angle=%.3f",
+            (unsigned long long)g_camera.injections, (unsigned long long)vtable, dy, next);
+}
+
+static void camera_aim_yaw(const uint64_t *regs, int aiming2) {
+    uint8_t *action = (uint8_t *)(uintptr_t)regs[19];
+    if (!action) return;
+    uint64_t vtable; memcpy(&vtable, action, sizeof vtable);
+    uint64_t expected = (uint64_t)(g_camera.main->base + (aiming2 ? g_aim.aiming2_vtable : g_aim.aiming_vtable));
+    if (vtable != expected) return;
+    float dx, dy;
+    dm_look_consume_axes(dm_guest_frame(), 1, 1, &dx, &dy);
+    if (dx == 0) return;
+    // entry.S saves q0..q31 at regs+256; every yaw gate has the new target yaw in q0.
+    float current;
+    memcpy(&current, (const uint8_t *)regs + 256, sizeof current);
+    if (!isfinite(current) || !isfinite(dx) || !isfinite(g_camera.gain) || g_camera.gain <= 0)
+        die("[RED] look: invalid aim yaw result or gain");
+    float next = wrap_degrees(current - dx * g_camera.gain);
+    memcpy((uint8_t *)(uintptr_t)regs + 256, &next, sizeof next);
+    g_camera.injections++;
+    if (g_camera.trace)
+        LOG("look: #%llu aim-yaw vtable=%#llx d=%.5f angle=%.3f",
+            (unsigned long long)g_camera.injections, (unsigned long long)vtable, dx, next);
+}
+
+static void camera_aiming_pitch(const uint64_t *regs) { camera_aim_pitch(regs, 0); }
+static void camera_aiming2_pitch(const uint64_t *regs) { camera_aim_pitch(regs, 1); }
+static void camera_aiming_yaw(const uint64_t *regs) { camera_aim_yaw(regs, 0); }
+static void camera_aiming2_yaw(const uint64_t *regs) { camera_aim_yaw(regs, 1); }
+
 void dm_look_install(void) {
-    if (!*DM_GAME_CAMERA_LOOK && !*DM_GAME_CAMERA_LOOK_TAIL) return;
+    if (!*DM_GAME_CAMERA_LOOK && !*DM_GAME_CAMERA_LOOK_TAIL && !*DM_GAME_CAMERA_LOOK_AIM) return;
     if (!*DM_GAME_CAMERA_LOOK || !*DM_GAME_CAMERA_LOOK_TAIL)
         die("[RED] look: CameraChase and CameraTail profile settings must be configured together");
     char build[33] = {0}; unsigned long long v[15]; float gain; int used = 0;
@@ -266,10 +344,19 @@ void dm_look_install(void) {
         "%32[0-9a-f]:%llx:%llx:%llx:%llx:%llx:%llx:%llx:%llx:%llx:%llx%n",
         tail_build, &tv[0], &tv[1], &tv[2], &tv[3], &tv[4], &tv[5], &tv[6], &tv[7], &tv[8], &tv[9], &tail_used);
     if (n != 11 || DM_GAME_CAMERA_LOOK_TAIL[tail_used]) die("[RED] look: malformed camera_look_tail profile");
+    char aim_build[33] = {0}; unsigned long long av[8]; int aim_used = 0;
+    if (*DM_GAME_CAMERA_LOOK_AIM) {
+        n = sscanf(DM_GAME_CAMERA_LOOK_AIM,
+            "%32[0-9a-f]:%llx:%llx:%llx:%llx:%llx:%llx:%llx:%llx%n",
+            aim_build, &av[0], &av[1], &av[2], &av[3], &av[4], &av[5], &av[6], &av[7], &aim_used);
+        if (n != 9 || DM_GAME_CAMERA_LOOK_AIM[aim_used]) die("[RED] look: malformed camera_look_aim profile");
+    }
     for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) g_camera.main = &g_mod[i];
     if (!g_camera.main || strcmp(build, g_camera.main->build_id))
         die("[RED] look: camera_look requires main build %s (loaded %s)", build, dm_main_build());
     if (strcmp(tail_build, build)) die("[RED] look: CameraChase and CameraTail profile build IDs differ");
+    if (*DM_GAME_CAMERA_LOOK_AIM && strcmp(aim_build, build))
+        die("[RED] look: camera_look_aim and camera_look build IDs differ");
     if (!isfinite(gain) || gain <= 0 || gain > 3600 || v[0] >= g_camera.main->text_end ||
         v[2] >= g_camera.main->text_end || v[3] >= g_camera.main->text_end ||
         v[1] + sizeof(uint64_t) > g_camera.main->size || v[4] > 0x10000 || v[5] > 0x10000 ||
@@ -282,8 +369,20 @@ void dm_look_install(void) {
         tv[3] > 0x10000 || tv[4] > 0x10000 || tv[5] > 0x10000 || tv[6] > 0x10000 ||
         tv[7] > 0x10000 || tv[8] > 0x10000 || tv[9] > 0x10000)
         die("[RED] look: CameraTail offsets are out of range");
+    if (*DM_GAME_CAMERA_LOOK_AIM) {
+        if (!av[0] || !av[1] || av[0] >= g_camera.main->size || av[1] >= g_camera.main->size ||
+            av[2] >= g_camera.main->text_end || av[3] >= g_camera.main->text_end ||
+            av[4] >= g_camera.main->text_end || av[5] >= g_camera.main->text_end ||
+            av[6] >= g_camera.main->text_end || av[7] > 0x10000)
+            die("[RED] look: camera_look_aim offsets are out of range");
+    }
     if (!gate_obs_present(OBS_BOTW_CAMERA_LOOK) || !gate_obs_present(OBS_BOTW_CAMERA_TAIL_LOOK))
         die("[RED] look: CameraChase or CameraTail gate missing; rewrite main with the current patch_nso.py");
+    if (*DM_GAME_CAMERA_LOOK_AIM &&
+        (!gate_obs_present(OBS_BOTW_AIMING_PITCH) || !gate_obs_present(OBS_BOTW_AIMING2_PITCH) ||
+         !gate_obs_present(OBS_BOTW_AIMING_YAW) || !gate_obs_present(OBS_BOTW_AIMING_YAW_MODE1) ||
+         !gate_obs_present(OBS_BOTW_AIMING2_YAW)))
+        die("[RED] look: aiming gate missing; rewrite main with the current patch_nso.py");
     const char *e = getenv("DM_LOOK");
     if (e && strcmp(e, "0") && strcmp(e, "1")) die("[RED] DM_LOOK must be 0 or 1");
     if (e && !strcmp(e, "0")) { LOG("look: disabled by DM_LOOK=0"); return; }
@@ -295,14 +394,28 @@ void dm_look_install(void) {
     g_tail.hook = tv[0]; g_tail.vtable = tv[1]; g_tail.state_init = tv[2]; g_tail.state_mode = tv[3];
     g_tail.pitch_base = tv[4]; g_tail.pitch_history_a = tv[5]; g_tail.pitch_history_b = tv[6];
     g_tail.yaw_base = tv[7]; g_tail.yaw_history_a = tv[8]; g_tail.yaw_history_b = tv[9];
+    if (*DM_GAME_CAMERA_LOOK_AIM) {
+        g_aim.aiming_vtable = av[0]; g_aim.aiming2_vtable = av[1];
+        g_aim.pitch_aiming = av[2]; g_aim.pitch_aiming2 = av[3];
+        g_aim.yaw_aiming = av[4]; g_aim.yaw_aiming_mode1 = av[5]; g_aim.yaw_aiming2 = av[6];
+        g_aim.pitch_field = av[7];
+    }
     e = getenv("DM_LOOK_TRACE");
     if (e && strcmp(e, "0") && strcmp(e, "1")) die("[RED] DM_LOOK_TRACE must be 0 or 1");
     g_camera.trace = e && !strcmp(e, "1");
     gate_obs_set(OBS_BOTW_CAMERA_LOOK, camera_look_update);
     gate_obs_set(OBS_BOTW_CAMERA_TAIL_LOOK, camera_look_tail_update);
+    if (*DM_GAME_CAMERA_LOOK_AIM) {
+        gate_obs_set(OBS_BOTW_AIMING_PITCH, camera_aiming_pitch);
+        gate_obs_set(OBS_BOTW_AIMING2_PITCH, camera_aiming2_pitch);
+        gate_obs_set(OBS_BOTW_AIMING_YAW, camera_aiming_yaw);
+        gate_obs_set(OBS_BOTW_AIMING_YAW_MODE1, camera_aiming_yaw);
+        gate_obs_set(OBS_BOTW_AIMING2_YAW, camera_aiming2_yaw);
+    }
     dm_look_set_available(1);
-    LOG("look: CameraChase main+%#llx and CameraTail main+%#llx installed for build %s (%.1f degrees per normalized short edge)",
-        (unsigned long long)g_camera.hook, (unsigned long long)g_tail.hook, build, gain);
+    LOG("look: CameraChase main+%#llx and CameraTail main+%#llx installed for build %s (%.1f degrees per normalized short edge)%s",
+        (unsigned long long)g_camera.hook, (unsigned long long)g_tail.hook, build, gain,
+        *DM_GAME_CAMERA_LOOK_AIM ? "; aiming drag enabled" : "");
 }
 
 #ifdef DM_TEST_HOOKS
@@ -321,4 +434,9 @@ void dm_look_test_tail_config(void) {
     g_tail.yaw_base = 0x9c; g_tail.yaw_history_a = 0xa0; g_tail.yaw_history_b = 0xa4;
 }
 void dm_look_test_tail_state_init(void (*init)(void *)) { g_test_tail_state_init = init; }
+void dm_look_test_aim_config(void) {
+    g_aim.aiming_vtable = 0x1200; g_aim.aiming2_vtable = 0x1300; g_aim.pitch_field = 0x234;
+}
+void dm_look_test_aim_pitch(int aiming2, const uint64_t *regs) { camera_aim_pitch(regs, aiming2); }
+void dm_look_test_aim_yaw(int aiming2, const uint64_t *regs) { camera_aim_yaw(regs, aiming2); }
 #endif

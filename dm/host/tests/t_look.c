@@ -8,9 +8,14 @@
 module_t g_mod[MAX_MOD];
 int g_nmod;
 static int test_gate_present, test_gate_installed, test_gate_count, test_missing_gate;
-int gate_obs_present(int id) { return (id == OBS_BOTW_CAMERA_LOOK || id == OBS_BOTW_CAMERA_TAIL_LOOK) && test_gate_present && id != test_missing_gate; }
+static int known_gate(int id) {
+    return id == OBS_BOTW_CAMERA_LOOK || id == OBS_BOTW_CAMERA_TAIL_LOOK ||
+           id == OBS_BOTW_AIMING_PITCH || id == OBS_BOTW_AIMING2_PITCH ||
+           id == OBS_BOTW_AIMING_YAW || id == OBS_BOTW_AIMING_YAW_MODE1 || id == OBS_BOTW_AIMING2_YAW;
+}
+int gate_obs_present(int id) { return known_gate(id) && test_gate_present && id != test_missing_gate; }
 void gate_obs_set(int id, void (*fn)(const uint64_t *regs)) {
-    assert((id == OBS_BOTW_CAMERA_LOOK || id == OBS_BOTW_CAMERA_TAIL_LOOK) && fn);
+    assert(known_gate(id) && fn);
     test_gate_installed = 1; test_gate_count++;
 }
 uint64_t dm_guest_frame(void) { return 0; }
@@ -178,6 +183,13 @@ static void missing_tail_gate(void) {
     g_mod[0].base = image; g_mod[0].size = sizeof image; g_mod[0].text_end = 0x1000000;
     test_gate_present = 1; test_missing_gate = OBS_BOTW_CAMERA_TAIL_LOOK; dm_look_install();
 }
+static void missing_aim_gate(void) {
+    static uint8_t image[0x2000000];
+    memset(g_mod, 0, sizeof g_mod); g_nmod = 1;
+    strcpy(g_mod[0].name, "main"); strcpy(g_mod[0].build_id, "cd57b23fa4bbad65803d9788c01821ee");
+    g_mod[0].base = image; g_mod[0].size = sizeof image; g_mod[0].text_end = 0x1000000;
+    test_gate_present = 1; test_missing_gate = OBS_BOTW_AIMING_YAW; dm_look_install();
+}
 static void test_install_guard(void) {
     static uint8_t image[0x2000000];
     unsetenv("DM_LOOK"); unsetenv("DM_LOOK_TRACE");
@@ -186,10 +198,11 @@ static void test_install_guard(void) {
     g_mod[0].base = image; g_mod[0].size = sizeof image; g_mod[0].text_end = 0x1000000;
     test_gate_present = 1; test_gate_installed = test_gate_count = test_missing_gate = 0;
     dm_look_install();
-    check("matching build and both observation gates enable the backend", dm_look_enabled() && test_gate_installed && test_gate_count == 2);
+    check("matching build and all observation gates enable the backend", dm_look_enabled() && test_gate_installed && test_gate_count == 7);
     expect_abort("camera backend rejects a different main build", wrong_build);
     expect_abort("camera backend rejects a missing rewritten gate", missing_gate);
     expect_abort("camera backend rejects a missing CameraTail gate", missing_tail_gate);
+    expect_abort("camera backend rejects a missing aiming gate", missing_aim_gate);
     dm_look_set_available(0);
 }
 
@@ -364,6 +377,88 @@ static void test_tail_callback(void) {
     dm_look_set_available(0); dm_look_test_camera_functions(NULL, NULL); dm_look_test_tail_state_init(NULL);
 }
 
+static void test_aim_callback(void) {
+    static uint8_t image[0x2000], action[0x400];
+    module_t main = {0}; strcpy(main.name, "main"); main.base = image; main.size = sizeof image;
+    dm_look_test_camera_config(&main, 180); dm_look_test_camera_offsets(); dm_look_test_aim_config();
+    memset(action, 0, sizeof action);
+    uint64_t regs[40] = {0}; regs[19] = (uint64_t)(uintptr_t)action;
+    float pitch, yaw;
+    dm_look_set_available(0); dm_look_set_available(1);
+
+    *(uint64_t *)action = (uint64_t)(uintptr_t)(image + 0x1200);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 0);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.25f, 0.05f, 0);
+    dm_look_test_aim_pitch(0, regs);
+    memcpy(&pitch, action + 0x234, sizeof pitch);
+    check("CameraAiming pitch adds the relative dy before the native load", near(pitch, 9));
+    float q = 10;
+    memcpy((uint8_t *)regs + 256, &q, sizeof q);
+    dm_look_test_aim_yaw(0, regs);
+    memcpy(&yaw, (uint8_t *)regs + 256, sizeof yaw);
+    check("CameraAiming yaw subtracts the relative dx from the native result", near(yaw, -35));
+    dm_look_test_aim_pitch(0, regs);
+    dm_look_test_aim_yaw(0, regs);
+    memcpy(&pitch, action + 0x234, sizeof pitch);
+    memcpy(&yaw, (uint8_t *)regs + 256, sizeof yaw);
+    check("aim movement is consumed once per drag update", near(pitch, 9) && near(yaw, -35));
+
+    dm_look_test_input_at(DM_LOOK_MOVE, -0.25f, -0.05f, 0);
+    dm_look_test_aim_pitch(0, regs);
+    dm_look_test_aim_yaw(0, regs);
+    memcpy(&pitch, action + 0x234, sizeof pitch);
+    memcpy(&yaw, (uint8_t *)regs + 256, sizeof yaw);
+    check("reverse aim movement returns pitch and yaw", near(pitch, 0) && near(yaw, 10));
+
+    q = 179; memcpy((uint8_t *)regs + 256, &q, sizeof q);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.25f, 0, 0);
+    dm_look_test_aim_yaw(0, regs);
+    memcpy(&yaw, (uint8_t *)regs + 256, sizeof yaw);
+    check("aim yaw wraps across the native 180-degree boundary", near(yaw, 134));
+
+    *(uint64_t *)action = (uint64_t)(uintptr_t)(image + 0x1300);
+    pitch = 0; memcpy(action + 0x234, &pitch, sizeof pitch);
+    q = 10; memcpy((uint8_t *)regs + 256, &q, sizeof q);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.25f, 0.05f, 0);
+    dm_look_test_aim_pitch(1, regs);
+    dm_look_test_aim_yaw(1, regs);
+    memcpy(&pitch, action + 0x234, sizeof pitch);
+    memcpy(&yaw, (uint8_t *)regs + 256, sizeof yaw);
+    check("CameraAiming2 uses the same pitch and yaw path", near(pitch, 9) && near(yaw, -35));
+
+    // A CameraAiming gate must not consume movement while another aim action owns the frame.
+    *(uint64_t *)action = (uint64_t)(uintptr_t)(image + 0x1200);
+    pitch = 0; memcpy(action + 0x234, &pitch, sizeof pitch);
+    q = 10; memcpy((uint8_t *)regs + 256, &q, sizeof q);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.25f, 0.05f, 0);
+    dm_look_test_aim_pitch(1, regs);
+    dm_look_test_aim_yaw(1, regs);
+    memcpy(&pitch, action + 0x234, sizeof pitch);
+    memcpy(&yaw, (uint8_t *)regs + 256, sizeof yaw);
+    check("an aim gate ignores a different aim action and leaves its movement queued", near(pitch, 0) && near(yaw, 10));
+    dm_look_test_aim_pitch(0, regs);
+    dm_look_test_aim_yaw(0, regs);
+    memcpy(&pitch, action + 0x234, sizeof pitch);
+    memcpy(&yaw, (uint8_t *)regs + 256, sizeof yaw);
+    check("the matching aim action then consumes the queued movement", near(pitch, 9) && near(yaw, -35));
+
+    // The shared Chase update runs during aiming too; it must preserve the queue for the aim gates.
+    dm_look_set_available(0); dm_look_set_available(1);
+    pitch = 0; memcpy(action + 0x234, &pitch, sizeof pitch);
+    q = 10; memcpy((uint8_t *)regs + 256, &q, sizeof q);
+    regs[0] = (uint64_t)(uintptr_t)action;
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 0);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.2f, 0.1f, 0);
+    camera_look_update(regs);
+    dm_look_test_aim_yaw(0, regs);
+    dm_look_test_aim_pitch(0, regs);
+    memcpy(&yaw, (uint8_t *)regs + 256, sizeof yaw);
+    memcpy(&pitch, action + 0x234, sizeof pitch);
+    check("the shared Chase update leaves aim movement for the aim gates", near(yaw, -26) && near(pitch, 18));
+    dm_look_test_input_at(DM_LOOK_END, 0, 0, 0);
+    dm_look_set_available(0);
+}
+
 int main(void) {
     check("relative look remains disabled before a build-checked installer enables it", !dm_look_enabled());
     test_angles();
@@ -377,6 +472,7 @@ int main(void) {
     test_install_guard();
     test_camera_callback();
     test_tail_callback();
+    test_aim_callback();
     expect_abort("invalid phase fails fast", invalid_phase);
     expect_abort("non-finite movement fails fast", nonfinite_delta);
     printf("== %d checks, %d failed ==\n", cases, fails);

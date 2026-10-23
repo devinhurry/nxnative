@@ -127,6 +127,10 @@ def header(g):
     if clt and not re.fullmatch(r'[0-9a-f]{32}(:0x[0-9a-f]+){10}', clt):
         sys.exit(f'{g.id}: camera_look_tail must be <build>:10 hex offsets: {clt}')
     if bool(cl) != bool(clt): sys.exit(f'{g.id}: camera_look and camera_look_tail must be configured together')
+    cla = g.get('camera_look_aim', '')   # aiming actions that consume the same relative input: build, 2 vtables, 5 gate sites, pitch field
+    if cla and not re.fullmatch(r'[0-9a-f]{32}(:0x[0-9a-f]+){8}', cla):
+        sys.exit(f'{g.id}: camera_look_aim must be <build>:8 hex offsets: {cla}')
+    if cla and not cl: sys.exit(f'{g.id}: camera_look_aim requires camera_look')
     cu = g.get('camera_ui_aspect', '')
     if cu and not re.fullmatch(r'(?:[0-9]|1[0-9]|2[0-8])(:0x[0-9a-f]+){3}', cu): sys.exit(f'{g.id}: camera_ui_aspect must be <register 0..28>:<source pointer>:<projection pointer>:<source fovy> (hex offsets)')
     au = g.get('aspect_ui', '')   # vertex shader identities of the game's font and layout libraries; runtime viewport transform only
@@ -187,6 +191,7 @@ def header(g):
          f'#define DM_GAME_CAMERA_ASPECT {q(ca)}',
          f'#define DM_GAME_CAMERA_LOOK {q(cl)}',
          f'#define DM_GAME_CAMERA_LOOK_TAIL {q(clt)}',
+         f'#define DM_GAME_CAMERA_LOOK_AIM {q(cla)}',
          f'#define DM_GAME_CAMERA_UI_ASPECT {q(cu)}',
          *([f'#define DM_GAME_NVN_API_MAJOR {api.split(".")[0]}', f'#define DM_GAME_NVN_API_MINOR {api.split(".")[1]}'] if g.get('device_api', '') else []),   # without the key: by the SDK version (hle_nvn.c nvn_api)
          '']
