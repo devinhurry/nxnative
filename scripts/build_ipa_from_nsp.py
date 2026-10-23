@@ -685,16 +685,31 @@ def profile_files(g):   # every file of the game profile (game.tsv and its table
     return sorted(p for p in g.dir.iterdir() if p.is_file())
 
 
-def split_tool_files(repo):   # the split reads no tool fingerprints: a changed lock does not change its output
-    return [p for p in tool_files(repo) if p.name != 'dmsh_chain.lock']
+def split_tool_files(repo):   # shader_split's direct repository readers; unrelated gfx tools do not affect the split
+    return [repo / p for p in ('dm/gfx/tools/shader_split.py', 'dm/gfx/tools/uepak.py', 'dm/gfx/tools/unityfs.py',
+                               'dm/games/game.py', 'dm/tools/nso_syms.py')]
 
 
-def split_profile_files(g):   # the split writes the shader tables; the chain header, the c1/cb tables and the warm-up list are not its inputs
-    return [p for p in profile_files(g) if p.name not in ('dmsh_chain.h', 'c1_full.tsv', 'cb_extent.tsv', 'pso_manifest.tsv')]
+def split_profile_files(g):   # its tables are validated outputs; only these source tables and rules feed the split
+    return [g.table(n) for n in ('shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'shader_facts_manual.tsv')]
 
 
-def shader_profile_files(g):   # the translated shader libraries do not depend on the c1/cb tables generated from their MSL or on the warm-up list
-    return [p for p in profile_files(g) if p.name not in ('c1_full.tsv', 'cb_extent.tsv', 'pso_manifest.tsv')]
+def split_profile_rules(g):   # game.tsv rows read by shader_split.py; host/runtime and camera settings are irrelevant
+    return [('modules', g.get('modules', 'main')), ('shader_groups', g.get('shader_groups')), ('shader_note', g.get('shader_note'))]
+
+
+def split_capture_files(rom, env, variable, leaf, suffix):   # match shader_split.py's override-or-version-folder lookup
+    root = Path(env.get(variable) or rom.parent / leaf)
+    return root, sorted(root.glob(f'*{suffix}'))
+
+
+def shader_profile_files(g):   # translation inputs, including the optional per-shader bf_want table and generated chain header
+    return [g.table(n) for n in ('shader_facts.tsv', 'shader_map.tsv', 'shader_map.tsv.conflicts.tsv', 'shader_pairs.tsv',
+                                 'bf_want.tsv', 'dmsh_chain.h')]
+
+
+def shader_profile_rules(g):   # same keys dmsh_build.py / dmsh_chain.py include in their per-shader chain
+    return [(k, vals) for k, vals in g.rows if k.startswith(('nvn_', 'shader_'))]
 
 
 # ---- Steps ----
@@ -1094,9 +1109,13 @@ def split_shaders(py, repo, roms, mains, pkg, env, logs, g, provisional=False, o
     names = ('shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv')
     PROG.stage('shader split', step='checking the inputs')   # then a spinner: shader_split.py writes the package and the tables only at the end
     kf = pkg.with_name(pkg.name + '.key')
-    key = None if provisional or ALLOW_DAMAGED else fingerprint(('files', split_tool_files(repo)), ('files', split_profile_files(g)),
-        *[x for r, m in zip(roms, mains) for x in (('files', [m]), ('tree', r), ('files', sorted((r.parent / 'glslc_capture').glob('*.glslc'))),
-                                                   ('files', sorted((r.parent / 'ue_shaders').glob('*.ushaderbytecode'))))])
+    inputs = []
+    for r, m in zip(roms, mains):
+        cap, glslc_files = split_capture_files(r, env, 'DM_GLSLC_CAPTURE', 'glslc_capture', '.glslc')
+        ued, ue_files = split_capture_files(r, env, 'DM_UE_SHADERS', 'ue_shaders', '.ushaderbytecode')
+        modules = [m.parent / name for name in g.words('modules', 'main') if name != 'main']
+        inputs.extend((('repr', (r.parent.name, str(cap), str(ued))), ('files', [m, *modules]), ('tree', r), ('files', glslc_files), ('files', ue_files)))
+    key = None if provisional or ALLOW_DAMAGED else fingerprint(('files', split_tool_files(repo)), ('files', split_profile_files(g)), split_profile_rules(g), *inputs)
     if key and pkg.is_dir() and (note := reused(kf, key)) is not None:
         PROG.end(f'{note}, reused (inputs unchanged)'); return package_key(pkg)
     if oodle:   # the packs are decoded by the game's own Oodle in the Mac host (dm/host/hle_oodle.c)
@@ -1178,7 +1197,7 @@ def build_shaders(py, repo, sh, xlate, env, logs, g, provisional=False, pkg_key=
     libs = ios / f'b-{chain}'; kf = libs.with_name(libs.name + '.key')
     if pkg_key:
         PROG.set(step='checking the inputs')
-        key = fingerprint(pkg_key, ('files', chain_files(repo)), ('stat', xlate.parent), ('files', shader_profile_files(g)), *toolchain(), str(xlate),
+        key = fingerprint(pkg_key, ('files', chain_files(repo)), ('stat', xlate.parent), ('files', shader_profile_files(g)), shader_profile_rules(g), *toolchain(), str(xlate),
                           {k: env.get(k) for k in ('XLATE_DEBUG', 'XLATE_REDUCED')}, env=env)
         if next(libs.glob('*_b.metallib'), None) and (note := reused(kf, key)) is not None:
             PROG.end(f'{note}, reused (inputs unchanged)'); return ios
