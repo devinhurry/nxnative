@@ -67,7 +67,8 @@ enum { OBS_MOVIE_RING_LINK = 19, OBS_MOVIE_RING_UNLINK = 20,   // Metroid Dread 
        OBS_BOTW_AIMING_PITCH = 26, OBS_BOTW_AIMING2_PITCH = 27,   // BOTW 1.9.0 CameraAiming / CameraAiming2 aim pitch source
        OBS_BOTW_AIMING_YAW = 28, OBS_BOTW_AIMING_YAW_MODE1 = 29,  // BOTW 1.9.0 CameraAiming mode-0 / mode-1 yaw result
        OBS_BOTW_AIMING2_YAW = 30,                                 // BOTW 1.9.0 CameraAiming2 common target yaw
-       OBS_MAX = 31 };
+       OBS_BOTW_AIMING_PITCH_MODE1 = 31,                          // BOTW 1.9.0 CameraAiming native mode-1 target result
+       OBS_MAX = 32 };
 void gate_obs_set(int id, void (*fn)(const uint64_t *regs));
 int gate_obs_present(int id);
 void dm_aspect_install(void);

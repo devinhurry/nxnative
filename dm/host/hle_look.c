@@ -327,6 +327,28 @@ static void camera_aim_yaw(const uint64_t *regs, int aiming2) {
 
 static void camera_aiming_pitch(const uint64_t *regs) { camera_aim_pitch(regs, 0); }
 static void camera_aiming2_pitch(const uint64_t *regs) { camera_aim_pitch(regs, 1); }
+static void camera_aiming_pitch_mode1(const uint64_t *regs) {
+    uint8_t *action = (uint8_t *)(uintptr_t)regs[19];
+    if (!action) return;
+    uint64_t vtable; memcpy(&vtable, action, sizeof vtable);
+    if (vtable != (uint64_t)(g_camera.main->base + g_aim.aiming_vtable)) return;
+    float dx, dy, target;
+    dm_look_consume_axes(dm_guest_frame(), 1, 2, &dx, &dy);
+    if (dy == 0) return;
+    memcpy(&target, (const uint8_t *)regs + 256, sizeof target);
+    float base; memcpy(&base, action + g_aim.pitch_field, sizeof base);
+    if (!isfinite(target) || !isfinite(base) || !isfinite(dy) || !isfinite(g_camera.gain) || g_camera.gain <= 0)
+        die("[RED] look: invalid mode-1 aim pitch or gain");
+    float delta = dy * g_camera.gain;
+    // The common path smooths +0x234 toward target s0; shifting both preserves the full drag delta.
+    target += delta; base += delta;
+    if (!isfinite(target) || !isfinite(base)) die("[RED] look: mode-1 aim pitch overflow");
+    memcpy((uint8_t *)(uintptr_t)regs + 256, &target, sizeof target);
+    memcpy(action + g_aim.pitch_field, &base, sizeof base);
+    g_camera.injections++;
+    if (g_camera.trace) LOG("look: #%llu aim-pitch-mode1 vtable=%#llx d=%.5f angle=%.3f",
+                            (unsigned long long)g_camera.injections, (unsigned long long)vtable, dy, target);
+}
 static void camera_aiming_yaw(const uint64_t *regs) { camera_aim_yaw(regs, 0); }
 static void camera_aiming2_yaw(const uint64_t *regs) { camera_aim_yaw(regs, 1); }
 
@@ -379,7 +401,7 @@ void dm_look_install(void) {
     if (!gate_obs_present(OBS_BOTW_CAMERA_LOOK) || !gate_obs_present(OBS_BOTW_CAMERA_TAIL_LOOK))
         die("[RED] look: CameraChase or CameraTail gate missing; rewrite main with the current patch_nso.py");
     if (*DM_GAME_CAMERA_LOOK_AIM &&
-        (!gate_obs_present(OBS_BOTW_AIMING_PITCH) || !gate_obs_present(OBS_BOTW_AIMING2_PITCH) ||
+        (!gate_obs_present(OBS_BOTW_AIMING_PITCH) || !gate_obs_present(OBS_BOTW_AIMING_PITCH_MODE1) || !gate_obs_present(OBS_BOTW_AIMING2_PITCH) ||
          !gate_obs_present(OBS_BOTW_AIMING_YAW) || !gate_obs_present(OBS_BOTW_AIMING_YAW_MODE1) ||
          !gate_obs_present(OBS_BOTW_AIMING2_YAW)))
         die("[RED] look: aiming gate missing; rewrite main with the current patch_nso.py");
@@ -407,6 +429,7 @@ void dm_look_install(void) {
     gate_obs_set(OBS_BOTW_CAMERA_TAIL_LOOK, camera_look_tail_update);
     if (*DM_GAME_CAMERA_LOOK_AIM) {
         gate_obs_set(OBS_BOTW_AIMING_PITCH, camera_aiming_pitch);
+        gate_obs_set(OBS_BOTW_AIMING_PITCH_MODE1, camera_aiming_pitch_mode1);
         gate_obs_set(OBS_BOTW_AIMING2_PITCH, camera_aiming2_pitch);
         gate_obs_set(OBS_BOTW_AIMING_YAW, camera_aiming_yaw);
         gate_obs_set(OBS_BOTW_AIMING_YAW_MODE1, camera_aiming_yaw);
@@ -438,5 +461,6 @@ void dm_look_test_aim_config(void) {
     g_aim.aiming_vtable = 0x1200; g_aim.aiming2_vtable = 0x1300; g_aim.pitch_field = 0x234;
 }
 void dm_look_test_aim_pitch(int aiming2, const uint64_t *regs) { camera_aim_pitch(regs, aiming2); }
+void dm_look_test_aim_pitch_mode1(const uint64_t *regs) { camera_aiming_pitch_mode1(regs); }
 void dm_look_test_aim_yaw(int aiming2, const uint64_t *regs) { camera_aim_yaw(regs, aiming2); }
 #endif
