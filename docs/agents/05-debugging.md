@@ -101,7 +101,7 @@ Patterns that worked: print every call of one function with its arguments; stop 
 
 ## BOTW relative camera look
 
-`DM_LOOK_TRACE=1` logs applied `CameraChase` and `CameraTail` deltas and angles; the startup line reports whether both build-gated observers were installed. `CameraTail` handles wall-camera look while preserving the game's native pitch bounds.
+`DM_LOOK_TRACE=1` logs the relative sample injected into BOTW 1.9.0's shared post-filter right-stick vector. The startup line reports whether the build-gated getter observer was installed. The trace confirms the host supplied an input vector; screenshots or game-state changes are still needed to prove the game consumed it.
 
 ## Racy crashes: load, trace gates
 

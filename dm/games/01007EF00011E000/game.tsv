@@ -26,12 +26,8 @@ aspect_canvas	ecb4242efaf4042b
 # UI model camera update at main+0xd44a2c: x19 owns the source camera (+0xa0) and projection (+0xa8); source fovy/offsets are at +0x74.
 camera_ui_aspect	19:0xa0:0xa8:0x74
 camera_aspect	cd57b23fa4bbad65803d9788c01821ee:0x1e39d10:0x38:0x1d05380:0xb0:0x8
-# BOTW 1.9.0 CameraChase polar update; direct angular deltas at 180 degrees per normalized short edge.
-camera_look	cd57b23fa4bbad65803d9788c01821ee:0xbf64ec:0x1cbf150:0xbf4bf0:0xc2a844:0x20:0x368:0x393:0x1dc:0x1e0:0x200:0x204:0x1cc:0x1d0:0x105c:0x1073:180
-# CameraTail is the active camera action on ordinary wall climbs.
-camera_look_tail	cd57b23fa4bbad65803d9788c01821ee:0xc1d0b4:0x1cc4470:0xc1daf4:0x2ad:0x18c:0x190:0x194:0x198:0x19c:0x1a0
-# CameraAiming (rune aiming) and CameraAiming2 (bow / rune wheel) share camera_look's gain: aim pitch source, mode-0 and mode-1 yaw results, common CameraAiming2 target yaw, pitch field.
-camera_look_aim	cd57b23fa4bbad65803d9788c01821ee:0x1cbee50:0x1cbefd0:0xbf0c38:0xbf2c48:0xbf0da4:0xbf0dfc:0xbf2fa0:0x234
+# BOTW 1.9.0 relative look enters the native right-stick vector after filtering; gain is a normalized-input impulse scale.
+camera_look	cd57b23fa4bbad65803d9788c01821ee:0xd5801c:0x1e93890:0x3c:60
 # The frame-interval controller (60 fps cuts in patch_nso.py) and dynamic resolution read the GPU time between the frame's two timestamp reports: each report takes its segment's GPU start / end
 gpu_timestamps	segment
 # 60 fps (30 on the Switch): the host decides each frame's step in whole vsyncs and holds the frame that long (rewriter stubs at setWaitVsyncInterval and VFR::updateInterval,

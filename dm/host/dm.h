@@ -63,12 +63,8 @@ uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs);
 enum { OBS_MOVIE_RING_LINK = 19, OBS_MOVIE_RING_UNLINK = 20,   // Metroid Dread 2.1.0's movie request ring (hle_movie.c)
        OBS_UE_MALLOC = 21,                                  // DRAGON QUEST VII Reimagined 1.2.0: Unreal's allocator object just made (hle_uemalloc.c)
        OBS_ASPECT_PROJECTION = 22, OBS_ASPECT_UI_CAMERA = 23, // BOTW guest camera updates (hle_aspect.c)
-       OBS_BOTW_CAMERA_LOOK = 24, OBS_BOTW_CAMERA_TAIL_LOOK = 25, // BOTW 1.9.0 CameraChase / CameraTail relative look (hle_look.c)
-       OBS_BOTW_AIMING_PITCH = 26, OBS_BOTW_AIMING2_PITCH = 27,   // BOTW 1.9.0 CameraAiming / CameraAiming2 aim pitch source
-       OBS_BOTW_AIMING_YAW = 28, OBS_BOTW_AIMING_YAW_MODE1 = 29,  // BOTW 1.9.0 CameraAiming mode-0 / mode-1 yaw result
-       OBS_BOTW_AIMING2_YAW = 30,                                 // BOTW 1.9.0 CameraAiming2 common target yaw
-       OBS_BOTW_AIMING_PITCH_MODE1 = 31,                          // BOTW 1.9.0 CameraAiming native mode-1 target result
-       OBS_MAX = 32 };
+       OBS_BOTW_LOOK_VECTOR = 32,                            // BOTW 1.9.0 shared post-filter stick vector (hle_look.c)
+       OBS_MAX = 33 };
 void gate_obs_set(int id, void (*fn)(const uint64_t *regs));
 int gate_obs_present(int id);
 void dm_aspect_install(void);
