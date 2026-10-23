@@ -7,19 +7,16 @@
 
 module_t g_mod[MAX_MOD];
 int g_nmod;
-static int test_gate_present, test_gate_installed, test_gate_count, test_missing_gate;
-static int known_gate(int id) {
-    return id == OBS_BOTW_CAMERA_LOOK || id == OBS_BOTW_CAMERA_TAIL_LOOK ||
-           id == OBS_BOTW_AIMING_PITCH || id == OBS_BOTW_AIMING2_PITCH ||
-           id == OBS_BOTW_AIMING_PITCH_MODE1 ||
-           id == OBS_BOTW_AIMING_YAW || id == OBS_BOTW_AIMING_YAW_MODE1 || id == OBS_BOTW_AIMING2_YAW;
-}
+static int test_gate_present, test_gate_registered, test_missing_gate;
+static uint64_t test_frame;
+
+static int known_gate(int id) { return id == OBS_BOTW_LOOK_VECTOR; }
 int gate_obs_present(int id) { return known_gate(id) && test_gate_present && id != test_missing_gate; }
 void gate_obs_set(int id, void (*fn)(const uint64_t *regs)) {
-    assert(known_gate(id) && fn);
-    test_gate_installed = 1; test_gate_count++;
+    assert(id == OBS_BOTW_LOOK_VECTOR && fn);
+    test_gate_registered++;
 }
-uint64_t dm_guest_frame(void) { return 0; }
+uint64_t dm_guest_frame(void) { return test_frame; }
 
 static int cases, fails;
 static void check(const char *name, int ok) {
@@ -27,134 +24,233 @@ static void check(const char *name, int ok) {
     if (!ok) { fprintf(stderr, "FAIL %s\n", name); fails++; }
 }
 static int near(float a, float b) { return fabsf(a - b) <= 1e-6f; }
-static void reset(void) { dm_look_set_available(0); dm_look_set_available(1); }
-static void consume(uint64_t frame, int active, float *x, float *y) { dm_look_consume(frame, active, x, y); }
-
-static void test_sum(int refresh_hz) {
-    reset();
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 100);
-    int events_per_frame = refresh_hz == 30 ? 4 : 2; // 12 samples of a 120 Hz gesture, batched by the game's update rate.
-    int frames = 12 / events_per_frame;
-    float total_x = 0, total_y = 0, x, y;
-    for (int f = 0; f < frames; f++) {
-        for (int e = 0; e < events_per_frame; e++)
-            dm_look_test_input_at(DM_LOOK_MOVE, 1.0f / 12, -0.5f / 12, 100 + f);
-        consume(100 + f, 1, &x, &y);
-        total_x += x; total_y += y;
-    }
-    dm_look_test_input_at(DM_LOOK_END, 0, 0, 100 + frames);
-    consume(100 + frames, 1, &x, &y);
-    total_x += x; total_y += y;
-    check(refresh_hz == 30 || refresh_hz == 60 ? "same 120 Hz gesture sums equally at 30/60 Hz guest updates" : "unexpected test refresh rate",
-          near(total_x, 1.0f) && near(total_y, -0.5f));
+static void reset(float gain) {
+    dm_look_test_vector_config(NULL, gain);
+    test_frame = 0;
+}
+static void apply(uint64_t frame, float nx, float ny, float ratio, float *x, float *y) {
+    dm_look_test_vector(frame, nx, ny, ratio, x, y);
 }
 
-static void test_once_and_tail(void) {
-    reset();
+static void test_native_passthrough(void) {
+    reset(60);
+    float x, y;
+    apply(1, 0.375f, -0.625f, 1, &x, &y);
+    check("without a drag the processed native vector is preserved exactly", x == 0.375f && y == -0.625f);
+    apply(2, 0, 0, 1, &x, &y);
+    check("without native or relative input the output remains zero", x == 0 && y == 0);
+
+    reset(60);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 3);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.01f, -0.02f, 3);
+    apply(3, 0.25f, -0.5f, 1, &x, &y);
+    check("physical stick input takes priority and remains unchanged", x == 0.25f && y == -0.5f);
+    apply(3, 0, 0, 1, &x, &y);
+    check("a same-frame zero read cannot reveal the suppressed touch impulse", x == 0 && y == 0);
+    apply(4, 0, 0, 1, &x, &y);
+    check("suppressed physical-frame movement does not leak into the next frame", x == 0 && y == 0);
+
+    reset(60);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 3);
+    apply(3, 0.25f, -0.5f, 1, &x, &y);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.01f, -0.02f, 3);
+    dm_look_test_input_at(DM_LOOK_END, 0, 0, 3);
+    apply(4, 0, 0, 1, &x, &y);
+    check("movement arriving later in a physically-owned frame is not deferred", x == 0 && y == 0);
+
+    reset(60);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 3);
+    apply(3, 0.25f, -0.5f, 1, &x, &y);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.01f, -0.02f, 3);
+    dm_look_test_input_at(DM_LOOK_END, 0, 0, 3);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 4);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.005f, 0.0025f, 4);
+    apply(4, 0, 0, 1, &x, &y);
+    check("fresh next-frame movement applies without suppressed touch from the physical frame", near(x, 0.3f) && near(y, -0.15f));
+}
+
+static void test_shared_vector_and_repeat(void) {
+    reset(60);
+    float x, y, again_x, again_y;
     dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 10);
-    dm_look_test_input_at(DM_LOOK_MOVE, 0.75f, -0.25f, 10);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.01f, 0.02f, 10);
+    // The output units are native stick-input units; gain is the user-configured impulse at base 30 Hz.
+    apply(10, 0, 0, 1, &x, &y);
+    apply(10, 0, 0, 1, &again_x, &again_y);
+    check("the shared vector receives signed horizontal and inverted vertical deltas", near(x, 0.6f) && near(y, -1.2f));
+    check("repeated getter reads in one frame see the same cached impulse", x == again_x && y == again_y);
+
     dm_look_test_input_at(DM_LOOK_END, 0, 0, 10);
+    apply(11, 0, 0, 1, &x, &y);
+    check("END retains no already-consumed movement into the next frame", x == 0 && y == 0);
+}
+
+static void test_end_and_cancel(void) {
+    reset(60);
     float x, y;
-    consume(10, 1, &x, &y);
-    check("END preserves the final unconsumed movement", near(x, 0.75f) && near(y, -0.25f));
-    consume(10, 1, &x, &y);
-    check("each movement is consumed exactly once", x == 0 && y == 0);
-
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 11);
-    dm_look_test_input_at(DM_LOOK_MOVE, 0.25f, 0, 11);
-    dm_look_test_input_at(DM_LOOK_END, 0, 0, 11);
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 11);
-    dm_look_test_input_at(DM_LOOK_MOVE, 0.5f, 0, 11);
-    consume(11, 1, &x, &y);
-    check("a new drag before consumption preserves the previous END tail", near(x, 0.75f) && y == 0);
-}
-
-static void test_reverse(void) {
-    reset();
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 30);
-    dm_look_test_input_at(DM_LOOK_MOVE, 0.375f, -0.125f, 30);
-    dm_look_test_input_at(DM_LOOK_MOVE, -0.375f, 0.125f, 30);
-    dm_look_test_input_at(DM_LOOK_END, 0, 0, 30);
-    float x, y;
-    consume(30, 1, &x, &y);
-    check("reverse pointer travel cancels accumulated displacement", fabsf(x) < 1e-7f && fabsf(y) < 1e-7f);
-}
-
-static void test_angles(void) {
-    float p, y;
-    look_apply_delta(0, 0, 0.25f, 0.125f, 180, -85, 89, &p, &y);
-    check("angular conversion is direct and independent of elapsed frames", near(p, 22.5f) && near(y, -45));
-    look_apply_delta(88, -179, 0.25f, 0.25f, 180, -85, 89, &p, &y);
-    check("pitch clamps and yaw wraps at the native polar limits", near(p, 89) && near(y, 136));
-    look_apply_delta(0, 179, 0.25f, 0, 180, -85, 89, &p, &y);
-    look_apply_delta(p, y, -0.25f, 0, 180, -85, 89, &p, &y);
-    check("reverse travel cancels across the yaw wrap", near(y, 179));
-    look_apply_delta(12, -40, 0.25f, 0.125f, 180, -85, 89, &p, &y);
-    float p2, y2;
-    look_apply_delta(p, y, -0.25f, -0.125f, 180, -85, 89, &p2, &y2);
-    check("reverse deltas cancel angle to floating precision", fabsf(p2 - 12) < 1e-6f && fabsf(y2 + 40) < 1e-6f);
-}
-
-typedef struct { float pitch, yaw; } angle_result;
-static angle_result angle_run(int refresh_hz) {
-    float pitch = 0, yaw = 0, x, y;
-    int events_per_frame = refresh_hz == 30 ? 4 : 2;
-    for (int frame = 0; frame < 12 / events_per_frame; frame++) {
-        x = y = 0;
-        for (int event = 0; event < events_per_frame; event++) { x += 1.0f / 12; y += -0.5f / 12; }
-        float p, a;
-        look_apply_delta(pitch, yaw, x, y, 180, -85, 89, &p, &a);
-        pitch = p; yaw = a;
-    }
-    return (angle_result){pitch, yaw};
-}
-
-static void test_angle_refresh_rates(void) {
-    angle_result at30 = angle_run(30), at60 = angle_run(60);
-    check("summed gesture produces the same final angles at 30 and 60 Hz",
-          fabsf(at30.pitch - at60.pitch) < 1e-4f && fabsf(at30.yaw - at60.yaw) < 1e-4f);
-}
-
-static void test_cancel_and_inactive(void) {
-    reset();
     dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 20);
-    dm_look_test_input_at(DM_LOOK_MOVE, 0.5f, 0.2f, 20);
-    dm_look_test_input_at(DM_LOOK_CANCEL, 0, 0, 20);
-    float x, y;
-    consume(20, 1, &x, &y);
-    check("CANCEL clears held and pending input", x == 0 && y == 0);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.005f, -0.01f, 20);
+    dm_look_test_input_at(DM_LOOK_END, 0, 0, 20);
+    apply(20, 0, 0, 1, &x, &y);
+    check("END preserves the final unconsumed delta for the getter", near(x, 0.3f) && near(y, 0.6f));
+    apply(21, 0, 0, 1, &x, &y);
+    check("the END delta is consumed once", x == 0 && y == 0);
 
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 21);
-    dm_look_test_input_at(DM_LOOK_MOVE, 0.4f, 0.1f, 21);
-    consume(21, 0, &x, &y);
-    check("inactive camera mode discards queued input", x == 0 && y == 0);
-    dm_look_test_input_at(DM_LOOK_MOVE, 0.1f, 0.2f, 22);
-    consume(22, 1, &x, &y);
-    check("held drag accepts fresh movement after mode resumes", near(x, 0.1f) && near(y, 0.2f));
+    reset(60);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 22);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.004f, -0.003f, 22);
+    apply(22, 0, 0, 1, &x, &y);
+    apply(23, 0, 0, 1, &x, &y);
+    check("a held finger with no MOVE has no repeated impulse on the next frame", x == 0 && y == 0);
+
+    reset(60);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 30);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.02f, 0.03f, 30);
+    apply(30, 0, 0, 1, &x, &y);
+    dm_look_test_input_at(DM_LOOK_CANCEL, 0, 0, 30);
+    apply(30, 0, 0, 1, &x, &y);
+    check("CANCEL clears a cached same-frame impulse", x == 0 && y == 0);
+    apply(31, 0, 0, 1, &x, &y);
+    check("CANCEL leaves no queued or cached movement for the following frame", x == 0 && y == 0);
+
+    reset(60);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 40);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.01f, 0.02f, 40);
+    apply(40, 0, 0, 1, &x, &y);
+    dm_look_test_input_at(DM_LOOK_CANCEL, 0, 0, 41);
+    apply(40, 0, 0, 1, &x, &y);
+    check("a CANCEL stamped after the cached frame still clears its pending sample", x == 0 && y == 0);
+    apply(41, 0, 0, 1, &x, &y);
+    check("a delayed getter cannot replay movement cleared by a later CANCEL", x == 0 && y == 0);
 }
 
-static void test_frame_gap(void) {
-    reset();
-    float x, y;
-    consume(100, 1, &x, &y);
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 101);
-    dm_look_test_input_at(DM_LOOK_MOVE, 0.6f, -0.3f, 101);
-    consume(150, 1, &x, &y);
-    check("frame gap discards movement accumulated while camera mode was inactive", x == 0 && y == 0);
-    dm_look_test_input_at(DM_LOOK_MOVE, -0.2f, 0.1f, 150);
-    consume(150, 1, &x, &y);
-    check("fresh movement after a frame gap still applies", near(x, -0.2f) && near(y, 0.1f));
+static void test_frame_ratio(void) {
+    const float ratios[] = {0.5f, 1.0f, 1.5f};
+    const char *names[] = {"60 Hz VFR ratio", "30 Hz VFR ratio", "20 Hz VFR ratio"};
+    for (unsigned i = 0; i < 3; i++) {
+        reset(60);
+        float x, y;
+        dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 40);
+        dm_look_test_input_at(DM_LOOK_MOVE, 0.005f, 0.0025f, 40);
+        apply(40, 0, 0, ratios[i], &x, &y);
+        check(names[i], near(x, 0.3f / ratios[i]) && near(y, -0.15f / ratios[i]));
+    }
 
-    reset();
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 10);
-    dm_look_test_input_at(DM_LOOK_MOVE, 0, 0.4f, 10);
-    consume(20, 1, &x, &y);
-    check("vertical-only input is discarded on the first update after a frame gap", x == 0 && y == 0);
+    reset(60);
+    float x, y, second_x, second_y;
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 50);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.005f, -0.0025f, 50);
+    apply(50, 0, 0, 0.5f, &x, &y);
+    apply(50, 0, 0, 1.5f, &second_x, &second_y);
+    check("the VFR ratio is snapshotted with the frame sample", x == second_x && y == second_y);
 }
 
+static void test_late_and_stale_input(void) {
+    reset(60);
+    float x, y;
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 60);
+    apply(60, 0, 0, 1, &x, &y);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.004f, 0.003f, 60);
+    apply(60, 0, 0, 1, &x, &y);
+    check("movement arriving after a frame snapshot waits instead of changing that snapshot", x == 0 && y == 0);
+    apply(61, 0, 0, 1, &x, &y);
+    check("late fresh movement is applied on the next frame", near(x, 0.24f) && near(y, -0.18f));
+
+    reset(60);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 70);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.02f, 0.01f, 70);
+    apply(70, 0, 0, 1, &x, &y);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.003f, -0.004f, 74);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.002f, 0.001f, 74);
+    dm_look_test_input_at(DM_LOOK_END, 0, 0, 74);
+    apply(74, 0, 0, 1, &x, &y);
+    check("fresh movement after a long gap survives subsequent MOVE and END events", near(x, 0.3f) && near(y, 0.18f));
+    apply(75, 0, 0, 1, &x, &y);
+    check("stale pre-gap movement does not replay after the fresh sample", x == 0 && y == 0);
+
+    reset(60);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 76);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.02f, 0.01f, 76);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.003f, -0.004f, 80);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.002f, 0.001f, 80);
+    dm_look_test_input_at(DM_LOOK_END, 0, 0, 80);
+    apply(80, 0, 0, 1, &x, &y);
+    check("fresh movement after a gap does not combine with stale queued movement", near(x, 0.3f) && near(y, 0.18f));
+
+    reset(60);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 80);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.02f, 0.01f, 80);
+    apply(83, 0, 0, 1, &x, &y);
+    check("a queued movement with no fresh input expires across a long frame gap", x == 0 && y == 0);
+
+    reset(60);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 90);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.01f, 0.01f, 90);
+    apply(91, 0, 0, 1, &x, &y);
+    apply(90, 0.25f, -0.5f, 1, &x, &y);
+    check("a delayed older getter call bypasses look without rewinding the frame cache", x == 0.25f && y == -0.5f);
+    apply(92, 0, 0, 1, &x, &y);
+    check("an older getter call does not replay an already sampled drag", x == 0 && y == 0);
+
+    reset(60);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 100);
+    apply(101, 0, 0, 1, &x, &y);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.004f, -0.002f, 100);
+    apply(102, 0, 0, 1, &x, &y);
+    check("a producer event stamped one frame behind the cached snapshot remains fresh next frame", near(x, 0.24f) && near(y, 0.12f));
+}
+
+static void test_actual_observer_ratio_read(void) {
+    static uint8_t image[0x200];
+    static uint8_t vfr[0x40];
+    module_t main = {0};
+    main.base = image; main.size = sizeof image;
+    dm_look_test_vector_config(&main, 60);
+    uint64_t vfr_ptr = 0;
+    memcpy(image + 0x100, &vfr_ptr, sizeof vfr_ptr);
+    float ratio = 1.5f;
+    memcpy(vfr + 0x20, &ratio, sizeof ratio);
+    float pair[2] = {0, 0};
+    uint64_t regs[31] = {0}; regs[19] = (uintptr_t)pair;
+    test_frame = 80;
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 80);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.005f, -0.0025f, 80);
+    camera_look_vector(regs);
+    check("a missing VFR singleton leaves the native zero vector unchanged and drops unready touch input", pair[0] == 0 && pair[1] == 0);
+
+    pair[0] = 0.125f; pair[1] = -0.25f;
+    camera_look_vector(regs);
+    check("OBS32 preserves a native vector without requiring the VFR singleton", pair[0] == 0.125f && pair[1] == -0.25f);
+
+    vfr_ptr = (uintptr_t)vfr;
+    memcpy(image + 0x100, &vfr_ptr, sizeof vfr_ptr);
+    test_frame = 81;
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.005f, -0.0025f, 81);
+    pair[0] = pair[1] = 0;
+    camera_look_vector(regs);
+    check("OBS32 reads the VFR ratio and applies both signed axes in place", near(pair[0], 0.2f) && near(pair[1], 0.1f));
+
+    ratio = 0.5f; memcpy(vfr + 0x20, &ratio, sizeof ratio);
+    pair[0] = pair[1] = 0;
+    camera_look_vector(regs);
+    check("OBS32 keeps the first ratio and sample stable for repeated getter reads", near(pair[0], 0.2f) && near(pair[1], 0.1f));
+}
+
+static void install_wrong_build(void) {
+    static uint8_t image[0x2000000];
+    memset(g_mod, 0, sizeof g_mod); g_nmod = 1;
+    strcpy(g_mod[0].name, "main"); strcpy(g_mod[0].build_id, "00000000000000000000000000000000");
+    g_mod[0].base = image; g_mod[0].size = sizeof image; g_mod[0].text_end = sizeof image;
+    test_gate_present = 1; dm_look_install();
+}
+static void install_missing_gate(void) {
+    static uint8_t image[0x2000000];
+    memset(g_mod, 0, sizeof g_mod); g_nmod = 1;
+    strcpy(g_mod[0].name, "main"); strcpy(g_mod[0].build_id, "cd57b23fa4bbad65803d9788c01821ee");
+    g_mod[0].base = image; g_mod[0].size = sizeof image; g_mod[0].text_end = sizeof image;
+    test_gate_present = 0; dm_look_install();
+}
 typedef void (*bad_call)(void);
-static void invalid_phase(void) { dm_look_test_input_at(99, 0, 0, 0); }
-static void nonfinite_delta(void) { dm_look_test_input_at(DM_LOOK_BEGIN, NAN, 0, 0); }
 static void expect_abort(const char *name, bad_call fn) {
     pid_t p = fork();
     if (!p) { freopen("/dev/null", "w", stderr); fn(); _exit(0); }
@@ -163,340 +259,28 @@ static void expect_abort(const char *name, bad_call fn) {
     check(name, WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
 }
 
-static void wrong_build(void) {
-    static uint8_t image[0x2000000];
-    memset(g_mod, 0, sizeof g_mod); g_nmod = 1;
-    strcpy(g_mod[0].name, "main"); strcpy(g_mod[0].build_id, "00000000000000000000000000000000");
-    g_mod[0].base = image; g_mod[0].size = sizeof image; g_mod[0].text_end = 0x1000000;
-    test_gate_present = 1; dm_look_install();
-}
-static void missing_gate(void) {
+static void test_profile_guard(void) {
+    expect_abort("the look observer rejects a different main build ID", install_wrong_build);
+    expect_abort("the look observer refuses a stale rewrite without OBS32", install_missing_gate);
+
     static uint8_t image[0x2000000];
     memset(g_mod, 0, sizeof g_mod); g_nmod = 1;
     strcpy(g_mod[0].name, "main"); strcpy(g_mod[0].build_id, "cd57b23fa4bbad65803d9788c01821ee");
-    g_mod[0].base = image; g_mod[0].size = sizeof image; g_mod[0].text_end = 0x1000000;
-    test_gate_present = 0; dm_look_install();
-}
-static void missing_tail_gate(void) {
-    static uint8_t image[0x2000000];
-    memset(g_mod, 0, sizeof g_mod); g_nmod = 1;
-    strcpy(g_mod[0].name, "main"); strcpy(g_mod[0].build_id, "cd57b23fa4bbad65803d9788c01821ee");
-    g_mod[0].base = image; g_mod[0].size = sizeof image; g_mod[0].text_end = 0x1000000;
-    test_gate_present = 1; test_missing_gate = OBS_BOTW_CAMERA_TAIL_LOOK; dm_look_install();
-}
-static void missing_aim_gate(void) {
-    static uint8_t image[0x2000000];
-    memset(g_mod, 0, sizeof g_mod); g_nmod = 1;
-    strcpy(g_mod[0].name, "main"); strcpy(g_mod[0].build_id, "cd57b23fa4bbad65803d9788c01821ee");
-    g_mod[0].base = image; g_mod[0].size = sizeof image; g_mod[0].text_end = 0x1000000;
-    test_gate_present = 1; test_missing_gate = OBS_BOTW_AIMING_PITCH_MODE1; dm_look_install();
-}
-static void test_install_guard(void) {
-    static uint8_t image[0x2000000];
-    unsetenv("DM_LOOK"); unsetenv("DM_LOOK_TRACE");
-    memset(g_mod, 0, sizeof g_mod); g_nmod = 1;
-    strcpy(g_mod[0].name, "main"); strcpy(g_mod[0].build_id, "cd57b23fa4bbad65803d9788c01821ee");
-    g_mod[0].base = image; g_mod[0].size = sizeof image; g_mod[0].text_end = 0x1000000;
-    test_gate_present = 1; test_gate_installed = test_gate_count = test_missing_gate = 0;
-    dm_look_install();
-    check("matching build and all observation gates enable the backend", dm_look_enabled() && test_gate_installed && test_gate_count == 8);
-    expect_abort("camera backend rejects a different main build", wrong_build);
-    expect_abort("camera backend rejects a missing rewritten gate", missing_gate);
-    expect_abort("camera backend rejects a missing CameraTail gate", missing_tail_gate);
-    expect_abort("camera backend rejects a missing aiming gate", missing_aim_gate);
-    dm_look_set_available(0);
-}
-
-static uint8_t *fake_camera;
-static int fake_init_count;
-static uint8_t *fake_action;
-static void *fake_camera_getter(void *owner) { assert(owner == fake_action + 0x20); return fake_camera; }
-static void fake_state_init(void *obj) {
-    uint8_t *a = obj; fake_init_count++;
-    float pitch = 5, yaw = 10;
-    memcpy(a + 0x60, &pitch, sizeof pitch); memcpy(a + 0x68, &yaw, sizeof yaw);
-}
-static void fake_tail_state_init(void *obj) {
-    uint8_t *a = obj; assert(a == fake_action); fake_init_count++;
-    float pitch = 5, yaw = 10, history = 3;
-    memcpy(a + 0x90, &pitch, sizeof pitch); memcpy(a + 0x9c, &yaw, sizeof yaw);
-    memcpy(a + 0x94, &history, sizeof history); memcpy(a + 0x98, &history, sizeof history);
-    memcpy(a + 0xa0, &history, sizeof history); memcpy(a + 0xa4, &history, sizeof history);
-}
-
-static void send_camera_delta(uint64_t *regs, float dx, float dy) {
-    dm_look_test_input_at(DM_LOOK_MOVE, dx, dy, 0);
-    camera_look_update(regs);
-}
-
-static void send_tail_delta(uint64_t *regs, float dx, float dy) {
-    dm_look_test_input_at(DM_LOOK_MOVE, dx, dy, 0);
-    camera_look_tail_update(regs);
-}
-
-static void test_camera_callback(void) {
-    static uint8_t image[0x2000], action[0x400], camera[0x1100];
-    static int32_t control_mode;
-    module_t main = {0}; strcpy(main.name, "main"); main.base = image; main.size = sizeof image;
-    dm_look_test_camera_config(&main, 180); dm_look_test_camera_offsets();
-    dm_look_test_camera_functions(fake_camera_getter, fake_state_init);
-    fake_action = action; fake_camera = camera; fake_init_count = 0;
-    memset(action, 0, sizeof action); memset(camera, 0, sizeof camera);
-    *(uint64_t *)action = (uint64_t)(image + 0x1000);
-    *(action + 0x50) = 2;
-    *(uint64_t *)(action + 0x40) = (uint64_t)(uintptr_t)&control_mode; control_mode = 1;
-    float min = -85, max = 89, radius = 6, pitch = 0, yaw = 30;
-    memcpy(action + 0x70, &min, 4); memcpy(action + 0x74, &max, 4);
-    memcpy(action + 0x60, &pitch, 4); memcpy(action + 0x68, &yaw, 4);
-    float polar[3] = {radius, pitch, yaw};
-    uint64_t regs[31] = {0}; regs[0] = (uint64_t)(uintptr_t)action; regs[1] = (uint64_t)(uintptr_t)polar;
-    dm_look_set_available(1);
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 0);
-    send_camera_delta(regs, 0.1f, 0.05f);
-    check("state 2 enters native state 3 once and seeds from the live view", *(action + 0x50) == 3 && fake_init_count == 1);
-    check("first relative delta uses native seeded angles without changing radius",
-          near(polar[0], 6) && near(polar[1], 14) && near(polar[2], -8));
-    uint16_t flags; memcpy(&flags, camera + 0x105c, sizeof flags);
-    check("manual camera latch is set while dragging", (flags & 1) != 0);
-    camera_look_update(regs);
-    check("a stationary held drag preserves state 3 and its angle", *(action + 0x50) == 3 && fake_init_count == 1 && near(polar[1], 14) && near(polar[2], -8));
-    send_camera_delta(regs, -0.1f, -0.05f);
-    check("state 3 applies reverse motion directly without reinitializing", fake_init_count == 1 && near(polar[1], 5) && near(polar[2], 10));
-    dm_look_test_input_at(DM_LOOK_END, 0, 0, 0);
-
-    dm_look_set_available(0); dm_look_set_available(1);
-    *(uint64_t *)action = (uint64_t)(image + 0x1008);
-    *(action + 0x50) = 2; polar[1] = 20; polar[2] = 30;
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 0);
-    dm_look_test_input_at(DM_LOOK_MOVE, 0.1f, 0.1f, 0);
-    camera_look_update(regs);
-    check("a different camera action vtable discards input without reading Chase fields", *(action + 0x50) == 2 && fake_init_count == 1 && near(polar[1], 20) && near(polar[2], 30));
-    *(uint64_t *)action = (uint64_t)(image + 0x1000);
-    dm_look_test_input_at(DM_LOOK_END, 0, 0, 0);
-
-    dm_look_set_available(0); dm_look_set_available(1);
-    *(action + 0x50) = 4; polar[1] = 20; polar[2] = 30; memset(camera + 0x105c, 0, 2);
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 0); send_camera_delta(regs, 0.1f, 0.1f);
-    memcpy(&flags, camera + 0x105c, sizeof flags);
-    check("state 4 rejects manual input without changing its mode, angles, or latch",
-          *(action + 0x50) == 4 && fake_init_count == 1 && near(polar[1], 20) && near(polar[2], 30) && flags == 0);
-
-    dm_look_set_available(0); dm_look_set_available(1);
-    *(action + 0x50) = 2; control_mode = 0; polar[1] = 20; polar[2] = 30;
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 0); send_camera_delta(regs, 0.1f, 0.1f);
-    check("non-manual control mode rejects input", *(action + 0x50) == 2 && fake_init_count == 1 && near(polar[1], 20) && near(polar[2], 30));
-
-    dm_look_set_available(0); dm_look_set_available(1);
-    control_mode = 1; camera[0x1073] = 1; polar[1] = 20; polar[2] = 30;
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 0); send_camera_delta(regs, 0.1f, 0.1f);
-    check("native camera status rejects input during a camera transition", *(action + 0x50) == 2 && fake_init_count == 1 && near(polar[1], 20) && near(polar[2], 30));
-    dm_look_set_available(0); dm_look_test_camera_functions(NULL, NULL);
-}
-
-static void test_tail_callback(void) {
-    static uint8_t image[0x3000], action[0x400], camera[0x1100];
-    module_t main = {0}; strcpy(main.name, "main"); main.base = image; main.size = sizeof image;
-    dm_look_test_camera_config(&main, 180); dm_look_test_camera_offsets(); dm_look_test_tail_config();
-    dm_look_test_camera_functions(fake_camera_getter, fake_state_init);
-    dm_look_test_tail_state_init(fake_tail_state_init);
-    fake_action = action; fake_camera = camera; fake_init_count = 0;
-    memset(action, 0, sizeof action); memset(camera, 0, sizeof camera);
-    *(uint64_t *)action = (uint64_t)(image + 0x1100);
-    *(action + 0x80) = 2;
-    uint64_t regs[31] = {0}; regs[20] = (uint64_t)(uintptr_t)action; regs[19] = (uint64_t)(uintptr_t)camera;
-    dm_look_set_available(0); dm_look_set_available(1);
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 0);
-    send_tail_delta(regs, 0.1f, 0.05f);
-    float pitch, yaw, z;
-    memcpy(&pitch, action + 0x90, sizeof pitch); memcpy(&yaw, action + 0x9c, sizeof yaw);
-    check("CameraTail state 2 enters native state 4 once and applies relative angles", *(action + 0x80) == 4 && fake_init_count == 1 && near(pitch, 14) && near(yaw, -8));
-    memcpy(&z, action + 0x94, sizeof z);
-    check("CameraTail direct movement clears pitch history", z == 0);
-    memcpy(&z, action + 0x98, sizeof z);
-    check("CameraTail direct movement clears the second pitch history", z == 0);
-    memcpy(&z, action + 0xa0, sizeof z);
-    check("CameraTail direct movement clears yaw history", z == 0);
-    memcpy(&z, action + 0xa4, sizeof z);
-    check("CameraTail direct movement clears the second yaw history", z == 0);
-
-    camera_look_tail_update(regs);
-    memcpy(&pitch, action + 0x90, sizeof pitch); memcpy(&yaw, action + 0x9c, sizeof yaw);
-    check("stationary held movement preserves CameraTail mode and angles", *(action + 0x80) == 4 && fake_init_count == 1 && near(pitch, 14) && near(yaw, -8));
-    dm_look_test_input_at(DM_LOOK_END, 0, 0, 0);
-    camera_look_tail_update(regs);
-    memcpy(&pitch, action + 0x90, sizeof pitch); memcpy(&yaw, action + 0x9c, sizeof yaw);
-    check("release leaves native CameraTail angle state stable without reinitializing", *(action + 0x80) == 4 && fake_init_count == 1 && near(pitch, 14) && near(yaw, -8));
-
-    dm_look_set_available(0); dm_look_set_available(1);
-    *(action + 0x80) = 4; pitch = 12; yaw = 179;
-    memcpy(action + 0x90, &pitch, sizeof pitch); memcpy(action + 0x9c, &yaw, sizeof yaw);
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 0); send_tail_delta(regs, -0.25f, -0.5f);
-    memcpy(&pitch, action + 0x90, sizeof pitch); memcpy(&yaw, action + 0x9c, sizeof yaw);
-    check("CameraTail mode 4 applies signed deltas and wraps yaw without reinitializing", fake_init_count == 1 && near(pitch, -78) && near(yaw, -136));
-    dm_look_test_input_at(DM_LOOK_END, 0, 0, 0);
-
-    dm_look_set_available(0); dm_look_set_available(1);
-    *(action + 0x80) = 2; pitch = 0; yaw = 0;
-    memcpy(action + 0x90, &pitch, sizeof pitch); memcpy(action + 0x9c, &yaw, sizeof yaw);
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 0); send_tail_delta(regs, 0, 0.5f);
-    memcpy(&pitch, action + 0x90, sizeof pitch);
-    check("CameraTail leaves pitch clamping to the native update", near(pitch, 95));
-    int init_count = fake_init_count;
-
-    dm_look_set_available(0); dm_look_set_available(1);
-    *(action + 0x80) = 5; pitch = 20; yaw = 30;
-    memcpy(action + 0x90, &pitch, sizeof pitch); memcpy(action + 0x9c, &yaw, sizeof yaw);
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 0); send_tail_delta(regs, 0.1f, 0.1f);
-    memcpy(&pitch, action + 0x90, sizeof pitch); memcpy(&yaw, action + 0x9c, sizeof yaw);
-    check("mode 5 rejects input without changing the camera state", *(action + 0x80) == 5 && fake_init_count == init_count && near(pitch, 20) && near(yaw, 30));
-
-    dm_look_set_available(0); dm_look_set_available(1);
-    *(action + 0x80) = 2; camera[0x1073] = 1;
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 0); send_tail_delta(regs, 0.1f, 0.1f);
-    check("camera status blocks CameraTail injection during native transitions", *(action + 0x80) == 2 && fake_init_count == init_count);
-    camera[0x1073] = 0;
-
-    dm_look_set_available(0); dm_look_set_available(1);
-    *(uint64_t *)action = (uint64_t)(image + 0x1008); *(action + 0x80) = 2;
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 0); send_tail_delta(regs, 0.1f, 0.1f);
-    check("non-CameraTail virtual actions discard movement without touching angle fields", *(action + 0x80) == 2 && fake_init_count == init_count);
-
-    // A Chase update between Tail interactions owns and consumes the same queue during a camera handoff.
-    dm_look_set_available(0); dm_look_set_available(1);
-    *(uint64_t *)action = (uint64_t)(image + 0x1000); *(action + 0x50) = 2;
-    float polar[3] = {5, 4, 6}; regs[0] = (uint64_t)(uintptr_t)action; regs[1] = (uint64_t)(uintptr_t)polar;
-    int32_t control_mode = 1;
-    *(uint64_t *)(action + 0x40) = (uint64_t)(uintptr_t)&control_mode;
-    float min = -85, max = 89, chase_pitch = 0, chase_yaw = 0;
-    memcpy(action + 0x70, &min, 4); memcpy(action + 0x74, &max, 4);
-    memcpy(action + 0x60, &chase_pitch, 4); memcpy(action + 0x68, &chase_yaw, 4);
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 0);
-    dm_look_test_input_at(DM_LOOK_MOVE, 0.2f, 0.1f, 0);
-    camera_look_update(regs);
-    check("Chase consumes handoff movement before CameraTail can reuse it", near(polar[1], 23) && near(polar[2], -26));
-    dm_look_test_input_at(DM_LOOK_END, 0, 0, 0);
-    dm_look_set_available(0); dm_look_test_camera_functions(NULL, NULL); dm_look_test_tail_state_init(NULL);
-}
-
-static void test_aim_callback(void) {
-    static uint8_t image[0x2000], action[0x400];
-    module_t main = {0}; strcpy(main.name, "main"); main.base = image; main.size = sizeof image;
-    dm_look_test_camera_config(&main, 180); dm_look_test_camera_offsets(); dm_look_test_aim_config();
-    memset(action, 0, sizeof action);
-    uint64_t regs[40] = {0}; regs[19] = (uint64_t)(uintptr_t)action;
-    float pitch, yaw;
-    dm_look_set_available(0); dm_look_set_available(1);
-
-    *(uint64_t *)action = (uint64_t)(uintptr_t)(image + 0x1200);
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 0);
-    dm_look_test_input_at(DM_LOOK_MOVE, 0.25f, 0.05f, 0);
-    dm_look_test_aim_pitch(0, regs);
-    memcpy(&pitch, action + 0x234, sizeof pitch);
-    check("CameraAiming pitch adds the relative dy before the native load", near(pitch, 9));
-    float q = 10;
-    memcpy((uint8_t *)regs + 256, &q, sizeof q);
-    dm_look_test_aim_yaw(0, regs);
-    memcpy(&yaw, (uint8_t *)regs + 256, sizeof yaw);
-    check("CameraAiming yaw subtracts the relative dx from the native result", near(yaw, -35));
-    dm_look_test_aim_pitch(0, regs);
-    dm_look_test_aim_yaw(0, regs);
-    memcpy(&pitch, action + 0x234, sizeof pitch);
-    memcpy(&yaw, (uint8_t *)regs + 256, sizeof yaw);
-    check("aim movement is consumed once per drag update", near(pitch, 9) && near(yaw, -35));
-
-    dm_look_test_input_at(DM_LOOK_MOVE, -0.25f, -0.05f, 0);
-    dm_look_test_aim_pitch(0, regs);
-    dm_look_test_aim_yaw(0, regs);
-    memcpy(&pitch, action + 0x234, sizeof pitch);
-    memcpy(&yaw, (uint8_t *)regs + 256, sizeof yaw);
-    check("reverse aim movement returns pitch and yaw", near(pitch, 0) && near(yaw, 10));
-
-    q = 179; memcpy((uint8_t *)regs + 256, &q, sizeof q);
-    dm_look_test_input_at(DM_LOOK_MOVE, 0.25f, 0, 0);
-    dm_look_test_aim_yaw(0, regs);
-    memcpy(&yaw, (uint8_t *)regs + 256, sizeof yaw);
-    check("aim yaw wraps across the native 180-degree boundary", near(yaw, 134));
-
-    *(uint64_t *)action = (uint64_t)(uintptr_t)(image + 0x1300);
-    pitch = 0; memcpy(action + 0x234, &pitch, sizeof pitch);
-    q = 10; memcpy((uint8_t *)regs + 256, &q, sizeof q);
-    dm_look_test_input_at(DM_LOOK_MOVE, 0.25f, 0.05f, 0);
-    dm_look_test_aim_pitch(1, regs);
-    dm_look_test_aim_yaw(1, regs);
-    memcpy(&pitch, action + 0x234, sizeof pitch);
-    memcpy(&yaw, (uint8_t *)regs + 256, sizeof yaw);
-    check("CameraAiming2 uses the same pitch and yaw path", near(pitch, 9) && near(yaw, -35));
-
-    *(uint64_t *)action = (uint64_t)(uintptr_t)(image + 0x1200);
-    pitch = 5; memcpy(action + 0x234, &pitch, sizeof pitch);
-    float target = 20; memcpy((uint8_t *)regs + 256, &target, sizeof target);
-    dm_look_test_input_at(DM_LOOK_MOVE, 0, 0.05f, 0);
-    dm_look_test_aim_pitch_mode1(regs);
-    memcpy(&pitch, action + 0x234, sizeof pitch);
-    memcpy(&target, (uint8_t *)regs + 256, sizeof target);
-    check("CameraAiming mode-1 shifts both native target and smoothing base by the full drag delta",
-          near(pitch, 14) && near(target, 29));
-    dm_look_test_aim_pitch_mode1(regs);
-    memcpy(&pitch, action + 0x234, sizeof pitch);
-    memcpy(&target, (uint8_t *)regs + 256, sizeof target);
-    check("mode-1 pitch delta is consumed once and remains in native state",
-          near(pitch, 14) && near(target, 29));
-    dm_look_test_input_at(DM_LOOK_MOVE, 0, -0.05f, 0);
-    dm_look_test_aim_pitch_mode1(regs);
-    memcpy(&pitch, action + 0x234, sizeof pitch);
-    memcpy(&target, (uint8_t *)regs + 256, sizeof target);
-    check("reverse mode-1 drag returns the native target and smoothing base",
-          near(pitch, 5) && near(target, 20));
-
-    // A CameraAiming gate must not consume movement while another aim action owns the frame.
-    *(uint64_t *)action = (uint64_t)(uintptr_t)(image + 0x1200);
-    pitch = 0; memcpy(action + 0x234, &pitch, sizeof pitch);
-    q = 10; memcpy((uint8_t *)regs + 256, &q, sizeof q);
-    dm_look_test_input_at(DM_LOOK_MOVE, 0.25f, 0.05f, 0);
-    dm_look_test_aim_pitch(1, regs);
-    dm_look_test_aim_yaw(1, regs);
-    memcpy(&pitch, action + 0x234, sizeof pitch);
-    memcpy(&yaw, (uint8_t *)regs + 256, sizeof yaw);
-    check("an aim gate ignores a different aim action and leaves its movement queued", near(pitch, 0) && near(yaw, 10));
-    dm_look_test_aim_pitch(0, regs);
-    dm_look_test_aim_yaw(0, regs);
-    memcpy(&pitch, action + 0x234, sizeof pitch);
-    memcpy(&yaw, (uint8_t *)regs + 256, sizeof yaw);
-    check("the matching aim action then consumes the queued movement", near(pitch, 9) && near(yaw, -35));
-
-    // The shared Chase update runs during aiming too; it must preserve the queue for the aim gates.
-    dm_look_set_available(0); dm_look_set_available(1);
-    pitch = 0; memcpy(action + 0x234, &pitch, sizeof pitch);
-    q = 10; memcpy((uint8_t *)regs + 256, &q, sizeof q);
-    regs[0] = (uint64_t)(uintptr_t)action;
-    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 0);
-    dm_look_test_input_at(DM_LOOK_MOVE, 0.2f, 0.1f, 0);
-    camera_look_update(regs);
-    dm_look_test_aim_yaw(0, regs);
-    dm_look_test_aim_pitch(0, regs);
-    memcpy(&yaw, (uint8_t *)regs + 256, sizeof yaw);
-    memcpy(&pitch, action + 0x234, sizeof pitch);
-    check("the shared Chase update leaves aim movement for the aim gates", near(yaw, -26) && near(pitch, 18));
-    dm_look_test_input_at(DM_LOOK_END, 0, 0, 0);
-    dm_look_set_available(0);
+    g_mod[0].base = image; g_mod[0].size = sizeof image; g_mod[0].text_end = sizeof image;
+    test_gate_present = 1; test_missing_gate = 0; test_gate_registered = 0;
+    unsetenv("DM_LOOK"); dm_look_install();
+    check("the matching BOTW build installs only the shared vector observer", dm_look_enabled() && test_gate_registered == 1);
 }
 
 int main(void) {
-    check("relative look remains disabled before a build-checked installer enables it", !dm_look_enabled());
-    test_angles();
-    test_sum(30);
-    test_sum(60);
-    test_angle_refresh_rates();
-    test_once_and_tail();
-    test_reverse();
-    test_cancel_and_inactive();
-    test_frame_gap();
-    test_install_guard();
-    test_camera_callback();
-    test_tail_callback();
-    test_aim_callback();
-    expect_abort("invalid phase fails fast", invalid_phase);
-    expect_abort("non-finite movement fails fast", nonfinite_delta);
+    check("relative look starts disabled until a build-checked installer enables it", !dm_look_enabled());
+    test_native_passthrough();
+    test_shared_vector_and_repeat();
+    test_end_and_cancel();
+    test_frame_ratio();
+    test_late_and_stale_input();
+    test_actual_observer_ratio_read();
+    test_profile_guard();
     printf("== %d checks, %d failed ==\n", cases, fails);
     return fails != 0;
 }
