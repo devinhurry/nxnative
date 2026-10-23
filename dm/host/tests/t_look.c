@@ -11,6 +11,7 @@ static int test_gate_present, test_gate_installed, test_gate_count, test_missing
 static int known_gate(int id) {
     return id == OBS_BOTW_CAMERA_LOOK || id == OBS_BOTW_CAMERA_TAIL_LOOK ||
            id == OBS_BOTW_AIMING_PITCH || id == OBS_BOTW_AIMING2_PITCH ||
+           id == OBS_BOTW_AIMING_PITCH_MODE1 ||
            id == OBS_BOTW_AIMING_YAW || id == OBS_BOTW_AIMING_YAW_MODE1 || id == OBS_BOTW_AIMING2_YAW;
 }
 int gate_obs_present(int id) { return known_gate(id) && test_gate_present && id != test_missing_gate; }
@@ -188,7 +189,7 @@ static void missing_aim_gate(void) {
     memset(g_mod, 0, sizeof g_mod); g_nmod = 1;
     strcpy(g_mod[0].name, "main"); strcpy(g_mod[0].build_id, "cd57b23fa4bbad65803d9788c01821ee");
     g_mod[0].base = image; g_mod[0].size = sizeof image; g_mod[0].text_end = 0x1000000;
-    test_gate_present = 1; test_missing_gate = OBS_BOTW_AIMING_YAW; dm_look_install();
+    test_gate_present = 1; test_missing_gate = OBS_BOTW_AIMING_PITCH_MODE1; dm_look_install();
 }
 static void test_install_guard(void) {
     static uint8_t image[0x2000000];
@@ -198,7 +199,7 @@ static void test_install_guard(void) {
     g_mod[0].base = image; g_mod[0].size = sizeof image; g_mod[0].text_end = 0x1000000;
     test_gate_present = 1; test_gate_installed = test_gate_count = test_missing_gate = 0;
     dm_look_install();
-    check("matching build and all observation gates enable the backend", dm_look_enabled() && test_gate_installed && test_gate_count == 7);
+    check("matching build and all observation gates enable the backend", dm_look_enabled() && test_gate_installed && test_gate_count == 8);
     expect_abort("camera backend rejects a different main build", wrong_build);
     expect_abort("camera backend rejects a missing rewritten gate", missing_gate);
     expect_abort("camera backend rejects a missing CameraTail gate", missing_tail_gate);
@@ -425,6 +426,27 @@ static void test_aim_callback(void) {
     memcpy(&pitch, action + 0x234, sizeof pitch);
     memcpy(&yaw, (uint8_t *)regs + 256, sizeof yaw);
     check("CameraAiming2 uses the same pitch and yaw path", near(pitch, 9) && near(yaw, -35));
+
+    *(uint64_t *)action = (uint64_t)(uintptr_t)(image + 0x1200);
+    pitch = 5; memcpy(action + 0x234, &pitch, sizeof pitch);
+    float target = 20; memcpy((uint8_t *)regs + 256, &target, sizeof target);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0, 0.05f, 0);
+    dm_look_test_aim_pitch_mode1(regs);
+    memcpy(&pitch, action + 0x234, sizeof pitch);
+    memcpy(&target, (uint8_t *)regs + 256, sizeof target);
+    check("CameraAiming mode-1 shifts both native target and smoothing base by the full drag delta",
+          near(pitch, 14) && near(target, 29));
+    dm_look_test_aim_pitch_mode1(regs);
+    memcpy(&pitch, action + 0x234, sizeof pitch);
+    memcpy(&target, (uint8_t *)regs + 256, sizeof target);
+    check("mode-1 pitch delta is consumed once and remains in native state",
+          near(pitch, 14) && near(target, 29));
+    dm_look_test_input_at(DM_LOOK_MOVE, 0, -0.05f, 0);
+    dm_look_test_aim_pitch_mode1(regs);
+    memcpy(&pitch, action + 0x234, sizeof pitch);
+    memcpy(&target, (uint8_t *)regs + 256, sizeof target);
+    check("reverse mode-1 drag returns the native target and smoothing base",
+          near(pitch, 5) && near(target, 20));
 
     // A CameraAiming gate must not consume movement while another aim action owns the frame.
     *(uint64_t *)action = (uint64_t)(uintptr_t)(image + 0x1200);

@@ -342,6 +342,7 @@ OBS = {
     (0xbf64ec, 24, 'fc1b0fec', 'CameraChase polar input: apply relative manual yaw/pitch before subsequent camera processing'),
     (0xc1d0b4, 25, '394ab698', 'CameraTail update: apply relative yaw/pitch to native state before camera processing'),
     (0xbf0c38, 26, 'bd423661', 'CameraAiming pitch source: apply relative manual pitch before the native load'),
+    (0xbf0bd8, 31, 'bd022e60', 'CameraAiming mode-1 pitch result: apply relative manual pitch before the native target store'),
     (0xbf2c48, 27, 'bd423664', 'CameraAiming2 pitch source: apply relative manual pitch before the native load'),
     (0xbf0da4, 28, '1e20400b', 'CameraAiming mode-0 yaw result: apply relative manual yaw before the native copy'),
     (0xbf0dfc, 29, 'bd023260', 'CameraAiming mode-1 yaw result: apply relative manual yaw before the native store'),
@@ -1140,10 +1141,10 @@ for off, oid, ow, why in obs:
     # Elsewhere, accept only sites where none of these registers are read before the next call (scratch_dead).
     prev = struct.unpack_from('<I', IMG, off - 4)[0] if off >= 4 else 0
     after_call = prev >> 26 == 0x25 or prev & 0xfffffc1f == 0xd63f0000
-    # Aiming gates are fixed sites inside CameraAiming / CameraAiming2 updates: two serve their
-    # pitch field before the native load, three carry the wrapped yaw target in q0. The exact
+    # Aiming gates are fixed sites inside CameraAiming / CameraAiming2 updates: pitch source/result
+    # gates and yaw result gates preserve the native clamp, gyro and smoothing paths. The exact
     # instruction words keep them tied to BOTW 1.9.0's main.
-    aim_words = {0xbf0c38: 0xbd423661, 0xbf2c48: 0xbd423664, 0xbf0da4: 0x1e20400b,
+    aim_words = {0xbf0c38: 0xbd423661, 0xbf0bd8: 0xbd022e60, 0xbf2c48: 0xbd423664, 0xbf0da4: 0x1e20400b,
                  0xbf0dfc: 0xbd023260, 0xbf2fa0: 0x1e204008}
     camera_aim_probe = (BUILD_ID == 'cd57b23fa4bbad65803d9788c01821ee' and
                         off in aim_words and w == aim_words[off])
@@ -1163,6 +1164,22 @@ if BUILD_ID == 'cd57b23fa4bbad65803d9788c01821ee':
     assert target == obs_off, f'CameraTail stable-frame edge targets {target:#x}, expected OBS25 at {obs_off:#x}'
     assert any(off == obs_off and oid == 25 for off, oid, _, _ in obs), f'CameraTail stable-frame target {obs_off:#x} is not OBS25'
     assert any(kind == 'obs' and arg == 25 and orig == obs_off for _, kind, arg, orig in gates), 'CameraTail OBS25 gate was not installed at the stable-frame target'
+    # CameraAiming's mode-1 branch bypasses the mode-0 pitch gate at bf0c38. Both routes must
+    # reach their matching input gate before the native target clamp/smoothing joins at bf0c4c.
+    def branch_target(off):
+        word = struct.unpack_from('<I', IMG, off)[0]
+        if word & 0x7c000000 == 0x14000000:  # b
+            imm = word & 0x3ffffff
+            if imm & 0x2000000: imm -= 0x4000000
+        else:  # b.cond
+            assert word & 0xff000010 == 0x54000000, f'expected branch at {off:#x}: {word:08x}'
+            imm = (word >> 5) & 0x7ffff
+            if imm & 0x40000: imm -= 0x80000
+        return off + imm * 4
+    assert branch_target(0xbf0b8c) == 0xbf0be0, 'CameraAiming mode branch changed; recheck pitch gates'
+    assert branch_target(0xbf0bdc) == 0xbf0c4c, 'CameraAiming mode-1 pitch gate no longer precedes the native join'
+    assert struct.unpack_from('<I', IMG, 0xbf0c38)[0] != 0xbd423661, 'CameraAiming mode-0 pitch gate was not replaced'
+    assert any(kind == 'obs' and arg == 31 and orig == 0xbf0bd8 for _, kind, arg, orig in gates), 'CameraAiming mode-1 OBS31 gate was not installed'
 
 # ---- Frame step in whole vsyncs (The Legend of Zelda: Tears of the Kingdom 1.4.3, Breath of the Wild 1.9.0, Hyrule Warriors: Age of Calamity 1.3.0 and Paper Mario: The Thousand-Year Door 1.0.1 main, host only) ----
 # The games step their game time by a whole number of vsyncs (1/60 s) per frame that their own interval logic picks. With the stubs the host picks it (hle_nvn.c fstep_tick,
