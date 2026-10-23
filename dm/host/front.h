@@ -28,7 +28,7 @@ void dm_aspect_touch_rect(float w, float h, float rect[4]);
 typedef struct { uint32_t id; float x, y; } dm_touch;
 void dm_touch_set(const dm_touch *t, int n);
 
-// Relative pointer look (implemented by the host's hle_look.c; Mac front end):
+// Relative pointer look (implemented by the host's hle_look.c; Mac and iOS front ends):
 // deltas are normalized by the smaller logical view dimension, with right and down positive.
 // BEGIN starts a session, MOVE adds displacement, END preserves the last unconsumed displacement,
 // and CANCEL clears held and pending input. May be called from any thread.

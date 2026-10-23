@@ -2,11 +2,11 @@
 //   Two layouts; one tap on the layout button at the top centre (labelled with the current layout, "2D" / "3D") switches them, and the choice is kept in NSUserDefaults (each game is its own app, so per game); the first launch uses the game profile's pad_layout (DM_GAME_PAD_FULL).
 //   2D (simple): top corners ZL above L (one column), ZR above R likewise, teardrops with the tip toward the screen corner; − and + side by side at the top centre; the left stick in the lower-left area (the touch-down point becomes its centre, so it starts under the thumb; small dead zone);
 //     the A (right) B (bottom) X (top) Y (left) diamond in the bottom-right corner, sliding a finger between keys switches keys. Each bottom corner holds a single control, so it sits close in (reaching halfway into the side safe-area inset).
-//   3D (full, Pro Controller style): everything in 2D (left stick and diamond keep their size), plus a D-pad (inward of and below the left stick, 8-way), a right stick that is not drawn
-//     (a touch landing in the right half of the screen on no control holds it: centred where it lands, the centre dragged along once the finger passes the stick radius) and L3 / R3 (small round keys in the top row, inward of ZL / ZR).
-//     Breath of the Wild crouches with L3 and uses the scope with R3; 3D World and Breath of the Wild turn the camera with the right stick.
+//   3D (full, Pro Controller style): everything in 2D (left stick and diamond keep their size), plus a D-pad (inward of and below the left stick, 8-way), an invisible right stick
+//     (a touch landing in the right half of the screen on no control holds it: centred where it lands, the centre dragged along once the finger passes the stick radius; games may use relative camera look instead) and L3 / R3 (small round keys in the top row, inward of ZL / ZR).
+//     Breath of the Wild crouches with L3 and uses the scope with R3; other games keep the right-stick behavior.
 //   Touch-down ownership: locked keys first (shoulders, − / +, the layout button, L3 / R3), then the D-pad and the diamond, then the left stick for a touch in the
-//     lower-left area (its centre is the touch-down point), then in 3D the right stick for a touch in the right half.
+//     lower-left area (its centre is the touch-down point), then in 3D relative camera look when enabled or the right stick for a touch in the right half.
 //   Everything hugs the edges and corners to leave the picture room; controls sit over the picture, one CAShapeLayer each: a press only swaps the fill, a stick only moves its knob, nothing redraws the whole screen.
 //   Touches no control takes (outside the left stick's area and, in 3D, the right half) go to the game's touch screen (pushGame; Super Mario Galaxy's pointer in handheld mode).
 //   The virtual gamepad (layout button included) hides while a physical controller is connected and comes back when it is removed; meanwhile every touch goes to the game. Physical controllers keep every button (D-pad and right stick included) and map by position: bottom = B, right = A, left = Y, top = X (same positions as on a Switch controller).
@@ -25,7 +25,7 @@
 #include "game_profile.h"
 
 enum { B_A = 0, B_B, B_X, B_Y, B_LS, B_RS, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_LEFT, B_UP, B_RIGHT, B_DOWN, B_N };
-enum { C_NONE = 0, C_STICK, C_DPAD, C_FACE, C_BTN, C_SWAP, C_GAME };   // which control a touch holds; C_GAME: none, the touch goes to the game's touch screen (finger slot << 8)
+enum { C_NONE = 0, C_STICK, C_DPAD, C_FACE, C_BTN, C_SWAP, C_GAME, C_LOOK };   // which control a touch holds; C_GAME uses a finger slot, C_LOOK is relative camera input
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t g_touch_btn, g_pad_btn, g_shake_btn;
@@ -169,6 +169,8 @@ static __weak DmGamepad *g_view;
     CALayer *_controls;                            // holds every control layer: hidden while a physical controller is connected (the view itself stays, for game touches)
     BOOL _padOff;                                  // a physical controller is connected: every touch goes to the game
     UITouch *_game[16];                            // touches on the game's touch screen by finger slot
+    UITouch *_lookTouch; CGPoint _lookLast; CGFloat _lookScale;
+    CGSize _lookBoundsSize; UIInterfaceOrientation _lookOrientation; BOOL _lookGeometryKnown;
 }
 
 static UIColor *k_idle, *k_on, *k_line, *k_ringFill, *k_text, *k_textOn;
@@ -322,6 +324,45 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     if (changed || stick || _stickShown) [self refresh];   // also refresh on the stick release so the knob returns to the centre
     _stickShown = stick;
 }
+// ---- Relative camera look ----
+- (void)cancelLook {   // Keep the owner's C_LOOK entry until lift; it cannot turn into a stick mid-gesture.
+    if (_lookTouch) dm_look_input(DM_LOOK_CANCEL, 0, 0);
+    _lookTouch = nil; _lookScale = 0;
+}
+- (void)checkLookGeometry {
+    CGSize size = self.bounds.size;
+    UIInterfaceOrientation orientation = self.window.windowScene.effectiveGeometry.interfaceOrientation;
+    if (!_lookGeometryKnown) { _lookBoundsSize = size; _lookOrientation = orientation; _lookGeometryKnown = YES; return; }
+    BOOL resized = !CGSizeEqualToSize(size, _lookBoundsSize);
+    BOOL rotated = orientation != UIInterfaceOrientationUnknown && _lookOrientation != UIInterfaceOrientationUnknown && orientation != _lookOrientation;
+    _lookBoundsSize = size;
+    if (orientation != UIInterfaceOrientationUnknown) _lookOrientation = orientation;
+    if (resized || rotated) [self cancelLook];
+}
+- (void)beginLook:(UITouch *)t at:(CGPoint)p {
+    [self checkLookGeometry];
+    [_owner setObject:@(C_LOOK) forKey:t];
+    if (_lookTouch || !dm_look_enabled()) return;   // overlapping camera fingers stay inert until they lift
+    CGFloat scale = MIN(self.bounds.size.width, self.bounds.size.height);
+    if (scale <= 0) return;
+    _lookTouch = t; _lookLast = p; _lookScale = scale;
+    dm_look_input(DM_LOOK_BEGIN, 0, 0);
+}
+- (void)moveLook:(UITouch *)t to:(CGPoint)p {
+    [self checkLookGeometry];
+    if (t != _lookTouch) return;
+    if (!dm_look_enabled() || _lookScale <= 0) { [self cancelLook]; return; }
+    float dx = (float)((p.x - _lookLast.x) / _lookScale);
+    float dy = (float)((p.y - _lookLast.y) / _lookScale);
+    _lookLast = p;
+    if (dx != 0 || dy != 0) dm_look_input(DM_LOOK_MOVE, dx, dy);
+}
+- (void)endLook:(UITouch *)t at:(CGPoint)p cancelled:(BOOL)cancelled {
+    if (t != _lookTouch) return;
+    if (cancelled || !dm_look_enabled()) { [self cancelLook]; return; }
+    [self moveLook:t to:p];   // UIKit may deliver a final location only in touchesEnded.
+    if (t == _lookTouch) { dm_look_input(DM_LOOK_END, 0, 0); _lookTouch = nil; _lookScale = 0; }
+}
 // Touches no control takes (all of them while a physical controller is connected) go to the game's touch screen, normalized on the 16:9 picture that front_ios.m
 // centres in the screen: Super Mario Galaxy's pointer in handheld mode (profile op_mode). The host reports them only in handheld mode, as on the Switch (hle_hid.c touch_read)
 - (void)pushGame {
@@ -348,12 +389,15 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
         CGPoint p = [t locationInView:self]; int hit = [self btnAt:p];
         if (hit >= 0) { [_owner setObject:@(C_BTN | (uint64_t)hit << 8) forKey:t]; continue; }
         if ([self inSwap:p]) { [_owner setObject:@(C_SWAP) forKey:t]; _swapT0 = CACurrentMediaTime(); continue; }
-        // D-pad, diamond, left stick (lower-left, centred on the touch), then the right stick in the right half
+        // D-pad, diamond, left stick (lower-left, centred on the touch), then camera look or the right stick in the right half
         int kind = C_NONE, idx = 0;
         if (_full) { CGFloat d = dist(p, self.dpadCenter) / (self.dpadR * K_DPAD_GRAB); if (d <= 1) kind = C_DPAD; }
         if (kind == C_NONE) { CGFloat f = dist(p, self.faceCenter) / (self.faceGap + self.faceR * 1.6); if (f <= 1) kind = C_FACE; }
         if (kind == C_NONE && !_stick[0] && [self inLeftArea:p]) kind = C_STICK;
-        if (kind == C_NONE && _full && !_stick[1] && [self inRightArea:p]) { kind = C_STICK; idx = 1; }
+        if (kind == C_NONE && _full && [self inRightArea:p]) {
+            if (dm_look_enabled()) { [self beginLook:t at:p]; continue; }
+            if (!_stick[1]) { kind = C_STICK; idx = 1; }
+        }
         if (kind == C_FACE) { [_owner setObject:@(C_FACE) forKey:t]; [_faceOf setObject:@([self faceAt:p]) forKey:t]; }
         else if (kind == C_DPAD) [_owner setObject:@(C_DPAD) forKey:t];
         else if (kind == C_STICK) {
@@ -373,6 +417,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
         else if (c == C_STICK) { _stickNow[v >> 8] = p;
             if ((v >> 8) == 1) { CGFloat d = dist(p, _rCentre), R = [self stickR:1];   // the right stick's centre follows a finger past its radius, so turning back responds at once
                 if (d > R) _rCentre = CGPointMake(p.x - (p.x - _rCentre.x) * R / d, p.y - (p.y - _rCentre.y) * R / d); } }
+        else if (c == C_LOOK) [self moveLook:t to:p];
         else if (c == C_GAME) game = YES;
     }
     if (game) [self pushGame];
@@ -382,6 +427,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     BOOL swap = NO, game = NO;
     for (UITouch *t in ts) {
         uint64_t v = [_owner objectForKey:t].unsignedLongLongValue;
+        if ((v & 0xff) == C_LOOK) [self endLook:t at:[t locationInView:self] cancelled:!ended];
         if (ended && (v & 0xff) == C_SWAP && [self inSwap:[t locationInView:self]]) {   // layout button: counts only when released on the button
             if (CACurrentMediaTime() - _swapT0 >= 0.8) { atomic_store(&g_motion_recenter, 1); LOG("front end: motion recentered by a long press on the layout button"); }
             else swap = YES;
@@ -395,7 +441,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
 }
 - (void)touchesEnded:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { [self endTouches:ts tapped:YES]; }
 - (void)touchesCancelled:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { [self endTouches:ts tapped:NO]; }
-- (void)reset { [_owner removeAllObjects]; [_faceOf removeAllObjects]; _stick[0] = _stick[1] = nil; for (int i = 0; i < 16; i++) _game[i] = nil; [self pushGame]; [self recompute]; }
+- (void)reset { [self cancelLook]; [_owner removeAllObjects]; [_faceOf removeAllObjects]; _stick[0] = _stick[1] = nil; for (int i = 0; i < 16; i++) _game[i] = nil; [self pushGame]; [self recompute]; }
 
 // ---- Shapes ----
 static CGPathRef circlePath(CGPoint c, CGFloat r) { return CGPathCreateWithEllipseInRect(CGRectMake(c.x - r, c.y - r, 2 * r, 2 * r), NULL); }
@@ -427,10 +473,11 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
     CFRelease(f);
 }
 
-- (void)deviceOrientationChanged { motion_update_flip(self.window.windowScene); }
+- (void)deviceOrientationChanged { motion_update_flip(self.window.windowScene); [self checkLookGeometry]; }
 - (void)layoutSubviews {
     [super layoutSubviews];
     motion_update_flip(self.window.windowScene);
+    [self checkLookGeometry];
     CGFloat u = self.u;
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     _controls.frame = self.layer.bounds;
