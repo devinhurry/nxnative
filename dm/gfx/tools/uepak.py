@@ -6,6 +6,9 @@
 # Unreal Engine 4.27 (DRAGON QUEST VII Reimagined) keeps its packages in IoStore containers (.utoc / .ucas) and the rest in pakchunk0-Switch.pak (3,972 files, index not encrypted), among them
 #   two stored shader code archives (ShaderArchive-Global-SF_GLSL_SWITCH, 1,764 shaders, and ShaderArchive-DOLL_Chunk0-SF_GLSL_SWITCH, 63,185): every shader in them is an LZ4 block, the
 #   engine's default shader compression since 4.26, decoded here (lz4_shaders) without the host.
+# Unreal Engine 5.6 (FINAL FANTASY RESONANCE) has no shader code archive in its pak (FFRS-Switch.pak holds configs only): the cooker converted both libraries into its IoStore container
+#   (FFRS-Switch.utoc / .ucas, Oodle in 64 KB blocks, not encrypted) as one ShaderCodeLibrary chunk each (the tables) and one ShaderCode chunk per group of shaders, every group Oodle-compressed
+#   on its own (Toc, io_archive). Both layers need the game's decoder, which runs in the Mac host's tool mode (OodleHost); the libraries come out as version 2 archives with every shader decoded.
 # The AES key is in main (Unreal embeds it): the 32-byte window of main's read-only or data segment that decrypts the index start to its mount point ("../../../"; Octopath Traveler 0: one window of
 #   116,287 tried). It is only kept in memory, never printed or written.
 # Pak footer (version 11, the last 0xdd bytes): encryption key GUID (16), encrypted index flag (u8), magic 0x5A6F12E1, version (u32), index offset (u64), index size (u64), index SHA-1 (20),
@@ -26,7 +29,8 @@
 #   entries {u64 offset, u32 size, u32 raw size, u8 frequency} (17 bytes, packed), preload entries (16 each), shader indices (u32): each array is a u32 count and its elements; the code follows,
 #   offsets relative to its start. A shader whose size differs from its raw size is compressed.
 # Usage: uepak.py list <pak> <main NSO> <out tsv>                       every file in the pak: path, raw size, stored size, compression, encrypted, blocks
-#        uepak.py job <RomFS> <main NSO> <work dir>                     the shader code archives of every pak, and an Oodle job of their Oodle-compressed shaders (LZ4 ones decoded at once)
+#        uepak.py job <RomFS> <main NSO> <work dir> [<Mac host> <rewritten modules>]   the shader code archives of every pak, and an Oodle job of their Oodle-compressed shaders (LZ4 ones
+#                                                                       decoded at once); IoStore shader libraries (UE 5.6) decoded at once through the game's Oodle in the host (OodleHost)
 #        uepak.py finish <work dir> <out dir>                           after the host has run the job: the archives with every shader decoded
 import ctypes, json, os, struct, sys
 
@@ -46,6 +50,56 @@ def aes_decrypt(key, data):
     if _cc(1, 0, 2, key, len(key), None, data, len(data), out, len(data), ctypes.byref(moved)): raise ValueError('CCCrypt failed')   # decrypt, AES, ECB
     return out.raw[:moved.value]
 
+_M, _K0, _K1, _K2 = (1 << 64) - 1, 0xc3a5c85c97cb3127, 0xb492b66fbe98f273, 0x9ae16a3b2f90404f
+def _rot(v, s): return ((v >> s) | (v << (64 - s))) & _M if s else v
+def _f64(s, i): return struct.unpack_from('<Q', s, i)[0]
+def _bswap(v): return int.from_bytes((v & _M).to_bytes(8, 'little'), 'big')
+def _h16(u, v, mul=0x9ddfea08eb382d69):
+    a = ((u ^ v) * mul) & _M; a ^= a >> 47
+    b = ((v ^ a) * mul) & _M; b ^= b >> 47
+    return (b * mul) & _M
+def _weak(s, i, a, b):
+    w, x, y, z = _f64(s, i), _f64(s, i + 8), _f64(s, i + 16), _f64(s, i + 24)
+    a = (a + w) & _M; b = _rot((b + a + z) & _M, 21); c = a
+    a = (a + x + y) & _M; b = (b + _rot(a, 44)) & _M
+    return ((a + z) & _M, (b + c) & _M)
+def city64(s):
+    """CityHash64 (Google's CityHash 1.1, the one Unreal's Core links; checked against python-cityhash 0.4.10 on 1,500 random inputs of 0 to 299 bytes)"""
+    n = len(s)
+    if n <= 16:
+        if n >= 8:
+            mul = _K2 + n * 2; a = (_f64(s, 0) + _K2) & _M; b = _f64(s, n - 8)
+            return _h16((_rot(b, 37) * mul + a) & _M, ((_rot(a, 25) + b) * mul) & _M, mul)
+        if n >= 4:
+            mul = _K2 + n * 2
+            return _h16((n + (struct.unpack_from('<I', s, 0)[0] << 3)) & _M, struct.unpack_from('<I', s, n - 4)[0], mul)
+        if n:
+            y, z = s[0] + (s[n >> 1] << 8), n + (s[n - 1] << 2); v = ((y * _K2) ^ (z * _K0)) & _M
+            return ((v ^ (v >> 47)) * _K2) & _M
+        return _K2
+    mul = _K2 + n * 2
+    if n <= 32:
+        a = (_f64(s, 0) * _K1) & _M; b = _f64(s, 8); c = (_f64(s, n - 8) * mul) & _M; d = (_f64(s, n - 16) * _K2) & _M
+        return _h16((_rot((a + b) & _M, 43) + _rot(c, 30) + d) & _M, (a + _rot((b + _K2) & _M, 18) + c) & _M, mul)
+    if n <= 64:
+        a = (_f64(s, 0) * _K2) & _M; b = _f64(s, 8); c = _f64(s, n - 24); d = _f64(s, n - 32)
+        e = (_f64(s, 16) * _K2) & _M; f = (_f64(s, 24) * 9) & _M; g = _f64(s, n - 8); h = (_f64(s, n - 16) * mul) & _M
+        u = (_rot((a + g) & _M, 43) + (_rot(b, 30) + c) * 9) & _M; v = (((a + g) ^ d) + f + 1) & _M
+        w = (_bswap((u + v) * mul) + h) & _M; x = (_rot((e + f) & _M, 42) + c) & _M
+        y = ((_bswap((v + w) * mul) + g) * mul) & _M; z = (e + f + c) & _M
+        a = (_bswap((x + z) * mul + y) + b) & _M; b = ((z + a) * mul + d + h) & _M; b = ((b ^ (b >> 47)) * mul) & _M
+        return (b + x) & _M
+    x = _f64(s, n - 40); y = (_f64(s, n - 16) + _f64(s, n - 56)) & _M; z = _h16((_f64(s, n - 48) + n) & _M, _f64(s, n - 24))
+    v = _weak(s, n - 64, n, z); w = _weak(s, n - 32, (y + _K1) & _M, x); x = (x * _K1 + _f64(s, 0)) & _M
+    left, i = (n - 1) & ~63, 0
+    while left:
+        x = (_rot((x + y + v[0] + _f64(s, i + 8)) & _M, 37) * _K1) & _M
+        y = (_rot((y + v[1] + _f64(s, i + 48)) & _M, 42) * _K1) & _M
+        x ^= w[1]; y = (y + v[0] + _f64(s, i + 40)) & _M; z = (_rot((z + w[0]) & _M, 33) * _K1) & _M
+        v = _weak(s, i, (v[1] * _K1) & _M, (x + w[0]) & _M); w = _weak(s, i + 32, (z + w[1]) & _M, (y + _f64(s, i + 16)) & _M)
+        z, x = x, z; i += 64; left -= 64
+    return _h16((_h16(v[0], w[0]) + (y ^ (y >> 47)) * _K1 + z) & _M, (_h16(v[1], w[1]) + x) & _M)
+
 def nso_image(path):
     """A decompressed NSO image and its (read-only start, data end)"""
     import lz4.block
@@ -56,6 +110,30 @@ def nso_image(path):
         raw = d[fo:fo + csz[i]]
         img[mo:mo + sz] = lz4.block.decompress(raw, uncompressed_size=sz) if flags >> i & 1 else raw
     return bytes(img), segs[1][1], segs[2][1] + segs[2][2]
+
+class OodleHost:
+    """The game's own OodleLZ_Decompress in the Mac host's tool mode (DM_OODLE_SERVE, dm/host/hle_oodle.c: served before the SDK starts, so no boot), called as decode(compressed, raw length).
+    host = the Mac host built for the game, modules = its rewritten modules, env = the host's environment (default: this process's)"""
+    def __init__(self, host, modules, env=None):
+        import subprocess, tempfile
+        self.err = tempfile.TemporaryFile()
+        self.p = subprocess.Popen([str(host), str(modules)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.err, env=dict(env or os.environ, DM_OODLE_SERVE='1'))
+        self.n = 0
+    def __call__(self, comp, n):
+        try:
+            self.p.stdin.write(struct.pack('<QQ', len(comp), n)); self.p.stdin.write(comp); self.p.stdin.flush()
+            got = struct.unpack('<Q', self.p.stdout.read(8))[0]
+        except (BrokenPipeError, struct.error): got = None
+        if got != n:
+            self.err.seek(0)
+            raise ValueError(f'the game\'s Oodle in the Mac host failed on a {len(comp)} → {n} byte stream; ---- host output ----\n' + self.err.read().decode(errors='replace')[-3000:])
+        self.n += 1
+        return self.p.stdout.read(n)
+    def close(self):
+        if self.p.poll() is None:
+            self.p.stdin.close()
+            try: self.p.wait(10)
+            except Exception: self.p.kill()
 
 class R:
     def __init__(self, b, o=0): self.b, self.o = b, o
@@ -143,6 +221,7 @@ class Pak:
         off = r.take('<I' if v >> 31 & 1 else '<Q'); raw = r.take('<I' if v >> 30 & 1 else '<Q')
         size = r.take('<I' if v >> 29 & 1 else '<Q') if meth else raw
         cur, blocks = 53 + (4 + 16 * nblk if meth else 0), []
+        if nblk == 1 and not bsz: bsz = raw   # FINAL FANTASY RESONANCE's pak (UE 5.6) stores block size 0 for a file of one block
         if nblk == 1 and not enc: blocks = [(cur, size)]
         else:
             for _ in range(nblk): s = r.take('<I'); blocks.append((cur, s)); cur += (s + 15) & ~15 if enc else s
@@ -195,6 +274,120 @@ def lz4_shaders(b, a):
         out.append(d)
     return out
 
+TOC_MAGIC, IO_SHADER_LIBRARY, IO_SHADER_CODE = b'-==--==--==--==-', 8, 9   # EIoChunkType in Unreal Engine 5 (TOC version 4 and later; 4.27 numbers its chunk types otherwise)
+
+class Toc:
+    """An IoStore container: the .utoc's chunk table and compression blocks, the data in the .ucas beside it (<name>_s<n>.ucas for partitions after the first). A chunk is a range of the
+    container's uncompressed stream, which is cut into blocks of one size, each stored or compressed on its own (method index 0 = stored, else the TOC's method names from 1).
+    Header (FIoStoreTocHeader, 144 bytes): magic, u8 version, u8, u16, u32 header size, entry count, block count, block entry size (12), method count, method name length, block size,
+    directory index size, partition count, u64 container ID, encryption key GUID (16), u8 flags (1 compressed, 2 encrypted, 4 signed, 8 indexed), u8, u16, u32 perfect hash seed count,
+    u64 partition size, u32 count of chunks without a perfect hash, then reserved words. After it: chunk IDs (12 bytes: u64 hash, u16 index, u8, u8 type), offsets and lengths
+    (5 + 5 bytes, big-endian), the perfect hash seeds and overflow list (u32 each), the blocks (5-byte offset, 3-byte stored size, 3-byte raw size, u8 method; little-endian), the method names"""
+    def __init__(self, path, key=None):
+        b = open(path, 'rb').read()
+        if b[:16] != TOC_MAGIC: raise ValueError(f'{path}: not an IoStore TOC')
+        self.path, self.key, self.version = path, key, b[16]
+        hsz, n, nblk, bsz, nmeth, mlen, self.block_size, _, nparts = struct.unpack_from('<9I', b, 20)
+        if bsz != 12: raise ValueError(f'{path}: compression block entries of {bsz} bytes')
+        self.encrypted = b[80] >> 1 & 1
+        nseeds = struct.unpack_from('<I', b, 84)[0] if self.version >= 4 else 0
+        self.part_size = struct.unpack_from('<Q', b, 88)[0] if self.version >= 3 and nparts > 1 else 1 << 64
+        nover = struct.unpack_from('<I', b, 96)[0] if self.version >= 5 else 0
+        if self.encrypted and not key: raise ValueError(f'{path}: the container is encrypted and no key was given')
+        o = hsz; self.ids = [b[o + 12 * i:o + 12 * i + 12] for i in range(n)]; o += 12 * n
+        self.ranges = [(int.from_bytes(b[o + 10 * i:o + 10 * i + 5], 'big'), int.from_bytes(b[o + 10 * i + 5:o + 10 * i + 10], 'big')) for i in range(n)]; o += 10 * n + 4 * nseeds + 4 * nover
+        self.blocks = []
+        for i in range(nblk):
+            e = b[o + 12 * i:o + 12 * i + 12]
+            self.blocks.append((int.from_bytes(e[:5], 'little'), int.from_bytes(e[5:8], 'little'), int.from_bytes(e[8:11], 'little'), e[11]))
+        o += 12 * nblk
+        self.methods = [b[o + mlen * i:o + mlen * (i + 1)].rstrip(b'\0').decode('latin1') for i in range(nmeth)]
+        self.index = {c: i for i, c in enumerate(self.ids)}; self.files = {}
+    def of_type(self, t):
+        """Indices of the chunks of one EIoChunkType (Unreal Engine 5 numbering: TOC version 4 and later)"""
+        return [i for i, c in enumerate(self.ids) if c[11] == t] if self.version >= 4 else []
+    def ucas(self, part):
+        if part not in self.files: self.files[part] = open(self.path[:-5] + ('.ucas' if not part else f'_s{part}.ucas'), 'rb')
+        return self.files[part]
+    def read(self, i, decode=None):
+        """Chunk i's bytes; Oodle blocks need decode(block bytes, raw length) → bytes (the game's own decoder, OodleHost)"""
+        off, ln = self.ranges[i]; first = off // self.block_size; out = []
+        for k in range(first, (off + ln - 1) // self.block_size + 1 if ln else first):
+            at, size, raw, m = self.blocks[k]; f = self.ucas(at // self.part_size); f.seek(at % self.part_size)
+            d = f.read((size + 15) & ~15 if self.encrypted else size)
+            if self.encrypted: d = aes_decrypt(self.key, d)[:size]
+            meth = self.methods[m - 1] if m else ''
+            if not meth: out.append(d[:raw])
+            elif meth == 'Oodle':
+                if not decode: raise ValueError(f'{self.path}: chunk {i} is Oodle-compressed and no decoder was given')
+                out.append(decode(d, raw))
+            elif meth == 'Zlib': import zlib; out.append(zlib.decompress(d))
+            elif meth == 'LZ4': import lz4.block; out.append(lz4.block.decompress(d, uncompressed_size=raw))
+            else: raise ValueError(f'{self.path}: compression method {meth} is not read')
+        s = off - first * self.block_size
+        return b''.join(out)[s:s + ln]
+
+def io_library_name(toc, i, names):
+    """A shader library chunk's archive name: Unreal makes its chunk ID from CityHash64 of "<library>-<format>" lowercased, in UTF-16 (FINAL FANTASY RESONANCE: global-sf_glsl_switch-sp_glsl_switch
+    → be76feab0415c156, the hash's bytes in memory order), names = the candidate "ShaderArchive-<library>-<format>" names (the RomFS manifests list them); a chunk none matches is named by its ID"""
+    h = toc.ids[i][:8]
+    for n in names:
+        if city64(n[len('ShaderArchive-'):].lower().encode('utf-16-le')).to_bytes(8, 'little') == h: return n
+    return f'ShaderArchive-IoStore-{h.hex()}'
+
+def io_archive(toc, i, decode):
+    """An IoStore shader library (Unreal Engine 5: FIoStoreShaderCodeArchive) as a version 2 shader code archive with every shader decoded, the form the shader tools read.
+    The library chunk: u32 version (1), shader map hashes (20 bytes each), shader hashes (20 each), the shader groups' chunk IDs (12 each), shader map entries {u32 first index, u32 shader count},
+    shader entries (u64: frequency in bits 0-3, group in 4-33, offset in the group's decoded bytes from bit 34), group entries {u32 first index, u32 shader count, u32 raw size, u32 stored size},
+    shader indices (u32): each a u32 count and its elements. Each group is one ShaderCode chunk holding its shaders end to end, Oodle-compressed as a whole when its stored size is below its raw
+    size (FINAL FANTASY RESONANCE: 5,919 groups of 74,244 shaders); a shader runs to the next shader's offset in its group, or to the group's end"""
+    r = R(toc.read(i, decode))
+    if r.take('<I') != 1: raise ValueError(f'{toc.path}: shader library chunk {i} is not version 1')
+    maph = r.raw(20 * r.take('<I')); nsh = r.take('<I'); shh = r.raw(20 * nsh)
+    gids = [r.raw(12) for _ in range(r.take('<I'))]
+    maps = [r.take('<II') for _ in range(r.take('<I'))]
+    n = r.take('<I'); ents = struct.unpack_from(f'<{n}Q', r.b, r.o); r.o += 8 * n
+    groups = [r.take('<IIII') for _ in range(r.take('<I'))]
+    k = r.take('<I'); idx = struct.unpack_from(f'<{k}I', r.b, r.o); r.o += 4 * k
+    if r.o != len(r.b) or n != nsh or len(gids) != len(groups): raise ValueError(f'{toc.path}: shader library chunk {i} does not parse')
+    code = [None] * n
+    for g, (gid, (first, cnt, raw, stored)) in enumerate(zip(gids, groups)):
+        if gid not in toc.index: raise ValueError(f'{toc.path}: shader group {g} has no chunk')
+        d = toc.read(toc.index[gid], decode)
+        if len(d) != stored: raise ValueError(f'{toc.path}: shader group {g} is {len(d)} bytes, its entry says {stored}')
+        if stored < raw: d = decode(d, raw)
+        mine = sorted(((ents[s] >> 34, s) for s in idx[first:first + cnt]))
+        for (at, s), (nxt, _) in zip(mine, mine[1:] + [(raw, None)]):
+            if (ents[s] >> 4) & 0x3FFFFFFF != g: raise ValueError(f'{toc.path}: shader {s} is listed in group {g} but names another')
+            code[s] = d[at:nxt]
+    if any(c is None for c in code): raise ValueError(f'{toc.path}: {sum(c is None for c in code)} shaders in no group')
+    out, off = bytearray(struct.pack('<II', ARCHIVE_VERSION, len(maph) // 20) + maph + struct.pack('<I', n) + shh + struct.pack('<I', len(maps))), 0
+    for a, c in maps: out += struct.pack('<IIII', a, c, 0, 0)
+    out += struct.pack('<I', n)
+    for e, c in zip(ents, code): out += struct.pack('<QIIB', off, len(c), len(c), e & 0xF); off += len(c)
+    out += struct.pack('<I', 0) + struct.pack(f'<I{len(idx)}I', len(idx), *idx)
+    return bytes(out) + b''.join(code)
+
+def io_shader_tocs(romfs):
+    """The IoStore containers under the RomFS that hold Unreal Engine 5 shader libraries"""
+    out = []
+    for dp, _, fs in os.walk(romfs):
+        for f in fs:
+            if not f.endswith('.utoc'): continue
+            try:
+                if Toc(os.path.join(dp, f), b'\0' * 32).of_type(IO_SHADER_LIBRARY): out.append(os.path.join(dp, f))
+            except (OSError, ValueError, struct.error): pass
+    return sorted(out)
+
+def archive_names(romfs):
+    """The shader code archive names ("ShaderArchive-<library>-<format>") the RomFS's manifests list (Unreal's Manifest_UFSFiles_<platform>.txt)"""
+    import re
+    names = set()
+    for f in os.listdir(romfs):
+        if f.startswith('Manifest_') and f.endswith('.txt'):
+            names |= set(re.findall(r'(ShaderArchive-[\w-]+?)\.ushaderbytecode', open(os.path.join(romfs, f), encoding='utf-8', errors='replace').read()))
+    return sorted(names)
+
 def paks(romfs):
     """Every pak under the RomFS"""
     return sorted(os.path.join(dp, f) for dp, _, fs in os.walk(romfs) for f in fs if f.endswith('.pak'))
@@ -210,10 +403,21 @@ def unreal_paks(romfs, legacy=None):
         if legacy is None or (ver in LEGACY) == legacy: out.append(p)
     return out
 
-def job(romfs, main_nso, work):
-    """The shader code archives of every pak under the RomFS into <work>/archives, and one Oodle job (<work>/oodle.job) of every compressed shader in them; <work>/job.json lists them"""
+def job(romfs, main_nso, work, decode=None):
+    """The shader code archives of every pak under the RomFS into <work>/archives, and one Oodle job (<work>/oodle.job) of every compressed shader in them; <work>/job.json lists them.
+    The shader libraries of IoStore containers (Unreal Engine 5.6, FINAL FANTASY RESONANCE: no archive in the pak) go there already decoded: their container blocks and shader groups are
+    Oodle-compressed, two layers, so they need decode (OodleHost: the game's decoder over a pipe) rather than the job"""
     os.makedirs(os.path.join(work, 'archives'), exist_ok=True)
     img, lo, hi = nso_image(main_nso); key = None; listing, recs = [], []
+    tocs = io_shader_tocs(romfs)
+    if tocs and not decode: raise ValueError(f'{tocs[0]}: IoStore shader libraries need the game\'s decoder (decode)')
+    names = archive_names(romfs)
+    for tp in tocs:
+        t = Toc(tp)
+        for i in t.of_type(IO_SHADER_LIBRARY):
+            name = io_library_name(t, i, names) + '.ushaderbytecode'; b = io_archive(t, i, decode)
+            open(os.path.join(work, 'archives', name), 'wb').write(b)
+            listing.append(dict(name=name, pak=os.path.relpath(tp, romfs), path=f'chunk {t.ids[i].hex()}', shaders=len(archive(b)['shaders']), compressed=0, compression='IoStore, decoded'))
     for pak in unreal_paks(romfs, legacy=False):
         with open(pak, 'rb') as f: enc = footer(f)[0]
         if enc and key is None:
@@ -278,7 +482,10 @@ if __name__ == '__main__':
         used = sorted({p.entry(x)['method'] for x in p.files} - {''})
         print(f'pak version {p.version}, mount {p.mount}, {len(p.files)} files, compression {used}')
     elif cmd == 'job':
-        listing, n = job(*sys.argv[2:5])
+        dec = OodleHost(*sys.argv[5:7]) if len(sys.argv) > 6 else None
+        try: listing, n = job(*sys.argv[2:5], decode=dec)
+        finally:
+            if dec: dec.close()
         for x in listing: print(f"{x['name']}: {x['shaders']} shaders, {x['compressed']} compressed")
         print(f'{n} records in {os.path.join(sys.argv[4], "oodle.job")}')
     elif cmd == 'finish':

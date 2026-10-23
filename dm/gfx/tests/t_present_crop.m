@@ -4,18 +4,16 @@
 #define nvn_game_fps nvn_game_fps_mtl_default
 #include "../nvn/nvn_mtl.m"
 #undef nvn_game_fps
-#define g_ft g_flush_tex
+#define g_ft g_ft_hle   // both files have a static g_ft, so hle_nvn.c's is renamed too
 #include "../nvn/hle_nvn.c"
 #undef g_ft
 #include "../../host/hle_aspect.c"
 void gate_obs_set(int id, void (*fn)(const uint64_t *)) { (void)id; (void)fn; }
 int gate_obs_present(int id) { (void)id; return 0; }
-uint64_t g_t0_ns;   // process start time from host main.c (used by hle_nvn's per-frame @t_s); unit test stub
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
 module_t g_mod[MAX_MOD]; int g_nmod;
 void svc_thread_dump(void) {}
-int dm_guest_as_contains(uintptr_t address) { (void)address; return 0; }
 uint64_t now_ns(void) { return bp_now(); }
 #ifdef CROP_LEGACY_HEADER
 #include CROP_LEGACY_HEADER
@@ -24,7 +22,7 @@ uint64_t now_ns(void) { return bp_now(); }
 #define ENCODE present_encode
 #endif
 static int failed, cases;
-#define EXPECT(n, w, v) do { int want_=(w),got_=(v); cases++; printf("%s expected %d → got %d %s\n",n,want_,got_,want_==got_?"✓":"✗");failed+=want_!=got_; } while(0)
+#define EXPECT(n, w, v) do { int a=(w),b=(v); cases++; printf("%s expected %d → got %d %s\n",n,a,b,a==b?"✓":"✗");failed+=a!=b; } while(0)
 static const uint8_t colors[4][4]={{255,0,0,255},{0,255,0,255},{0,0,255,255},{255,255,0,255}};
 
 static void check(id<MTLTexture> src, const char *name, const int crop[4], int w, int h, int color) {

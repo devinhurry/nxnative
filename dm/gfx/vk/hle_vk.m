@@ -199,9 +199,14 @@ struct VkFence_T { _Atomic uint64_t val; };   // 0 = signalled; FENCE_NONE = uns
 #define MAXB 64
 typedef struct { uint32_t binding, count, base; VkDescriptorType type; int dyn, imm; } lbind;   // base: first element in a set's array; dyn: first dynamic offset in the set (-1 if not dynamic)
 struct VkDescriptorSetLayout_T { uint32_t n, total, ndyn; lbind b[MAXB]; int8_t idx[128]; VkSampler *imm; };
-typedef struct { VkBuffer buf; VkDeviceSize off, range; VkImageView view; VkSampler smp; VkBufferView bv; } desc_t;
+// A descriptor holds the Metal objects it was written with (retained), as a hardware descriptor holds a copy of the object's handle: a set may still name a view, sampler
+// or buffer the game has destroyed (the hardware reads it only when a draw samples it), and the replay binds every element of an array the shader takes. Descriptors
+// used to point at this layer's view / sampler / buffer structs, and Super Mario Galaxy 2 crashed reading a freed view's texture from element 1 of its 8-texture array
+// when the ship took off after its first galaxy (GitHub issue 68). buf / off: the buffer's memory and its offset there plus the descriptor's; tex: an image view's
+// texture or a texel buffer's
+typedef struct { __strong id<MTLBuffer> buf; VkDeviceSize off; __strong id<MTLTexture> tex; __strong id<MTLSamplerState> smp; } desc_t;
 struct VkDescriptorPool_T { struct VkDescriptorSet_T *sets; };
-struct VkDescriptorSet_T { VkDescriptorSetLayout L; VkDescriptorPool pool; struct VkDescriptorSet_T *prev, *next; desc_t d[]; };
+struct VkDescriptorSet_T { VkDescriptorSetLayout L; VkDescriptorPool pool; struct VkDescriptorSet_T *prev, *next; desc_t *d; };   // d: L->total descriptors (ARC objects: no flexible array)
 struct VkDescriptorUpdateTemplate_T { uint32_t n; VkDescriptorUpdateTemplateEntry e[]; };
 struct VkPipelineLayout_T { uint32_t nset, pc_size; VkDescriptorSetLayout set[8]; };   // pc_size: end of the highest push-constant range
 
@@ -661,7 +666,8 @@ static void set_free(VkDescriptorSet s) {
     VkDescriptorPool p = s->pool;
     if (s->prev) s->prev->next = s->next; else p->sets = s->next;
     if (s->next) s->next->prev = s->prev;
-    free(s);
+    for (uint32_t k = 0; k < s->L->total; k++) s->d[k] = (desc_t){0};   // releases what the descriptors hold
+    free(s->d); free(s);
 }
 VK(vkResetDescriptorPool, VkResult, VkDevice d, VkDescriptorPool p, VkDescriptorPoolResetFlags f) { (void)d; (void)f; while (p->sets) set_free(p->sets); return VK_SUCCESS; }
 VK(vkDestroyDescriptorPool, void, VkDevice d, VkDescriptorPool p, const VkAllocationCallbacks *a) { (void)a; if (p) { h_vkResetDescriptorPool(d, p, 0); free(p); } }
@@ -669,9 +675,9 @@ VK(vkAllocateDescriptorSets, VkResult, VkDevice d, const VkDescriptorSetAllocate
     (void)d;
     for (uint32_t i = 0; i < ai->descriptorSetCount; i++) {
         VkDescriptorSetLayout L = ai->pSetLayouts[i];
-        VkDescriptorSet s = zalloc(sizeof *s + L->total * sizeof(desc_t));
+        VkDescriptorSet s = zalloc(sizeof *s); s->d = zalloc(umax(1, L->total) * sizeof(desc_t));
         s->L = L; s->pool = ai->descriptorPool; s->next = s->pool->sets; if (s->next) s->next->prev = s; s->pool->sets = s;
-        if (L->imm) for (uint32_t k = 0; k < L->total; k++) s->d[k].smp = L->imm[k];
+        if (L->imm) for (uint32_t k = 0; k < L->total; k++) s->d[k].smp = L->imm[k] ? L->imm[k]->s : nil;
         out[i] = s;
     }
     return VK_SUCCESS;
@@ -689,12 +695,13 @@ static desc_t *set_elem(VkDescriptorSet s, uint32_t binding, uint32_t elem, cons
 }
 static void desc_write(desc_t *e, const lbind *lb, VkDescriptorType t, const VkDescriptorImageInfo *ii, const VkDescriptorBufferInfo *bi, const VkBufferView *bv) {
     switch (t) {
-        case VK_DESCRIPTOR_TYPE_SAMPLER: if (!lb->imm) e->smp = ii->sampler; break;
-        case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: e->view = ii->imageView; if (!lb->imm) e->smp = ii->sampler; break;
-        case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT: e->view = ii->imageView; break;
-        case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER: case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER: e->bv = *bv; break;
-        case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC: case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
-            e->buf = bi->buffer; e->off = bi->offset; e->range = bi->range; break;
+        case VK_DESCRIPTOR_TYPE_SAMPLER: if (!lb->imm) e->smp = ii->sampler ? ii->sampler->s : nil; break;
+        case VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER: e->tex = ii->imageView ? ii->imageView->tex : nil; if (!lb->imm) e->smp = ii->sampler ? ii->sampler->s : nil; break;
+        case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE: case VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT: e->tex = ii->imageView ? ii->imageView->tex : nil; break;
+        case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER: case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER: e->tex = *bv ? bview_tex(*bv) : nil; break;
+        case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER: case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC: case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC: {
+            VkBuffer b = bi->buffer; e->buf = b && b->mem ? mem_buf(b->mem) : nil; e->off = b ? b->off + bi->offset : 0; break;   // a buffer is bound to its memory before it is written
+        }
         default: RED1("descriptor type %d not implemented", t); break;
     }
 }
@@ -1159,22 +1166,20 @@ static void bind_res(rs_t *s, const shinfo *si, int frag) {
             const desc_t *e = &ds->d[lb->base + k]; NSUInteger slot = r->slot + k;
             switch (r->kind) {
                 case 'u': case 'b': {
-                    VkBuffer b = e->buf; if (!b || !b->mem) { RED1("shader %s: buffer %u.%u[%u] is empty", si->key, r->set, r->binding, k); break; }
-                    VkDeviceSize off = b->off + e->off; if (lb->dyn >= 0 && lb->dyn + k < 16) off += s->set[r->set].dyn[lb->dyn + k];
-                    id<MTLBuffer> mb = mem_buf(b->mem);
-                    if (frag) [re setFragmentBuffer:mb offset:off atIndex:slot]; else [re setVertexBuffer:mb offset:off atIndex:slot];
+                    if (!e->buf) { RED1("shader %s: buffer %u.%u[%u] is empty", si->key, r->set, r->binding, k); break; }
+                    VkDeviceSize off = e->off; if (lb->dyn >= 0 && lb->dyn + k < 16) off += s->set[r->set].dyn[lb->dyn + k];
+                    if (frag) [re setFragmentBuffer:e->buf offset:off atIndex:slot]; else [re setVertexBuffer:e->buf offset:off atIndex:slot];
                     break;
                 }
                 case 't': case 'c': {
-                    id<MTLTexture> t = e->view ? e->view->tex : e->bv ? bview_tex(e->bv) : nil;
-                    if (!t) { RED1("shader %s: texture %u.%u[%u] is empty", si->key, r->set, r->binding, k); break; }
-                    if (frag) [re setFragmentTexture:t atIndex:slot]; else [re setVertexTexture:t atIndex:slot];
-                    if (r->kind == 'c' && e->smp) { if (frag) [re setFragmentSamplerState:e->smp->s atIndex:slot]; else [re setVertexSamplerState:e->smp->s atIndex:slot]; }
+                    if (!e->tex) { RED1("shader %s: texture %u.%u[%u] is empty", si->key, r->set, r->binding, k); break; }
+                    if (frag) [re setFragmentTexture:e->tex atIndex:slot]; else [re setVertexTexture:e->tex atIndex:slot];
+                    if (r->kind == 'c' && e->smp) { if (frag) [re setFragmentSamplerState:e->smp atIndex:slot]; else [re setVertexSamplerState:e->smp atIndex:slot]; }
                     break;
                 }
                 case 's':
                     if (!e->smp) { RED1("shader %s: sampler %u.%u[%u] is empty", si->key, r->set, r->binding, k); break; }
-                    if (frag) [re setFragmentSamplerState:e->smp->s atIndex:slot]; else [re setVertexSamplerState:e->smp->s atIndex:slot];
+                    if (frag) [re setFragmentSamplerState:e->smp atIndex:slot]; else [re setVertexSamplerState:e->smp atIndex:slot];
                     break;
             }
         }

@@ -1,4 +1,4 @@
-# chain b-30fd9f023111 2026-10-22T22:27:01+08:00 (list carried over from b-8b6186c008e4: that chain change did not touch any uniform read)
+# chain b-fc3150ef3ee3 2026-10-23T08:37:08+08:00 (list carried over from b-30fd9f023111: that chain change did not touch any uniform read)
 # shader key, then reg:bytes for each uniform slot whose reads stay inside its first bytes, and s<reg> for each storage slot it never writes (cb_extent.py)
 00008cfe4fc1d31b	5:304 6:1856 7:64 12:16
 0004d9615081f2dd	5:304 6:1856 7:64
