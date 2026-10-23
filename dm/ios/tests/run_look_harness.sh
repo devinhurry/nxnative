@@ -53,7 +53,7 @@ PLIST
 
 make -s -C "$HOST" GAME="$PROFILE" game_profile
 xcrun --sdk iphonesimulator clang \
-  -target arm64-apple-ios26.0-simulator -isysroot "$SDK" -fobjc-arc -fblocks -O1 -g \
+  -target arm64-apple-ios26.0-simulator -isysroot "$SDK" -fobjc-arc -fblocks -O1 -g -DDM_TEST_HOOKS \
   -I"$HOST" -I"$HOST/gen/$PROFILE" -I"$ROOT/dm/games/$PROFILE" \
   "$ROOT/dm/ios/tests/ios_look_harness.m" "$ROOT/dm/ios/Sources/DmGamepad.m" \
   -framework UIKit -framework GameController -framework CoreMotion -framework CoreText -framework QuartzCore -framework CoreGraphics \

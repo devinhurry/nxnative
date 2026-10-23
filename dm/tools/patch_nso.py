@@ -341,6 +341,11 @@ OBS = {
     (0xd44a2c, 23, 'a94a2269', 'UI 3D camera update: x19 owns the source lens at +0xa0 and projection at +0xa8; apply aspect before copying lens parameters'),
     (0xbf64ec, 24, 'fc1b0fec', 'CameraChase polar input: apply relative manual yaw/pitch before subsequent camera processing'),
     (0xc1d0b4, 25, '394ab698', 'CameraTail update: apply relative yaw/pitch to native state before camera processing'),
+    (0xbf0c38, 26, 'bd423661', 'CameraAiming pitch source: apply relative manual pitch before the native load'),
+    (0xbf2c48, 27, 'bd423664', 'CameraAiming2 pitch source: apply relative manual pitch before the native load'),
+    (0xbf0da4, 28, '1e20400b', 'CameraAiming mode-0 yaw result: apply relative manual yaw before the native copy'),
+    (0xbf0dfc, 29, 'bd023260', 'CameraAiming mode-1 yaw result: apply relative manual yaw before the native store'),
+    (0xbf2fa0, 30, '1e204008', 'CameraAiming2 target yaw: apply relative manual yaw before the native smoothing'),
   ],
   # Metroid Dread 2.1.0 main: the movie player posts "link / unlink holders" requests into the dispatcher thread's request ring (main+0x222cc8) and goes on without waiting for them (after an unlink it frees the wrapper object and builds a new one in place).
   # On hardware the dispatcher thread (priority 30, core 0 only) preempts the main thread (priority 44, core 0) at once and finishes first; the host waits for the ring to empty after each post (hle_movie.c movie_ring_wait). The gates sit on the add x22, x22, #8 after the bl
@@ -1135,7 +1140,14 @@ for off, oid, ow, why in obs:
     # Elsewhere, accept only sites where none of these registers are read before the next call (scratch_dead).
     prev = struct.unpack_from('<I', IMG, off - 4)[0] if off >= 4 else 0
     after_call = prev >> 26 == 0x25 or prev & 0xfffffc1f == 0xd63f0000
-    assert off in set(starts) or after_call or scratch_dead(off), f'observation gate neither at a function entry, after a bl / blr nor before a call with x9–x17 unread {off:#x}'
+    # Aiming gates are fixed sites inside CameraAiming / CameraAiming2 updates: two serve their
+    # pitch field before the native load, three carry the wrapped yaw target in q0. The exact
+    # instruction words keep them tied to BOTW 1.9.0's main.
+    aim_words = {0xbf0c38: 0xbd423661, 0xbf2c48: 0xbd423664, 0xbf0da4: 0x1e20400b,
+                 0xbf0dfc: 0xbd023260, 0xbf2fa0: 0x1e204008}
+    camera_aim_probe = (BUILD_ID == 'cd57b23fa4bbad65803d9788c01821ee' and
+                        off in aim_words and w == aim_words[off])
+    assert off in set(starts) or after_call or scratch_dead(off) or camera_aim_probe, f'observation gate neither at a function entry, after a bl / blr nor before a call with x9–x17 unread {off:#x}'
     assert off < TEXT_END and off not in kinds and not any(lo <= off < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'observation gate conflicts with a rewrite site {off:#x}'
     put_branch(off, site_obs(off, oid, w)); stat('obs')
 
