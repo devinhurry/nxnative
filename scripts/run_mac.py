@@ -65,6 +65,11 @@ def resolve_game_input(repo, value, env):
             match = _BUILD_NAME.fullmatch(child.name)
             if child.is_dir() and match:
                 candidates.append((match.group(1).upper(), child))
+        if len(candidates) > 1 and len({game_id for game_id, _ in candidates}) == 1:
+            # The NSP pipeline's _build folder is canonical when both names exist.
+            build_roots = [(game_id, child) for game_id, child in candidates if child.name.endswith('_build')]
+            if len(build_roots) == 1:
+                candidates = build_roots
         if len(candidates) > 1:
             choices = ', '.join(str(child) for _, child in candidates)
             raise LaunchError(f'multiple game builds found under {path}: {choices}; choose one with --game <folder>')
