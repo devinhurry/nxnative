@@ -90,73 +90,83 @@ int main(void) {
     calculated_matrix(target2);
     expect_translation(target2, 45, -36);
 
-    // Use the collapsed field-map's live centered scissor (440x288 after its
-    // native 0.4 scale), then carry the same translation to its guide sibling
-    // and the five environment panes in MainScreen.
-    uint8_t map_root[0x100] = {0}, born[0x100] = {0}, inout[0x100] = {0};
-    uint8_t pos[0x100] = {0}, mini[0x100] = {0}, scissor[0x100] = {0}, sensor[0x100] = {0};
-    pane_name(map_root, "RootPane"); pane_name(born, "N_Born_00"); pane_name(inout, "N_InOut_00");
-    pane_name(pos, "N_MiniMapPos_00"); pane_name(mini, "N_MiniMap_00");
-    pane_name(scissor, "N_Scissor_00"); pane_name(sensor, "N_MiniMap_01");
-    set_pane_parent(born, map_root); set_pane_parent(inout, born); set_pane_parent(pos, inout);
-    set_pane_parent(mini, pos); set_pane_parent(scissor, mini); set_pane_parent(sensor, inout);
-    map_root[BOTW_TOUCH_FLAGS] = born[BOTW_TOUCH_FLAGS] = inout[BOTW_TOUCH_FLAGS] = 1;
-    pos[BOTW_TOUCH_FLAGS] = mini[BOTW_TOUCH_FLAGS] = scissor[BOTW_TOUCH_FLAGS] = sensor[BOTW_TOUCH_FLAGS] = 1;
-    float collapsed = 0.4f, map_x = 410, map_y = -216;
-    memcpy(mini + BOTW_TOUCH_SCALE, &collapsed, sizeof collapsed);
-    memcpy(mini + BOTW_TOUCH_SCALE + 4, &collapsed, sizeof collapsed);
-    memcpy(mini + BOTW_TOUCH_POSITION, &map_x, sizeof map_x);
-    memcpy(mini + BOTW_TOUCH_POSITION + 4, &map_y, sizeof map_y);
-    calculate_entry(mini);
-    pane_size(scissor, 1100, 720); scaled_matrix(scissor, 0.4f, 414, -216);
-    calculate_entry(scissor); calculated_matrix(scissor);
-    expect_translation(scissor, -307, 102);
-    assert(map_region_valid);
-    assert(fabsf(map_region[0] - 0.08828125f) < 0.001f && fabsf(map_region[1] - 0.1583333f) < 0.001f);
-    assert(fabsf(map_region[2] - 0.34375f) < 0.001f && fabsf(map_region[3] - 0.4f) < 0.001f);
-    int map_events_before_tap = map_region_events;
-    dm_botw_touch_hud_map_tapped();
-    assert(!map_region_valid && map_region_events == map_events_before_tap + 1);
-    // No scissor calculation arrives while Slate is expanded. The first
-    // fresh collapsed calculation must republish unchanged bounds.
-    float expanded = 1, zero = 0;
-    memcpy(mini + BOTW_TOUCH_SCALE, &expanded, sizeof expanded);
-    memcpy(mini + BOTW_TOUCH_SCALE + 4, &expanded, sizeof expanded);
-    memcpy(mini + BOTW_TOUCH_POSITION, &zero, sizeof zero);
-    memcpy(mini + BOTW_TOUCH_POSITION + 4, &zero, sizeof zero);
-    calculate_entry(mini);
-    assert(!map_region_valid);
-    memcpy(mini + BOTW_TOUCH_SCALE, &collapsed, sizeof collapsed);
-    memcpy(mini + BOTW_TOUCH_SCALE + 4, &collapsed, sizeof collapsed);
-    memcpy(mini + BOTW_TOUCH_POSITION, &map_x, sizeof map_x);
-    memcpy(mini + BOTW_TOUCH_POSITION + 4, &map_y, sizeof map_y);
-    calculate_entry(mini);
-    calculate_entry(scissor); scaled_matrix(scissor, 0.4f, 414, -216); calculated_matrix(scissor);
-    assert(map_region_valid && map_region_events == map_events_before_tap + 2);
-    matrix_translation(sensor, 30, 40); calculate_entry(sensor); calculated_matrix(sensor);
-    expect_translation(sensor, -691, 358);
+    // Match the runtime AppMap tree: a visible N_InOut_00 / N_Cut_00
+    // viewport (166x166 collapsed, 1500x720 expanded) contains a 192x192
+    // capture pane. N_Cut_01 is its sibling marker/compass subtree.
+    uint8_t map_root[0x100] = {0}, map_inout[0x100] = {0}, cut[0x100] = {0};
+    uint8_t capture[0x100] = {0}, cut_sibling[0x100] = {0};
+    pane_name(map_root, "RootPane"); pane_name(map_inout, "N_InOut_00");
+    pane_name(cut, "N_Cut_00"); pane_name(capture, "N_Capture_00"); pane_name(cut_sibling, "N_Cut_01");
+    set_pane_parent(map_inout, map_root); set_pane_parent(cut, map_inout);
+    set_pane_parent(capture, cut); set_pane_parent(cut_sibling, map_inout);
+    map_root[BOTW_TOUCH_FLAGS] = map_inout[BOTW_TOUCH_FLAGS] = cut[BOTW_TOUCH_FLAGS] =
+        capture[BOTW_TOUCH_FLAGS] = cut_sibling[BOTW_TOUCH_FLAGS] = 1;
+    pane_size(cut, 166, 166); pane_size(capture, 192, 192); pane_size(cut_sibling, 210, 328);
+    scaled_matrix(cut, 1, 510, -240); scaled_matrix(cut_sibling, 1, 510, -240);
+    calculate_entry(cut); calculated_matrix(cut);
+    assert(!map_region_valid); // wait until the full live cluster geometry is known
+    expect_translation(cut, 510, -240);
+    calculate_entry(cut_sibling); calculated_matrix(cut_sibling);
+    expect_translation(cut_sibling, 510, -240);
 
     uint8_t env_all[0x100] = {0}, env_root[0x100] = {0}, weather[0x100] = {0}, status[0x100] = {0};
     pane_name(env_all, "N_All_00"); pane_name(env_root, "RootPane");
     pane_name(weather, "Pa_Weather_00"); pane_name(status, "Pa_Sensor_00");
     set_pane_parent(env_all, env_root); set_pane_parent(weather, env_all); set_pane_parent(status, env_all);
+    env_root[BOTW_TOUCH_FLAGS] = env_all[BOTW_TOUCH_FLAGS] = weather[BOTW_TOUCH_FLAGS] = status[BOTW_TOUCH_FLAGS] = 1;
     matrix_translation(weather, 392, -182); calculate_entry(weather); calculated_matrix(weather);
-    expect_translation(weather, -329, 136);
+    expect_translation(weather, 392, -182);
     pane_size(status, 582, 78.2f); matrix_translation(status, 392, -182);
     calculate_entry(status); calculated_matrix(status);
-    expect_translation(status, -329, 136);
-    assert(fabsf((-329.0f - 582.0f * 0.5f) - (-620.0f)) < 0.001f);
+    expect_translation(status, 392, -182);
+    // Anchor the shared cluster to the visible viewport's top edge. N_Cut_01
+    // is 328 px tall around the 166 px circle, so its upper padding does not
+    // push the visible circle away from the 20 px canvas inset.
+    scaled_matrix(cut, 1, 510, -240); calculate_entry(cut); calculated_matrix(cut);
+    assert(map_region_valid && fabsf(map_region[2] - 166.0f / 1280.0f) < .001f);
+    assert(fabsf(map_region[1] - 20.0f / 720.0f) < .001f);
+    expect_translation(cut, 443, 257);
+    scaled_matrix(cut_sibling, 1, 510, -240); calculate_entry(cut_sibling); calculated_matrix(cut_sibling);
+    expect_translation(cut_sibling, 443, 257);
+    matrix_translation(status, 392, -182); calculate_entry(status); calculated_matrix(status);
+    expect_translation(status, 325, 315);
+    assert(fabsf((315.0f - 257.0f) - 58.0f) < .001f); // gauges retain their native offset from the map
+    assert(fabsf((325.0f + 582.0f * .5f) - 616.0f) < .001f);
+    int map_events_before_tap = map_region_events;
+    dm_botw_touch_hud_map_tapped();
+    assert(!map_region_valid && map_region_events == map_events_before_tap + 1);
 
-    // Expanded/native Slate pose remains in place and releases map ownership.
-    memcpy(mini + BOTW_TOUCH_SCALE, &expanded, sizeof expanded);
-    memcpy(mini + BOTW_TOUCH_SCALE + 4, &expanded, sizeof expanded);
-    memcpy(mini + BOTW_TOUCH_POSITION, &zero, sizeof zero);
-    memcpy(mini + BOTW_TOUCH_POSITION + 4, &zero, sizeof zero);
-    // Deliberately skip the parent entry callback: fresh scissor calculation
-    // must reject an expanded map even if the prior collapsed flag was stale.
-    matrix_translation(scissor, 100, 200); calculate_entry(scissor); calculated_matrix(scissor);
+    // Expanded Slate invalidates the hit region and leaves its large viewport
+    // at the native position. Returning to collapsed republishes the live hit.
+    pane_size(cut, 1500, 720); scaled_matrix(cut, 1, 0, 0);
+    calculate_entry(cut); calculated_matrix(cut);
+    assert(!map_region_valid); expect_translation(cut, 0, 0);
+    pane_size(cut, 166, 166); scaled_matrix(cut, 1, 510, -240);
+    calculate_entry(cut); calculated_matrix(cut);
+    assert(!map_region_valid); expect_translation(cut, 510, -240);
+    scaled_matrix(cut_sibling, 1, 510, -240); calculate_entry(cut_sibling); calculated_matrix(cut_sibling);
+    matrix_translation(status, 392, -182); calculate_entry(status); calculated_matrix(status);
+    scaled_matrix(cut, 1, 510, -240); calculate_entry(cut); calculated_matrix(cut);
+    assert(map_region_valid && map_region_events == map_events_before_tap + 2);
+    assert(fabsf(map_region[1] - 20.0f / 720.0f) < .001f);
+    expect_translation(cut, 443, 257);
+
+    // Reestablish a live collapsed hit region, then hide AppMap's RootPane.
+    // A child traversal is skipped under a hidden root, so its own Calculate
+    // entry must invalidate the stale hit region.
+    map_inout[BOTW_TOUCH_FLAGS] = 0;
+    calculate_entry(map_inout);
     assert(!map_region_valid);
-    expect_translation(scissor, 100, 200);
+    map_inout[BOTW_TOUCH_FLAGS] = 1;
+    calculate_entry(cut); // refresh the collapsed-state identity before child matrix callbacks
+    calculate_entry(cut_sibling); calculated_matrix(cut_sibling);
+    matrix_translation(status, 392, -182); calculate_entry(status); calculated_matrix(status);
+    scaled_matrix(cut, 1, 510, -240); calculate_entry(cut); calculated_matrix(cut);
+    assert(map_region_valid);
+    map_root[BOTW_TOUCH_FLAGS] = 0;
+    calculate_entry(map_root);
+    assert(!map_region_valid);
+    map_root[BOTW_TOUCH_FLAGS] = 1;
 
     // Controller connect / non-3D mode publishes inactive and restores a fresh native matrix.
     dm_botw_touch_hud_publish(0, 0.25f, 0.75f);
@@ -165,6 +175,13 @@ int main(void) {
     assert(target2[BOTW_TOUCH_FLAGS] & BOTW_TOUCH_DIRTY);
     calculated_matrix(target2);
     expect_translation(target2, -509, 210);
+    // A hidden cut still matches by identity, so it invalidates the hitbox;
+    // restoring a previously translated pane also marks it dirty only as needed.
+    cut[BOTW_TOUCH_FLAGS] = 0;
+    pane_size(cut, 166, 166); matrix_translation(cut, 510, -240);
+    calculate_entry(cut); calculated_matrix(cut);
+    assert(!map_region_valid);
+    expect_translation(cut, 510, -240);
 
     // Same-name N_Pos panes elsewhere (including MainScreen's hearts branch) do not match.
     uint8_t other_root[0x100] = {0}, other_all[0x100] = {0}, other[0x100] = {0};

@@ -196,17 +196,20 @@ static NSPoint preview_from_top(float x, float y, float height) { return NSMakeP
 static dm_touchpad_point preview_pad_point(float x, float y) { return (dm_touchpad_point){x, y}; }
 
 @implementation DmTouchPreviewView {
-    BOOL _active, _mapValid, _mapTapConsumed, _mapInvalidAfterTap;
+    BOOL _active, _mapValid, _mapTapConsumed, _mapInvalidAfterTap, _lookDragged, _lookTapPending;
     dm_touchpad_rect _mapRect;
     int _owner, _button;
     uint64_t _held;
     NSPoint _down, _last, _stickCenter;
+    NSTimeInterval _lookDownTime, _lookTapTime;
+    NSPoint _lookTapPoint;
     BOOL _hasTouch;
 }
 - (BOOL)isFlipped { return NO; }
 - (BOOL)acceptsFirstMouse:(NSEvent *)event { (void)event; return YES; }
 - (NSView *)hitTest:(NSPoint)p { return _active && !self.hidden && NSPointInRect(p, self.bounds) ? self : nil; }
 - (void)setPreviewActive:(BOOL)active {
+    if (_active != active) _lookTapPending = NO;
     if (_active != active && !active) { [self cancelInput]; _mapValid = NO; _mapTapConsumed = NO; _mapInvalidAfterTap = NO; }
     _active = active; self.hidden = !active; [self setNeedsDisplay:YES];
 }
@@ -243,8 +246,11 @@ static dm_touchpad_point preview_pad_point(float x, float y) { return (dm_touchp
         {9, DM_TP_ZL_X, DM_TP_ZL_Y, DM_TP_ZL_R, YES}, {7, DM_TP_L_X, DM_TP_L_Y, DM_TP_L_R, YES}
     };
     for (unsigned i = 0; i < sizeof keys / sizeof keys[0]; i++) {
-        float x = keys[i].right ? w - keys[i].x * u : keys[i].x * u;
-        if (preview_distance(NSMakePoint(p.x, p.y), NSMakePoint(x, keys[i].y * u)) < keys[i].r * u * 1.35f) return keys[i].bit;
+        dm_touchpad_point c = {keys[i].right ? w - keys[i].x * u : keys[i].x * u, keys[i].y * u};
+        if (_active && (keys[i].bit == 9 || keys[i].bit == 7))
+            c = dm_touchpad_right_shoulder(w, (float)self.bounds.size.height, 0, 0, 0, 0, keys[i].bit == 9);
+        float hit_scale = _active && (keys[i].bit == 9 || keys[i].bit == 7) ? DM_TP_SHOULDER_HIT_SCALE : 1.35f;
+        if (preview_distance(NSMakePoint(p.x, p.y), NSMakePoint(c.x, c.y)) < keys[i].r * u * hit_scale) return keys[i].bit;
     }
     float pillY = DM_TP_PILL_Y * u;
     float minusX = w * .5f - DM_TP_PILL_DX * u, plusX = w * .5f + DM_TP_PILL_DX * u;
@@ -296,19 +302,21 @@ static dm_touchpad_point preview_pad_point(float x, float y) { return (dm_touchp
     dm_touchpad_point p = [self topPoint:e];
     _down = _last = NSMakePoint(p.x, p.y); _hasTouch = YES; _held = 0; _owner = PREVIEW_NONE;
     if (e.clickCount >= 2 && [self leftStickOwnsTop:p]) {
+        _lookTapPending = NO;
         g_preview_buttons |= DM_BTN_LS; push(); g_preview_buttons &= ~DM_BTN_LS; push(); _hasTouch = NO; return;
     }
     int b = [self buttonAtTop:p];
-    if (b >= 0) { _owner = PREVIEW_BUTTON; _button = b; _held = 1ull << b; [self publishButtons]; return; }
+    if (b >= 0) { _lookTapPending = NO; _owner = PREVIEW_BUTTON; _button = b; _held = 1ull << b; [self publishButtons]; return; }
     // Match iOS touch-down ownership: nearby face/D-pad/stick controls get first refusal,
     // the floating left stick owns its home region, then the relocated map takes the tap.
-    if ([self leftStickOwnsTop:p]) { _owner = PREVIEW_STICK; _stickCenter = NSMakePoint(p.x,p.y); [self updateStick:p]; return; }
+    if ([self leftStickOwnsTop:p]) { _lookTapPending = NO; _owner = PREVIEW_STICK; _stickCenter = NSMakePoint(p.x,p.y); [self updateStick:p]; return; }
     dm_touchpad_point fc = [self faceCenter], dc = [self dpadCenter]; float u = self.u;
     float fd = preview_distance(NSMakePoint(p.x,p.y), NSMakePoint(fc.x,fc.y));
     float dd = preview_distance(NSMakePoint(p.x,p.y), NSMakePoint(dc.x,dc.y));
-    if (fd <= DM_TP_FACE_GAP*u + DM_TP_FACE_R*u*1.6f && fd <= dd) { _owner = PREVIEW_FACE; _held = [self faceAtTop:p]; [self publishButtons]; return; }
-    if (dd <= DM_TP_DPAD_R*u*DM_TP_DPAD_GRAB && dd < fd) { _owner = PREVIEW_DPAD; _held = [self dpadAtTop:p]; [self publishButtons]; return; }
+    if (fd <= DM_TP_FACE_GAP*u + DM_TP_FACE_R*u*1.6f && fd <= dd) { _lookTapPending = NO; _owner = PREVIEW_FACE; _held = [self faceAtTop:p]; [self publishButtons]; return; }
+    if (dd <= DM_TP_DPAD_R*u*DM_TP_DPAD_GRAB && dd < fd) { _lookTapPending = NO; _owner = PREVIEW_DPAD; _held = [self dpadAtTop:p]; [self publishButtons]; return; }
     if ([self mapOwnsTop:p]) {
+        _lookTapPending = NO;
         _owner = PREVIEW_NONE; _hasTouch = NO;
         _mapTapConsumed = YES; _mapInvalidAfterTap = NO; _mapValid = NO; _mapRect = (dm_touchpad_rect){0};
         // The host publishes the invalid map region as part of this call. Do not
@@ -319,8 +327,9 @@ static dm_touchpad_point preview_pad_point(float x, float y) { return (dm_touchp
         return;
     }
     if (dm_look_enabled() && p.x >= self.bounds.size.width * (1.0f-DM_TP_RSWIPE)) {
-        _owner = PREVIEW_LOOK; dm_look_input(DM_LOOK_BEGIN,0,0); return;
+        _owner = PREVIEW_LOOK; _lookDownTime = e.timestamp; _lookDragged = NO; dm_look_input(DM_LOOK_BEGIN,0,0); return;
     }
+    _lookTapPending = NO;
     _owner = PREVIEW_GAME; [self sendGameTouch:p];
 }
 - (void)mouseDragged:(NSEvent *)e {
@@ -332,6 +341,9 @@ static dm_touchpad_point preview_pad_point(float x, float y) { return (dm_touchp
     else if (_owner == PREVIEW_GAME) [self sendGameTouch:p];
     else if (_owner == PREVIEW_LOOK) {
         float scale = fminf((float)self.bounds.size.width, (float)self.bounds.size.height);
+        _lookDragged |= dm_touchpad_look_dragged((float)_down.x, (float)_down.y, p.x, p.y,
+                                                  DM_TP_LOOK_TAP_SLOP * self.u);
+        if (_lookDragged) _lookTapPending = NO;
         if (scale > 0) dm_look_input(DM_LOOK_MOVE, (p.x-_last.x)/scale, (p.y-_last.y)/scale);
     }
     _last = NSMakePoint(p.x,p.y);
@@ -339,16 +351,32 @@ static dm_touchpad_point preview_pad_point(float x, float y) { return (dm_touchp
 - (void)mouseUp:(NSEvent *)e {
     if (!_hasTouch) return;
     if (_owner == PREVIEW_GAME) dm_touch_set(NULL,0);
-    if (_owner == PREVIEW_LOOK) dm_look_input(DM_LOOK_END,0,0);
+    if (_owner == PREVIEW_LOOK) {
+        dm_touchpad_point p = [self topPoint:e];
+        _lookDragged |= dm_touchpad_look_dragged((float)_down.x, (float)_down.y, p.x, p.y,
+                                                  DM_TP_LOOK_TAP_SLOP * self.u);
+        if (_lookDragged) _lookTapPending = NO;
+        dm_look_input(DM_LOOK_END,0,0);
+        if (dm_touchpad_look_tap((float)(e.timestamp - _lookDownTime), _lookDragged)) {
+            float u = self.u;
+            if (_lookTapPending && dm_touchpad_look_double_tap((double)_lookTapTime, (double)e.timestamp,
+                    (float)_lookTapPoint.x, (float)_lookTapPoint.y, (float)_down.x, (float)_down.y, u)) {
+                _lookTapPending = NO;
+                g_preview_buttons |= DM_BTN_RS; push(); g_preview_buttons &= ~DM_BTN_RS; push();
+            } else { _lookTapPending = YES; _lookTapTime = e.timestamp; _lookTapPoint = _down; }
+        } else {
+            _lookTapPending = NO;
+        }
+    }
     _owner = PREVIEW_NONE; _hasTouch = NO; _held = 0;
     g_preview_lx = g_preview_ly = 0; g_preview_buttons = 0; push(); [self setNeedsDisplay:YES];
 }
 - (void)cancelInput {
     if (_owner == PREVIEW_GAME) dm_touch_set(NULL,0);
     if (_owner == PREVIEW_LOOK) dm_look_input(DM_LOOK_CANCEL,0,0);
-    _owner = PREVIEW_NONE; _hasTouch = NO; _held = 0;
+    _lookTapPending = NO; _owner = PREVIEW_NONE; _hasTouch = NO; _held = 0;
     g_preview_lx = g_preview_ly = 0; g_preview_buttons = 0;
-    dm_input_cancel_virtual_latch(DM_BTN_LS | DM_BTN_MINUS); push();
+    dm_input_cancel_virtual_latch(DM_BTN_LS | DM_BTN_RS | DM_BTN_MINUS); push();
 }
 - (void)drawCircle:(NSPoint)c radius:(float)r fill:(float)alpha label:(NSString *)label {
     NSRect rect = NSMakeRect(c.x-r, c.y-r, 2*r, 2*r);
@@ -379,8 +407,10 @@ static dm_touchpad_point preview_pad_point(float x, float y) { return (dm_touchp
         {9,DM_TP_ZL_X,DM_TP_ZL_Y,DM_TP_ZL_R,YES,@"ZR"},{7,DM_TP_L_X,DM_TP_L_Y,DM_TP_L_R,YES,@"R"}
     };
     for (unsigned i=0;i<sizeof keys/sizeof keys[0];i++) {
-        float x = keys[i].right ? w-keys[i].x*u : keys[i].x*u;
-        [self drawCircle:preview_from_top(x,keys[i].y*u,h) radius:keys[i].r*u fill:(_held & (1ull<<keys[i].bit))?.48:.15 label:keys[i].name];
+        dm_touchpad_point c = {keys[i].right ? w-keys[i].x*u : keys[i].x*u, keys[i].y*u};
+        if (_active && (keys[i].bit == 9 || keys[i].bit == 7))
+            c = dm_touchpad_right_shoulder(w, h, 0, 0, 0, 0, keys[i].bit == 9);
+        [self drawCircle:preview_from_top(c.x,c.y,h) radius:keys[i].r*u fill:(_held & (1ull<<keys[i].bit))?.48:.15 label:keys[i].name];
     }
     float py=DM_TP_PILL_Y*u;
     for (int b=10;b<=11;b++) {
@@ -431,7 +461,10 @@ static void preview_refresh(void) {
 - (void)setFrameSize:(NSSize)s {
     [super setFrameSize:s];
     if (s.width <= 0 || s.height <= 0) return;
-    if (_hasLookSize && !NSEqualSizes(_lookSize, s)) [self cancelLook];
+    if (_hasLookSize && !NSEqualSizes(_lookSize, s)) {
+        [self cancelLook];
+        if (g_preview_view) [g_preview_view cancelInput];
+    }
     _lookSize = s; _hasLookSize = YES;
     dm_aspect_set_display((float)(s.width / s.height));
     [self fitDrawable];

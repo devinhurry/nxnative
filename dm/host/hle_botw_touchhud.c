@@ -10,21 +10,23 @@
 enum { BOTW_TOUCH_PANE_NAME = 0xb8, BOTW_TOUCH_PARENT = 0x18, BOTW_TOUCH_FLAGS = 0x58,
        BOTW_TOUCH_POSITION = 0x30, BOTW_TOUCH_SCALE = 0x48, BOTW_TOUCH_SIZE = 0x50,
        BOTW_TOUCH_MATRIX = 0x70, BOTW_TOUCH_DIRTY = 0x10 };
-// MainScreen's authored Pa_Sensor_00 extends 93 px left of the collapsed map
-// scissor at its base pose. The canvas edge is 7 px inside that union; add a
-// 20 px content inset so the full visible bundle stays within the canvas.
-enum { BOTW_TOUCH_SENSOR_LEFT_MARGIN = 27 };
+enum { BOTW_TOUCH_MAP_RIGHT_INSET = 24, BOTW_TOUCH_MAP_TOP = 340 };
 static const char BOTW_BUILD[] = "cd57b23fa4bbad65803d9788c01821ee";
 static pthread_mutex_t g_touchhud_mu = PTHREAD_MUTEX_INITIALIZER;
 static struct {
     int active, home_valid, delta_valid, map_rect_valid;
     float x, y, home_x, home_y, map_dx, map_dy, map_rect[4];
+    int cut_bounds_valid, sibling_bounds_valid, sensor_bounds_valid;
+    float cut_right, cut_top, sibling_right, sensor_right;
 } g_touchhud;
 static _Atomic int g_touchhud_active;
 static _Atomic(uintptr_t) g_touchhud_pane;
 static _Atomic int g_touchhud_available;
 static _Atomic int g_touchhud_map_collapsed;
+static _Atomic(uintptr_t) g_touchhud_map_root;
 static module_t *g_touchhud_main;
+static uint8_t *pane_parent(uint8_t *pane);
+static int visible_to_root(uint8_t *pane);
 
 int dm_botw_touch_hud_available(void) { return atomic_load_explicit(&g_touchhud_available, memory_order_acquire); }
 
@@ -59,7 +61,6 @@ void dm_botw_touch_hud_map_tapped(void) {
 static int pane_named(const uint8_t *pane, const char *name) {
     return pane && !strncmp((const char *)pane + BOTW_TOUCH_PANE_NAME, name, 16);
 }
-
 // A name alone is not sufficient: MainScreen also has an N_Pos_00 for hearts.
 // Verify the asset's unique three-pane ancestry before retaining this pointer.
 static int main_shortcut_equipment(uint8_t *pane) {
@@ -81,19 +82,30 @@ static int visible_to_root(uint8_t *pane) {
 static int map_layout_root(uint8_t *pane) {
     return pane_named(pane, "RootPane");
 }
-static int map_mini_root(uint8_t *pane) {
-    uint8_t *pos = pane_parent(pane), *inout = pane_parent(pos), *born = pane_parent(inout), *root = pane_parent(born);
-    return pane_named(pane, "N_MiniMap_00") && pane_named(pos, "N_MiniMapPos_00") &&
-           pane_named(inout, "N_InOut_00") && pane_named(born, "N_Born_00") && map_layout_root(root);
+// The live gameplay AppMap does not use the authored MiniMapPos/Scissor
+// ancestry. Its collapsed viewport is the 166x166 N_Cut_00 beneath the
+// visible AppMap root; the capture texture inside it is 192x192. Slate expands
+// this same cut to 1500x720. Match the live viewport and tree, not marker names.
+static int map_cut_root(uint8_t *pane) {
+    uint8_t *inout = pane_parent(pane), *root = pane_parent(inout);
+    return pane_named(pane, "N_Cut_00") && pane_named(inout, "N_InOut_00") &&
+           map_layout_root(root);
 }
-static int map_sensor_root(uint8_t *pane) {
-    uint8_t *inout = pane_parent(pane), *born = pane_parent(inout), *root = pane_parent(born);
-    return pane_named(pane, "N_MiniMap_01") && pane_named(inout, "N_InOut_00") &&
-           pane_named(born, "N_Born_00") && map_layout_root(root);
+static int map_cut_visible(uint8_t *pane) { return visible_to_root(pane); }
+static int map_inout_root(uint8_t *pane) {
+    uint8_t *root = pane_parent(pane);
+    return pane_named(pane, "N_InOut_00") && map_layout_root(root) &&
+           (uintptr_t)root == atomic_load(&g_touchhud_map_root);
 }
-static int map_scissor_root(uint8_t *pane) {
-    uint8_t *map = pane_parent(pane);
-    return pane_named(pane, "N_Scissor_00") && map_mini_root(map);
+static int map_cut_sibling(uint8_t *pane) {
+    uint8_t *inout = pane_parent(pane), *root = pane_parent(inout);
+    return pane_named(pane, "N_Cut_01") && pane_named(inout, "N_InOut_00") &&
+           map_layout_root(root) && (uintptr_t)root == atomic_load(&g_touchhud_map_root);
+}
+static int map_ornament_root(uint8_t *pane) {
+    uint8_t *root = pane_parent(pane);
+    return pane_named(pane, "N_InOut_01") && map_layout_root(root) &&
+           (uintptr_t)root == atomic_load(&g_touchhud_map_root);
 }
 static int main_environment_pane(uint8_t *pane) {
     uint8_t *all = pane_parent(pane), *root = pane_parent(all);
@@ -134,6 +146,39 @@ static int transform_bounds(uint8_t *pane, float *left, float *bottom, float *ri
     return *right > *left && *top > *bottom;
 }
 
+// Keep the relocated viewport and the panes around it in one live cluster.
+// Source bounds come from the freshly composed matrices before we translate
+// them; all three branches therefore share one delta and preserve their layout.
+static int touchhud_record_cluster_bounds(uint8_t *pane, int branch) {
+    float left, bottom, right, top;
+    if (!transform_bounds(pane, &left, &bottom, &right, &top)) return 0;
+    pthread_mutex_lock(&g_touchhud_mu);
+    if (branch == 0) { g_touchhud.cut_bounds_valid = 1; g_touchhud.cut_right = right; g_touchhud.cut_top = top; }
+    if (branch == 1) { g_touchhud.sibling_bounds_valid = 1; g_touchhud.sibling_right = right; }
+    if (branch == 2) { g_touchhud.sensor_bounds_valid = 1; g_touchhud.sensor_right = right; }
+    int valid = g_touchhud.cut_bounds_valid && g_touchhud.sibling_bounds_valid && g_touchhud.sensor_bounds_valid;
+    pthread_mutex_unlock(&g_touchhud_mu);
+    return valid;
+}
+static int touchhud_update_cluster_delta(void) {
+    pthread_mutex_lock(&g_touchhud_mu);
+    int valid = g_touchhud.cut_bounds_valid && g_touchhud.sibling_bounds_valid && g_touchhud.sensor_bounds_valid;
+    if (valid) {
+        float right_edge = fmaxf(g_touchhud.cut_right, fmaxf(g_touchhud.sibling_right, g_touchhud.sensor_right));
+        g_touchhud.map_dx = 640.0f - BOTW_TOUCH_MAP_RIGHT_INSET - right_edge;
+        g_touchhud.map_dy = BOTW_TOUCH_MAP_TOP - g_touchhud.cut_top;
+        g_touchhud.delta_valid = 1;
+    }
+    pthread_mutex_unlock(&g_touchhud_mu);
+    return valid;
+}
+static void touchhud_clear_cluster(void) {
+    pthread_mutex_lock(&g_touchhud_mu);
+    g_touchhud.cut_bounds_valid = g_touchhud.sibling_bounds_valid = g_touchhud.sensor_bounds_valid = 0;
+    g_touchhud.delta_valid = 0;
+    pthread_mutex_unlock(&g_touchhud_mu);
+}
+
 static void publish_map_rect(uint8_t *pane) {
     float left, bottom, right, top;
     if (!atomic_load_explicit(&g_touchhud_active, memory_order_acquire) ||
@@ -159,35 +204,42 @@ static void publish_map_rect(uint8_t *pane) {
     if (changed) front_botw_touch_hud_map_region(1, x0, y0, x1 - x0, y1 - y0);
 }
 
-static int current_map_collapsed(uint8_t *pane) {
-    if (!atomic_load_explicit(&g_touchhud_active, memory_order_acquire) || !map_mini_root(pane)) return 0;
-    uint8_t *root = NULL;
-    for (uint8_t *p = pane; p; p = pane_parent(p)) {
-        if (!pane_visible(p)) return 0;
-        if (pane_named(p, "RootPane")) { root = p; break; }
-    }
-    if (!root) return 0;
-    float sx, sy, x, y;
-    memcpy(&sx, pane + BOTW_TOUCH_SCALE, sizeof sx); memcpy(&sy, pane + BOTW_TOUCH_SCALE + 4, sizeof sy);
-    memcpy(&x, pane + BOTW_TOUCH_POSITION, sizeof x); memcpy(&y, pane + BOTW_TOUCH_POSITION + 4, sizeof y);
-    return isfinite(sx) && isfinite(sy) && isfinite(x) && isfinite(y) &&
-           fabsf(sx - 0.4f) < 0.025f && fabsf(sy - 0.4f) < 0.025f &&
-           fabsf(x - 410.0f) < 1.0f && fabsf(y + 216.0f) < 1.0f;
-}
-
 static void botw_touchhud_pane(const uint64_t *regs) {
     uint8_t *pane = (uint8_t *)(uintptr_t)regs[0];
     if (!pane) return;
-    if (map_mini_root(pane)) {
-        int collapsed = current_map_collapsed(pane);
-        atomic_store_explicit(&g_touchhud_map_collapsed, collapsed, memory_order_release);
-        if (!collapsed) invalidate_map_rect();
-        pthread_mutex_lock(&g_touchhud_mu); int delta_valid = g_touchhud.delta_valid; pthread_mutex_unlock(&g_touchhud_mu);
-        if (atomic_load_explicit(&g_touchhud_active, memory_order_acquire) || delta_valid)
-            pane[BOTW_TOUCH_FLAGS] |= BOTW_TOUCH_DIRTY;
+    if (pane_named(pane, "RootPane") && (uintptr_t)pane == atomic_load(&g_touchhud_map_root) &&
+        !pane_visible(pane)) {
+        atomic_store_explicit(&g_touchhud_map_collapsed, 0, memory_order_release);
+        touchhud_clear_cluster();
+        invalidate_map_rect();
         return;
     }
-    if (map_sensor_root(pane) || map_scissor_root(pane) || main_environment_pane(pane)) {
+    if (map_inout_root(pane) && !visible_to_root(pane)) {
+        atomic_store_explicit(&g_touchhud_map_collapsed, 0, memory_order_release);
+        touchhud_clear_cluster();
+        invalidate_map_rect();
+        return;
+    }
+    if (map_cut_root(pane) || map_cut_sibling(pane) || map_ornament_root(pane)) {
+        int moved = touchhud_delta_valid();
+        if (atomic_load_explicit(&g_touchhud_active, memory_order_acquire) || moved)
+            pane[BOTW_TOUCH_FLAGS] |= BOTW_TOUCH_DIRTY;
+        if (map_cut_root(pane)) {
+            atomic_store(&g_touchhud_map_root, (uintptr_t)pane_parent(pane_parent(pane)));
+            float w, h;
+            memcpy(&w, pane + BOTW_TOUCH_SIZE, sizeof w);
+            memcpy(&h, pane + BOTW_TOUCH_SIZE + 4, sizeof h);
+            int collapsed = atomic_load_explicit(&g_touchhud_active, memory_order_acquire) && map_cut_visible(pane) &&
+                            isfinite(w) && isfinite(h) && fabsf(w - 166.0f) < 2.0f && fabsf(h - 166.0f) < 2.0f;
+            atomic_store_explicit(&g_touchhud_map_collapsed, collapsed, memory_order_release);
+            if (!collapsed) {
+                touchhud_clear_cluster();
+                invalidate_map_rect();
+            }
+        }
+        return;
+    }
+    if (main_environment_pane(pane)) {
         int delta_valid = touchhud_delta_valid();
         if (atomic_load_explicit(&g_touchhud_active, memory_order_acquire) || atomic_load_explicit(&g_touchhud_map_collapsed, memory_order_acquire) || delta_valid)
             pane[BOTW_TOUCH_FLAGS] |= BOTW_TOUCH_DIRTY;
@@ -238,12 +290,30 @@ static void botw_touchhud_matrix(const uint64_t *regs) {
         }
         return;
     }
-    if (!map_scissor_root(pane)) {
-        if (!map_sensor_root(pane) && !main_environment_pane(pane)) return;
+    if (map_cut_root(pane)) {
+        float w, h;
+        memcpy(&w, pane + BOTW_TOUCH_SIZE, sizeof w); memcpy(&h, pane + BOTW_TOUCH_SIZE + 4, sizeof h);
+        collapsed = active && map_cut_visible(pane) && isfinite(w) && isfinite(h) &&
+                    fabsf(w - 166.0f) < 2.0f && fabsf(h - 166.0f) < 2.0f;
+        atomic_store_explicit(&g_touchhud_map_collapsed, collapsed, memory_order_release);
+        if (!collapsed) {
+            invalidate_map_rect();
+            return;
+        }
+        if (!touchhud_record_cluster_bounds(pane, 0) || !touchhud_update_cluster_delta()) { invalidate_map_rect(); return; }
+        pthread_mutex_lock(&g_touchhud_mu); float dx = g_touchhud.map_dx, dy = g_touchhud.map_dy; pthread_mutex_unlock(&g_touchhud_mu);
+        float tx, ty; memcpy(&tx, pane + BOTW_TOUCH_MATRIX + 0x0c, 4); memcpy(&ty, pane + BOTW_TOUCH_MATRIX + 0x1c, 4);
+        tx += dx; ty += dy; memcpy(pane + BOTW_TOUCH_MATRIX + 0x0c, &tx, 4); memcpy(pane + BOTW_TOUCH_MATRIX + 0x1c, &ty, 4);
+        publish_map_rect(pane);
+        return;
+    }
+    if (map_cut_sibling(pane) || map_ornament_root(pane) || main_environment_pane(pane)) {
         pthread_mutex_lock(&g_touchhud_mu);
         int apply = active && collapsed && g_touchhud.delta_valid;
         float dx = g_touchhud.map_dx, dy = g_touchhud.map_dy;
         pthread_mutex_unlock(&g_touchhud_mu);
+        if (active && collapsed && map_cut_sibling(pane)) touchhud_record_cluster_bounds(pane, 1);
+        if (active && collapsed && main_environment_pane(pane) && pane_named(pane, "Pa_Sensor_00") && visible_to_root(pane)) touchhud_record_cluster_bounds(pane, 2);
         if (apply) {
             float tx, ty;
             memcpy(&tx, pane + BOTW_TOUCH_MATRIX + 0x0c, sizeof tx);
@@ -254,38 +324,6 @@ static void botw_touchhud_matrix(const uint64_t *regs) {
         }
         return;
     }
-
-    // Do not trust a cached mode across a suspended expanded Slate layout.
-    // The scissor callback is a fresh, live Pane calculation, so validate its
-    // current MiniMap pose and ancestor visibility before publishing a hitbox.
-    collapsed = current_map_collapsed(pane_parent(pane));
-    atomic_store_explicit(&g_touchhud_map_collapsed, collapsed, memory_order_release);
-
-    if (!active || !collapsed || !pane_visible(pane)) { invalidate_map_rect(); return; }
-    float left, bottom, right, top;
-    pthread_mutex_lock(&g_touchhud_mu);
-    int home_valid = g_touchhud.home_valid;
-    float home_x = g_touchhud.home_x, home_y = g_touchhud.home_y;
-    pthread_mutex_unlock(&g_touchhud_mu);
-    if (!home_valid || !transform_bounds(pane, &left, &bottom, &right, &top)) { invalidate_map_rect(); return; }
-
-    // N_MainAll_00's original position plus its authored cross-guide offset
-    // identifies the old loadout corner. Pa_Sensor_00 extends 93 px left of
-    // the map clip, so place the combined cluster's left/top bounds there.
-    // The shared live translation keeps the authored sizes and animation.
-    float target_left = home_x - 45.0f + BOTW_TOUCH_SENSOR_LEFT_MARGIN;
-    float target_top = home_y + 36.0f;
-    float dx = target_left - left, dy = target_top - top;
-    pthread_mutex_lock(&g_touchhud_mu);
-    g_touchhud.map_dx = dx; g_touchhud.map_dy = dy; g_touchhud.delta_valid = 1;
-    pthread_mutex_unlock(&g_touchhud_mu);
-    float tx, ty;
-    memcpy(&tx, pane + BOTW_TOUCH_MATRIX + 0x0c, sizeof tx);
-    memcpy(&ty, pane + BOTW_TOUCH_MATRIX + 0x1c, sizeof ty);
-    tx += dx; ty += dy;
-    memcpy(pane + BOTW_TOUCH_MATRIX + 0x0c, &tx, sizeof tx);
-    memcpy(pane + BOTW_TOUCH_MATRIX + 0x1c, &ty, sizeof ty);
-    publish_map_rect(pane);
 }
 
 void dm_botw_touch_hud_install(void) {

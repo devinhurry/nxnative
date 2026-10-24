@@ -3,9 +3,9 @@
 //   Tap sends non-layout touches to the game touch screen in handheld mode. 2D and 3D layouts follow the profile's default layout.
 //     the A (right) B (bottom) X (top) Y (left) diamond in the bottom-right corner, sliding a finger between keys switches keys. Each bottom corner holds a single control, so it sits close in (reaching halfway into the side safe-area inset).
 //   3D (full, Pro Controller style): everything in 2D (left stick and diamond keep their size), plus a D-pad (inward of and below the left stick, 8-way), an invisible right stick
-//     (a touch landing in the right half of the screen on no control holds it: centred where it lands, the centre dragged along once the finger passes the stick radius; games may use relative camera look instead) and L3 / R3 (small round keys in the top row, inward of ZL / ZR).
-//     Breath of the Wild crouches with L3 and uses the scope with R3; other games keep the right-stick behavior.
-//   Touch-down ownership: locked keys first (shoulders, − / +, the layout button, L3 / R3), then the D-pad and the diamond, then the left stick for a touch in the
+//     (a touch landing in the right half of the screen on no control holds it: centred where it lands, the centre dragged along once the finger passes the stick radius; games may use relative camera look instead) and L3 / R3.
+//     BOTW hides both stick-click keys: L3 is a left-stick double tap and R3 is a short camera-area double tap; R/ZR share a row above the face cluster. Other games keep the visible R3 key and right-stick behavior.
+//   Touch-down ownership: locked keys first (shoulders, − / +, the layout button, L3 / R3 where visible), then the D-pad and the diamond, then the left stick for a touch in the
 //     lower-left area (its centre is the touch-down point), then in 3D relative camera look when enabled or the right stick for a touch in the right half.
 //   Everything hugs the edges and corners to leave the picture room; controls sit over the picture, one CAShapeLayer each: a press only swaps the fill, a stick only moves its knob, nothing redraws the whole screen.
 //   Touches no control takes (outside the left stick's area and, in 3D, the right half) go to the game's touch screen (pushGame; Super Mario Galaxy's pointer in handheld mode).
@@ -209,7 +209,7 @@ void front_botw_touch_hud_map_region(int valid, float x, float y, float width, f
     CALayer *_controls;                            // holds every control layer: hidden while a physical controller is connected (the view itself stays, for game touches)
     BOOL _padOff;                                  // a physical controller is connected: every touch goes to the game
     UITouch *_game[16];                            // touches on the game's touch screen by finger slot
-    UITouch *_lookTouch; CGPoint _lookLast; CGFloat _lookScale;
+    UITouch *_lookTouch; CGPoint _lookLast, _lookDown, _botwLookTapPoint; CGFloat _lookScale; CFTimeInterval _lookDownTime, _botwLookTapTime; BOOL _lookDragged, _botwLookTapPending;
     CGSize _lookBoundsSize; UIInterfaceOrientation _lookOrientation; BOOL _lookGeometryKnown;
 }
 
@@ -281,10 +281,12 @@ static BOOL botwTouchHudSupported(void) { return dm_botw_touch_hud_available(); 
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     for (int b = 0; b < B_N; b++) _key[b].hidden = _tap || (fullOnly(b) && !_full);
     BOOL botwActive = [self botwTouchControlsActive];
+    if (!botwActive) _botwLookTapPending = NO;
     _key[B_LS].hidden = botwActive || _tap || !_full;
+    _key[B_RS].hidden = botwActive || _tap || !_full;
     _key[B_MINUS].hidden = _tap || (botwActive && _botwMapValid);
     _leftStickDoubleTap.enabled = botwActive;
-    BOOL hideDpadArt = [self botwTouchControlsActive];
+    BOOL hideDpadArt = [self botwTouchControlsActive] || _padOff;
     _key[B_LEFT].hidden = _key[B_UP].hidden = _key[B_RIGHT].hidden = _key[B_DOWN].hidden = _tap || !_full || hideDpadArt;
     _ring.hidden = _knob.hidden = _tap;
     _swapLabel.string = _tap ? @"Tap" : _full ? @"3D" : @"2D";
@@ -306,8 +308,10 @@ static BOOL botwTouchHudSupported(void) { return dm_botw_touch_hud_available(); 
 }
 - (void)refreshTouchHudMode {
     BOOL botwActive = [self botwTouchControlsActive];
-    BOOL hideDpadArt = botwActive;
+    if (!botwActive) _botwLookTapPending = NO;
+    BOOL hideDpadArt = botwActive || _padOff;
     _key[B_LS].hidden = botwActive || _tap || !_full;
+    _key[B_RS].hidden = botwActive || _tap || !_full;
     _key[B_MINUS].hidden = _tap || (botwActive && _botwMapValid);
     _leftStickDoubleTap.enabled = botwActive;
     _key[B_LEFT].hidden = _key[B_UP].hidden = _key[B_RIGHT].hidden = _key[B_DOWN].hidden = _tap || !_full || hideDpadArt;
@@ -341,6 +345,11 @@ static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPoint
 static BOOL isDrop(int b) { return b == B_ZL || b == B_L || b == B_ZR || b == B_R; }
 static BOOL isClick(int b) { return b == B_LS || b == B_RS; }
 - (CGPoint)dropCenter:(int)b { CGRect s = self.safe; CGFloat u = self.u; BOOL z = b == B_ZL || b == B_ZR;
+    if ([self botwTouchControlsActive] && (b == B_ZR || b == B_R)) {
+        dm_touchpad_point p = dm_touchpad_right_shoulder(self.bounds.size.width, self.bounds.size.height,
+            s.origin.x, s.origin.y, CGRectGetMaxX(self.bounds)-CGRectGetMaxX(s), CGRectGetMaxY(self.bounds)-CGRectGetMaxY(s), b == B_ZR);
+        return CGPointMake(p.x, p.y);
+    }
     return side(s, b == B_ZR || b == B_R, (z ? K_ZL_X : K_L_X) * u, CGRectGetMinY(s) + (z ? K_ZL_Y : K_L_Y) * u); }
 - (CGFloat)dropR:(int)b { return (b == B_ZL || b == B_ZR ? K_ZL_R : K_L_R) * self.u; }
 - (CGPoint)clickCenter:(int)b { CGRect s = self.safe; CGFloat u = self.u; return side(s, b == B_RS, K_CLICK_X * u, CGRectGetMinY(s) + K_ZL_Y * u); }
@@ -382,8 +391,10 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     for (int i = 0; i < (int)(sizeof k_btns / sizeof *k_btns); i++) { int b = k_btns[i];
         if (fullOnly(b) && !_full) continue;
         if ([self botwTouchControlsActive] && b == B_LS) continue;
+        if ([self botwTouchControlsActive] && b == B_RS) continue;
         if ([self botwTouchControlsActive] && (_botwMapValid || _botwMapTapConsumed) && b == B_MINUS) continue;
-        BOOL hit = isDrop(b) ? dist(p, [self dropCenter:b]) <= [self dropR:b] * 1.35
+        BOOL botwRightShoulder = [self botwTouchControlsActive] && (b == B_ZR || b == B_R);
+        BOOL hit = isDrop(b) ? dist(p, [self dropCenter:b]) <= [self dropR:b] * (botwRightShoulder ? DM_TP_SHOULDER_HIT_SCALE : 1.35)
                  : isClick(b) ? dist(p, [self clickCenter:b]) <= K_CLICK_R * u * 1.35
                  : CGRectContainsPoint(CGRectInset([self pillRect:b], -8 * u, -8 * u), p);
         if (hit) return b; }
@@ -475,6 +486,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
 - (void)cancelLook {   // Keep the owner's C_LOOK entry until lift; it cannot turn into a stick mid-gesture.
     UITouch *owner = _lookTouch;
     if (owner) dm_look_input(DM_LOOK_CANCEL, 0, 0);
+    _botwLookTapPending = NO;
     _lookTouch = nil; _lookScale = 0;
     if (owner && _stick[1] == owner) _stick[1] = nil;
     if (owner) [self recompute];  // Publish zero virtual RS immediately, even without another touch event.
@@ -492,10 +504,11 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
 - (void)beginLook:(UITouch *)t at:(CGPoint)p {
     [self checkLookGeometry];
     [_owner setObject:@(C_LOOK) forKey:t];
-    if (_lookTouch || !dm_look_enabled()) return;   // overlapping camera fingers stay inert until they lift
+    if (_lookTouch) { _botwLookTapPending = NO; _lookDragged = YES; return; } // overlapping camera fingers cancel tap recognition
+    if (!dm_look_enabled()) return;
     CGFloat scale = MIN(self.bounds.size.width, self.bounds.size.height);
     if (scale <= 0) return;
-    _lookTouch = t; _lookLast = p; _lookScale = scale;
+    _lookTouch = t; _lookLast = _lookDown = p; _lookDownTime = t.timestamp; _lookDragged = NO; _lookScale = scale;
     _stick[1] = t; _stickNow[1] = p; _rCentre = p;
     dm_look_input(DM_LOOK_BEGIN, 0, 0);
 }
@@ -505,6 +518,9 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     if (!dm_look_enabled() || _lookScale <= 0) { [self cancelLook]; return; }
     float dx = (float)((p.x - _lookLast.x) / _lookScale);
     float dy = (float)((p.y - _lookLast.y) / _lookScale);
+    _lookDragged |= dm_touchpad_look_dragged((float)_lookDown.x, (float)_lookDown.y,
+                                              (float)p.x, (float)p.y, DM_TP_LOOK_TAP_SLOP * self.u);
+    if (_lookDragged) _botwLookTapPending = NO;
     _lookLast = p;
     _stickNow[1] = p;
     CGFloat d = dist(p, _rCentre), R = [self stickR:1];
@@ -515,7 +531,20 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     if (t != _lookTouch) return;
     if (cancelled || !dm_look_enabled()) { [self cancelLook]; return; }
     [self moveLook:t to:p];   // UIKit may deliver a final location only in touchesEnded.
-    if (t == _lookTouch) { dm_look_input(DM_LOOK_END, 0, 0); _lookTouch = nil; _lookScale = 0; }
+    if (t == _lookTouch) {
+        BOOL tap = dm_touchpad_look_tap((float)(t.timestamp - _lookDownTime), _lookDragged);
+        dm_look_input(DM_LOOK_END, 0, 0); _lookTouch = nil; _lookScale = 0;
+        if (tap && [self botwTouchControlsActive]) {
+            CGFloat u = self.u;
+            if (_botwLookTapPending && dm_touchpad_look_double_tap((double)_botwLookTapTime, (double)t.timestamp,
+                    (float)_botwLookTapPoint.x, (float)_botwLookTapPoint.y, (float)_lookDown.x, (float)_lookDown.y, (float)u)) {
+                _botwLookTapPending = NO;
+                [self pulseBotwTouchButton:B_RS];
+            } else {
+                _botwLookTapPending = YES; _botwLookTapTime = t.timestamp; _botwLookTapPoint = _lookDown;
+            }
+        } else _botwLookTapPending = NO;
+    }
 }
 // Touches no control takes (all of them while a physical controller is connected) go to the game's touch screen, normalized on the 16:9 picture that front_ios.m
 // centres in the screen: Super Mario Galaxy's pointer in handheld mode (profile op_mode). The host reports them only in handheld mode, as on the Switch (hle_hid.c touch_read)
@@ -537,25 +566,28 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
 }
 - (void)touchesBegan:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e {
     motion_first_input();
+    if (ts.count > 1) _botwLookTapPending = NO;
     BOOL game = NO;
     for (UITouch *t in ts) {
-        if (_padOff) { game |= [self gameBegin:t]; continue; }
+        if (_padOff) { _botwLookTapPending = NO; game |= [self gameBegin:t]; continue; }
         CGPoint p = [t locationInView:self]; int hit = _tap ? -1 : [self btnAt:p];
-        if (hit >= 0) { [_owner setObject:@(C_BTN | (uint64_t)hit << 8) forKey:t]; continue; }
-        if ([self inSwap:p]) { [_owner setObject:@(C_SWAP) forKey:t]; _swapT0 = CACurrentMediaTime(); continue; }
+        if (hit >= 0) { _botwLookTapPending = NO; [_owner setObject:@(C_BTN | (uint64_t)hit << 8) forKey:t]; continue; }
+        if ([self inSwap:p]) { _botwLookTapPending = NO; [_owner setObject:@(C_SWAP) forKey:t]; _swapT0 = CACurrentMediaTime(); continue; }
         if ([self leftStickOwnsPoint:p]) {
+            _botwLookTapPending = NO;
             // Keep the existing dynamic left-stick grab ahead of the map clip
             // where their rectangular bounds meet near the lower-left edge.
             [_owner setObject:@(C_STICK) forKey:t]; _stick[0] = t; _stickNow[0] = p; _lCentre = p; continue;
         }
         if ([self botwMapOwnsPoint:p]) {
+            _botwLookTapPending = NO;
             [_owner setObject:@(C_BOTW_MAP) forKey:t];
             dm_botw_touch_hud_map_tapped();
             _botwMapValid = NO; _botwMapRect = CGRectZero; _botwMapTapConsumed = YES; _botwMapInvalidAfterTap = NO;
             _key[B_MINUS].hidden = YES;
             [self pulseBotwTouchButton:B_MINUS]; continue;
         }
-        if (_tap) { game |= [self gameBegin:t]; continue; }
+        if (_tap) { _botwLookTapPending = NO; game |= [self gameBegin:t]; continue; }
         // Choose the nearest control in its grab radius, then route the open right half to relative look or the native right stick.
         CGFloat best = 1; int kind = C_NONE, idx = 0;
         CGFloat f = dist(p, self.faceCenter) / (self.faceGap + self.faceR * 1.6); if (f <= best) { best = f; kind = C_FACE; }
@@ -565,6 +597,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
             if (dm_look_enabled()) { [self beginLook:t at:p]; continue; }
             if (!_stick[1]) { kind = C_STICK; idx = 1; _rCentre = p; }
         }
+        _botwLookTapPending = NO;
         if (kind == C_FACE) { [_owner setObject:@(C_FACE) forKey:t]; [_faceOf setObject:@([self faceAt:p]) forKey:t]; }
         else if (kind == C_DPAD) [_owner setObject:@(C_DPAD) forKey:t];
         else if (kind == C_STICK) {
@@ -609,7 +642,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
 - (void)touchesEnded:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { [self endTouches:ts tapped:YES]; }
 - (void)touchesCancelled:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e { [self endTouches:ts tapped:NO]; }
 - (void)reset {
-    if (botwTouchHudSupported()) dm_input_cancel_virtual_latch(DM_BTN_LS | DM_BTN_MINUS);
+    if (botwTouchHudSupported()) dm_input_cancel_virtual_latch(DM_BTN_LS | DM_BTN_RS | DM_BTN_MINUS);
     [self cancelLook]; [_owner removeAllObjects]; [_faceOf removeAllObjects]; _stick[0] = _stick[1] = nil;
     for (int i = 0; i < 16; i++) _game[i] = nil;
     [self pushGame]; [self recompute];
@@ -672,7 +705,7 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
     setPath(_knob, circlePath(CGPointMake(k, k), k));
     CAShapeLayer *in = (CAShapeLayer *)_knob.sublayers.firstObject; CGPathRef ip = circlePath(CGPointMake(k, k), k * 0.62);
     in.frame = _knob.bounds; in.path = ip; CGPathRelease(ip);
-    BOOL hideDpadArt = [self botwTouchControlsActive];
+    BOOL hideDpadArt = [self botwTouchControlsActive] || _padOff;
     _key[B_LEFT].hidden = _key[B_UP].hidden = _key[B_RIGHT].hidden = _key[B_DOWN].hidden = _tap || !_full || hideDpadArt;
     [CATransaction commit];
     [self publishTouchHudForController:_padOff];
@@ -684,10 +717,15 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
     atomic_store(&g_gamepad_connected, connected);
     [self applyLayout];
 }
+- (void)setFull:(BOOL)full {
+    if (_full != full || _tap) [self reset];
+    _full = full; _tap = NO; [self applyLayout];
+}
 - (BOOL)dm_testDpadArtworkHidden {
     return _key[B_LEFT].hidden && _key[B_UP].hidden && _key[B_RIGHT].hidden && _key[B_DOWN].hidden;
 }
 - (BOOL)dm_testL3ArtworkHidden { return _key[B_LS].hidden; }
+- (BOOL)dm_testR3ArtworkHidden { return _key[B_RS].hidden; }
 - (BOOL)dm_testMinusArtworkHidden { return _key[B_MINUS].hidden; }
 - (BOOL)dm_testL3GestureEnabled { return _leftStickDoubleTap.enabled; }
 - (BOOL)dm_testLeftStickOwnsPoint:(CGPoint)p { return [self leftStickOwnsPoint:p]; }
@@ -733,13 +771,14 @@ static void read_pad(GCExtendedGamepad *g) {
     publish();
 }
 - (void)padsChanged {
+    _botwLookTapPending = NO;
     BOOL any = NO;
     for (GCController *c in GCController.controllers) if (c.extendedGamepad) {
         any = YES; c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; read_pad(g); };
         read_pad(c.extendedGamepad);
     }
     atomic_store(&g_gamepad_connected, any);
-    if (any && botwTouchHudSupported()) dm_input_cancel_virtual_latch(DM_BTN_LS | DM_BTN_MINUS);
+    if (any && botwTouchHudSupported()) dm_input_cancel_virtual_latch(DM_BTN_LS | DM_BTN_RS | DM_BTN_MINUS);
     if (!any) { dm_haptics_apple_controller(0, nil); pthread_mutex_lock(&g_mu); g_pad_btn = 0; g_pad_lx = g_pad_ly = g_pad_rx = g_pad_ry = 0; pthread_mutex_unlock(&g_mu); publish(); }
     [self publishTouchHudForController:any];   // publish hot-plug state before the guest's next pane calculation
     dispatch_async(dispatch_get_main_queue(), ^{ self->_padOff = any; self->_controls.hidden = any; [self reset]; [self applyLayout]; [self setNeedsLayout]; });
