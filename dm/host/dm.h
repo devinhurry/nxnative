@@ -64,7 +64,8 @@ enum { OBS_MOVIE_RING_LINK = 19, OBS_MOVIE_RING_UNLINK = 20,   // Metroid Dread 
        OBS_UE_MALLOC = 21,                                  // DRAGON QUEST VII Reimagined 1.2.0: Unreal's allocator object just made (hle_uemalloc.c)
        OBS_ASPECT_PROJECTION = 22, OBS_ASPECT_UI_CAMERA = 23, // BOTW guest camera updates (hle_aspect.c)
        OBS_BOTW_LOOK_VECTOR = 32,                            // BOTW 1.9.0 shared post-filter stick vector (hle_look.c)
-       OBS_MAX = 33 };
+       OBS_BOTW_LOOK_SOURCE = 33,                            // BOTW 1.9.0 selected raw stick pair before filtering (hle_look.c)
+       OBS_MAX = 34 };
 void gate_obs_set(int id, void (*fn)(const uint64_t *regs));
 int gate_obs_present(int id);
 void dm_aspect_install(void);

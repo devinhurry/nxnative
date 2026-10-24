@@ -20,9 +20,12 @@ static int g_w, g_a, g_s, g_d;
 void *front_metal_layer(void) { return (__bridge void *)g_layer; }
 static _Atomic int g_screen_fps;   // the window's screen's maximumFramesPerSecond, kept up to date when the window moves to another screen
 int front_screen_max_fps(void) { return g_screen_fps; }
+static int32_t g_mouse_rx, g_mouse_ry;
+static void push(void);
+void front_look_mode_changed(void) {} // Mac input sources are separate before and after look mode installs.
 static void push(void) {
     int32_t lx = (g_d - g_a) * 32767, ly = (g_w - g_s) * 32767;
-    dm_input_set(g_btn, lx, ly, 0, 0);
+    dm_input_set(g_btn, lx, ly, g_mouse_rx, g_mouse_ry);
 }
 static int key_bit(unsigned short code) {
     switch (code) {
@@ -69,7 +72,7 @@ static void pads_changed(void) {   // every connected pad reports (the last one 
 // With look disabled, the left button is touchscreen finger 0; BOTW uses its held drag for relative camera look instead.
 @interface DmGameView : NSView {
     NSSize _lookSize;
-    NSPoint _lookLastPoint;
+    NSPoint _lookLastPoint, _lookCenter;
     BOOL _hasLookSize, _lookHeld, _lookCanceled;
 }
 - (void)cancelLook;
@@ -88,6 +91,7 @@ static void pads_changed(void) {   // every connected pad reports (the last one 
     if (_lookHeld || (dm_look_enabled() && !_lookCanceled)) dm_look_input(DM_LOOK_CANCEL, 0, 0);
     if (_lookHeld) _lookCanceled = YES;
     _lookHeld = NO;
+    if (g_mouse_rx || g_mouse_ry) { g_mouse_rx = g_mouse_ry = 0; push(); }
 }
 - (NSPoint)lookPoint:(NSEvent *)e {
     return [self convertPoint:e.locationInWindow fromView:nil];
@@ -100,13 +104,27 @@ static void pads_changed(void) {   // every connected pad reports (the last one 
     float dx = (float)((p.x - _lookLastPoint.x) / scale);
     float dy = (float)((_lookLastPoint.y - p.y) / scale);
     _lookLastPoint = p;
+    // Keep the original virtual-stick response available to native UI, while the shared scene
+    // getter replaces this synthetic vector with the direct relative displacement above.
+    CGFloat sx = p.x - _lookCenter.x, sy = p.y - _lookCenter.y; // AppKit native stick Y grows upward.
+    CGFloat d = hypot(sx, sy), radius = 60.0 * fmin(b.height / 430.0, 1.3);
+    if (radius > 0 && d > radius) {
+        _lookCenter = NSMakePoint(p.x - sx * radius / d, p.y - sy * radius / d);
+        sx = p.x - _lookCenter.x; sy = p.y - _lookCenter.y; d = hypot(sx, sy);
+    }
+    if (d > 0 && radius > 0) {
+        g_mouse_rx = (int32_t)lrint(sx / d * DM_STICK_MAX);
+        g_mouse_ry = (int32_t)lrint(sy / d * DM_STICK_MAX);
+    } else g_mouse_rx = g_mouse_ry = 0;
+    push();
     if (dx != 0 || dy != 0) dm_look_input(DM_LOOK_MOVE, dx, dy);
 }
 - (void)mouseDown:(NSEvent *)e {
     if (_lookHeld) [self cancelLook];
     _lookCanceled = NO;
     if (dm_look_enabled()) {
-        _lookLastPoint = [self lookPoint:e];
+        _lookLastPoint = _lookCenter = [self lookPoint:e];
+        g_mouse_rx = g_mouse_ry = 0; push();
         _lookHeld = YES;
         dm_look_input(DM_LOOK_BEGIN, 0, 0);
         return;
@@ -136,6 +154,7 @@ static void pads_changed(void) {   // every connected pad reports (the last one 
         [self moveLookToPoint:[self lookPoint:e]];
         dm_look_input(DM_LOOK_END, 0, 0);
         _lookHeld = NO;
+        g_mouse_rx = g_mouse_ry = 0; push();
     } else [self cancelLook];
 }
 // The drawable follows the view in pixels: a layer assigned to a layer-backed view kept the drawable at the first window's 1280x720 in fullscreen too, so the game picture was

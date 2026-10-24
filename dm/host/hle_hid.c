@@ -27,6 +27,9 @@ _Static_assert(sizeof(NpadState) == 0x28, "NpadState");
 // Front-end publishing: the keyboard / touch path (dm_input_set) and the physical controller path (dm_pad_set) are ORed; press edges are latched until the game's next read so short presses are not lost
 static _Atomic uint64_t g_btn, g_axes, g_latch, g_pad_btn, g_pad_axes, g_pad_latch;
 static _Atomic int64_t g_sampling = 1 << 16;   // starts high so the history entries below the newest keep positive sampling numbers
+static pthread_mutex_t g_look_sample_mu = PTHREAD_MUTEX_INITIALIZER;
+static dm_hid_look_sample g_look_sample;
+static int g_look_sample_valid;
 static uint64_t pack(int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     return (uint64_t)(uint16_t)lx | (uint64_t)(uint16_t)ly << 16 | (uint64_t)(uint16_t)rx << 32 | (uint64_t)(uint16_t)ry << 48;
 }
@@ -180,13 +183,62 @@ static uint32_t style_of(uint32_t id) { return id != connected_id() ? 0 : id == 
 static int32_t ax(uint64_t v, int i) { return (int16_t)(v >> (16 * i)); }
 static int32_t pick(int32_t a, int32_t b) { return (a < 0 ? -a : a) >= (b < 0 ? -b : b) ? a : b; }   // whichever of the two paths is deflected more
 
+static int stick_tilted(int32_t x, int32_t y) {
+    return (int64_t)x * x + (int64_t)y * y > (int64_t)4000 * 4000;
+}
+static dm_hid_look_sample look_sample_for_frame(uint64_t frame, int32_t vrx, int32_t vry, int32_t prx, int32_t pry) {
+    dm_hid_look_sample sample = {.frame = frame, .virtual_rx = vrx, .virtual_ry = vry,
+        .physical_rx = prx, .physical_ry = pry, .source = DM_HID_LOOK_VIRTUAL};
+    // Never drop a small physical stick when touch is centered. When both are deflected,
+    // retain iOS's established whole-vector 4000 threshold/priority instead of mixing axes.
+    int physical_present = prx != 0 || pry != 0;
+    int virtual_present = vrx != 0 || vry != 0;
+    if (physical_present && (!virtual_present || stick_tilted(prx, pry))) {
+        sample.source = DM_HID_LOOK_PHYSICAL;
+        sample.selected_rx = prx; sample.selected_ry = pry;
+    } else {
+        sample.selected_rx = vrx; sample.selected_ry = vry;
+    }
+    return sample;
+}
+int dm_hid_look_sample_at(uint64_t frame, dm_hid_look_sample *out) {
+    if (!out) return 0;
+    pthread_mutex_lock(&g_look_sample_mu);
+    // Native camera getters can run before the next Npad poll in a guest present. The child
+    // still carries the last sampled pair, so return its immutable provenance until a newer
+    // connected Npad read freezes a replacement. Never associate a future sample with an older
+    // getter that was already in flight.
+    int valid = g_look_sample_valid && g_look_sample.frame <= frame;
+    if (valid) *out = g_look_sample;
+    pthread_mutex_unlock(&g_look_sample_mu);
+    return valid;
+}
+static dm_hid_look_sample look_sample_freeze(uint64_t frame, int32_t vrx, int32_t vry, int32_t prx, int32_t pry) {
+    pthread_mutex_lock(&g_look_sample_mu);
+    if (!g_look_sample_valid || frame > g_look_sample.frame) {
+        g_look_sample = look_sample_for_frame(frame, vrx, vry, prx, pry);
+        g_look_sample_valid = 1;
+    }
+    dm_hid_look_sample sample = g_look_sample;
+    pthread_mutex_unlock(&g_look_sample_mu);
+    return sample;
+}
+
 static void fill(NpadState *s, uint32_t id, uint32_t style) {
     memset(s, 0, sizeof *s);
     s->sampling = atomic_fetch_add(&g_sampling, 1) + 1;
     if (!(style_of(id) & style)) return;   // no controller of this id / style: attributes = 0
     uint64_t b = atomic_load(&g_btn) | atomic_exchange(&g_latch, 0) | atomic_load(&g_pad_btn) | atomic_exchange(&g_pad_latch, 0);
     uint64_t k = atomic_load(&g_axes), p = atomic_load(&g_pad_axes);
-    s->lx = pick(ax(k, 0), ax(p, 0)); s->ly = pick(ax(k, 1), ax(p, 1)); s->rx = pick(ax(k, 2), ax(p, 2)); s->ry = pick(ax(k, 3), ax(p, 3));
+    s->lx = pick(ax(k, 0), ax(p, 0)); s->ly = pick(ax(k, 1), ax(p, 1));
+    if (dm_look_enabled()) {
+        // Freeze the two sources and their whole-vector priority together on the first valid
+        // connected state read in a guest frame. Later reads/styles reuse this exact pair.
+        dm_hid_look_sample sample = look_sample_freeze(dm_guest_frame(), ax(k, 2), ax(k, 3), ax(p, 2), ax(p, 3));
+        s->rx = sample.selected_rx; s->ry = sample.selected_ry;
+    } else {
+        s->rx = pick(ax(k, 2), ax(p, 2)); s->ry = pick(ax(k, 3), ax(p, 3));
+    }
     b &= 0xffffull;
     if (s->lx < -STICK_THRESH) b |= 1u << 16;
     if (s->ly > STICK_THRESH) b |= 1u << 17;
@@ -199,6 +251,18 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
     s->buttons = b;
     s->attributes = ATTR_CONNECTED | (id == NPAD_HANDHELD ? ATTR_WIRED | ATTR_LEFT_CONN | ATTR_LEFT_WIRED | ATTR_RIGHT_CONN | ATTR_RIGHT_WIRED : ATTR_LEFT_CONN | ATTR_RIGHT_CONN);
 }
+
+#ifdef DM_TEST_HOOKS
+void dm_hid_test_reset_look_sample(void) {
+    pthread_mutex_lock(&g_look_sample_mu); memset(&g_look_sample, 0, sizeof g_look_sample); g_look_sample_valid = 0; pthread_mutex_unlock(&g_look_sample_mu);
+}
+void dm_hid_test_fill(uint32_t id, uint32_t style, int64_t *sampling, uint64_t *buttons,
+                      int32_t *rx, int32_t *ry, uint32_t *attributes) {
+    NpadState s; fill(&s, id, style);
+    if (sampling) *sampling = s.sampling; if (buttons) *buttons = s.buttons;
+    if (rx) *rx = s.rx; if (ry) *ry = s.ry; if (attributes) *attributes = s.attributes;
+}
+#endif
 // GetNpadStates(out, n, id): newest first, n entries: the current state repeated with consecutive sampling numbers. The host keeps no history, but on hardware the
 // 16-entry history is always full, and games read all of it whatever count comes back: Super Mario Odyssey (main+0x93fc20) polls every controller slot each frame, which advances
 // the shared sampling number by about 16 per frame, and with only entry 0 written neither stick did anything in play (the camera did not turn at its first hint) while buttons

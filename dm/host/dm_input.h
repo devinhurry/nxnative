@@ -17,6 +17,17 @@ uint64_t dm_input_samples(void);   // Cumulative number of times the game has sa
 // ORed bitwise and a stick uses the controller's value if it is non-zero. All 0 when no controller is connected, so values are bit-for-bit the same as before
 void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);
 
+// BOTW relative-look adapter: the latest immutable right-stick source frozen by a valid
+// connected Npad read at or before the requested guest frame. A newer valid read supersedes it.
+enum { DM_HID_LOOK_NONE, DM_HID_LOOK_VIRTUAL, DM_HID_LOOK_PHYSICAL };
+typedef struct {
+    uint64_t frame;
+    int32_t virtual_rx, virtual_ry, physical_rx, physical_ry;
+    int32_t selected_rx, selected_ry;
+    int source;
+} dm_hid_look_sample;
+int dm_hid_look_sample_at(uint64_t frame, dm_hid_look_sample *out);
+
 // Optional diagnostic DM_HID_RECEIPT_LOG=<writable JSONL path>: received samples of real GetNpadState returns.
 // Fields read_start_ns/time_ns use the same host now_ns(); the front-end publish window must use the same helper, and a read interval that spans a publish must not be force-matched.
 // State changes + at most one activity witness per second, limit_reached after 1024 entries; no file is written when the environment variable is not set.

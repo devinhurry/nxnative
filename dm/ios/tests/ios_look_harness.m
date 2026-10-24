@@ -5,6 +5,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include "dm.h"
 #include "dm_input.h"
 #include "front.h"
@@ -13,6 +14,7 @@ void dm_test_motion_reset(void);
 void dm_test_motion_recenter(void);
 void dm_test_motion_publish(CMQuaternion q, CMAcceleration a, CMRotationRate r);
 void dm_gamepad_geometry_changed(UIInterfaceOrientation orientation);
+void front_look_mode_changed(void);
 
 @interface DmGamepad : UIView
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event;
@@ -43,6 +45,9 @@ static int g_look_count, g_failures, g_begin_count;
 static float g_queued_dx, g_queued_dy;
 static uint64_t g_buttons;
 static int32_t g_lx, g_ly, g_rx, g_ry;
+static uint64_t g_pad_buttons;
+static int32_t g_pad_lx, g_pad_ly, g_pad_rx, g_pad_ry;
+static int g_input_sets, g_pad_sets;
 static dm_touch g_last_touch;
 static int g_touch_count, g_touch_sets;
 static dm_motion g_motion_samples[16];
@@ -66,7 +71,12 @@ void dm_look_input(int phase, float dx, float dy) {
     }
 }
 void dm_input_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
+    ++g_input_sets;
     g_buttons = buttons; g_lx = lx; g_ly = ly; g_rx = rx; g_ry = ry;
+}
+void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
+    ++g_pad_sets;
+    g_pad_buttons = buttons; g_pad_lx = lx; g_pad_ly = ly; g_pad_rx = rx; g_pad_ry = ry;
 }
 void dm_touch_set(const dm_touch *touches, int count) {
     g_touch_count = count; ++g_touch_sets;
@@ -120,7 +130,10 @@ static void test_look_drag(DmGamepad *view) {
     g_look_enabled = YES; [view setFull:YES];
     reset_look();
     FakeTouch *t = touch(600, 150);
-    began(view, t); moved(view, t, 615, 165); ended(view, t, 620, 170);
+    began(view, t); moved(view, t, 615, 165);
+    CHECK(g_rx > 0 && g_ry < 0 && abs(g_rx - 23170) <= 1 && abs(g_ry + 23170) <= 1,
+          "the owning look finger also publishes its legacy full-tilt right-stick direction");
+    ended(view, t, 620, 170);
     CHECK(g_look_count == 4 && g_look_events[0].phase == DM_LOOK_BEGIN &&
           g_look_events[1].phase == DM_LOOK_MOVE && g_look_events[2].phase == DM_LOOK_MOVE &&
           g_look_events[3].phase == DM_LOOK_END, "look receives BEGIN, relative MOVE samples, final release MOVE, then END");
@@ -128,6 +141,8 @@ static void test_look_drag(DmGamepad *view) {
     near_value(g_look_events[1].dy, 15.0f / 390.0f, "downward delta is positive and normalized by the logical short edge");
     near_value(g_look_events[2].dx, 5.0f / 390.0f, "release-only horizontal displacement is delivered");
     near_value(g_look_events[2].dy, 5.0f / 390.0f, "release-only vertical displacement is delivered");
+    CHECK(g_pad_buttons == 0 && g_pad_lx == 0 && g_pad_ly == 0 && g_pad_rx == 0 && g_pad_ry == 0,
+          "virtual touch right-stick axes stay separate from the physical-pad channel");
     CHECK(g_touch_count == 0, "look drag does not become a game touchscreen touch");
     float split_x, split_y; sum_moves(&split_x, &split_y);
 
@@ -135,6 +150,18 @@ static void test_look_drag(DmGamepad *view) {
     float one_x, one_y; sum_moves(&one_x, &one_y);
     near_value(one_x, split_x, "one and many move events have the same horizontal total");
     near_value(one_y, split_y, "one and many move events have the same vertical total");
+
+    reset_look(); t = touch(600, 150); began(view, t); moved(view, t, 700, 150);
+    CHECK(g_rx == 32767 && g_ry == 0, "look right-stick value clamps at full tilt when the finger passes its radius");
+    moved(view, t, 701, 150);
+    CHECK(g_rx == 32767 && g_ry == 0, "look right-stick centre recentres with the finger beyond its radius");
+    int input_sets_before_republish = g_input_sets, pad_sets_before_republish = g_pad_sets;
+    front_look_mode_changed();
+    CHECK(g_input_sets == input_sets_before_republish + 1 && g_pad_sets == pad_sets_before_republish + 1 &&
+          g_rx == 32767 && g_pad_rx == 0,
+          "look-mode installation republishes the current virtual and physical source split");
+    ended(view, t, 701, 150);
+    CHECK(g_rx == 0 && g_ry == 0, "ending look clears the virtual right-stick axes after the final relative delta");
 
     reset_look(); t = touch(600, 150); began(view, t);
     moved(view, t, 600, 150); moved(view, t, 600, 150); ended(view, t, 600, 150);
@@ -167,14 +194,19 @@ static void test_priority_and_multitouch(DmGamepad *view) {
     reset_look();
     int prior_begins = g_begin_count;
     FakeTouch *first = touch(600, 150), *second = touch(700, 180);
-    began(view, first); began(view, second);
-    CHECK(g_begin_count == prior_begins + 1 && g_look_count == 1, "a second right-region finger is inert while look is owned");
+    began(view, first); moved(view, first, 620, 150); int held_rx = g_rx, held_look_count = g_look_count;
+    began(view, second);
+    CHECK(g_begin_count == prior_begins + 1 && g_look_count == held_look_count, "a second right-region finger is inert while look is owned");
+    moved(view, second, 740, 220);
+    CHECK(g_rx == held_rx && g_look_count == held_look_count,
+          "an inert second finger cannot change the owner right-stick axes or relative look stream");
     ended(view, first, 600, 150);
+    CHECK(g_rx == 0 && g_ry == 0, "lifting the look owner clears its virtual right-stick axes immediately");
     moved(view, second, 720, 200); ended(view, second, 720, 200);
-    CHECK(g_look_count == 2 && g_look_events[1].phase == DM_LOOK_END,
+    CHECK(g_look_count == held_look_count + 1 && g_look_events[g_look_count - 1].phase == DM_LOOK_END,
           "an inert second finger does not take over after the owner lifts");
     FakeTouch *next = touch(650, 180); began(view, next);
-    CHECK(g_look_count == 3 && g_look_events[2].phase == DM_LOOK_BEGIN, "a fresh finger can begin look after the old gesture ends");
+    CHECK(g_look_count == held_look_count + 2 && g_look_events[g_look_count - 1].phase == DM_LOOK_BEGIN, "a fresh finger can begin look after the old gesture ends");
     ended(view, next, 650, 180);
 }
 
@@ -184,13 +216,16 @@ static void test_cancel_and_modes(DmGamepad *view) {
     cancelled(view, t, 640, 190);
     CHECK(g_look_count == 3 && g_look_events[2].phase == DM_LOOK_CANCEL && !g_look_held,
           "UIKit cancellation clears look without applying its final unreported point");
+    CHECK(g_rx == 0 && g_ry == 0, "cancelling look clears its virtual right-stick axes immediately");
     moved(view, t, 650, 200); ended(view, t, 650, 200);
     CHECK(g_look_count == 3 && g_touch_count == 0, "cancelled owner stays inert until lift");
 
     reset_look(); t = touch(600, 150); began(view, t); g_look_enabled = NO;
-    moved(view, t, 620, 170); ended(view, t, 630, 180);
+    moved(view, t, 620, 170);
     CHECK(g_look_count == 2 && g_look_events[1].phase == DM_LOOK_CANCEL && !g_look_held,
           "disabling look mid-gesture cancels and suppresses release tail");
+    CHECK(g_rx == 0 && g_ry == 0, "disabling look immediately clears its virtual right-stick axes");
+    ended(view, t, 630, 180);
     g_look_enabled = YES;
 
     reset_look(); [view setFull:NO]; t = touch(600, 150); int touch_sets_before = g_touch_sets;
@@ -203,13 +238,15 @@ static void test_cancel_and_modes(DmGamepad *view) {
     reset_look(); g_look_enabled = NO; t = touch(600, 150); began(view, t); moved(view, t, 650, 150);
     CHECK(g_look_count == 0 && g_rx > 30000 && g_ry == 0,
           "disabled feature preserves the existing fully deflected horizontal right-stick behavior");
+    CHECK(g_pad_rx == 0 && g_pad_ry == 0,
+          "legacy LOOK=0 routing keeps right-region touch in the original input channel");
     ended(view, t, 650, 150);
     g_look_enabled = YES;
 
-    reset_look(); t = touch(600, 150); began(view, t);
+    reset_look(); t = touch(600, 150); began(view, t); moved(view, t, 620, 150);
     [view setValue:@YES forKey:@"padOff"];
     [view reset];
-    CHECK(g_look_count == 2 && g_look_events[1].phase == DM_LOOK_CANCEL,
+    CHECK(g_look_count == 3 && g_look_events[2].phase == DM_LOOK_CANCEL && g_rx == 0 && g_ry == 0,
           "pad-off/reset cancels the current look session");
     reset_look(); g_look_enabled = YES;
     [view setValue:@YES forKey:@"padOff"];
@@ -222,18 +259,18 @@ static void test_cancel_and_modes(DmGamepad *view) {
           "switching pad layout cancels the current look session");
     ended(view, t, 610, 160); [view setFull:YES];
 
-    reset_look(); t = touch(600, 150); began(view, t);
+    reset_look(); t = touch(600, 150); began(view, t); moved(view, t, 620, 150);
     CGRect bounds = view.bounds; bounds.size.height += 10; view.bounds = bounds; [view setNeedsLayout]; [view layoutIfNeeded];
-    CHECK(g_look_count == 2 && g_look_events[1].phase == DM_LOOK_CANCEL,
-          "bounds resize cancels the current look session");
+    CHECK(g_look_count == 3 && g_look_events[2].phase == DM_LOOK_CANCEL && g_rx == 0 && g_ry == 0,
+          "bounds resize cancels look and clears virtual axes immediately");
     moved(view, t, 610, 160); ended(view, t, 610, 160);
-    CHECK(g_look_count == 2, "resized gesture cannot resume or add a release delta");
+    CHECK(g_look_count == 3, "resized gesture cannot resume or add a release delta");
 
-    reset_look(); t = touch(600, 150); began(view, t);
+    reset_look(); t = touch(600, 150); began(view, t); moved(view, t, 620, 150);
     bounds = view.bounds; bounds.size.height += 10; view.bounds = bounds;
     moved(view, t, 800, 250); ended(view, t, 810, 260);
-    CHECK(g_look_count == 2 && g_look_events[1].phase == DM_LOOK_CANCEL,
-          "geometry change detected before layout cancels without emitting move or end");
+    CHECK(g_look_count == 3 && g_look_events[2].phase == DM_LOOK_CANCEL && g_rx == 0 && g_ry == 0,
+          "geometry change detected before layout cancels and clears axes without a later event");
     [view layoutIfNeeded]; [view setFull:YES];
 }
 
@@ -298,14 +335,14 @@ static void run_tests(DmGamepad *view) {
     test_cancel_and_modes(view);
     reset_look(); g_look_enabled = YES;
     [view setFull:YES];
-    FakeTouch *t = touch(600, 150); began(view, t);
+    FakeTouch *t = touch(600, 150); began(view, t); moved(view, t, 620, 150);
     UIInterfaceOrientation current = view.window.windowScene.effectiveGeometry.interfaceOrientation;
     if (current != UIInterfaceOrientationUnknown) {
         UIInterfaceOrientation stale = current == UIInterfaceOrientationLandscapeLeft ? UIInterfaceOrientationLandscapeRight : UIInterfaceOrientationLandscapeLeft;
         [view setValue:@(stale) forKey:@"lookOrientation"];
         [view deviceOrientationChanged];
-        CHECK(g_look_count == 2 && g_look_events[1].phase == DM_LOOK_CANCEL,
-              "interface-orientation notification cancels an active look session");
+        CHECK(g_look_count == 3 && g_look_events[2].phase == DM_LOOK_CANCEL && g_rx == 0 && g_ry == 0,
+              "interface-orientation notification cancels look and clears its virtual axes immediately");
     } else CHECK(NO, "simulator reports a known interface orientation for the orientation-cancel check");
     reset_look();
     t = touch(600, 150); began(view, t);
@@ -316,9 +353,9 @@ static void run_tests(DmGamepad *view) {
         reset_look(); g_look_enabled = YES;
         NSString *report = [NSString stringWithFormat:@"UIKit handler regression: %d failures; %d look BEGIN sessions\n", g_failures, g_begin_count];
         printf("%s", report.UTF8String);
+        fflush(stdout); fflush(stderr);
         [report writeToFile:[NSHomeDirectory() stringByAppendingPathComponent:@"Documents/result.txt"]
                  atomically:YES encoding:NSUTF8StringEncoding error:nil];
-        fflush(stdout); fflush(stderr);
         exit(g_failures ? 1 : 0);
     });
 }
@@ -345,7 +382,7 @@ int main(int argc, char **argv) {
         NSString *documents = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents"];
         [[NSFileManager defaultManager] createDirectoryAtPath:documents withIntermediateDirectories:YES attributes:nil error:nil];
         NSString *log = [documents stringByAppendingPathComponent:@"details.log"];
-        if (!freopen(log.fileSystemRepresentation, "w", stdout) || !freopen(log.fileSystemRepresentation, "a", stderr)) abort();
+        if (!freopen(log.fileSystemRepresentation, "w", stdout) || dup2(STDOUT_FILENO, STDERR_FILENO) < 0) abort();
         setvbuf(stdout, NULL, _IOLBF, 0);
         setvbuf(stderr, NULL, _IOLBF, 0);
         return UIApplicationMain(argc, argv, nil, NSStringFromClass(HarnessDelegate.class));

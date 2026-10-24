@@ -1,4 +1,4 @@
-// Virtual gamepad (Nintendo button positions) + physical controllers (GameController). Both are merged and handed to the host through dm_input_set (hle_hid.c, bit layout in dm_input.h).
+// Virtual gamepad (Nintendo button positions) + physical controllers (GameController). Normally both are merged for the host; BOTW relative-look mode publishes them separately so the native scene observer can identify the sampled virtual source.
 //   Two layouts; one tap on the layout button at the top centre (labelled with the current layout, "2D" / "3D") switches them, and the choice is kept in NSUserDefaults (each game is its own app, so per game); the first launch uses the game profile's pad_layout (DM_GAME_PAD_FULL).
 //   2D (simple): top corners ZL above L (one column), ZR above R likewise, teardrops with the tip toward the screen corner; − and + side by side at the top centre; the left stick in the lower-left area (the touch-down point becomes its centre, so it starts under the thumb; small dead zone);
 //     the A (right) B (bottom) X (top) Y (left) diamond in the bottom-right corner, sliding a finger between keys switches keys. Each bottom corner holds a single control, so it sits close in (reaching halfway into the side safe-area inset).
@@ -34,11 +34,23 @@ static int tilted(int32_t x, int32_t y) { return (int64_t)x * x + (int64_t)y * y
 static void publish(void) {
     pthread_mutex_lock(&g_mu);
     int32_t lx = g_touch_lx, ly = g_touch_ly, rx = g_touch_rx, ry = g_touch_ry;
-    if (tilted(g_pad_lx, g_pad_ly)) { lx = g_pad_lx; ly = g_pad_ly; }   // a tilted physical stick wins
-    if (tilted(g_pad_rx, g_pad_ry)) { rx = g_pad_rx; ry = g_pad_ry; }
-    dm_input_set(g_touch_btn | g_pad_btn | g_shake_btn, lx, ly, rx, ry);
+    if (dm_look_enabled()) {
+        // Keep the legacy whole-vector left-stick choice and buttons on the ordinary input path.
+        // Split only the right stick so BOTW can tell a virtual UI stick from a physical stick.
+        if (tilted(g_pad_lx, g_pad_ly)) { lx = g_pad_lx; ly = g_pad_ly; }
+        dm_input_set(g_touch_btn | g_pad_btn | g_shake_btn, lx, ly, g_touch_rx, g_touch_ry);
+        dm_pad_set(0, 0, 0, g_pad_rx, g_pad_ry);
+    } else {
+        if (tilted(g_pad_lx, g_pad_ly)) { lx = g_pad_lx; ly = g_pad_ly; }   // a tilted physical stick wins
+        if (tilted(g_pad_rx, g_pad_ry)) { rx = g_pad_rx; ry = g_pad_ry; }
+        dm_input_set(g_touch_btn | g_pad_btn | g_shake_btn, lx, ly, rx, ry);
+    }
     pthread_mutex_unlock(&g_mu);
 }
+
+// dm_look_install may run after GameController discovery published its first value. Republish
+// the existing source split immediately so a connected controller is not lost until it moves.
+void front_look_mode_changed(void) { publish(); }
 
 // ---- Shaking the phone ----
 // The accelerometer at 60 Hz (no gyroscope, no permission prompt): gravity is followed by a slow low-pass (about 0.8 s), and a sample whose acceleration beyond it exceeds DM_SHAKE_G
@@ -337,8 +349,11 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
 }
 // ---- Relative camera look ----
 - (void)cancelLook {   // Keep the owner's C_LOOK entry until lift; it cannot turn into a stick mid-gesture.
-    if (_lookTouch) dm_look_input(DM_LOOK_CANCEL, 0, 0);
+    UITouch *owner = _lookTouch;
+    if (owner) dm_look_input(DM_LOOK_CANCEL, 0, 0);
     _lookTouch = nil; _lookScale = 0;
+    if (owner && _stick[1] == owner) _stick[1] = nil;
+    if (owner) [self recompute];  // Publish zero virtual RS immediately, even without another touch event.
 }
 - (void)checkLookGeometry {
     CGSize size = self.bounds.size;
@@ -357,6 +372,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     CGFloat scale = MIN(self.bounds.size.width, self.bounds.size.height);
     if (scale <= 0) return;
     _lookTouch = t; _lookLast = p; _lookScale = scale;
+    _stick[1] = t; _stickNow[1] = p; _rCentre = p;
     dm_look_input(DM_LOOK_BEGIN, 0, 0);
 }
 - (void)moveLook:(UITouch *)t to:(CGPoint)p {
@@ -366,6 +382,9 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     float dx = (float)((p.x - _lookLast.x) / _lookScale);
     float dy = (float)((p.y - _lookLast.y) / _lookScale);
     _lookLast = p;
+    _stickNow[1] = p;
+    CGFloat d = dist(p, _rCentre), R = [self stickR:1];
+    if (d > R) _rCentre = CGPointMake(p.x - (p.x - _rCentre.x) * R / d, p.y - (p.y - _rCentre.y) * R / d);
     if (dx != 0 || dy != 0) dm_look_input(DM_LOOK_MOVE, dx, dy);
 }
 - (void)endLook:(UITouch *)t at:(CGPoint)p cancelled:(BOOL)cancelled {

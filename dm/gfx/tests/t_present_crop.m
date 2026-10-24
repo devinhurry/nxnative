@@ -124,6 +124,16 @@ int main(void) { @autoreleasepool {
     R.rt.color[0] = &canvas; strcpy(layout->sh[0]->key, "0000000000000000_b");
     EXPECT("3D composite remains unscaled", 0, ui_squeeze_scale(layout, &ux, &uy));
     memcpy(layout->sh[0]->key, DM_GAME_ASPECT_UI, 16); layout->sh[0]->key[16] = 0;
+    dm_aspect_set_display(21.f / 10);
+    const char *split_fill_vs[] = {"78a4ace2913b091d_b", "a983fef957911db8_b"};
+    for (int i = 0; i < 2; i++) {
+        strcpy(layout->sh[0]->key, split_fill_vs[i]);
+        EXPECT("BOTW split-fill layout VS scales at 21:10", 1, ui_squeeze_scale(layout, &ux, &uy));
+        EXPECT("BOTW split-fill 21:10 factor", 1181, lround(ux * 1000));
+        R.rt.color[0] = &tex;
+        EXPECT("BOTW split-fill offscreen capture stays unscaled", 0, ui_squeeze_scale(layout, &ux, &uy));
+        R.rt.color[0] = &canvas;
+    }
     tex_t picture = {.magic=MAGIC('T','E','X',0), .serial=60001};
     picture.d.width=320; picture.d.height=180; picture.d.depth=picture.d.samples=picture.d.levels=1;
     picture.d.format=NVN_FORMAT_RGBA8; picture.d.target=NVN_TEXTURE_TARGET_2D;
