@@ -29,6 +29,7 @@ static int32_t g_mouse_rx, g_mouse_ry;
 static void push(void);
 void front_look_mode_changed(void) {} // Mac input sources are separate before and after look mode installs.
 void front_botw_touch_hud_mode_changed(void) {} // The BOTW relocation is an iOS virtual-pad feature.
+void front_botw_touch_hud_map_region(int valid, float x, float y, float width, float height) { (void)valid; (void)x; (void)y; (void)width; (void)height; } // No BOTW map hit region on Mac.
 // The screen's refresh rate matched to the game's frame rate in fullscreen (front_screen_match, from PR #79; DM_SCREEN_MATCH=0 turns it off). 60 fps on a 144 Hz screen cannot be paced
 // evenly: the display link counts a tick on the refresh nearest each 1/60 s slot (nvn_mtl.m link_range), so frames stay up 2 and 3 refreshes in turn (13.9 / 20.8 ms) and Apple's HUD shows
 // the frame interval jumping between them. In fullscreen, a screen whose rate is not a multiple of the game's switches to the mode of the same size with the highest rate that is (144 → 120 Hz

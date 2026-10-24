@@ -62,6 +62,20 @@ static void t_npads(void) {
     CHECK(buttons_of(0, STYLE_FULLKEY) == (DM_BTN_X | DM_BTN_A) && lx_of(0) == -200, "keyboard and player 1's controller are ORed, the stick deflected more wins");
     dm_input_set(0, 0, 0, 0, 0); dm_pad_set(0, 0, 0, 0, 0); buttons_of(0, STYLE_FULLKEY);
 
+    // Short virtual-only BOTW actions stay visible for one guest sample, then release.
+    dm_input_set(DM_BTN_LS, 0, 0, 0, 0); dm_input_set(0, 0, 0, 0, 0);
+    CHECK(buttons_of(0, STYLE_FULLKEY) & DM_BTN_LS, "a short virtual L3 pulse is delivered on the next Npad read");
+    CHECK(!(buttons_of(0, STYLE_FULLKEY) & DM_BTN_LS), "a short virtual L3 pulse is released after one Npad read");
+
+    // Hot-plug/reset cancellation drops only the virtual edge, never the physical edge.
+    dm_input_set(DM_BTN_MINUS, 0, 0, 0, 0); dm_input_set(0, 0, 0, 0, 0);
+    dm_input_cancel_virtual_latch(DM_BTN_LS | DM_BTN_MINUS);
+    CHECK(!(buttons_of(0, STYLE_FULLKEY) & DM_BTN_MINUS), "BOTW reset cancellation drops an unread virtual Minus pulse");
+    dm_pad_set(DM_BTN_MINUS, 0, 0, 0, 0); dm_pad_set(0, 0, 0, 0, 0);
+    dm_input_cancel_virtual_latch(DM_BTN_LS | DM_BTN_MINUS);
+    CHECK(buttons_of(0, STYLE_FULLKEY) & DM_BTN_MINUS, "virtual latch cancellation preserves a physical Minus edge");
+    CHECK(!(buttons_of(0, STYLE_FULLKEY) & DM_BTN_MINUS), "the preserved physical Minus edge is consumed once");
+
     // Two controllers: player 2 on No2 with its own input, the style event of No2 signalled
     static uint8_t ev1[0x40];
     h_hid_BindStyleEv(&(uint32_t){1}, ev1, 0);
