@@ -5,6 +5,7 @@ B = build
 GINC = $(if $(strip $(GAME)),-I../gen/$(GAME) -I../../games/$(GAME),$(error GAME is not set: make GAME=<base game title ID>: $(shell python3 ../../games/game.py list | awk -F'\t' '{printf "%s (%s)  ", $$1, $$3}')))
 GAME_H = ../gen/$(GAME)/game_profile.h
 run: $(B)/t_aspect $(B)/t_touch $(B)/t_look $(B)/t_botw_touchhud $(B)/t_motion $(B)/t_gesture $(B)/t_oe $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_audio_spsc $(B)/t_swkbd $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pctl $(B)/t_time $(B)/t_shared_font $(B)/t_vorbis $(B)/t_vorbis_divides $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple $(B)/t_nro
+
 	$(B)/t_aspect
 	$(B)/t_touch
 	$(B)/t_look
@@ -32,6 +33,13 @@ run: $(B)/t_aspect $(B)/t_touch $(B)/t_look $(B)/t_botw_touchhud $(B)/t_motion $
 	$(B)/t_haptics_apple
 	$(B)/t_nro
 run: $(B)/t_nro
+.PHONY: touchpad_geometry
+touchpad_geometry: $(B)/t_touchpad_geometry
+	$(B)/t_touchpad_geometry
+
+$(B)/t_touchpad_geometry: t_touchpad_geometry.c ../touchpad_geometry.h ../dm_input.h | $(B)
+	clang -O1 -Wall -Werror -I.. -o $@ t_touchpad_geometry.c -lm
+
 $(B)/t_nro: t_nro.c ../loader.c ../hle_ro.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	clang -O1 -g -Wall -Wno-unused-function -Wno-deprecated-declarations -I.. $(GINC) -o $@ t_nro.c
 .PHONY: nro

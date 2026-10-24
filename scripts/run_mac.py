@@ -153,6 +153,8 @@ def resolve_shader_cache(base, g, override, layout, chain):
 def resolve(args, env, repo):
     game_id = args.game or env.get('DM_GAME')
     g, discovered_build = resolve_game_input(repo, game_id, env)
+    if getattr(args, 'touch_preview', False) and g.id != '01007EF00011E000':
+        raise LaunchError('--touch-preview is currently available only for Breath of the Wild (01007EF00011E000)')
     base = _path(args.build) or discovered_build or _path(env.get('DM_ROOT'))
     if not base or not base.is_dir(): raise LaunchError('set --build or DM_ROOT to an existing game build folder, or pass a game folder containing <ID>_build / <ID>-work')
     version = args.version or env.get('DM_VERSION') or g.get('package', '')
@@ -207,6 +209,8 @@ def launch(plan, args, env, repo, rewrite_call=None, make_call=None, exec_call=N
         if not fresh: raise LaunchError(f'rewrite did not produce a complete current output: {reason}')
     game_id = plan['game'].id
     env.update(DM_GAME=game_id, DM_ROOT=str(plan['base']), DM_ROMFS=str(plan['romfs']), DM_MSL_DIR=str(plan['msl']))
+    if getattr(args, 'touch_preview', False): env['DM_TOUCH_PREVIEW'] = '1'
+    else: env.pop('DM_TOUCH_PREVIEW', None)
     env.setdefault('DM_NVN_SHMAP', str(plan['game'].table('shader_map.tsv')))
     profile_root = plan['game'].dir.parent.resolve()
     repo_profiles = (repo / 'dm/games').resolve()
@@ -251,6 +255,7 @@ def parser():
     p.add_argument('--romfs', help='RomFS folder (default: DM_ROMFS or detected layout)')
     p.add_argument('--msl', help='shader cache parent (default: DM_MSL_DIR or detected layout)')
     p.add_argument('--windowed', action='store_true', help='disable fullscreen; DM_ASPECT_RATIO still sets the window size')
+    p.add_argument('--touch-preview', action='store_true', help='BOTW-only Mac preview of the iOS virtual touch controls and relocated touch HUD')
     p.add_argument('--check', action='store_true', help='report resolved paths and rewrite freshness without changing files or building')
     return p
 

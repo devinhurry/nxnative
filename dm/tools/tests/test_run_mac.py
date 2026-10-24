@@ -32,6 +32,17 @@ def stamp_nvn(lib, g):
 
 
 class MacLauncherTests(unittest.TestCase):
+    def test_touch_preview_is_explicitly_botw_only(self):
+        args = SimpleNamespace(game='010015100B514000', build=None, version=None, patched=None,
+                               exefs=None, romfs=None, msl=None, touch_preview=True)
+        with self.assertRaisesRegex(run_mac.LaunchError, 'only for Breath of the Wild'):
+            run_mac.resolve(args, {}, REPO)
+
+        botw = SimpleNamespace(game='01007EF00011E000', build=None, version=None, patched=None,
+                               exefs=None, romfs=None, msl=None, touch_preview=True)
+        with self.assertRaisesRegex(run_mac.LaunchError, 'set --build'):
+            run_mac.resolve(botw, {}, REPO)
+
     def make_layout(self, root, g):
         v = g.get('package')
         exefs, romfs, patched, msl = (root / p for p in (Path('extract') / v / 'ExeFS', Path('extract') / v / 'RomFS', Path(f'patched_{v}'), Path('shader') / 'cache'))
