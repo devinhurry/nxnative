@@ -790,7 +790,11 @@ def sarc_members(d):
     names = hl + 12 + 16 * n + 8
     for i in range(n):
         h, attr, s, e = struct.unpack_from('<IIII', d, hl + 12 + 16 * i)
-        nm = d[names + (attr & 0xffffff) * 4:].split(b'\0')[0].decode('utf-8', 'replace') if attr >> 24 else f'#{i}'
+        if attr >> 24:
+            off = names + (attr & 0xffffff) * 4
+            end = d.find(b'\0', off)
+            nm = d[off:end if end >= 0 else None].decode('utf-8', 'replace')
+        else: nm = f'#{i}'
         yield nm, d[doff + s:doff + e]
 
 NV_STAGES = ['vs', 'ps', 'gs', 'hs', 'ds', 'cs']   # NVN stage order
