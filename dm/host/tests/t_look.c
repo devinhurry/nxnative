@@ -9,14 +9,21 @@ module_t g_mod[MAX_MOD];
 int g_nmod;
 static int test_gate_present, test_gate_registered, test_missing_gate;
 static uint64_t test_frame;
+static int test_hid_valid;
+static dm_hid_look_sample test_hid_sample;
+int dm_hid_look_sample_at(uint64_t frame, dm_hid_look_sample *out) {
+    if (!test_hid_valid || test_hid_sample.frame > frame || !out) return 0;
+    *out = test_hid_sample; return 1;
+}
 
-static int known_gate(int id) { return id == OBS_BOTW_LOOK_VECTOR; }
+static int known_gate(int id) { return id == OBS_BOTW_LOOK_VECTOR || id == OBS_BOTW_LOOK_SOURCE; }
 int gate_obs_present(int id) { return known_gate(id) && test_gate_present && id != test_missing_gate; }
 void gate_obs_set(int id, void (*fn)(const uint64_t *regs)) {
-    assert(id == OBS_BOTW_LOOK_VECTOR && fn);
+    assert(known_gate(id) && fn);
     test_gate_registered++;
 }
 uint64_t dm_guest_frame(void) { return test_frame; }
+void front_look_mode_changed(void) {}
 
 static int cases, fails;
 static void check(const char *name, int ok) {
@@ -24,12 +31,81 @@ static void check(const char *name, int ok) {
     if (!ok) { fprintf(stderr, "FAIL %s\n", name); fails++; }
 }
 static int near(float a, float b) { return fabsf(a - b) <= 1e-6f; }
+static float from_bits(uint32_t bits) { float value; memcpy(&value, &bits, sizeof value); return value; }
 static void reset(float gain) {
     dm_look_test_vector_config(NULL, gain);
     test_frame = 0;
+    test_hid_valid = 0; memset(&test_hid_sample, 0, sizeof test_hid_sample);
 }
 static void apply(uint64_t frame, float nx, float ny, float ratio, float *x, float *y) {
     dm_look_test_vector(frame, nx, ny, ratio, x, y);
+}
+
+static void apply_source(uint64_t frame, float nx, float ny, float ratio,
+                         int sample_valid, int raw_match, int physical, float *x, float *y) {
+    dm_look_test_vector_source(frame, nx, ny, ratio, sample_valid, raw_match, physical, x, y);
+}
+
+static void test_source_attribution(void) {
+    reset(60);
+    float x, y;
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 120);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.01f, 0.02f, 120);
+    apply_source(120, 0.75f, -0.25f, 1, 1, 0, 0, &x, &y);
+    check("an unmatched raw native source is preserved", x == 0.75f && y == -0.25f);
+    apply_source(120, 0.75f, -0.25f, 1, 1, 1, 0, &x, &y);
+    check("an unknown first getter suppresses a later same-frame synthetic velocity", x == 0 && y == 0);
+    apply_source(121, 0, 0, 1, 1, 1, 0, &x, &y);
+    check("movement rejected for an unmatched source is not replayed", x == 0 && y == 0);
+
+    reset(60);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 122);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.01f, 0.02f, 122);
+    apply_source(122, 0.9f, -0.8f, 1, 1, 1, 0, &x, &y);
+    check("a proven synthetic source is replaced by signed relative movement", near(x, 0.6f) && near(y, -1.2f));
+    apply_source(122, 0.7f, -0.6f, 1, 1, 0, 0, &x, &y);
+    check("a later same-frame unknown candidate is preserved per invocation", x == 0.7f && y == -0.6f);
+    apply_source(122, 0.9f, -0.8f, 1, 1, 1, 0, &x, &y);
+    check("a later matching virtual candidate still sees the frame sample", near(x, 0.6f) && near(y, -1.2f));
+    apply_source(122, 0.3f, -0.4f, 1, 1, 1, 1, &x, &y);
+    check("a physical candidate on a later getter call keeps native output", x == 0.3f && y == -0.4f);
+    apply_source(123, 0.9f, -0.8f, 1, 1, 1, 0, &x, &y);
+    check("a held stationary synthetic stick is replaced with zero on the next frame", x == 0 && y == 0);
+
+    reset(60);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 124);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.005f, -0.01f, 124);
+    apply_source(124, 0.5f, -0.5f, 1, 1, 1, 0, &x, &y);
+    check("relative movement replaces the post-filter virtual response", near(x, 0.3f) && near(y, 0.6f));
+    dm_look_test_input_at(DM_LOOK_CANCEL, 0, 0, 124);
+    apply_source(124, 0.5f, -0.5f, 1, 1, 1, 0, &x, &y);
+    check("CANCEL after a frozen HID sample clears that frame's synthetic output", x == 0 && y == 0);
+    apply_source(125, 0, 0, 1, 1, 1, 0, &x, &y);
+    check("CANCEL leaves no later impulse", x == 0 && y == 0);
+
+    reset(60);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 125);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.01f, 0, 125);
+    apply_source(125, 0.2f, 0.1f, 1, 1, 1, 0, &x, &y);
+    dm_look_test_input_at(DM_LOOK_CANCEL, 0, 0, 126);
+    apply_source(125, 0.2f, 0.1f, 1, 1, 1, 0, &x, &y);
+    check("a newer CANCEL clears an already-cached sample for a delayed getter", x == 0 && y == 0);
+
+    reset(60);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 126);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.005f, 0, 126);
+    apply_source(126, 0.2f, -0.4f, 1, 1, 0, 1, &x, &y);
+    check("sampled physical right stick keeps its native curve and suppresses drag", x == 0.2f && y == -0.4f);
+    apply_source(127, 0, 0, 1, 1, 1, 0, &x, &y);
+    check("physical-priority movement cannot leak after release", x == 0 && y == 0);
+
+    reset(60);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 128);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.01f, 0, 128);
+    apply_source(128, 0.1f, 0.2f, 1, 0, 0, 0, &x, &y);
+    check("a getter without a matching HID snapshot fails open", x == 0.1f && y == 0.2f);
+    apply_source(129, 0, 0, 1, 1, 1, 0, &x, &y);
+    check("an unobserved frame's drag is not replayed later", x == 0 && y == 0);
 }
 
 static void test_native_passthrough(void) {
@@ -122,6 +198,21 @@ static void test_end_and_cancel(void) {
     check("a CANCEL stamped after the cached frame still clears its pending sample", x == 0 && y == 0);
     apply(41, 0, 0, 1, &x, &y);
     check("a delayed getter cannot replay movement cleared by a later CANCEL", x == 0 && y == 0);
+
+    reset(60);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 42);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.01f, 0, 42);
+    dm_look_test_input_at(DM_LOOK_CANCEL, 0, 0, 42);
+    apply_source(42, 0.8f, 0.2f, 1, 1, 1, 0, &x, &y);
+    check("CANCEL before the first getter replaces a frozen virtual stick with zero", x == 0 && y == 0);
+
+    reset(60);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 43);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.01f, 0, 43);
+    apply_source(43, 0.8f, 0.2f, 1, 1, 1, 0, &x, &y);
+    dm_look_test_input_at(DM_LOOK_END, 0, 0, 44);
+    apply_source(44, 0.8f, 0.2f, 1, 1, 1, 0, &x, &y);
+    check("END without a final MOVE suppresses the frozen virtual stick next frame", x == 0 && y == 0);
 }
 
 static void test_frame_ratio(void) {
@@ -193,6 +284,18 @@ static void test_late_and_stale_input(void) {
     check("an older getter call does not replay an already sampled drag", x == 0 && y == 0);
 
     reset(60);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 93);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.01f, 0.005f, 93);
+    apply_source(93, 0, 0, 1, 1, 1, 0, &x, &y);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.004f, 0, 94);
+    apply_source(94, 0, 0, 1, 1, 1, 0, &x, &y);
+    check("a newer frame samples its own movement before delayed older work", near(x, 0.24f) && y == 0);
+    apply_source(93, 0.7f, -0.6f, 1, 1, 1, 0, &x, &y);
+    check("a delayed older synthetic getter is zero rather than stale stick velocity", x == 0 && y == 0);
+    apply_source(94, 0, 0, 1, 1, 1, 0, &x, &y);
+    check("the delayed getter does not rewind the newer sample", near(x, 0.24f) && y == 0);
+
+    reset(60);
     dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 100);
     apply(101, 0, 0, 1, &x, &y);
     dm_look_test_input_at(DM_LOOK_MOVE, 0.004f, -0.002f, 100);
@@ -203,6 +306,7 @@ static void test_late_and_stale_input(void) {
 static void test_actual_observer_ratio_read(void) {
     static uint8_t image[0x200];
     static uint8_t vfr[0x40];
+    static uint8_t child[0x140];
     module_t main = {0};
     main.base = image; main.size = sizeof image;
     dm_look_test_vector_config(&main, 60);
@@ -211,29 +315,130 @@ static void test_actual_observer_ratio_read(void) {
     float ratio = 1.5f;
     memcpy(vfr + 0x20, &ratio, sizeof ratio);
     float pair[2] = {0, 0};
-    uint64_t regs[31] = {0}; regs[19] = (uintptr_t)pair;
+    uint64_t regs[31] = {0}; regs[0] = (uintptr_t)child; regs[19] = (uintptr_t)pair;
     test_frame = 80;
     dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 80);
     dm_look_test_input_at(DM_LOOK_MOVE, 0.005f, -0.0025f, 80);
+    test_hid_valid = 1; test_hid_sample = (dm_hid_look_sample){.frame=80, .source=DM_HID_LOOK_VIRTUAL};
+    camera_look_source(regs);
     camera_look_vector(regs);
-    check("a missing VFR singleton leaves the native zero vector unchanged and drops unready touch input", pair[0] == 0 && pair[1] == 0);
+    check("a valid paired source with no VFR leaves native output unchanged and drops unready touch input", pair[0] == 0 && pair[1] == 0);
+    check("OBS32 consumes and clears its paired OBS33 packet", !g_raw_call.valid);
 
     pair[0] = 0.125f; pair[1] = -0.25f;
+    regs[0] = 0; camera_look_source(regs); // native null-source branch skips the raw pair load
     camera_look_vector(regs);
-    check("OBS32 preserves a native vector without requiring the VFR singleton", pair[0] == 0.125f && pair[1] == -0.25f);
+    check("a null source cannot reuse the previous OBS33 packet", pair[0] == 0.125f && pair[1] == -0.25f && !g_raw_call.valid);
 
     vfr_ptr = (uintptr_t)vfr;
     memcpy(image + 0x100, &vfr_ptr, sizeof vfr_ptr);
     test_frame = 81;
     dm_look_test_input_at(DM_LOOK_MOVE, 0.005f, -0.0025f, 81);
     pair[0] = pair[1] = 0;
+    regs[0] = (uintptr_t)child;
+    test_hid_sample = (dm_hid_look_sample){.frame=81, .source=DM_HID_LOOK_VIRTUAL};
+    camera_look_source(regs);
     camera_look_vector(regs);
-    check("OBS32 reads the VFR ratio and applies both signed axes in place", near(pair[0], 0.2f) && near(pair[1], 0.1f));
+    check("the real OBS33→OBS32 path reads the VFR ratio and applies both signed axes", near(pair[0], 0.2f) && near(pair[1], 0.1f));
 
     ratio = 0.5f; memcpy(vfr + 0x20, &ratio, sizeof ratio);
     pair[0] = pair[1] = 0;
+    camera_look_source(regs);
     camera_look_vector(regs);
     check("OBS32 keeps the first ratio and sample stable for repeated getter reads", near(pair[0], 0.2f) && near(pair[1], 0.1f));
+
+    test_frame = 82; pair[0] = 0.25f; pair[1] = 0.5f;
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.002f, -0.003f, 82);
+    // The native pair is intentionally not the frame-frozen virtual candidate. This exercises
+    // the real pre-filter capture -> post-filter source match, rather than the helper's boolean
+    // mismatch seam. Such a mismatch can represent another native producer that won selection.
+    float native_candidate[2] = {0.25f, -0.125f};
+    memcpy(child + 0x128, native_candidate, sizeof native_candidate);
+    test_hid_sample = (dm_hid_look_sample){.frame=82, .source=DM_HID_LOOK_VIRTUAL,
+        .selected_rx=23170, .selected_ry=23170, .virtual_rx=23170, .virtual_ry=23170};
+    camera_look_source(regs);
+    camera_look_vector(regs);
+    check("an unmatched virtual-source candidate preserves native filtered output", pair[0] == 0.25f && pair[1] == 0.5f);
+    apply_source(83, pair[0], pair[1], 1, 1, 1, 0, &pair[0], &pair[1]);
+    check("movement rejected by a raw-source mismatch is not replayed", pair[0] == 0 && pair[1] == 0);
+
+    test_frame = 84;
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.005f, 0.002f, 84);
+    float virtual_axis = 16384.0f / 32767.0f;
+    memcpy(child + 0x128, &virtual_axis, sizeof virtual_axis);
+    float virtual_y = 0;
+    memcpy(child + 0x12c, &virtual_y, sizeof virtual_y);
+    test_hid_sample = (dm_hid_look_sample){.frame=84, .source=DM_HID_LOOK_VIRTUAL,
+        .selected_rx=16384, .virtual_rx=16384};
+    pair[0] = pair[1] = 0;
+    camera_look_source(regs);
+    check("OBS33 captures the actual same-frame virtual HID sample and native raw pair", g_raw_call.valid && g_raw_call.raw_x == virtual_axis && g_raw_call.hid.selected_rx == 16384);
+    camera_look_vector(regs);
+    check("the paired OBS33 to OBS32 path consumes that source exactly once", near(pair[0], 0.6f) && near(pair[1], -0.24f) && !g_raw_call.valid);
+
+    test_frame = 85; pair[0] = pair[1] = 0;
+    // Fixture from the exact native 1.9 cached-stick instruction sequence for signed rounded-circle axes.
+    // The component divide alone is not the final native pair: radius > 1 rescales both axes.
+    float diagonal_axis = from_bits(0x3f3504f3);
+    memcpy(child + 0x128, &diagonal_axis, sizeof diagonal_axis);
+    memcpy(child + 0x12c, &diagonal_axis, sizeof diagonal_axis);
+    test_hid_sample = (dm_hid_look_sample){.frame=85, .source=DM_HID_LOOK_VIRTUAL,
+        .selected_rx=23170, .selected_ry=23170, .virtual_rx=23170, .virtual_ry=23170};
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.003f, -0.004f, 85);
+    camera_look_source(regs);
+    camera_look_vector(regs);
+    check("OBS33→OBS32 accepts the native-normalized rounded diagonal pair", near(pair[0], 0.36f) && near(pair[1], 0.48f));
+
+    // The game can call its shared stick getter after this present's Npad poll has not run yet.
+    // Keep the last frozen source usable only while the raw candidate still exactly matches it.
+    test_frame = 86; pair[0] = virtual_axis; pair[1] = 0;
+    memcpy(child + 0x128, &virtual_axis, sizeof virtual_axis);
+    memcpy(child + 0x12c, &virtual_y, sizeof virtual_y);
+    test_hid_sample = (dm_hid_look_sample){.frame=85, .source=DM_HID_LOOK_VIRTUAL,
+        .selected_rx=16384, .virtual_rx=16384};
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.001f, 0, 86);
+    camera_look_source(regs); camera_look_vector(regs);
+    check("getter one frame after an unchanged cached virtual sample applies the fresh relative impulse", near(pair[0], 0.12f) && pair[1] == 0);
+
+    test_frame = 87; pair[0] = virtual_axis; pair[1] = 0;
+    test_hid_sample = (dm_hid_look_sample){.frame=84, .source=DM_HID_LOOK_PHYSICAL,
+        .selected_rx=16384, .physical_rx=16384};
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.001f, 0, 87);
+    camera_look_source(regs); camera_look_vector(regs);
+    check("cached physical-stick provenance preserves the native candidate", pair[0] == virtual_axis && pair[1] == 0);
+
+    test_frame = 88; pair[0] = virtual_axis; pair[1] = 0;
+    test_hid_sample = (dm_hid_look_sample){.frame=89, .source=DM_HID_LOOK_VIRTUAL,
+        .selected_rx=16384, .virtual_rx=16384};
+    camera_look_source(regs); camera_look_vector(regs);
+    check("a future HID sample cannot be paired with an older in-flight getter", pair[0] == virtual_axis && pair[1] == 0);
+
+    test_frame = 90; pair[0] = virtual_axis; pair[1] = 0;
+    test_hid_sample = (dm_hid_look_sample){.frame=90, .source=DM_HID_LOOK_VIRTUAL,
+        .selected_rx=10000, .virtual_rx=10000};
+    float replacement_axis; native_stick_pair(10000, 0, &replacement_axis, &virtual_y);
+    memcpy(child + 0x128, &replacement_axis, sizeof replacement_axis);
+    memcpy(child + 0x12c, &virtual_y, sizeof virtual_y);
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.001f, 0, 90);
+    camera_look_source(regs); camera_look_vector(regs);
+    check("a newer HID sample replaces old provenance and matches its own native candidate", near(pair[0], 0.12f) && pair[1] == 0);
+
+    test_frame = 93; pair[0] = replacement_axis; pair[1] = 0;
+    dm_look_test_input_at(DM_LOOK_MOVE, 0.001f, 0, 93);
+    camera_look_source(regs); camera_look_vector(regs);
+    check("getter three frames after the last HID poll uses that cached source only while raw still matches", near(pair[0], 0.12f) && pair[1] == 0);
+}
+
+static void test_native_stick_float_mapping(void) {
+    float x, y;
+    native_stick_pair(16384, 0, &x, &y);
+    check("native cardinal stick conversion matches its binary32 fixture", x == from_bits(0x3f000100) && y == 0.0f);
+    native_stick_pair(23170, 23170, &x, &y);
+    check("native rounded diagonal applies the radial clamp and exact float rounding", x == from_bits(0x3f3504f3) && y == from_bits(0x3f3504f3));
+    native_stick_pair(20000, 24000, &x, &y);
+    check("native in-range asymmetric conversion preserves component order", x == from_bits(0x3f1c4139) && y == from_bits(0x3f3b8177));
+    native_stick_pair(-23170, 23170, &x, &y);
+    check("native radial normalization preserves signed axis orientation", x == from_bits(0xbf3504f3) && y == from_bits(0x3f3504f3));
 }
 
 static void install_wrong_build(void) {
@@ -269,16 +474,18 @@ static void test_profile_guard(void) {
     g_mod[0].base = image; g_mod[0].size = sizeof image; g_mod[0].text_end = sizeof image;
     test_gate_present = 1; test_missing_gate = 0; test_gate_registered = 0;
     unsetenv("DM_LOOK"); dm_look_install();
-    check("the matching BOTW build installs only the shared vector observer", dm_look_enabled() && test_gate_registered == 1);
+    check("the matching BOTW build installs the pre-filter source and shared vector observers", dm_look_enabled() && test_gate_registered == 2);
 }
 
 int main(void) {
     check("relative look starts disabled until a build-checked installer enables it", !dm_look_enabled());
     test_native_passthrough();
+    test_source_attribution();
     test_shared_vector_and_repeat();
     test_end_and_cancel();
     test_frame_ratio();
     test_late_and_stale_input();
+    test_native_stick_float_mapping();
     test_actual_observer_ratio_read();
     test_profile_guard();
     printf("== %d checks, %d failed ==\n", cases, fails);

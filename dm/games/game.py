@@ -121,8 +121,8 @@ def header(g):
     ca = g.get('camera_aspect', '')   # the main camera's projection for aspect_native: build ID, singleton offset, projection offset, vtable offset, aspect field, dirty flag (hex)
     if ca and not re.fullmatch(r'[0-9a-f]{32}(:0x[0-9a-f]+){5}', ca): sys.exit(f'{g.id}: camera_aspect must be <build>:<singleton>:<projection>:<vtable>:<aspect>:<dirty> in hex: {ca}')
     cl = g.get('camera_look', '')
-    if cl and not re.fullmatch(r'[0-9a-f]{32}(:0x[0-9a-f]+){3}:[0-9]+(?:\.[0-9]+)?', cl):
-        sys.exit(f'{g.id}: camera_look must be <build>:<getter hook>:<VFR singleton>:<ratio member>:<normalized-input impulse scale>: {cl}')
+    if cl and not re.fullmatch(r'[0-9a-f]{32}(:0x[0-9a-f]+){4}:[0-9]+(?:\.[0-9]+)?', cl):
+        sys.exit(f'{g.id}: camera_look must be <build>:<getter hook>:<raw pair member>:<VFR singleton>:<ratio member>:<normalized-input impulse scale>: {cl}')
     if g.get('camera_look_tail', '') or g.get('camera_look_aim', ''):
         sys.exit(f'{g.id}: camera_look_tail and camera_look_aim were replaced by the shared camera_look vector hook')
     cu = g.get('camera_ui_aspect', '')

@@ -29,10 +29,10 @@ $(GAME_H):
 	$(MAKE) -C .. game_profile GAME=$(GAME)
 $(B)/t_touch: t_touch.c ../hle_touch.c ../front.h ../dm.h $(GAME_H) | $(B)
 	clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_touch.c ../hle_touch.c
-$(B)/t_look: t_look.c ../hle_look.c ../front.h ../hle.h ../dm.h $(GAME_H) | $(B)
+$(B)/t_look: t_look.c ../hle_look.c ../front.h ../hle.h ../dm.h ../dm_input.h $(GAME_H) | $(B)
 	clang -O1 -Wall -Werror -Wno-unused-function -DDM_TEST_HOOKS -I.. $(GINC) -o $@ t_look.c
-$(B)/t_motion: t_motion.c ../hle_hid.c ../hle_look.c ../front.h ../hle.h ../dm.h $(GAME_H) | $(B)
-	clang -O1 -Wall -Werror -Wno-unused-function -ffunction-sections -fdata-sections -Wl,-dead_strip -I.. $(GINC) -o $@ t_motion.c -lm -lpthread
+$(B)/t_motion: t_motion.c ../hle_hid.c ../hle_look.c ../front.h ../hle.h ../dm.h ../dm_input.h $(GAME_H) | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -DDM_TEST_HOOKS -ffunction-sections -fdata-sections -Wl,-dead_strip -I.. $(GINC) -o $@ t_motion.c -lm -lpthread
 $(B)/t_thread_leak: t_thread_leak.c ../thread.c ../dm.h $(GAME_H) | $(B)
 	clang -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_thread_leak.c
 $(B)/t_fs: t_fs.c t_fs_stub.c ../hle_fs.c ../hle_bigstack.c ../hle.h ../dm.h $(GAME_H) | $(B)

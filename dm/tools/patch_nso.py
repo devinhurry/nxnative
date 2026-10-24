@@ -336,6 +336,7 @@ OBS = {
   'cd57b23fa4bbad65803d9788c01821ee': [
     (0xeb4468, 22, 'a9be7bfd', 'projection update: apply the display aspect to the main camera before checking dirty flags'),
     (0xd44a2c, 23, 'a94a2269', 'UI 3D camera update: x19 owns the source lens at +0xa0 and projection at +0xa8; apply aspect before copying lens parameters'),
+    (0xd58008, 33, 'f9409408', 'shared stick getter: snapshot the selected raw child pair before the native dead-zone/filter branches'),
     (0xd5801c, 32, 'fd400be8', 'shared normalized stick getter: inject one frame of relative input after native filtering and before return'),
   ],
   # Metroid Dread 2.1.0 main: the movie player posts "link / unlink holders" requests into the dispatcher thread's request ring (main+0x222cc8) and goes on without waiting for them (after an unlink it frees the wrapper object and builds a new one in place).
@@ -1124,6 +1125,9 @@ def scratch_dead(off):
     return False
 
 if BUILD_ID == 'cd57b23fa4bbad65803d9788c01821ee':
+    source_off = 0xd58008
+    assert struct.unpack_from('<4I', IMG, source_off) == (0xf9409408, 0x910023e0, 0xf90007e8, 0x941fbe5f), \
+        'BOTW raw stick source sequence changed; recheck OBS33 child pointer and raw pair location'
     getter_off = 0xd5801c
     expected = (0xfd400be8, 0xf94017f3, 0xa941fbfd, 0x9100c3ff, 0xd65f03c0)
     actual = struct.unpack_from('<5I', IMG, getter_off)
@@ -1149,6 +1153,8 @@ for off, oid, ow, why in obs:
 # BOTW's shared stick-vector observer must remain at the post-filter getter epilogue. It runs after
 # both successful normalization and the zero-input exits, with x19 still pointing at the output pair.
 if BUILD_ID == 'cd57b23fa4bbad65803d9788c01821ee':
+    source_off = 0xd58008
+    assert any(kind == 'obs' and arg == 33 and orig == source_off for _, kind, arg, orig in gates), 'BOTW raw-source OBS33 gate was not installed before filtering'
     off = 0xd5801c
     assert any(kind == 'obs' and arg == 32 and orig == off for _, kind, arg, orig in gates), 'BOTW shared stick-vector OBS32 gate was not installed at the getter epilogue'
 

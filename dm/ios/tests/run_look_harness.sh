@@ -9,6 +9,11 @@ if [[ $# -ne 1 ]]; then
 fi
 WORK="$1"
 DEVICE="${SIMULATOR_UDID:-}"
+SIMCTL=(xcrun simctl)
+if [[ -n "${SIMULATOR_DEVICE_SET:-}" ]]; then
+  mkdir -p "$SIMULATOR_DEVICE_SET"
+  SIMCTL=(xcrun simctl --set "$SIMULATOR_DEVICE_SET")
+fi
 if [[ -z "$DEVICE" ]]; then
   echo "Set SIMULATOR_UDID to an existing iOS 26.0+ simulator UDID." >&2
   exit 2
@@ -61,24 +66,25 @@ xcrun --sdk iphonesimulator clang \
 plutil -lint "$APP/Info.plist"
 codesign --force --deep --sign - "$APP"
 
-if xcrun simctl list devices | grep -F "$DEVICE" | grep -q '(Booted)'; then
+if "${SIMCTL[@]}" list devices | grep -F "$DEVICE" | grep -q '(Booted)'; then
   WAS_BOOTED=1
 else
-  xcrun simctl boot "$DEVICE"
+  "${SIMCTL[@]}" boot "$DEVICE"
 fi
 cleanup() {
   if [[ "$INSTALLED" == 1 ]]; then
-    xcrun simctl terminate "$DEVICE" "$BUNDLE" >/dev/null 2>&1 || true
-    xcrun simctl uninstall "$DEVICE" "$BUNDLE" >/dev/null 2>&1 || true
+    "${SIMCTL[@]}" terminate "$DEVICE" "$BUNDLE" >/dev/null 2>&1 || true
+    "${SIMCTL[@]}" uninstall "$DEVICE" "$BUNDLE" >/dev/null 2>&1 || true
   fi
-  if [[ "$WAS_BOOTED" == 0 ]]; then xcrun simctl shutdown "$DEVICE" >/dev/null 2>&1 || true; fi
+  if [[ "$WAS_BOOTED" == 0 ]]; then "${SIMCTL[@]}" shutdown "$DEVICE" >/dev/null 2>&1 || true; fi
 }
 trap cleanup EXIT
-xcrun simctl bootstatus "$DEVICE" -b
-xcrun simctl install "$DEVICE" "$APP"
+"${SIMCTL[@]}" bootstatus "$DEVICE" -b
+"${SIMCTL[@]}" install "$DEVICE" "$APP"
 INSTALLED=1
-xcrun simctl launch --terminate-running-process "$DEVICE" "$BUNDLE"
-DATA="$(xcrun simctl get_app_container "$DEVICE" "$BUNDLE" data)"
+DATA="$("${SIMCTL[@]}" get_app_container "$DEVICE" "$BUNDLE" data)"
+rm -f "$DATA/Documents/result.txt" "$DATA/Documents/details.log"
+"${SIMCTL[@]}" launch --terminate-running-process "$DEVICE" "$BUNDLE"
 for _ in $(seq 1 120); do
   [[ -f "$DATA/Documents/result.txt" ]] && break
   sleep 0.25

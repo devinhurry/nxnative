@@ -35,6 +35,8 @@ void dm_touch_set(const dm_touch *t, int n);
 enum { DM_LOOK_BEGIN, DM_LOOK_MOVE, DM_LOOK_END, DM_LOOK_CANCEL };
 int dm_look_enabled(void);
 void dm_look_input(int phase, float dx, float dy);
+// Republish already-connected input sources when a build-checked look mode becomes available.
+void front_look_mode_changed(void);
 
 // Device motion (implemented by the host's hle_hid.c; called by the iOS front end): one sample per CoreMotion update.
 // acc = acceleration in G in the device frame (gravity included); gyro = angular velocity in revolutions/s in the device frame;

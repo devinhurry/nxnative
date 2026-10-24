@@ -5,9 +5,10 @@
 #include <math.h>
 
 static uint64_t test_now;
+static uint64_t test_frame = 9;
 uint64_t guest_ns(void) { return test_now; }
 uint64_t now_ns(void) { return test_now; }
-uint64_t dm_guest_frame(void) { return 9; }
+uint64_t dm_guest_frame(void) { return test_frame; }
 int dm_detclock_enabled(void) { return 0; }
 void dm_guest_clock_advanced(void) {}
 void guest_clock_freeze(int on) { (void)on; }
@@ -30,6 +31,10 @@ void dm_ctl_cvar_i32(uint64_t offset, int32_t value) { (void)offset; (void)value
 void dm_ctl_cvar_f32(uint64_t offset, float value) { (void)offset; (void)value; }
 void dm_gfx_texdump_next(const char *path) { (void)path; }
 void dm_gfx_passdump_next(long frames) { (void)frames; }
+
+void dm_hid_test_reset_look_sample(void);
+void dm_hid_test_fill(uint32_t id, uint32_t style, int64_t *sampling, uint64_t *buttons,
+                      int32_t *rx, int32_t *ry, uint32_t *attributes);
 
 static int near(float a, float b) { return fabsf(a - b) < 1e-5f; }
 static void qmul_test(const float a[4], const float b[4], float q[4]) {
@@ -154,6 +159,54 @@ int main(void) {
     dm_motion_set(NULL);
     assert(seven_states(seven, 1) == 0);
     assert(six_states(&again, 1, handheld_handle) == 1 && near(again.acc[2], -1) && near(again.gyro[2], 0));
-    puts("Device-motion/HID regression: 0 failures; six-axis and SevenSixAxis preserve samples with look queued.");
+
+    // BOTW relative-look mode freezes a whole right-stick source once per guest frame, but the
+    // legacy merge remains unchanged when the feature is unavailable.
+    const uint32_t npad = 0x20, full_key = 1, handheld = 2;
+    int32_t rx, ry; uint32_t attrs; int64_t sampling; uint64_t buttons;
+    dm_hid_test_reset_look_sample(); dm_look_set_available(1);
+    dm_input_set(0, 0, 0, 1000, -1000); dm_pad_set(0, 0, 0, 2000, 1000);
+    test_frame = 20;
+    dm_hid_test_fill(npad, full_key, &sampling, &buttons, &rx, &ry, &attrs);
+    dm_hid_look_sample look_sample;
+    assert(!dm_hid_look_sample_at(test_frame, &look_sample)); // invalid style cannot publish provenance
+    dm_input_set(0, 0, 0, 12000, 3000);
+    dm_hid_test_fill(npad, handheld, &sampling, &buttons, &rx, &ry, &attrs);
+    assert(dm_hid_look_sample_at(test_frame, &look_sample));
+    assert(look_sample.source == DM_HID_LOOK_VIRTUAL && look_sample.virtual_rx == 12000 &&
+           look_sample.virtual_ry == 3000 && rx == 12000 && ry == 3000);
+    assert(dm_hid_look_sample_at(test_frame + 1, &look_sample) && look_sample.frame == test_frame &&
+           look_sample.source == DM_HID_LOOK_VIRTUAL); // cached source remains valid before the next Npad poll
+    assert(!dm_hid_look_sample_at(test_frame - 1, &look_sample)); // never pair a future sample with an older getter
+    dm_input_set(0, 0, 0, -22000, 8000); dm_pad_set(0, 0, 0, 16000, -4000);
+    dm_hid_test_fill(npad, handheld, NULL, NULL, &rx, &ry, NULL);
+    assert(rx == 12000 && ry == 3000 && dm_hid_look_sample_at(test_frame, &look_sample) &&
+           look_sample.source == DM_HID_LOOK_VIRTUAL); // same-frame state remains frozen
+
+    test_frame = 21;
+    dm_hid_test_fill(npad, handheld, NULL, NULL, &rx, &ry, NULL);
+    assert(dm_hid_look_sample_at(test_frame, &look_sample));
+    assert(look_sample.source == DM_HID_LOOK_PHYSICAL && rx == 16000 && ry == -4000);
+    assert(dm_hid_look_sample_at(test_frame + 3, &look_sample) && look_sample.frame == test_frame &&
+           look_sample.source == DM_HID_LOOK_PHYSICAL); // no newer poll: native physical provenance stays cached
+    dm_pad_set(0, 0, 0, 0, 0); dm_input_set(0, 0, 0, -9000, 1500);
+    dm_hid_test_fill(npad, handheld, NULL, NULL, &rx, &ry, NULL);
+    assert(rx == 16000 && ry == -4000); // physical release after sampling takes effect next frame
+    test_frame = 22;
+    dm_hid_test_fill(npad, handheld, NULL, NULL, &rx, &ry, NULL);
+    assert(dm_hid_look_sample_at(test_frame, &look_sample) && look_sample.source == DM_HID_LOOK_VIRTUAL &&
+           rx == -9000 && ry == 1500);
+
+    dm_look_set_available(0); test_frame = 23;
+    dm_input_set(0, 0, 0, 1000, 20000); dm_pad_set(0, 0, 0, 3000, 1000);
+    dm_hid_test_fill(npad, handheld, NULL, NULL, &rx, &ry, NULL);
+    assert(rx == 3000 && ry == 20000); // feature-off path retains historical per-axis merge
+    dm_look_set_available(1); test_frame = 24;
+    dm_input_set(0, 0, 0, 0, 0); dm_pad_set(0, 0, 0, 2500, -1200);
+    dm_hid_test_fill(npad, handheld, NULL, NULL, &rx, &ry, NULL);
+    assert(rx == 2500 && ry == -1200 && dm_hid_look_sample_at(test_frame, &look_sample) &&
+           look_sample.source == DM_HID_LOOK_PHYSICAL && look_sample.selected_rx == 2500 && look_sample.selected_ry == -1200);
+    dm_look_set_available(0);
+    puts("Device-motion/HID regression: 0 failures; frame-frozen source and legacy axis merge verified.");
     return 0;
 }
