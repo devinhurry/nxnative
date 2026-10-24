@@ -120,5 +120,21 @@ class EnvFile(Base):
         with self.assertRaises(nsp.BuildError): nsp.env_file_pairs(self.tmp / 'none.txt')
 
 
+class NxExtract(Base):
+    def test_build_returns_private_dotnet_host_and_framework_dependent_dll(self):
+        dotnet = self.tmp / 'private runtime' / 'dotnet'; dotnet.parent.mkdir(); dotnet.touch()
+        def fake_build(cmd, log, env=None, cwd=None, on_line=None):
+            self.ran.append([str(c) for c in cmd])
+            out = Path(cmd[cmd.index('-o') + 1])
+            for name in ('nx_extract.dll', 'nx_extract.deps.json', 'nx_extract.runtimeconfig.json', 'LibHac.dll'):
+                (out / name).write_bytes(b'test')
+        with mock.patch.object(nsp.shutil, 'which', return_value=str(dotnet)), mock.patch.object(nsp, 'run', fake_build):
+            command = nsp.build_nx_extract(REPO, self.tmp / 'work', self.logs, {'PATH': str(dotnet.parent)})
+        expected_dll = self.tmp / 'work/tools/nx_extract/nx_extract.dll'
+        self.assertEqual(command, [str(dotnet), str(expected_dll)])
+        self.assertTrue((expected_dll.parent / 'nx_extract.runtimeconfig.json').is_file())
+        self.assertEqual(self.ran[0][0], str(dotnet))
+
+
 if __name__ == '__main__':
     unittest.main()

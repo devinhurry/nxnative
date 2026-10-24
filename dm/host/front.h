@@ -25,6 +25,13 @@ int dm_aspect_native(void);
 void dm_aspect_set_display(float ratio);
 void dm_aspect_touch_rect(float w, float h, float rect[4]);
 
+// Publish the virtual 3D-pad target used by BOTW's gameplay HUD. The centre is
+// normalized to the centered 16:9 touch rectangle (top-left origin). Other
+// profiles ignore this state. May be called from the UI thread.
+void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
+int dm_botw_touch_hud_available(void);
+void front_botw_touch_hud_mode_changed(void);
+
 // Touchscreen (implemented by the host's hle_touch.c; called by the iOS / Mac front end): whenever the set of touch points changes (down / move / up / cancel) the whole set is pushed once; n = 0 = all lifted.
 // id = finger slot number 0–15 (the lowest free slot on down, unchanged until up; used directly as finger_id); x / y = normalized coordinates [0,1) on the output frame, origin at top left.
 // The host converts to the panel coordinates the game reads, 1280x720 (x·1280, y·720), and latches short taps (a down and up between two reads is reported at least once). May be called from any thread.

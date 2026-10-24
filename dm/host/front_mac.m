@@ -28,6 +28,7 @@ int front_screen_max_fps(void) { return g_screen_fps; }
 static int32_t g_mouse_rx, g_mouse_ry;
 static void push(void);
 void front_look_mode_changed(void) {} // Mac input sources are separate before and after look mode installs.
+void front_botw_touch_hud_mode_changed(void) {} // The BOTW relocation is an iOS virtual-pad feature.
 // The screen's refresh rate matched to the game's frame rate in fullscreen (front_screen_match, from PR #79; DM_SCREEN_MATCH=0 turns it off). 60 fps on a 144 Hz screen cannot be paced
 // evenly: the display link counts a tick on the refresh nearest each 1/60 s slot (nvn_mtl.m link_range), so frames stay up 2 and 3 refreshes in turn (13.9 / 20.8 ms) and Apple's HUD shows
 // the frame interval jumping between them. In fullscreen, a screen whose rate is not a multiple of the game's switches to the mode of the same size with the highest rate that is (144 → 120 Hz
@@ -213,9 +214,11 @@ static void pads_start(void) {
         _lookCenter = NSMakePoint(p.x - sx * radius / d, p.y - sy * radius / d);
         sx = p.x - _lookCenter.x; sy = p.y - _lookCenter.y; d = hypot(sx, sy);
     }
-    if (d > 0 && radius > 0) {
-        g_mouse_rx = (int32_t)lrint(sx / d * DM_STICK_MAX);
-        g_mouse_ry = (int32_t)lrint(sy / d * DM_STICK_MAX);
+    CGFloat dead = radius * 0.1, full = radius * 0.8;
+    if (d > dead && radius > 0) {
+        CGFloat magnitude = fmin((d - dead) / (full - dead), 1);
+        g_mouse_rx = (int32_t)lrint(sx / d * magnitude * DM_STICK_MAX);
+        g_mouse_ry = (int32_t)lrint(sy / d * magnitude * DM_STICK_MAX);
     } else g_mouse_rx = g_mouse_ry = 0;
     push();
     if (dx != 0 || dy != 0) dm_look_input(DM_LOOK_MOVE, dx, dy);

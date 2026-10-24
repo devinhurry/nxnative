@@ -107,12 +107,37 @@ def validate_main(ctx):
     assert tuple(word(o) for o in range(0xd5801c, 0xd58030, 4)) == (
         0xfd400be8, 0xf94017f3, 0xa941fbfd, 0x9100c3ff, 0xd65f03c0,
     ), 'BOTW shared getter epilogue changed; recheck OBS32 scratch-register liveness'
+    assert tuple(word(o) for o in range(0x276a0, 0x276d8, 4)) == (
+        0xd10243ff, 0xfd0023e8, 0xf9002ff9, 0xa904fbfd, 0xa9065ff8, 0xa90757f6,
+        0xa9084ff4, 0x910123fd, 0x39416008, 0xaa0003f3, 0x12000109, 0x3940744a,
+        0x2a0a0129, 0x72001d3f,
+    ), 'BOTW Pane::Calculate entry changed; recheck OBS34 pane and dirty-flag semantics'
+    assert tuple(word(o) for o in range(0x27ae0, 0x27aec, 4)) == (
+        0x39416268, 0x52800036, 0x360805a8,
+    ), 'BOTW Pane::Calculate post-matrix point changed; recheck OBS35 x19 pane and translation lanes'
+    # OBS35 is interior, so its stub may use x9-x17. Both its direct exit and
+    # the child-recursion path below use x8 and x19-x25 until the first blr;
+    # keep the verified tail bytes here as its register-liveness proof.
+    assert tuple(word(o) for o in range(0x27ae8, 0x27bd0, 4)) == (
+        0x360805a8, 0x39416668, 0x7103fd1f, 0x54000540, 0x1e230100, 0x52901028,
+        0x72a77008, 0xbd401a88, 0x91008279, 0x1e270101, 0x52800028, 0x1e200900,
+        0x39407e98, 0x39007e88, 0x1e210803, 0xbd001a83, 0xf9401677, 0xeb1902ff,
+        0x54000160, 0xf85f8ee8, 0xaa1503e1, 0xaa1703e0, 0xaa1403e2, 0xf9405108,
+        0x2a1603e3, 0xd63f0100, 0xf9400af7, 0xeb1902ff, 0x54fffee1, 0xbd001a88,
+        0x39007e98, 0x39416268, 0x32190108, 0x39016268, 0x39417268, 0x321c0108,
+        0x39017268, 0xfd4023e8, 0xa9484ff4, 0xa94757f6, 0xf9402ff9, 0xa9465ff8,
+        0xa944fbfd, 0x910243ff, 0xd65f03c0, 0xf9401677, 0x91008278, 0xeb1802ff,
+        0x54fffde0, 0xd503201f, 0xf85f8ee8, 0xaa1503e1, 0xaa1703e0, 0xaa1403e2,
+        0xf9405108, 0x2a1603e3, 0xd63f0100, 0xf9400af7,
+    ), 'BOTW Pane::Calculate OBS35 scratch-register liveness changed'
 
 VALIDATE = {'cd57b23fa4bbad65803d9788c01821ee': validate_main}
 
 # BOTW 1.9.0 main: aspect adjustments and the selected raw / filtered right-stick observations.
 OBS = {
   'cd57b23fa4bbad65803d9788c01821ee': [
+    (0x276a0, 34, 'd10243ff', 'Pane::Calculate entry: locate N_MainAll_00 and mark its global matrix dirty on touch HUD changes'),
+    (0x27ae4, 35, '52800036', 'Pane::Calculate after global matrix composition and before child recursion: offset N_MainAll_00 translation'),
     (0xeb4468, 22, 'a9be7bfd', 'projection update: apply the display aspect to the main camera before checking dirty flags'),
     (0xd44a2c, 23, 'a94a2269', 'UI 3D camera update: x19 owns the source lens at +0xa0 and projection at +0xa8; apply aspect before copying lens parameters'),
     (0xd58008, 33, 'f9409408', 'shared stick getter: snapshot the selected raw child pair before the native dead-zone/filter branches'),
@@ -122,4 +147,4 @@ OBS = {
 
 # The getter epilogue is reached by both the successful and zero-input branches. The profile's
 # validator checks that exact CFG and proves x9-x17 are dead before allowing OBS32 there.
-OBS_SAFE = {'cd57b23fa4bbad65803d9788c01821ee': {0xd5801c}}
+OBS_SAFE = {'cd57b23fa4bbad65803d9788c01821ee': {0xd5801c, 0x27ae4}}

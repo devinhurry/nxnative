@@ -136,8 +136,8 @@ static void test_look_drag(DmGamepad *view) {
     reset_look();
     FakeTouch *t = touch(600, 150);
     began(view, t); moved(view, t, 615, 165);
-    CHECK(g_rx > 0 && g_ry < 0 && abs(g_rx - 23170) <= 1 && abs(g_ry + 23170) <= 1,
-          "the owning look finger also publishes its legacy full-tilt right-stick direction");
+    CHECK(g_rx > 0 && g_ry < 0 && abs(g_rx + g_ry) <= 1 && g_rx < 32767 && -g_ry < 32767,
+          "moderate look drag keeps the proportional virtual right-stick magnitude");
     ended(view, t, 620, 170);
     CHECK(g_look_count == 4 && g_look_events[0].phase == DM_LOOK_BEGIN &&
           g_look_events[1].phase == DM_LOOK_MOVE && g_look_events[2].phase == DM_LOOK_MOVE &&
@@ -156,7 +156,20 @@ static void test_look_drag(DmGamepad *view) {
     near_value(one_x, split_x, "one and many move events have the same horizontal total");
     near_value(one_y, split_y, "one and many move events have the same vertical total");
 
-    reset_look(); t = touch(600, 150); began(view, t); moved(view, t, 700, 150);
+    reset_look(); t = touch(600, 150); began(view, t); moved(view, t, 602, 150);
+    CHECK(g_rx == 0 && g_ry == 0 && g_look_count == 2 && g_look_events[1].phase == DM_LOOK_MOVE,
+          "movement inside the stick dead zone stays zero while relative look still receives it");
+    ended(view, t, 602, 150);
+
+    reset_look(); t = touch(600, 150); began(view, t);
+    CGFloat radius = 60.0 * fmin(view.bounds.size.height / 430.0, 1.3);
+    moved(view, t, 600 + radius * 0.45, 150);
+    CHECK(abs(g_rx - 16384) <= 2 && g_ry == 0,
+          "a drag at 45 percent of the virtual-stick radius produces half tilt");
+    ended(view, t, 600 + radius * 0.45, 150);
+
+    reset_look(); t = touch(600, 150); began(view, t);
+    moved(view, t, 700, 150);
     CHECK(g_rx == 32767 && g_ry == 0, "look right-stick value clamps at full tilt when the finger passes its radius");
     moved(view, t, 701, 150);
     CHECK(g_rx == 32767 && g_ry == 0, "look right-stick centre recentres with the finger beyond its radius");
