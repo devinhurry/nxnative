@@ -12,6 +12,7 @@ static _Atomic float g_screen = 16.0f / 9.0f;
 static module_t *g_main;
 static uint64_t g_single_off, g_proj_off, g_vt_off, g_field_off, g_dirty_off;
 static unsigned g_ui_reg; static uint64_t g_ui_source, g_ui_projection, g_ui_fovy;
+static unsigned g_world_reg; static uint64_t g_world_projection;
 static const float GAME_ASPECT = 16.0f / 9.0f;
 
 static void aspect_config(void) {
@@ -50,16 +51,28 @@ void dm_aspect_touch_rect(float w, float h, float rect[4]) {
     rect[0] = (w - cw) / 2; rect[1] = (h - ch) / 2; rect[2] = cw; rect[3] = ch;
 }
 
-static void aspect_projection(const uint64_t *regs) {
-    uint8_t *singleton = *(uint8_t **)(g_main->base + g_single_off);
-    uint8_t *proj = (uint8_t *)regs[0];
-    if (!singleton || proj != singleton + g_proj_off) return;
+static void aspect_apply_projection(uint8_t *proj) {
     if (*(uint64_t *)proj != (uint64_t)(g_main->base + g_vt_off)) die("[RED] aspect: main camera projection vtable mismatch");
     float want = dm_aspect_ratio(), now;
     memcpy(&now, proj + g_field_off, sizeof now);
     if (now != want) { memcpy(proj + g_field_off, &want, sizeof want); proj[g_dirty_off] = 1; }
     static float logged;
     if (logged != want) { logged = want; LOG("aspect: camera %.4f at projection update; centered 16:9 UI", want); }
+}
+
+static void aspect_projection(const uint64_t *regs) {
+    uint8_t *singleton = *(uint8_t **)(g_main->base + g_single_off);
+    uint8_t *proj = (uint8_t *)regs[0];
+    if (!singleton || proj != singleton + g_proj_off) return;
+    aspect_apply_projection(proj);
+}
+
+// MainScreen3D copies the camera projection every frame. Correct that clone immediately after the copy,
+// before its matrix is rebuilt for world-space labels.
+static void aspect_world_projection(const uint64_t *regs) {
+    uint8_t *owner = (uint8_t *)regs[g_world_reg];
+    if (!owner) die("[RED] aspect: missing world-UI projection owner");
+    aspect_apply_projection(owner + g_world_projection);
 }
 
 // The game has rebuilt the UI model's source lens, and is about to copy it into its perspective projection.
@@ -89,6 +102,12 @@ void dm_aspect_install(void) {
     if (!gate_obs_present(OBS_ASPECT_PROJECTION)) die("[RED] aspect: projection gate missing; rewrite main with the current patch_nso.py");
     g_single_off = a; g_proj_off = b; g_vt_off = c; g_field_off = d; g_dirty_off = e;
     gate_obs_set(OBS_ASPECT_PROJECTION, aspect_projection);
+    if (*DM_GAME_CAMERA_WORLD_ASPECT) {
+        if (sscanf(DM_GAME_CAMERA_WORLD_ASPECT, "%u:0x%llx", &g_world_reg, &g_world_projection) != 2 || g_world_reg > 28 || g_world_projection > 0x10000)
+            die("[RED] aspect: invalid camera_world_aspect profile");
+        if (!gate_obs_present(OBS_ASPECT_WORLD_PROJECTION)) die("[RED] aspect: world-UI projection gate missing; rewrite main with the current patch_nso.py");
+        gate_obs_set(OBS_ASPECT_WORLD_PROJECTION, aspect_world_projection);
+    }
     if (*DM_GAME_CAMERA_UI_ASPECT) {
         unsigned long long source, projection, fovy;
         if (sscanf(DM_GAME_CAMERA_UI_ASPECT, "%u:%llx:%llx:%llx", &g_ui_reg, &source, &projection, &fovy) != 4 || g_ui_reg > 28 || source > 0x10000 || projection > 0x10000 || fovy > 0x10000)
