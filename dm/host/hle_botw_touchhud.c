@@ -290,8 +290,10 @@ static void botw_touchhud_matrix(const uint64_t *regs) {
 
 void dm_botw_touch_hud_install(void) {
 #if !TARGET_OS_IPHONE && !defined(DM_TEST_HOOKS)
-    return; // this virtual-control relocation is an iOS-only feature
+    const char *preview = getenv("DM_TOUCH_PREVIEW");
+    if (!preview || strcmp(preview, "1")) return; // Mac installation is opt-in through run_mac.py --touch-preview.
 #else
+#endif
     if (strcmp(DM_GAME_ID, "01007EF00011E000")) return;
     if (strcmp(dm_main_build(), BOTW_BUILD)) {
         LOG("BOTW touch HUD: disabled for main build %s (requires %s)", dm_main_build(), BOTW_BUILD);
@@ -305,7 +307,6 @@ void dm_botw_touch_hud_install(void) {
     atomic_store_explicit(&g_touchhud_available, 1, memory_order_release);
     front_botw_touch_hud_mode_changed();
     LOG("BOTW touch HUD: MainShortCut pane probes installed for build %s", BOTW_BUILD);
-#endif
 }
 
 #ifdef DM_TEST_HOOKS

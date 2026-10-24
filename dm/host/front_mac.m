@@ -15,6 +15,7 @@
 #include "hle.h"
 #include "pad_slots.h"
 #include "haptics_apple.h"
+#include "touchpad_geometry.h"
 #include <signal.h>
 #include <math.h>
 
@@ -26,10 +27,17 @@ void *front_metal_layer(void) { return (__bridge void *)g_layer; }
 static _Atomic int g_screen_fps;   // the window's screen's maximumFramesPerSecond, kept up to date when the window moves to another screen
 int front_screen_max_fps(void) { return g_screen_fps; }
 static int32_t g_mouse_rx, g_mouse_ry;
+static int32_t g_preview_lx, g_preview_ly;
+static uint64_t g_preview_buttons;
+static BOOL g_touch_preview_requested, g_touch_preview_active;
 static void push(void);
+static void preview_refresh(void);
+static void preview_set_map_region(int valid, float x, float y, float width, float height);
 void front_look_mode_changed(void) {} // Mac input sources are separate before and after look mode installs.
-void front_botw_touch_hud_mode_changed(void) {} // The BOTW relocation is an iOS virtual-pad feature.
-void front_botw_touch_hud_map_region(int valid, float x, float y, float width, float height) { (void)valid; (void)x; (void)y; (void)width; (void)height; } // No BOTW map hit region on Mac.
+void front_botw_touch_hud_mode_changed(void) { dispatch_async(dispatch_get_main_queue(), ^{ preview_refresh(); }); }
+void front_botw_touch_hud_map_region(int valid, float x, float y, float width, float height) {
+    dispatch_async(dispatch_get_main_queue(), ^{ preview_set_map_region(valid, x, y, width, height); });
+}
 // The screen's refresh rate matched to the game's frame rate in fullscreen (front_screen_match, from PR #79; DM_SCREEN_MATCH=0 turns it off). 60 fps on a 144 Hz screen cannot be paced
 // evenly: the display link counts a tick on the refresh nearest each 1/60 s slot (nvn_mtl.m link_range), so frames stay up 2 and 3 refreshes in turn (13.9 / 20.8 ms) and Apple's HUD shows
 // the frame interval jumping between them. In fullscreen, a screen whose rate is not a multiple of the game's switches to the mode of the same size with the highest rate that is (144 → 120 Hz
@@ -88,7 +96,10 @@ void front_screen_match(int fps) {
 }
 static void push(void) {
     int32_t lx = (g_d - g_a) * 32767, ly = (g_w - g_s) * 32767;
-    dm_input_set(g_btn, lx, ly, g_mouse_rx, g_mouse_ry);
+    if (g_touch_preview_active && (abs(g_preview_lx) + abs(g_preview_ly) > abs(lx) + abs(ly))) {
+        lx = g_preview_lx; ly = g_preview_ly;
+    }
+    dm_input_set(g_btn | (g_touch_preview_active ? g_preview_buttons : 0), lx, ly, g_mouse_rx, g_mouse_ry);
 }
 static int key_bit(unsigned short code) {
     switch (code) {
@@ -171,6 +182,241 @@ static void pads_start(void) {
     pads_changed(nil);
 }
 
+enum { PREVIEW_NONE, PREVIEW_STICK, PREVIEW_DPAD, PREVIEW_FACE, PREVIEW_BUTTON, PREVIEW_LOOK, PREVIEW_GAME };
+@interface DmTouchPreviewView : NSView
+- (void)setPreviewActive:(BOOL)active;
+- (void)setMapRegionValid:(BOOL)valid x:(float)x y:(float)y width:(float)width height:(float)height;
+- (void)cancelInput;
+- (dm_touchpad_point)dpadCenter;
+@end
+static DmTouchPreviewView *g_preview_view;
+
+static float preview_distance(NSPoint a, NSPoint b) { return hypotf((float)(a.x - b.x), (float)(a.y - b.y)); }
+static NSPoint preview_from_top(float x, float y, float height) { return NSMakePoint(x, height - y); }
+static dm_touchpad_point preview_pad_point(float x, float y) { return (dm_touchpad_point){x, y}; }
+
+@implementation DmTouchPreviewView {
+    BOOL _active, _mapValid, _mapTapConsumed, _mapInvalidAfterTap;
+    dm_touchpad_rect _mapRect;
+    int _owner, _button;
+    uint64_t _held;
+    NSPoint _down, _last, _stickCenter;
+    BOOL _hasTouch;
+}
+- (BOOL)isFlipped { return NO; }
+- (BOOL)acceptsFirstMouse:(NSEvent *)event { (void)event; return YES; }
+- (NSView *)hitTest:(NSPoint)p { return _active && !self.hidden && NSPointInRect(p, self.bounds) ? self : nil; }
+- (void)setPreviewActive:(BOOL)active {
+    if (_active != active && !active) { [self cancelInput]; _mapValid = NO; _mapTapConsumed = NO; _mapInvalidAfterTap = NO; }
+    _active = active; self.hidden = !active; [self setNeedsDisplay:YES];
+}
+- (void)setMapRegionValid:(BOOL)valid x:(float)x y:(float)y width:(float)width height:(float)height {
+    if (!_active) { _mapTapConsumed = NO; _mapInvalidAfterTap = NO; }
+    _mapValid = valid && isfinite(x) && isfinite(y) && isfinite(width) && isfinite(height) && width > 0 && height > 0;
+    if (!_mapValid) {
+        _mapRect = (dm_touchpad_rect){0};
+        if (_active && _mapTapConsumed) _mapInvalidAfterTap = YES;
+    } else if (_mapTapConsumed && !_mapInvalidAfterTap) {
+        _mapValid = NO; _mapRect = (dm_touchpad_rect){0};
+    } else {
+        _mapTapConsumed = NO; _mapInvalidAfterTap = NO;
+        _mapRect = (dm_touchpad_rect){x, y, width, height};
+    }
+    [self setNeedsDisplay:YES];
+}
+- (dm_touchpad_point)stickHome { return dm_touchpad_stick_home(self.bounds.size.width, self.bounds.size.height, 0, 0, 0, 0); }
+- (dm_touchpad_point)faceCenter { return dm_touchpad_face_center(self.bounds.size.width, self.bounds.size.height, 0, 0, 0, 0); }
+- (dm_touchpad_point)dpadCenter { return dm_touchpad_dpad_center(self.bounds.size.width, self.bounds.size.height, 0, 0, 0, 0); }
+- (float)u { return dm_touchpad_u((float)self.bounds.size.height); }
+- (BOOL)mapOwnsTop:(dm_touchpad_point)p {
+    if (!_mapValid) return NO;
+    float content[4]; dm_aspect_touch_rect((float)self.bounds.size.width, (float)self.bounds.size.height, content);
+    if (content[2] <= 0 || content[3] <= 0) return NO;
+    float x = (p.x - content[0]) / content[2], y = (p.y - content[1]) / content[3];
+    return x >= _mapRect.x && x < _mapRect.x + _mapRect.width && y >= _mapRect.y && y < _mapRect.y + _mapRect.height;
+}
+- (int)buttonAtTop:(dm_touchpad_point)p {
+    float u = self.u, w = self.bounds.size.width;
+    // Shoulder buttons share the iOS edge positions; the preview uses simple round hit shapes.
+    struct { int bit; float x, y, r; BOOL right; } keys[] = {
+        {8, DM_TP_ZL_X, DM_TP_ZL_Y, DM_TP_ZL_R, NO}, {6, DM_TP_L_X, DM_TP_L_Y, DM_TP_L_R, NO},
+        {9, DM_TP_ZL_X, DM_TP_ZL_Y, DM_TP_ZL_R, YES}, {7, DM_TP_L_X, DM_TP_L_Y, DM_TP_L_R, YES}
+    };
+    for (unsigned i = 0; i < sizeof keys / sizeof keys[0]; i++) {
+        float x = keys[i].right ? w - keys[i].x * u : keys[i].x * u;
+        if (preview_distance(NSMakePoint(p.x, p.y), NSMakePoint(x, keys[i].y * u)) < keys[i].r * u * 1.35f) return keys[i].bit;
+    }
+    float pillY = DM_TP_PILL_Y * u;
+    float minusX = w * .5f - DM_TP_PILL_DX * u, plusX = w * .5f + DM_TP_PILL_DX * u;
+    if (!(_mapValid || _mapTapConsumed) && fabsf(p.x - minusX) <= (DM_TP_PILL_W * u * .5f + 8 * u) && fabsf(p.y - pillY) <= (DM_TP_PILL_H * u * .5f + 8 * u)) return 11;
+    if (fabsf(p.x - plusX) <= (DM_TP_PILL_W * u * .5f + 8 * u) && fabsf(p.y - pillY) <= (DM_TP_PILL_H * u * .5f + 8 * u)) return 10;
+    return -1;
+}
+- (BOOL)leftStickOwnsTop:(dm_touchpad_point)p {
+    if ([self buttonAtTop:p] >= 0) return NO;
+    dm_touchpad_point face = [self faceCenter], dpad = [self dpadCenter], stick = [self stickHome];
+    float f = preview_distance(NSMakePoint(p.x, p.y), NSMakePoint(face.x, face.y)) /
+              (DM_TP_FACE_GAP * self.u + DM_TP_FACE_R * self.u * 1.6f);
+    float d = preview_distance(NSMakePoint(p.x, p.y), NSMakePoint(dpad.x, dpad.y)) /
+              (DM_TP_DPAD_R * self.u * DM_TP_DPAD_GRAB);
+    float s = preview_distance(NSMakePoint(p.x, p.y), NSMakePoint(stick.x, stick.y)) /
+              (DM_TP_STICK_R * self.u * DM_TP_STICK_GRAB);
+    return s <= 1.0f && s < f && s < d;
+}
+- (uint64_t)faceAtTop:(dm_touchpad_point)p {
+    dm_touchpad_point c = [self faceCenter]; float u = self.u;
+    return dm_touchpad_face_buttons(p.x, p.y, c.x, c.y, DM_TP_FACE_GAP * u, DM_TP_FACE_R * u * 1.25f);
+}
+- (uint64_t)dpadAtTop:(dm_touchpad_point)p {
+    dm_touchpad_point c = [self dpadCenter];
+    return dm_touchpad_dpad_buttons(p.x, p.y, c.x, c.y, DM_TP_DPAD_R * self.u);
+}
+- (void)publishButtons {
+    g_preview_buttons = _held;
+    push(); [self setNeedsDisplay:YES];
+}
+- (void)updateStick:(dm_touchpad_point)p {
+    float dx = p.x - _stickCenter.x, dy = p.y - _stickCenter.y, radius = DM_TP_STICK_R * self.u;
+    float d = hypotf(dx, dy);
+    if (d > radius) { dx *= radius / d; dy *= radius / d; }
+    dm_touchpad_stick_axis(dx, dy, radius, 0, &g_preview_lx, &g_preview_ly);
+    push(); [self setNeedsDisplay:YES];
+}
+- (dm_touchpad_point)topPoint:(NSEvent *)e {
+    NSPoint p = [self convertPoint:e.locationInWindow fromView:nil];
+    return preview_pad_point((float)p.x, (float)(self.bounds.size.height - p.y));
+}
+- (void)sendGameTouch:(dm_touchpad_point)p {
+    float r[4]; dm_aspect_touch_rect((float)self.bounds.size.width, (float)self.bounds.size.height, r);
+    if (r[2] <= 0 || r[3] <= 0) return;
+    dm_touch t = {0, fminf(fmaxf((p.x-r[0])/r[2], 0), .999f), fminf(fmaxf((p.y-r[1])/r[3], 0), .999f)};
+    dm_touch_set(&t, 1);
+}
+- (void)mouseDown:(NSEvent *)e {
+    dm_touchpad_point p = [self topPoint:e];
+    _down = _last = NSMakePoint(p.x, p.y); _hasTouch = YES; _held = 0; _owner = PREVIEW_NONE;
+    if (e.clickCount >= 2 && [self leftStickOwnsTop:p]) {
+        g_preview_buttons |= DM_BTN_LS; push(); g_preview_buttons &= ~DM_BTN_LS; push(); _hasTouch = NO; return;
+    }
+    int b = [self buttonAtTop:p];
+    if (b >= 0) { _owner = PREVIEW_BUTTON; _button = b; _held = 1ull << b; [self publishButtons]; return; }
+    // Match iOS touch-down ownership: nearby face/D-pad/stick controls get first refusal,
+    // the floating left stick owns its home region, then the relocated map takes the tap.
+    if ([self leftStickOwnsTop:p]) { _owner = PREVIEW_STICK; _stickCenter = NSMakePoint(p.x,p.y); [self updateStick:p]; return; }
+    dm_touchpad_point fc = [self faceCenter], dc = [self dpadCenter]; float u = self.u;
+    float fd = preview_distance(NSMakePoint(p.x,p.y), NSMakePoint(fc.x,fc.y));
+    float dd = preview_distance(NSMakePoint(p.x,p.y), NSMakePoint(dc.x,dc.y));
+    if (fd <= DM_TP_FACE_GAP*u + DM_TP_FACE_R*u*1.6f && fd <= dd) { _owner = PREVIEW_FACE; _held = [self faceAtTop:p]; [self publishButtons]; return; }
+    if (dd <= DM_TP_DPAD_R*u*DM_TP_DPAD_GRAB && dd < fd) { _owner = PREVIEW_DPAD; _held = [self dpadAtTop:p]; [self publishButtons]; return; }
+    if ([self mapOwnsTop:p]) {
+        _owner = PREVIEW_NONE; _hasTouch = NO;
+        _mapTapConsumed = YES; _mapInvalidAfterTap = NO; _mapValid = NO; _mapRect = (dm_touchpad_rect){0};
+        // The host publishes the invalid map region as part of this call. Do not
+        // synthesize a local invalidation here: a queued pre-tap valid callback
+        // must not be mistaken for the fresh collapsed-map publication.
+        dm_botw_touch_hud_map_tapped();
+        g_preview_buttons |= DM_BTN_MINUS; push(); g_preview_buttons &= ~DM_BTN_MINUS; push();
+        return;
+    }
+    if (dm_look_enabled() && p.x >= self.bounds.size.width * (1.0f-DM_TP_RSWIPE)) {
+        _owner = PREVIEW_LOOK; dm_look_input(DM_LOOK_BEGIN,0,0); return;
+    }
+    _owner = PREVIEW_GAME; [self sendGameTouch:p];
+}
+- (void)mouseDragged:(NSEvent *)e {
+    if (!_hasTouch) return;
+    dm_touchpad_point p = [self topPoint:e];
+    if (_owner == PREVIEW_STICK) [self updateStick:p];
+    else if (_owner == PREVIEW_FACE) { _held = [self faceAtTop:p]; [self publishButtons]; }
+    else if (_owner == PREVIEW_DPAD) { _held = [self dpadAtTop:p]; [self publishButtons]; }
+    else if (_owner == PREVIEW_GAME) [self sendGameTouch:p];
+    else if (_owner == PREVIEW_LOOK) {
+        float scale = fminf((float)self.bounds.size.width, (float)self.bounds.size.height);
+        if (scale > 0) dm_look_input(DM_LOOK_MOVE, (p.x-_last.x)/scale, (p.y-_last.y)/scale);
+    }
+    _last = NSMakePoint(p.x,p.y);
+}
+- (void)mouseUp:(NSEvent *)e {
+    if (!_hasTouch) return;
+    if (_owner == PREVIEW_GAME) dm_touch_set(NULL,0);
+    if (_owner == PREVIEW_LOOK) dm_look_input(DM_LOOK_END,0,0);
+    _owner = PREVIEW_NONE; _hasTouch = NO; _held = 0;
+    g_preview_lx = g_preview_ly = 0; g_preview_buttons = 0; push(); [self setNeedsDisplay:YES];
+}
+- (void)cancelInput {
+    if (_owner == PREVIEW_GAME) dm_touch_set(NULL,0);
+    if (_owner == PREVIEW_LOOK) dm_look_input(DM_LOOK_CANCEL,0,0);
+    _owner = PREVIEW_NONE; _hasTouch = NO; _held = 0;
+    g_preview_lx = g_preview_ly = 0; g_preview_buttons = 0;
+    dm_input_cancel_virtual_latch(DM_BTN_LS | DM_BTN_MINUS); push();
+}
+- (void)drawCircle:(NSPoint)c radius:(float)r fill:(float)alpha label:(NSString *)label {
+    NSRect rect = NSMakeRect(c.x-r, c.y-r, 2*r, 2*r);
+    [[NSColor colorWithWhite:1 alpha:alpha] setFill]; [[NSColor colorWithWhite:1 alpha:.44] setStroke];
+    NSBezierPath *path = [NSBezierPath bezierPathWithOvalInRect:rect]; path.lineWidth = 1.5; [path fill]; [path stroke];
+    if (label.length) {
+        NSDictionary *a = @{NSFontAttributeName:[NSFont systemFontOfSize:11 weight:NSFontWeightMedium], NSForegroundColorAttributeName:[NSColor colorWithWhite:1 alpha:.75]};
+        NSSize s = [label sizeWithAttributes:a]; [label drawAtPoint:NSMakePoint(c.x-s.width/2,c.y-s.height/2) withAttributes:a];
+    }
+}
+- (void)drawRect:(NSRect)dirtyRect {
+    (void)dirtyRect; if (!_active) return;
+    float h = self.bounds.size.height, w = self.bounds.size.width, u = self.u;
+    dm_touchpad_point sh = _owner == PREVIEW_STICK ? preview_pad_point((float)_stickCenter.x,(float)_stickCenter.y) : [self stickHome]; NSPoint ring = preview_from_top(sh.x,sh.y,h);
+    [self drawCircle:ring radius:DM_TP_STICK_R*u fill:.08 label:@""];
+    float ox = fminf(fmaxf((float)(_last.x-_stickCenter.x),-DM_TP_STICK_R*u),DM_TP_STICK_R*u);
+    float oy = fminf(fmaxf((float)(_last.y-_stickCenter.y),-DM_TP_STICK_R*u),DM_TP_STICK_R*u);
+    NSPoint knob = _owner == PREVIEW_STICK ? preview_from_top((float)_stickCenter.x+ox,(float)_stickCenter.y+oy,h) : ring;
+    [self drawCircle:knob radius:DM_TP_KNOB_R*u fill:.28 label:@""];
+    dm_touchpad_point fc = [self faceCenter];
+    for (int b=0;b<4;b++) {
+        dm_touchpad_point q = dm_touchpad_face_button(w,h,0,0,0,0,b);
+        static NSString *names[] = {@"A",@"B",@"X",@"Y"};
+        [self drawCircle:preview_from_top(q.x,q.y,h) radius:DM_TP_FACE_R*u fill:(_held & (1ull<<b))?.48:.15 label:names[b]];
+    }
+    struct { int bit; float x,y,r; BOOL right; NSString *name; } keys[] = {
+        {8,DM_TP_ZL_X,DM_TP_ZL_Y,DM_TP_ZL_R,NO,@"ZL"},{6,DM_TP_L_X,DM_TP_L_Y,DM_TP_L_R,NO,@"L"},
+        {9,DM_TP_ZL_X,DM_TP_ZL_Y,DM_TP_ZL_R,YES,@"ZR"},{7,DM_TP_L_X,DM_TP_L_Y,DM_TP_L_R,YES,@"R"}
+    };
+    for (unsigned i=0;i<sizeof keys/sizeof keys[0];i++) {
+        float x = keys[i].right ? w-keys[i].x*u : keys[i].x*u;
+        [self drawCircle:preview_from_top(x,keys[i].y*u,h) radius:keys[i].r*u fill:(_held & (1ull<<keys[i].bit))?.48:.15 label:keys[i].name];
+    }
+    float py=DM_TP_PILL_Y*u;
+    for (int b=10;b<=11;b++) {
+        if (b==11 && (_mapValid || _mapTapConsumed)) continue;
+        float x=w*.5f+(b==10?1:-1)*DM_TP_PILL_DX*u;
+        NSRect r=NSMakeRect(x-DM_TP_PILL_W*u*.5f,h-py-DM_TP_PILL_H*u*.5f,DM_TP_PILL_W*u,DM_TP_PILL_H*u);
+        [[NSColor colorWithWhite:1 alpha:(_held&(1ull<<b))?.48:.15] setFill]; [[NSColor colorWithWhite:1 alpha:.44] setStroke];
+        NSBezierPath *p=[NSBezierPath bezierPathWithRoundedRect:r xRadius:7 yRadius:7]; [p fill]; [p stroke];
+        NSString *name=b==10?@"+":@"−"; NSDictionary *a=@{NSFontAttributeName:[NSFont systemFontOfSize:11],NSForegroundColorAttributeName:[NSColor colorWithWhite:1 alpha:.75]};
+        NSSize s=[name sizeWithAttributes:a]; [name drawAtPoint:NSMakePoint(x-s.width/2,h-py-s.height/2) withAttributes:a];
+    }
+    (void)fc;
+}
+@end
+
+static void preview_set_map_region(int valid, float x, float y, float width, float height) {
+    [g_preview_view setMapRegionValid:valid x:x y:y width:width height:height];
+}
+static void preview_refresh(void) {
+    if (!g_preview_view) return;
+    BOOL connected = GCController.controllers.count != 0;
+    BOOL active = g_touch_preview_requested && !connected && dm_botw_touch_hud_available();
+    if (g_touch_preview_active != active) {
+        if (!active) [g_preview_view cancelInput];
+        g_touch_preview_active = active;
+        if (active) LOG("front end: BOTW Mac touch preview active (mouse single-pointer controls)");
+        else if (g_touch_preview_requested) LOG("front end: BOTW Mac touch preview paused while a physical controller is connected or HUD build is unavailable");
+    }
+    [g_preview_view setPreviewActive:active];
+    float rect[4]; dm_aspect_touch_rect((float)g_preview_view.bounds.size.width, (float)g_preview_view.bounds.size.height, rect);
+    dm_touchpad_point d = [g_preview_view dpadCenter];
+    if (active && rect[2] > 0 && rect[3] > 0)
+        dm_botw_touch_hud_publish(1, (d.x-rect[0])/rect[2], (d.y-rect[1])/rect[3]);
+    else dm_botw_touch_hud_publish(0,0,0);
+}
+
 // Mouse input stays on the content view, so titlebar, window-button and resize-edge clicks remain native AppKit events.
 // With look disabled, the left button is touchscreen finger 0; BOTW uses its held drag for relative camera look instead.
 @interface DmGameView : NSView {
@@ -189,6 +435,7 @@ static void pads_start(void) {
     _lookSize = s; _hasLookSize = YES;
     dm_aspect_set_display((float)(s.width / s.height));
     [self fitDrawable];
+    preview_refresh();
 }
 - (void)cancelLook {
     if (_lookHeld || (dm_look_enabled() && !_lookCanceled)) dm_look_input(DM_LOOK_CANCEL, 0, 0);
@@ -285,7 +532,14 @@ __attribute__((constructor)) static void hud_env(void) { if (getenv("DM_METAL_HU
 void front_run(void (*guest)(void)) {
     // A game: tell macOS its work is latency-critical, so the system does not trade its frame time for power while the frame rate is capped
     static id activity; activity = [[NSProcessInfo processInfo] beginActivityWithOptions:NSActivityUserInitiated | NSActivityLatencyCritical reason:@"game"];
-    if (!getenv("DM_WINDOW")) { guest(); return; }
+    const char *touch_preview = getenv("DM_TOUCH_PREVIEW");
+    g_touch_preview_requested = touch_preview && !strcmp(touch_preview, "1");
+    if (touch_preview && *touch_preview && strcmp(touch_preview, "0") && strcmp(touch_preview, "1"))
+        die("[RED] DM_TOUCH_PREVIEW must be 0 or 1");
+    if (!getenv("DM_WINDOW")) {
+        if (g_touch_preview_requested) die("[RED] DM_TOUCH_PREVIEW requires the Mac window front end (DM_WINDOW=1)");
+        guest(); return;
+    }
     @autoreleasepool {
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
@@ -301,7 +555,8 @@ void front_run(void (*guest)(void)) {
         // Fullscreen: without FullScreenPrimary the green button only zooms the window. The present path already scales
         // the game picture to fit the drawable with black bars around it, so fullscreen keeps the game's aspect ratio.
         win.collectionBehavior = NSWindowCollectionBehaviorFullScreenPrimary;
-        NSView *v = win.contentView = [[DmGameView alloc] initWithFrame:r];
+        DmGameView *gameView = [[DmGameView alloc] initWithFrame:r];
+        NSView *v = win.contentView = gameView;
         v.wantsLayer = YES;
         g_layer = [CAMetalLayer layer];
         g_layer.device = MTLCreateSystemDefaultDevice();
@@ -309,6 +564,12 @@ void front_run(void (*guest)(void)) {
         g_layer.contentsScale = win.backingScaleFactor;
         if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) { g_layer.developerHUDProperties = @{@"mode": @"default"}; LOG("front end: Metal performance HUD on (DM_METAL_HUD)"); }   // Apple's HUD over the game: frame rate, frame and GPU time, memory
         v.layer = g_layer;
+        if (g_touch_preview_requested) {
+            g_preview_view = [[DmTouchPreviewView alloc] initWithFrame:v.bounds];
+            g_preview_view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+            g_preview_view.wantsLayer = YES;
+            [gameView addSubview:g_preview_view];
+        }
         [(DmGameView *)v fitDrawable];
         [win center];
         [win makeKeyAndOrderFront:nil];
@@ -328,9 +589,10 @@ void front_run(void (*guest)(void)) {
             [NSNotificationCenter.defaultCenter addObserverForName:nm object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
                 GCController *c = n.object; int conn = n.name == GCControllerDidConnectNotification;
                 if (!c.extendedGamepad || g_merge) LOG("controller %s: %s%s", conn ? "connected" : "disconnected", pad_name(c), c.extendedGamepad ? "" : " (no extended gamepad profile: not used)");
-                pads_changed(conn ? nil : c); }];
+                pads_changed(conn ? nil : c); preview_refresh(); }];
         dm_haptics_apple_init();
         pads_start();
+        preview_refresh();
         [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown | NSEventMaskKeyUp handler:^NSEvent *(NSEvent *e) {
             if (e.window != win) return e;   // Only swallow keys for the game window; other windows such as the software keyboard input box receive typing as usual
             if (e.type == NSEventTypeKeyDown && (e.modifierFlags & NSEventModifierFlagCommand)) return e;   // ⌘ shortcuts go to the menu; a key released while ⌘ is held still reaches the game, or it would stay pressed
@@ -346,9 +608,9 @@ void front_run(void (*guest)(void)) {
         // content view by itself; only the scale factor has to be carried over to the screen the window ended up on. The screen's rate is matched in fullscreen only (screen_match_apply)
         [nc addObserverForName:NSWindowDidEnterFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; g_layer.contentsScale = win.backingScaleFactor; screen_match_apply(); }];
         [nc addObserverForName:NSWindowDidExitFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; g_layer.contentsScale = win.backingScaleFactor; screen_match_apply(); }];
-        [nc addObserverForName:NSWindowDidResignKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; [(DmGameView *)v cancelLook]; if (!win.miniaturized) dm_focus_set(2); }];
+        [nc addObserverForName:NSWindowDidResignKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; [(DmGameView *)v cancelLook]; [g_preview_view cancelInput]; if (!win.miniaturized) dm_focus_set(2); }];
         [nc addObserverForName:NSWindowDidBecomeKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_focus_set(1); }];
-        [nc addObserverForName:NSWindowDidMiniaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; [(DmGameView *)v cancelLook]; dm_focus_set(3); dm_audio_suspend(1); dm_gfx_suspend(1); }];
+        [nc addObserverForName:NSWindowDidMiniaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; [(DmGameView *)v cancelLook]; [g_preview_view cancelInput]; dm_focus_set(3); dm_audio_suspend(1); dm_gfx_suspend(1); }];
         [nc addObserverForName:NSWindowDidDeminiaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_gfx_suspend(0); dm_audio_suspend(0); dm_focus_set(2); }];
         // Guest thread: 64 MiB stack (the Switch main thread stack is specified by npdm; the host gives plenty)
         static guest_arg ga; ga.fn = guest;
