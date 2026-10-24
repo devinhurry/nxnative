@@ -10,6 +10,11 @@ import re
 NFB = 8
 
 def variant(msl, bindings, om_only_ok=False):
+    # main0_u (dmsh_build.py int_outputs: integer colour targets) is appended to the source after main0; the host takes it from the shader's own library, never from this variant.
+    # Its body reads main0's output struct, whose members the variant renames, and its samples were rewritten to fb0–fb7, which only main0 declares: 483 of Breath of the
+    # Wild's variants failed to compile once their cached copies were gone (use of undeclared identifier 'fb0'). The variant is built from the source without it
+    cut = msl.find('\nstruct main0_out_u\n')
+    if cut >= 0: msl = msl[:cut + 1]
     tex = {m.group(1) for m in re.finditer(r'texture2d<float> (\w+) \[\[id\(\d+\)\]\];', msl)}
     locn = {m.group(1): int(m.group(2)) for m in re.finditer(r'float4 (m_\d+) \[\[user\(locn(\d+)\)\]\];', msl.split('struct main0_in', 1)[-1].split('};', 1)[0])}
     reg = {b['msl_name']: b['reg'] for b in bindings if b.get('kind') == 'tex' and b.get('msl_name') and b.get('reg') is not None}
@@ -46,7 +51,9 @@ def variant(msl, bindings, om_only_ok=False):
     i0 = body.find('fragment main0_out main0(')
     i1 = body.find(')\n{', i0) if i0 >= 0 else -1   # end of signature: closing parenthesis immediately followed by a newline and an opening brace (parameter attributes contain brackets such as [[buffer(0)]])
     if i0 < 0 or i1 < 0: return None, 'main function signature not recognized'
-    body = body[:i1] + ''.join(f', float4 fb{k} [[color({k}), function_constant(FB_{k})]]' for k in range(NFB)) + body[i1:]
+    fbs = ''.join(f', float4 fb{k} [[color({k}), function_constant(FB_{k})]]' for k in range(NFB))
+    if body[i1 - 1] == '(': fbs = fbs[2:]   # main0() with no parameters at all: no leading comma (30 of Breath of the Wild's output-mapping-only variants)
+    body = body[:i1] + fbs + body[i1:]
     decl = ''.join(f'    {t} spv_o_{n} = {t}(0);\n' for t, n, c in outs)
     body = body.replace('    main0_out out = {};\n', '    main0_out out = {};\n' + decl, 1)
     for t, n, c in outs: body = body.replace(f'out.{n}', f'spv_o_{n}')

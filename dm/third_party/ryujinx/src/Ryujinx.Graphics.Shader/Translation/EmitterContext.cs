@@ -156,6 +156,20 @@ namespace Ryujinx.Graphics.Shader.Translation
 
                     this.Store(StorageKind.LocalMemory, ResourceManager.LocalGeometryOutputVertexCountMemoryId, Const(0));
                     this.Store(StorageKind.LocalMemory, ResourceManager.LocalGeometryOutputIndexCountMemoryId, Const(0));
+                    if (ResourceManager.Reservations.GeometryInputFixed)
+                    {
+                        this.Store(StorageKind.LocalMemory, ResourceManager.LocalGeometryPrimitiveOpenMemoryId, Const(0));
+                        for (int i = 0; i < ResourceManager.Reservations.OutputSizePerInvocation; i++)
+                            this.Store(StorageKind.LocalMemory, ResourceManager.LocalVertexDataMemoryId, Const(i), ConstF(0));
+                        void DefaultOne(IoVariable variable, int location, int component)
+                        {
+                            if (ResourceManager.Reservations.TryGetOffset(StorageKind.Output, variable, location, component, out int offset))
+                                this.Store(StorageKind.LocalMemory, ResourceManager.LocalVertexDataMemoryId, Const(offset), ConstF(1));
+                        }
+                        DefaultOne(IoVariable.Position, 0, 3);
+                        DefaultOne(IoVariable.PointSize, 0, 0);
+                        for (int i = 0; i < 32; i++) DefaultOne(IoVariable.UserDefined, i, 3);
+                    }
                 }
             }
         }
@@ -560,7 +574,7 @@ namespace Ryujinx.Graphics.Shader.Translation
 
                     Operand writtenIndices = this.Load(StorageKind.LocalMemory, ResourceManager.LocalGeometryOutputIndexCountMemoryId);
 
-                    int maxIndicesPerPrimitiveInvocation = TranslatorContext.Definitions.GetGeometryOutputIndexBufferStridePerInstance();
+                    int maxIndicesPerPrimitiveInvocation = TranslatorContext.Definitions.GetGeometryOutputIndexBufferStridePerInstance(ResourceManager.Reservations.GeometryInputFixed);
                     int maxIndicesPerPrimitive = maxIndicesPerPrimitiveInvocation * TranslatorContext.Definitions.ThreadsPerInputPrimitive;
 
                     this.BranchIfTrue(lblExit, this.ICompareGreaterOrEqualUnsigned(writtenIndices, Const(maxIndicesPerPrimitiveInvocation)));
@@ -570,7 +584,7 @@ namespace Ryujinx.Graphics.Shader.Translation
                     Operand primitiveIndex = this.Load(StorageKind.Input, IoVariable.GlobalId, Const(0));
                     Operand instanceIndex = this.Load(StorageKind.Input, IoVariable.GlobalId, Const(1));
                     Operand invocationId = this.Load(StorageKind.Input, IoVariable.GlobalId, Const(2));
-                    Operand vertexCount = this.Load(StorageKind.ConstantBuffer, vertexInfoCbBinding, Const((int)VertexInfoBufferField.VertexCounts), Const(0));
+                    Operand vertexCount = this.Load(StorageKind.ConstantBuffer, vertexInfoCbBinding, Const((int)(ResourceManager.Reservations.GeometryInputFixed ? VertexInfoBufferField.GeometryCounts : VertexInfoBufferField.VertexCounts)), Const(0));
                     Operand primitiveId = this.IAdd(this.IMultiply(instanceIndex, vertexCount), primitiveIndex);
                     Operand ibOffset = this.IMultiply(primitiveId, Const(maxIndicesPerPrimitive));
                     ibOffset = this.IAdd(ibOffset, this.IMultiply(invocationId, Const(maxIndicesPerPrimitiveInvocation)));

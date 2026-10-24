@@ -5,7 +5,7 @@
 # `s<reg>` marks a storage slot the shader never writes (unwritten); the host notes GPU writes for every other storage binding (nvn_mtl.m sbw_note).
 # The host (nvn_mtl.m cb_ext) reads only that much of a binding when it has to copy one: a uniform block the game updates in part inside a render pass (ubp_get). Breath of the Wild binds
 # a 64 KiB block to the vertex stage and updates its first 64 bytes 221 times a frame, while its vertex shaders read at most 544 bytes of it.
-# The host loads the table only when its header names its chain version (like c1_full.tsv); regenerate it after each shader build
+# The host loads the table only when its header names its library's chain version and inputs stamp (like c1_full.tsv); dmsh_build.py makes it after each full build
 import datetime
 import json
 import multiprocessing
@@ -15,6 +15,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from c1_guard import Interval, definitions_of, known   # noqa: E402
+import dmsh_chain   # noqa: E402
 
 MAX = 65536
 
@@ -89,7 +90,7 @@ def main():
     os.makedirs(os.path.dirname(output), exist_ok=True)
     with open(output, "w", encoding="utf-8", newline="") as stream:
         stamp = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
-        stream.write(f"# chain {os.path.basename(version_dir)} {stamp}\n")
+        stream.write(f"{dmsh_chain.table_head(version_dir)} {stamp}\n")   # the library's chain version and the profile inputs it was built from
         stream.write("# shader key, then reg:bytes for each uniform slot whose reads stay inside its first bytes, and s<reg> for each storage slot it never writes (cb_extent.py)\n")
         for line in rows: stream.write(line + "\n")
     print(f"bounded uniform reads: {slots} slots; storage slots never written: {ro}; {len(rows)} shaders")

@@ -5363,6 +5363,16 @@ _nvnth_535:
     stadd x17, [x16]
     ldr x17, [x16, #8]
     br x17
+    .globl _nvnth_536
+_nvnth_536:
+    adrp x16, _nvn_slot@PAGE
+    add x16, x16, _nvn_slot@PAGEOFF
+    mov x17, #8576
+    add x16, x16, x17
+    mov x17, #1
+    stadd x17, [x16]
+    ldr x17, [x16, #8]
+    br x17
     .data
     .p2align 3
     .globl _nvn_thunk
@@ -5903,6 +5913,7 @@ _nvn_thunk:
     .quad _nvnth_533
     .quad _nvnth_534
     .quad _nvnth_535
+    .quad _nvnth_536
     .globl _nvn_names
 _nvn_names:
     .quad Ln0
@@ -6441,6 +6452,7 @@ _nvn_names:
     .quad Ln533
     .quad Ln534
     .quad Ln535
+    .quad Ln536
     .cstring
 Ln0: .asciz "nvnDeviceBuilderSetDefaults"
 Ln1: .asciz "nvnDeviceBuilderSetFlags"
@@ -6978,3 +6990,4 @@ Ln532: .asciz "nvnCommandBufferSetZCullZF32CompressionEnable"
 Ln533: .asciz "nvnDeviceSetAutomaticCheckpointsMask"
 Ln534: .asciz "nvnProgramGetSubtileSize"
 Ln535: .asciz "nvnTextureBuilderGetViewOffset"
+Ln536: .asciz "nvnSetExternalDebuggerEnabledNVX"

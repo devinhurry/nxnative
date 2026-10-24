@@ -6,6 +6,7 @@ import unittest
 from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[3] / 'scripts/build_ipa_from_nsp.py'
+REPO = SCRIPT.parent.parent
 spec = importlib.util.spec_from_file_location('build_ipa_from_nsp_cache_test', SCRIPT)
 nsp = importlib.util.module_from_spec(spec); spec.loader.exec_module(nsp)
 
@@ -15,7 +16,7 @@ class Profile:
         self.dir = root; self.id = 'fixture'
         self.rows = [('shader_groups', ['a=b']), ('shader_note', ['test']), ('modules', ['main']), ('camera_aspect', ['old'])]
         for name in ('shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'shader_facts_manual.tsv',
-                     'shader_map.tsv.conflicts.tsv', 'bf_want.tsv', 'dmsh_chain.h'):
+                     'shader_map.tsv.conflicts.tsv', 'bf_want.tsv'):
             (root / name).write_text('table\n')
         self._write_game()
 
@@ -132,7 +133,7 @@ class SplitCache(unittest.TestCase):
 
     def test_translation_key_ignores_camera_rows_but_tracks_shader_rows(self):
         def key():
-            return nsp.fingerprint(('files', nsp.shader_profile_files(self.profile)), nsp.shader_profile_rules(self.profile))
+            return nsp.fingerprint(('files', nsp.shader_profile_files(REPO, self.profile)), nsp.shader_profile_rules(self.profile))
         first = key()
         self.profile.rows.append(('camera_look', ['camera']))
         self.assertEqual(first, key())

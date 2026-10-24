@@ -534,3 +534,4 @@ nvnCommandBufferSetZCullZF32CompressionEnable
 nvnDeviceSetAutomaticCheckpointsMask
 nvnProgramGetSubtileSize
 nvnTextureBuilderGetViewOffset
+nvnSetExternalDebuggerEnabledNVX

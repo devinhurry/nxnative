@@ -142,7 +142,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Transforms
             Operand baseIndexOffset = GenerateBaseOffset(
                 resourceManager,
                 node,
-                definitions.GetGeometryOutputIndexBufferStride(),
+                definitions.GetGeometryOutputIndexBufferStride(resourceManager.Reservations.GeometryInputFixed),
                 definitions.ThreadsPerInputPrimitive);
             Operand outputBaseIndex = Local();
             node.List.AddBefore(node, new Operation(Instruction.Add, outputBaseIndex, new[] { baseIndexOffset, outputPrimIndex }));
@@ -197,7 +197,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Transforms
             Operand baseIndexOffset = GenerateBaseOffset(
                 resourceManager,
                 node,
-                definitions.GetGeometryOutputIndexBufferStride(),
+                definitions.GetGeometryOutputIndexBufferStride(resourceManager.Reservations.GeometryInputFixed),
                 definitions.ThreadsPerInputPrimitive);
             Operand outputBaseIndex = Local();
             node.List.AddBefore(node, new Operation(Instruction.Add, outputBaseIndex, new[] { baseIndexOffset, outputPrimIndex }));
@@ -212,7 +212,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Transforms
         private static Operand GenerateBaseOffset(ResourceManager resourceManager, LinkedListNode<INode> node, int stride, int threadsPerInputPrimitive)
         {
             Operand primitiveId = Local();
-            GeneratePrimitiveId(resourceManager, node, primitiveId);
+            GeneratePrimitiveId(resourceManager, node, primitiveId, true);
 
             Operand baseOffset = Local();
             node.List.AddBefore(node, new Operation(Instruction.Multiply, baseOffset, new[] { primitiveId, Const(stride) }));
@@ -303,8 +303,10 @@ namespace Ryujinx.Graphics.Shader.Translation.Transforms
             return vertexElemOffset;
         }
 
-        private static LinkedListNode<INode> GeneratePrimitiveId(ResourceManager resourceManager, LinkedListNode<INode> node, Operand dest)
+        private static LinkedListNode<INode> GeneratePrimitiveId(ResourceManager resourceManager, LinkedListNode<INode> node, Operand dest, bool outputIndex = false)
         {
+            if (resourceManager.Reservations.GeometryInputFixed && !outputIndex)
+                return node.List.AddBefore(node, new Operation(Instruction.Load, StorageKind.Input, dest, new[] { Const((int)IoVariable.GlobalId), Const(0) }));
             int vertexInfoCbBinding = resourceManager.Reservations.VertexInfoConstantBufferBinding;
 
             Operand vertexCount = Local();
@@ -312,7 +314,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Transforms
                 Instruction.Load,
                 StorageKind.ConstantBuffer,
                 vertexCount,
-                new[] { Const(vertexInfoCbBinding), Const((int)VertexInfoBufferField.VertexCounts), Const(0) }));
+                new[] { Const(vertexInfoCbBinding), Const((int)(resourceManager.Reservations.GeometryInputFixed ? VertexInfoBufferField.GeometryCounts : VertexInfoBufferField.VertexCounts)), Const(0) }));
 
             Operand vertexIndex = Local();
             node.List.AddBefore(node, new Operation(

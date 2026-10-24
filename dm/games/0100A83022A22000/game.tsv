@@ -28,7 +28,7 @@ zip_store	.bin:.bnk:.dat:.mp4:.nro:.otf:.metallib
 # ---- Memory ----
 # The NPDM declares 16 MB of system resource (virtual address memory), and main never calls SetMemoryHeapSize: everything lives in address regions of the alias region.
 # Measured with a 64 GB alias region from boot into the first level (probes on VammManager::AllocateAddressRegion's success path sdk+0x13bf8c, x21 size / x22 address, and the MapPhysicalMemory log):
-#   - malloc's StandardAllocator, 40 GB of address space (main+0x28bff4); 2.19 GB used, 1.75 GB of it FNA3D's GPU heap (FNA3D_CreateDevice). patch_nso.py cuts the region to 2.5 GB;
+#   - malloc's StandardAllocator, 40 GB of address space (main+0x28bff4); 2.19 GB used, 1.75 GB of it FNA3D's GPU heap (FNA3D_CreateDevice). patches.py cuts the region to 2.5 GB;
 #   - the .NET GC's region range: 5 × its hard limit, 768 MB (75% of the 1 GB its GetPhysicalMemoryLimit, main+0x28bffc, returns), i.e. 3.75 GB. game_env below sets 1.5 GB, which the GC
 #     uses from both ends (756 MB from the start, 748 MB from the end, 718 MB mapped into the first level);
 #   - a few small regions (bookkeeping, thread-local blocks), under 5 MB.

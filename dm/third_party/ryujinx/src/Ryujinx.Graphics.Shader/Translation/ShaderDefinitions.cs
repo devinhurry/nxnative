@@ -337,8 +337,12 @@ namespace Ryujinx.Graphics.Shader.Translation
             return _graphicsState.AttributeTypes[location].HasFlag(AttributeType.PackedRgb10A2Signed);
         }
 
-        public int GetGeometryOutputIndexBufferStridePerInstance()
+        public int GetGeometryOutputIndexBufferStridePerInstance(bool fixedInput = false)
         {
+            // Even a strip with fewer than three vertices can be ended. Empty
+            // ends are ignored by the fixed-input emitter, so at most one
+            // restart per emitted vertex is needed.
+            if (fixedInput) return MaxOutputVertices * 2;
             return MaxOutputVertices + OutputTopology switch
             {
                 OutputTopology.LineStrip => MaxOutputVertices / 2,
@@ -347,9 +351,9 @@ namespace Ryujinx.Graphics.Shader.Translation
             };
         }
 
-        public int GetGeometryOutputIndexBufferStride()
+        public int GetGeometryOutputIndexBufferStride(bool fixedInput = false)
         {
-            return GetGeometryOutputIndexBufferStridePerInstance() * ThreadsPerInputPrimitive;
+            return GetGeometryOutputIndexBufferStridePerInstance(fixedInput) * ThreadsPerInputPrimitive;
         }
     }
 }
