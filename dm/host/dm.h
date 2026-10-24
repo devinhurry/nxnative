@@ -76,11 +76,13 @@ enum { OBS_MOVIE_RING_LINK = 19, OBS_MOVIE_RING_UNLINK = 20,   // Metroid Dread 
        OBS_ASPECT_PROJECTION = 22, OBS_ASPECT_UI_CAMERA = 23, // BOTW guest camera updates (hle_aspect.c)
        OBS_BOTW_LOOK_VECTOR = 32,                            // BOTW 1.9.0 shared post-filter stick vector (hle_look.c)
        OBS_BOTW_LOOK_SOURCE = 33,                            // BOTW 1.9.0 selected raw stick pair before filtering (hle_look.c)
-       OBS_MAX = 34 };
+       OBS_BOTW_TOUCH_PANE = 34, OBS_BOTW_TOUCH_MATRIX = 35, // BOTW 1.9.0 MainShortCut equipment subtree (hle_botw_touchhud.c)
+       OBS_MAX = 36 };
 void gate_obs_set(int id, void (*fn)(const uint64_t *regs));
 int gate_obs_present(int id);
 void dm_aspect_install(void);
 void dm_look_install(void);
+void dm_botw_touch_hud_install(void);
 uint64_t now_ns(void);
 uint64_t guest_ns(void);              // Guest clock (hle_os.c; does not advance while frozen, guest_clock_freeze)
 int dm_detclock_enabled(void);

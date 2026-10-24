@@ -178,8 +178,11 @@ int dm_opmode(void);   // hle_oe.c: 0 = handheld
 
 @interface DmGamepad : UIView
 - (void)checkLookGeometry;
+- (void)publishTouchHudForController:(BOOL)connected;
+- (void)refreshTouchHudMode;
 @end
 static __weak DmGamepad *g_view;
+void front_botw_touch_hud_mode_changed(void) { dispatch_async(dispatch_get_main_queue(), ^{ [g_view refreshTouchHudMode]; }); }
 
 @implementation DmGamepad {
     NSMapTable<UITouch *, NSNumber *> *_owner;     // touch → control (with the key for C_BTN or the stick for C_STICK, << 8)
@@ -215,6 +218,7 @@ static CATextLayer *label(CALayer *parent, NSString *s) {
     [parent addSublayer:t]; return t;
 }
 static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   // keys shown only in the 3D layout
+static BOOL botwTouchHudSupported(void) { return dm_botw_touch_hud_available(); }
 
 - (instancetype)initWithFrame:(CGRect)f {
     if ((self = [super initWithFrame:f])) {
@@ -261,9 +265,30 @@ static BOOL fullOnly(int b) { return b == B_LS || b == B_RS || b >= B_LEFT; }   
 - (void)applyLayout {   // show / hide the controls for the current layout
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     for (int b = 0; b < B_N; b++) _key[b].hidden = _tap || (fullOnly(b) && !_full);
+    BOOL hideDpadArt = botwTouchHudSupported() && _full && !_tap && !_padOff;
+    _key[B_LEFT].hidden = _key[B_UP].hidden = _key[B_RIGHT].hidden = _key[B_DOWN].hidden = hideDpadArt;
     _ring.hidden = _knob.hidden = _tap;
     _swapLabel.string = _tap ? @"Tap" : _full ? @"3D" : @"2D";
     [CATransaction commit];
+    [self publishTouchHudForController:_padOff];
+}
+- (void)publishTouchHudForController:(BOOL)connected {
+    BOOL active = botwTouchHudSupported() && _full && !_tap && !connected;
+    if (!active || self.bounds.size.width <= 0 || self.bounds.size.height <= 0) {
+        dm_botw_touch_hud_publish(0, 0, 0);
+        return;
+    }
+    CGPoint c = self.dpadCenter;
+    float rect[4]; dm_aspect_touch_rect((float)self.bounds.size.width, (float)self.bounds.size.height, rect);
+    float x = (float)((c.x - rect[0]) / rect[2]);
+    float y = (float)((c.y - rect[1]) / rect[3]);
+    dm_botw_touch_hud_publish(1, x, y);
+}
+- (void)refreshTouchHudMode {
+    BOOL hideDpadArt = dm_botw_touch_hud_available() && _full && !_tap && !_padOff;
+    _key[B_LEFT].hidden = _key[B_UP].hidden = _key[B_RIGHT].hidden = _key[B_DOWN].hidden = hideDpadArt;
+    [self publishTouchHudForController:_padOff];
+    [self setNeedsLayout];
 }
 - (void)nextLayout {   // 2D → 3D (→ Tap in handheld mode) → 2D: release every touch first (no key stays held), save, lay out again
     int l = _tap ? 0 : _full ? (dm_opmode() == 0 ? 2 : 0) : 1;
@@ -346,7 +371,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     int32_t ax[4] = {0};
     for (int i = 0; i < 2; i++) {
         CGPoint o = [self knobOffset:i]; CGFloat R = [self stickR:i], d = hypot(o.x, o.y), dz = R * K_DEAD;
-        BOOL full = i == 1;                                   // the right stick is a camera nudge: any movement is full tilt
+        BOOL full = i == 1 && !dm_look_enabled();             // keep legacy full-tilt swipes except when BOTW consumes the analog virtual stick
         if (d <= (full ? 0 : dz)) continue;
         CGFloat m = (full ? 1.0 : fmin((d - dz) / (R * K_FULL - dz), 1)) / d;
         ax[i * 2] = (int32_t)lrint(o.x * m * 32767); ax[i * 2 + 1] = (int32_t)lrint(-o.y * m * 32767);   // host: up is positive; rounded so full tilt is exactly 32767
@@ -551,7 +576,10 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
     setPath(_knob, circlePath(CGPointMake(k, k), k));
     CAShapeLayer *in = (CAShapeLayer *)_knob.sublayers.firstObject; CGPathRef ip = circlePath(CGPointMake(k, k), k * 0.62);
     in.frame = _knob.bounds; in.path = ip; CGPathRelease(ip);
+    BOOL hideDpadArt = botwTouchHudSupported() && _full && !_tap && !_padOff;
+    _key[B_LEFT].hidden = _key[B_UP].hidden = _key[B_RIGHT].hidden = _key[B_DOWN].hidden = hideDpadArt;
     [CATransaction commit];
+    [self publishTouchHudForController:_padOff];
     [self refresh];
 }
 - (void)safeAreaInsetsDidChange { [super safeAreaInsetsDidChange]; [self setNeedsLayout]; }
@@ -594,7 +622,8 @@ static void read_pad(GCExtendedGamepad *g) {
         read_pad(c.extendedGamepad);
     }
     if (!any) { dm_haptics_apple_controller(0, nil); pthread_mutex_lock(&g_mu); g_pad_btn = 0; g_pad_lx = g_pad_ly = g_pad_rx = g_pad_ry = 0; pthread_mutex_unlock(&g_mu); publish(); }
-    dispatch_async(dispatch_get_main_queue(), ^{ self->_padOff = any; self->_controls.hidden = any; [self reset]; });
+    [self publishTouchHudForController:any];   // publish hot-plug state before the guest's next pane calculation
+    dispatch_async(dispatch_get_main_queue(), ^{ self->_padOff = any; self->_controls.hidden = any; [self reset]; [self setNeedsLayout]; });
 }
 @end
 

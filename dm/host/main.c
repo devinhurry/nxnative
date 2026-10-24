@@ -96,6 +96,7 @@ static void host_preload(int argc, char **argv) {
     load_modules(argv[1], names, n);
     dm_aspect_install();   // validate support and update the camera on the guest projection-update gate
     dm_look_install();     // validate BOTW's shared native stick-vector gate before enabling relative input
+    dm_botw_touch_hud_install(); // validate BOTW's MainShortCut pane transform gates
     dm_sdk_major();   // logs the SDK version, which SDK-dependent behaviour follows (loader.c)
     uint64_t ta = now_ns();
     probe_install();   // DM_PROBE probes (for diagnostics)
