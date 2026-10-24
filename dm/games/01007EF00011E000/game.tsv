@@ -25,6 +25,7 @@ aspect_canvas	ecb4242efaf4042b
 # The main camera is a sead::PerspectiveProjection at +0x38 in the singleton at main+0x1e39d10 (vtable main+0x1d05380, aspect +0xb0, dirty +8); 1.9.0 build cd57b23fa4bbad65803d9788c01821ee.
 # UI model camera update at main+0xd44a2c: x19 owns the source camera (+0xa0) and projection (+0xa8); source fovy/offsets are at +0x74.
 camera_ui_aspect	19:0xa0:0xa8:0x74
+camera_world_aspect	19:0x41c0
 camera_aspect	cd57b23fa4bbad65803d9788c01821ee:0x1e39d10:0x38:0x1d05380:0xb0:0x8
 # BOTW 1.9.0 relative look enters the native right-stick vector after filtering; gain is a normalized-input impulse scale.
 camera_look	cd57b23fa4bbad65803d9788c01821ee:0xd5801c:0x128:0x1e93890:0x3c:60

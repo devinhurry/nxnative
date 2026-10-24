@@ -101,6 +101,18 @@ FRAME_STEP = {'cd57b23fa4bbad65803d9788c01821ee': frame_step}
 # checked here with the per-game rewrite rules, rather than embedding BOTW addresses in patch_nso.py.
 def validate_main(ctx):
     word = lambda off: struct.unpack_from('<I', ctx.image, off)[0]
+    assert tuple(word(o) for o in range(0xe1a61c, 0xe1a62c, 4)) == (
+        0x97fd1459, 0x97fd1470, 0xb40002c0, 0xf960de68,
+    ), 'BOTW MainScreen3D camera copy / successful-result branch changed'
+    assert tuple(word(o) for o in range(0xe1a628, 0xe1a674, 4)) == (
+        0xf960de68, 0xb4000288, 0xbd401000, 0x52885008, 0x8b080268, 0xbd400801,
+        0x1e213800, 0x1e2c1001, 0x1e210800, 0xbd000100, 0xbd401400, 0xbd400c02,
+        0x1e223800, 0x1e210803, 0xbd000503, 0xb0007fc8, 0x913b4108, 0xf9400100,
+        0xb4000060,
+    ), 'BOTW MainScreen3D post-copy point or x19 owner liveness changed'
+    assert tuple(word(o) for o in range(0xe1a67c, 0xe1a688, 4)) == (
+        0xa9414ff4, 0xa8c27bfd, 0xd65f03c0,
+    ), 'BOTW MainScreen3D early return scratch-register liveness changed'
     assert tuple(word(o) for o in range(0xd58008, 0xd58018, 4)) == (
         0xf9409408, 0x910023e0, 0xf90007e8, 0x941fbe5f,
     ), 'BOTW raw stick source sequence changed; recheck OBS33 child pointer and raw pair location'
@@ -140,11 +152,13 @@ OBS = {
     (0x27ae4, 35, '52800036', 'Pane::Calculate after global matrix composition and before child recursion: offset N_MainAll_00 translation'),
     (0xeb4468, 22, 'a9be7bfd', 'projection update: apply the display aspect to the main camera before checking dirty flags'),
     (0xd44a2c, 23, 'a94a2269', 'UI 3D camera update: x19 owns the source lens at +0xa0 and projection at +0xa8; apply aspect before copying lens parameters'),
+    (0xe1a628, 24, 'f960de68', 'MainScreen3D update: correct its copied projection before rebuilding the world-label view'),
     (0xd58008, 33, 'f9409408', 'shared stick getter: snapshot the selected raw child pair before the native dead-zone/filter branches'),
     (0xd5801c, 32, 'fd400be8', 'shared normalized stick getter: inject one frame of relative input after native filtering and before return'),
   ],
 }
 
-# The getter epilogue is reached by both the successful and zero-input branches. The profile's
-# validator checks that exact CFG and proves x9-x17 are dead before allowing OBS32 there.
-OBS_SAFE = {'cd57b23fa4bbad65803d9788c01821ee': {0xd5801c, 0x27ae4}}
+# OBS_SAFE sites are interior instructions whose scratch-register liveness is established below:
+# 0xe1a628 follows MainScreen3D's successful camera check and the profile verifies x9-x17 stay unread
+# through the world-view setup until the next call; the getter / pane sites have their own proofs.
+OBS_SAFE = {'cd57b23fa4bbad65803d9788c01821ee': {0xd5801c, 0x27ae4, 0xe1a628}}
