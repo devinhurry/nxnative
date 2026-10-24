@@ -29,7 +29,9 @@ void dm_aspect_touch_rect(float w, float h, float rect[4]);
 // normalized to the centered 16:9 touch rectangle (top-left origin). Other
 // profiles ignore this state. May be called from the UI thread.
 void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
+void dm_botw_touch_hud_map_tapped(void);   // consume the published host hit region until native panes are calculated again
 int dm_botw_touch_hud_available(void);
+void front_botw_touch_hud_map_region(int valid, float x, float y, float width, float height);
 void front_botw_touch_hud_mode_changed(void);
 
 // Touchscreen (implemented by the host's hle_touch.c; called by the iOS / Mac front end): whenever the set of touch points changes (down / move / up / cancel) the whole set is pushed once; n = 0 = all lifted.

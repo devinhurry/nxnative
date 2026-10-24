@@ -27,11 +27,22 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
 - (void)dm_testSetTouchHudModeFull:(BOOL)full tap:(BOOL)tap connected:(BOOL)connected;
 - (BOOL)dm_testDpadArtworkHidden;
 - (BOOL)dm_testControlsHidden;
+- (BOOL)dm_testL3ArtworkHidden;
+- (BOOL)dm_testMinusArtworkHidden;
+- (BOOL)dm_testL3GestureEnabled;
+- (BOOL)dm_testLeftStickOwnsPoint:(CGPoint)point;
+- (BOOL)dm_testSetBotwMapRectValid:(BOOL)valid x:(CGFloat)x y:(CGFloat)y width:(CGFloat)width height:(CGFloat)height;
+- (int)dm_testBtnAt:(CGPoint)point;
+- (BOOL)dm_testBotwMapOwnsPoint:(CGPoint)point;
+- (void)dm_testPulseBotwL3;
 - (void)reset;
 - (void)padsChanged;
 - (void)deviceOrientationChanged;
 - (CGPoint)facePos:(int)button;
 - (CGPoint)clickCenter:(int)button;
+- (CGPoint)stickHome;
+- (CGPoint)dpadCenter;
+- (CGRect)pillRect:(int)button;
 @end
 
 @interface FakeTouch : UITouch
@@ -54,6 +65,9 @@ static uint64_t g_pad_buttons;
 static int32_t g_pad_lx, g_pad_ly, g_pad_rx, g_pad_ry;
 static int g_pad_player;
 static int g_input_sets, g_pad_sets;
+static int g_virtual_latch_cancels;
+static uint64_t g_virtual_latch_cancel_mask;
+static uint64_t g_input_history[512];
 static dm_touch g_last_touch;
 static int g_touch_count, g_touch_sets;
 static dm_motion g_motion_samples[16];
@@ -81,8 +95,10 @@ void dm_look_input(int phase, float dx, float dy) {
 }
 void dm_input_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     ++g_input_sets;
+    if (g_input_sets <= (int)(sizeof g_input_history / sizeof g_input_history[0])) g_input_history[g_input_sets - 1] = buttons;
     g_buttons = buttons; g_lx = lx; g_ly = ly; g_rx = rx; g_ry = ry;
 }
+void dm_input_cancel_virtual_latch(uint64_t buttons) { ++g_virtual_latch_cancels; g_virtual_latch_cancel_mask = buttons; }
 void dm_pad_set_player(int player, uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     ++g_pad_sets;
     g_pad_player = player;
@@ -142,10 +158,13 @@ static void sum_moves(float *dx, float *dy) {
 static void test_dpad_art_visibility(DmGamepad *view) {
     g_botw_touchhud_available = NO;
     [view dm_testSetTouchHudModeFull:NO tap:NO connected:NO];
+    [view layoutIfNeeded];
     CHECK([view dm_testDpadArtworkHidden], "2D layout keeps the 3D D-pad artwork hidden when BOTW relocation is unavailable");
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+    [view layoutIfNeeded];
     CHECK(![view dm_testDpadArtworkHidden], "ordinary 3D layout keeps D-pad artwork visible when BOTW relocation is unavailable");
     [view dm_testSetTouchHudModeFull:YES tap:YES connected:NO];
+    [view layoutIfNeeded];
     CHECK([view dm_testDpadArtworkHidden], "Tap layout keeps the D-pad artwork hidden");
 
     g_botw_touchhud_available = YES;
@@ -155,6 +174,93 @@ static void test_dpad_art_visibility(DmGamepad *view) {
     CHECK([view dm_testDpadArtworkHidden] && [view dm_testControlsHidden],
           "a connected physical controller hides the touch overlay and keeps the D-pad artwork hidden");
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+    g_botw_touchhud_available = NO;
+}
+
+static void test_botw_virtual_buttons(DmGamepad *view) {
+    g_botw_touchhud_available = NO;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+    CHECK(![view dm_testL3ArtworkHidden] && ![view dm_testMinusArtworkHidden],
+          "non-BOTW 3D layout keeps L3 and Minus artwork visible");
+    CHECK(![view dm_testL3GestureEnabled], "non-BOTW 3D layout keeps L3 double-tap disabled");
+    CHECK(![view dm_testLeftStickOwnsPoint:[view stickHome]],
+          "BOTW stick double-tap recognition stays disabled when the BOTW hook is unavailable");
+    int cancellations = g_virtual_latch_cancels;
+    [view reset];
+    CHECK(g_virtual_latch_cancels == cancellations,
+          "non-BOTW reset does not touch pending virtual button edges");
+
+    g_botw_touchhud_available = YES;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+    [view reset];
+    CHECK(g_virtual_latch_cancels == cancellations + 1 &&
+          g_virtual_latch_cancel_mask == (DM_BTN_LS | DM_BTN_MINUS),
+          "BOTW reset cancels only the virtual L3 and Minus edge latches");
+    CGPoint stick = [view stickHome];
+    CHECK([view dm_testL3ArtworkHidden] && ![view dm_testMinusArtworkHidden],
+          "active BOTW mode hides L3 while keeping Minus available until the map hit area is installed");
+    CHECK([view dm_testL3GestureEnabled], "active BOTW 3D touch mode enables L3 double-tap");
+    CHECK([view dm_testLeftStickOwnsPoint:stick],
+          "left-stick double tap accepts the actual left stick owner area");
+    CHECK(![view dm_testLeftStickOwnsPoint:[view dpadCenter]],
+          "left-stick double tap rejects the D-pad area");
+    CHECK(![view dm_testLeftStickOwnsPoint:[view facePos:0]],
+          "left-stick double tap rejects the face-button area");
+    CHECK(![view dm_testLeftStickOwnsPoint:[view clickCenter:4]],
+          "left-stick double tap rejects the hidden L3 button area");
+
+    g_input_sets = g_pad_sets = 0; g_input_history[0] = g_input_history[1] = 0;
+    g_pad_buttons = 0;
+    [view dm_testPulseBotwL3];
+    CHECK(g_input_sets == 2 && (g_input_history[0] & DM_BTN_LS) && !(g_input_history[1] & DM_BTN_LS) &&
+          !(g_buttons & DM_BTN_LS),
+          "virtual L3 publishes one press edge and immediately releases its source");
+    CHECK(!(g_pad_buttons & DM_BTN_LS) && g_pad_sets == 2,
+          "virtual L3 pulse is not copied into the separate physical controller channel");
+
+    CHECK([view dm_testSetBotwMapRectValid:YES x:0.05 y:0.16 width:0.36 height:0.40],
+          "active BOTW mode accepts the live relocated-map clip as a hit region");
+    CHECK([view dm_testMinusArtworkHidden], "valid visible map hides the standalone Minus artwork");
+    CGRect minusRect = [view pillRect:11];
+    CHECK([view dm_testBtnAt:CGPointMake(CGRectGetMidX(minusRect), CGRectGetMidY(minusRect))] < 0,
+          "valid map mode removes the standalone Minus hit region");
+    g_input_sets = 0; g_input_history[0] = g_input_history[1] = 0;
+    int touch_sets_before = g_touch_sets, look_begins_before = g_begin_count;
+    CGPoint mapPoint = CGPointMake(view.bounds.size.width * 0.23, view.bounds.size.height * 0.36);
+    CHECK([view dm_testBotwMapOwnsPoint:mapPoint] &&
+          ![view dm_testBotwMapOwnsPoint:CGPointMake(view.bounds.size.width * 0.8, view.bounds.size.height * 0.36)],
+          "map ownership follows the published normalized clip rectangle only");
+    FakeTouch *mapTouch = touch(mapPoint.x, mapPoint.y); began(view, mapTouch);
+    CHECK(g_input_sets >= 2 && (g_input_history[0] & DM_BTN_MINUS) && !(g_input_history[1] & DM_BTN_MINUS),
+          "map tap publishes one Minus press edge and releases the virtual source");
+    CHECK(g_touch_sets == touch_sets_before && g_begin_count == look_begins_before,
+          "map tap is consumed without entering game touch or camera look");
+    ended(view, mapTouch, mapPoint.x, mapPoint.y);
+    int afterMapPulse = g_input_sets;
+    CHECK(![view dm_testBotwMapOwnsPoint:mapPoint] && [view dm_testMinusArtworkHidden],
+          "consuming a map tap disables stale map hits while Minus stays hidden during Slate transition");
+    FakeTouch *secondMapTouch = touch(mapPoint.x, mapPoint.y); began(view, secondMapTouch); ended(view, secondMapTouch, mapPoint.x, mapPoint.y);
+    BOOL repeatedMinus = NO;
+    for (int i = afterMapPulse; i < g_input_sets; i++) repeatedMinus |= (g_input_history[i] & DM_BTN_MINUS) != 0;
+    CHECK(!repeatedMinus,
+          "a second tap cannot issue another Minus edge before the collapsed map is republished");
+    CHECK(![view dm_testSetBotwMapRectValid:NO x:0 y:0 width:0 height:0] && [view dm_testMinusArtworkHidden],
+          "native map invalidation keeps the consumed Slate transition from restoring a stale Minus control");
+    CHECK([view dm_testSetBotwMapRectValid:YES x:0.05 y:0.16 width:0.36 height:0.40] &&
+          [view dm_testMinusArtworkHidden] && [view dm_testBotwMapOwnsPoint:mapPoint],
+          "a fresh collapsed-map publication rearms map taps");
+
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES];
+    CHECK(![view dm_testL3GestureEnabled] && ![view dm_testMinusArtworkHidden],
+          "connected physical controller restores Minus and disables L3 double-tap");
+    CHECK(![view dm_testLeftStickOwnsPoint:stick],
+          "connected physical controller disables BOTW double-tap recognition");
+    int before = g_input_sets;
+    [view dm_testPulseBotwL3];
+    CHECK(g_input_sets == before, "connected physical controller cancels virtual L3 pulses");
+    [view dm_testSetTouchHudModeFull:YES tap:YES connected:NO];
+    CHECK(![view dm_testL3GestureEnabled], "Tap layout disables L3 double-tap");
+    CHECK(![view dm_testLeftStickOwnsPoint:stick], "Tap layout disables BOTW double-tap recognition");
     g_botw_touchhud_available = NO;
 }
 
@@ -375,6 +481,7 @@ static void test_motion_orientation(void) {
 
 static void run_tests(DmGamepad *view) {
     test_dpad_art_visibility(view);
+    test_botw_virtual_buttons(view);
     test_motion_orientation();
     test_look_drag(view);
     test_priority_and_multitouch(view);
