@@ -173,7 +173,7 @@ static void md_defer_body(void *arg) {
 // the dispatcher links or unlinks each entry in main+0x222d94, finalizes the holders and events, and counts the pending number down to 0) and goes on without waiting: after an unlink it frees the wrapper object and builds a new one in place, after a link it calls Start at once.
 // On hardware the dispatcher thread (priority 30, core 0 only) preempts the main thread (priority 44, core 0) and the requests are done first; on the host the threads run in parallel, the memory was reused while the old holders were still linked into the dispatcher's MultiWait,
 // and WaitAny / SignalEvent walked into freed holders (the core_preempt approximation does not cover it: with the dispatcher busy, posting wakes nobody, and the main thread makes no SVC on the way).
-// The rewriter puts observation gates on the instruction after each "one request posted" (patch_nso.py OBS 19 / 20, for this build only); here we wait for the pending count to reach zero, for at most 3 s.
+// The rewriter puts observation gates on the instruction after each "one request posted" (OBS 19 / 20 in Metroid Dread's patches.py, for this build only); here we wait for the pending count to reach zero, for at most 3 s.
 // 100 ms was too short once the Mac was saturated (an iOS shader build in parallel): the wait ran out with one request pending and WaitAny crashed right after. Waits over 50 ms are logged (the first eight)
 static void movie_ring_wait(const uint64_t *regs) {
     const volatile uint64_t *pending = (const volatile uint64_t *)(regs[19] + 0x370);

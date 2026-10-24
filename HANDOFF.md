@@ -8,9 +8,9 @@ Repository: `/Volumes/ExternalSSD/HomeDir/projects/nxnative`
 The user resumed work after requesting a stop-and-handoff checkpoint. That earlier stop is no longer in force. The lead agent `/root` coordinates and reviews; `/root/magnet_acceptance` owns the active input implementation, review, and runtime verification. `/root/magnet_fix` completed the Mac shader-cache repair; `/root/magnet_attached` supplied the partial-heart trace and evidence. Treat runtime PIDs as transient and recheck before acting.
 
 - **21:10 partial-heart defect: fixed and verified on Mac.** The half-filled and quarter-filled second hearts now remain evenly placed between the full first and empty third hearts. Details and test evidence are in the external report below.
-- **Mac black rendering: full cache is built and the field renders.** All update-only profile shader keys have verified libraries for the original chain. A fresh OBS33 runtime used the full cache and rendered gameplay without shader-load or pipeline-creation errors in the inspected log.
-- **Relative scene look: verified in the isolated Mac runtime. The user confirmed weapon switching works.** UIKit runtime execution remains blocked; physical iPhone gyro/Magnesis feel was not newly verified.
-- **Git integration:** The user authorized committing, merging `upstream/main`, and pushing to origin. At the pre-integration checkpoint, HEAD was `64f53adaf178dd82aa47d1cb38f3c6fcb43ce93b` and fetched history was current.
+- **Mac black rendering: verified before upstream integration only.** The old global chain cache rendered gameplay in the OBS33 run recorded below. Upstream integration changed the shared shader chain; this cache is not valid for the merged host, and there has been no post-merge runtime verification.
+- **Relative scene look: verified in the isolated Mac runtime before upstream integration. The user confirmed weapon switching works; no platform was specified for that confirmation.** UIKit runtime execution remains blocked; physical iPhone gyro/Magnesis feel was not newly verified.
+- **Git integration:** The user authorized committing, merging `upstream/main`, and pushing to origin. The pre-integration baseline was `64f53adaf178dd82aa47d1cb38f3c6fcb43ce93b`. Source changes were committed for upstream integration; Git history and remote refs are authoritative for the final merge and push state.
 
 ## User requirements and boundaries
 
@@ -30,15 +30,15 @@ Half-fill image/crop: `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-wor
 
 Quarter-fill image/crop: `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/mac-black-repro-20261024/runtime-aspect21-quarter-v1/field-ready.png` and `field-ready-hearts.png` in the same directory.
 
-## Verified Mac cache and launch
+## Pre-merge Mac cache and launch evidence
 
-The profile is update-only (`v1114112`), so the full cache was built from the matching update-only package. Its chain is `534b10d1d578`. All **19,592** profile shader keys have matching `_b.metallib` and reflection JSON with the correct key, stage, and chain. The builder reported 19,592/19,592 successful shaders, no base-library failures, and generated all 1,070 shadow-input libraries. Optional `_bf` fetch variants are separate from the base libraries.
+The profile is update-only (`v1114112`), so the full cache was built from the matching update-only package. Its pre-merge per-profile chain was `534b10d1d578`. All **19,592** profile shader keys have matching `_b.metallib` and reflection JSON with the correct key, stage, and chain. The builder reported 19,592/19,592 successful shaders, no base-library failures, and generated all 1,070 shadow-input libraries. Optional `_bf` fetch variants are separate from the base libraries.
 
-A fresh OBS33 runtime (`main` build ID `cd57b23fa4bbad65803d9788c01821ee`) resolved:
+Before upstream integration, an OBS33 runtime (`main` build ID `cd57b23fa4bbad65803d9788c01821ee`) resolved:
 
 `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/mac-black-repro-20261024/runtime-original-chain-full-cache/b-534b10d1d578`
 
-It loaded the 19,592-entry shader map, prewarmed 508 runtime shader keys, and rendered the Great Plateau field. The inspected run log had no `[RED]`, shader-load, or pipeline-creation failures through the captured run. This proves the full-cache runtime path; the initial black-screen cause was the incorrect source package/index selection, not the discarded BAHS padding hypothesis.
+It loaded the 19,592-entry shader map, prewarmed 508 runtime shader keys, and rendered the Great Plateau field. This is historical evidence for the pre-merge host/cache pair only. The merged source uses global chain `657c42552d82`, while the cache above was built for the old per-profile chain `534b10d1d578`; the retained old cache/symlink cannot be used to verify or launch the merged host. A matching shader build is required before a fresh runtime check.
 
 Log: `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/mac-black-repro-20261024/runtime-input-obs33-20261024/run-cua3.log`
 
@@ -56,7 +56,7 @@ Do not use the older union package under `$WORK/shader/pkg` with this update-onl
 
 ## Input status and remaining platform limits
 
-The latest source work is in the shared worktree, principally `dm/host/hle_hid.c`, `dm/host/hle_look.c`, `dm/ios/Sources/DmGamepad.m`, Mac frontend files, test harnesses, and `dm/tools/patch_nso.py`. The implementation uses a per-frame HID sample that distinguishes virtual and physical right-stick sources, preserves physical priority, and replaces only a matching synthetic virtual-stick vector with relative displacement. The exact native conversion is now traced and implemented: binary32 divide each signed axis by `32767.0f`, compute `sqrtf(fmaf(x, x, y*y))`, then if the radius is strictly greater than 1 multiply both components by its reciprocal. Matching is exact float equality with no epsilon. Evidence: `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/mac-black-repro-20261024/acceptance/native-stick-conversion.md`.
+The pre-merge source work is in the shared worktree, principally `dm/host/hle_hid.c`, `dm/host/hle_look.c`, `dm/ios/Sources/DmGamepad.m`, Mac frontend files, test harnesses, and `dm/tools/patch_nso.py`. The implementation uses a per-frame HID sample that distinguishes virtual and physical right-stick sources, preserves physical priority, and replaces only a matching synthetic virtual-stick vector with relative displacement. The exact native conversion is now traced and implemented: binary32 divide each signed axis by `32767.0f`, compute `sqrtf(fmaf(x, x, y*y))`, then if the radius is strictly greater than 1 multiply both components by its reciprocal. Matching is exact float equality with no epsilon. Evidence: `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/mac-black-repro-20261024/acceptance/native-stick-conversion.md`.
 
 Known evidence and limits:
 
@@ -65,7 +65,7 @@ Known evidence and limits:
 - The native conversion trace explains why cardinal `(32767, 0)` becomes `(1, 0)` and diagonal `(32767, 32767)` becomes approximately `(0.7071068, 0.7071068)`. Exact normalization matching is implemented; do not broaden replacement to unmatched native samples.
 - A controlled CUA drag was observed in the real gameplay scene: frame 7423 delivered `dx=0.034722` and the shared getter produced three outputs of `1.38889`; frame 7424 produced zero after the drag ended. Root reviewed the before/after screenshots and confirmed the camera/HUD changed; the user accepted the scene result. Captures: `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/mac-black-repro-20261024/acceptance/relative-scene-before.png` and `relative-scene-after.png`. The detailed old trace was overwritten by the latest restart; retain these values as previously reviewed evidence.
 - Held-still behavior was checked during BEGIN frame 5241 to END frame 5358: frame 5250 had raw `(−1,0)`, virtual `(-32767,0)`, an exact match, but output `(0,0)`. Non-cardinal matching was also observed at frames 5254 and 5257. This supports one-shot relative movement with no repeated turn while still.
-- The final gesture trace is `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/mac-black-repro-20261024/runtime-native-bits-20261024/run-gesture-trace.log`; its previous PID 62732 is historical and the file was overwritten on restart. No further UI selection tests are requested; user confirmation accepted the UI behavior.
+- The historical gesture trace is `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/mac-black-repro-20261024/runtime-native-bits-20261024/run-gesture-trace.log`; its previous PID 62732 is historical and the file was overwritten on restart. No further UI selection tests are requested; user confirmation accepted the UI behavior.
 - The iOS harness previously reported four failures. Its logging used competing `freopen` streams, so detailed lines were unreliable, but the failure count is not dismissed. Later launch attempts hung before the harness ran; an isolated simulator-device-set attempt failed with POSIX error 22 (“allocated but was stuck in creation state”). Static syntax checks and corrected harness assertions passed, but there is **no trustworthy fresh UIKit result**.
 - No physical-device test has established final scene feel, native Magnesis behavior, or weapon-wheel behavior for the current code.
 
@@ -75,8 +75,8 @@ Scene drag and held-still behavior have been verified in the isolated Mac runtim
 
 ## Repository and operational notes
 
-The worktree is shared and currently dirty across input, aspect, shader-split, host, iOS, and test files; do not reset or overwrite another agent's changes. The pre-integration baseline was `64f53adaf178dd82aa47d1cb38f3c6fcb43ce93b`. A small uncommitted `sarc_members()` name-scan optimization remains in `dm/gfx/tools/shader_split.py`; its benchmark is at `acceptance/sarc-name-extraction-benchmark.md`.
+The worktree is shared and currently contains merge-resolution changes across input, aspect, shader-split, host, iOS, launcher, and test files; do not reset or overwrite another agent's changes. The pre-integration baseline was `64f53adaf178dd82aa47d1cb38f3c6fcb43ce93b`. A small uncommitted `sarc_members()` name-scan optimization remains in `dm/gfx/tools/shader_split.py`; its benchmark is at `acceptance/sarc-name-extraction-benchmark.md`.
 
-Use `/opt/homebrew/bin/python3` (arm64) and the external toolchain paths recorded in `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/mac-black-repro-20261024/HANDOFF.md` if shader builds are ever needed. The native `oead` Yaz0 decoder was used only by an external regeneration wrapper; it is not a production dependency. No shader rebuild is currently needed for the aspect profile change.
+Use `/opt/homebrew/bin/python3` (arm64) and the external toolchain paths recorded in `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/mac-black-repro-20261024/HANDOFF.md` if shader builds are needed. The native `oead` Yaz0 decoder was used only by an external regeneration wrapper; it is not a production dependency. The aspect profile edits alone do not change shader inputs, but the upstream shared-chain update requires a new cache before validating the merged host.
 
 The notification instruction for completed tasks over five minutes is in the current `AGENTS.md`; the earlier handoff's Feishu instruction is obsolete. No Aliyun login has been performed.

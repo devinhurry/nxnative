@@ -28,6 +28,11 @@ OP_DECORATE, OP_MEMBER_DECORATE, OP_TYPE_ARRAY, OP_TYPE_RTARRAY, OP_TYPE_STRUCT 
 DEC_ARRAY_STRIDE, DEC_BINDING, DEC_SET = 6, 33, 34
 KINDS = {'ubos': 'u', 'ssbos': 'b', 'separate_images': 't', 'images': 't', 'separate_samplers': 's', 'textures': 'c'}
 SLOT_CLASS = {'u': 'buffer', 'b': 'buffer', 't': 'texture', 's': 'sampler', 'c': 'texture', 'p': 'buffer'}
+# GLSL's FMin / FMax / FClamp, which spirv-cross writes as fast::min / max / clamp, leave a NaN operand's result to the GPU; the Switch's GPU returns the other operand, as Metal's
+# precise:: functions (IEEE fmin / fmax) do on every GPU. Super Mario Galaxy 2's GX lighting normalizes light directions the game leaves at (0, 0, 0) (the key and fill lights of
+# its characters) and takes max(0, dot(ldir, NaN)) as the spot term: 0 on the Switch and on the M4 Pro, so the attenuation is 1; on an A20 Pro (iPhone) the half of Mario
+# that the fill light (from the camera's left) faces came out white (GitHub issue 72)
+PRECISE = re.compile(r'\bfast::(min|max|clamp)\(')
 
 def red(msg): sys.exit('[RED] ' + msg)
 
@@ -126,6 +131,7 @@ def one(path, tmp, root):
             res.append(f'p:0.0={pc_slot}')
     used = {(c, int(n)) for c, n in re.findall(r'\[\[(buffer|texture|sampler)\((\d+)\)\]\]', m.group(1))}
     res = [x for x in res if (SLOT_CLASS[x[0]], int(x.rsplit('=', 1)[1].split('*')[0])) in used]
+    src = PRECISE.sub(r'precise::\1(', src); open(msl, 'w').write(src)
     msls = [msl]
     if stage == 'frag' and '[[color(1)]]' in src:   # dual-source variant vk_<key>_d: the output at location 1 becomes the second blend source of attachment 0
         msl_d = os.path.join(tmp, key + '_d.metal'); msls.append(msl_d)
@@ -167,7 +173,9 @@ def main():
                '# spirv-cross ' + ' '.join((lambda r: r.stdout + r.stderr)(subprocess.run(['spirv-cross', '--revision'], capture_output=True, text=True)).split())]
         tsv += [f'{k}\t{v[0]}\t{" ".join(v[1])}\t{v[3]}' for k, v in sorted(seen.items())]
         dirs = [(os.path.join(out, 'vk'), 'macosx', [])]
-        if ios: dirs.append((os.path.join(ios, 'vk'), 'iphoneos', ['-mios-version-min=18.0']))
+        # The iPhone library is compiled with -fmetal-math-mode=relaxed, as the NVN chain's (dm/ios/tools/ios_metal.py): the default fast mode lets the GPU compiler assume there is
+        # no NaN / Inf, which would let it drop the NaN handling of the precise:: functions above
+        if ios: dirs.append((os.path.join(ios, 'vk'), 'iphoneos', ['-mios-version-min=18.0', '-fmetal-math-mode=relaxed']))
         for d, sdk, extra in dirs:
             lib = metallib(msls, d, sdk, extra)
             open(os.path.join(d, 'vk_shaders.tsv'), 'w').write('\n'.join(tsv) + '\n')

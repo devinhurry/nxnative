@@ -165,10 +165,15 @@ NVN(nvnDeviceGetInteger, void, const NVNdevice *d, NVNdeviceInfo what, int *out)
     *out = g_devinfo[w];
     // 0x2E / 0x30, the newest GPU code version the driver runs: the table's 1.14 is SMO's SDK 7 driver, while each SDK's driver runs the code of the GLSLC in the same SDK. A game that compiles
     // at run time checks its GLSLC's version against this range first (Catherine: Full Body, SDK 8.2.1: its GLSLC writes 1.15, main+0x330dcc refused it, no built-in program was compiled
-    // and the first uniform lookup read a null program, main+0x3316dc), so the host reports at least the version of the GLSLC the game carries
+    // and the first uniform lookup read a null program, main+0x3316dc), so the host reports at least the version of the GLSLC the game carries. A game that checks the shaders it ships
+    // does the same (Bayonetta 3, SDK 13.3.2: PlatinumGames' shader objects carry their GPU code version, 1.9 to 1.16, and main+0xd0da20 refuses one above the driver's newest; at 1.14
+    // its first built-in shader, hwfillcolor.vso at 1.15, was refused, the init failed and nnMain returned), so the SDK also sets a floor: what that SDK's GLSLC writes, 1.15 from SDK 8
+    // (Catherine: Full Body's 8.2.1) and 1.16 from SDK 13 (Bayonetta 3's newest objects). A wider range only lets more shaders pass these checks
     if (w == 0x2E || w == 0x30) {
-        int gv[2];
-        if (dm_glslc_gpu_code(&gv[0], &gv[1]) && (gv[0] > g_devinfo[0x2E] || (gv[0] == g_devinfo[0x2E] && gv[1] > g_devinfo[0x30]))) *out = w == 0x2E ? gv[0] : gv[1];
+        int gv[2], m = dm_sdk_major(), sv[2] = {1, m >= 13 ? 16 : m >= 8 ? 15 : 0}, cur[2] = {g_devinfo[0x2E], g_devinfo[0x30]};
+        if (sv[1] && (sv[0] > cur[0] || (sv[0] == cur[0] && sv[1] > cur[1]))) { cur[0] = sv[0]; cur[1] = sv[1]; }
+        if (dm_glslc_gpu_code(&gv[0], &gv[1]) && (gv[0] > cur[0] || (gv[0] == cur[0] && gv[1] > cur[1]))) { cur[0] = gv[0]; cur[1] = gv[1]; }
+        *out = w == 0x2E ? cur[0] : cur[1];
     }
     if (w <= 1) { static int api[2] = {-1, -1}; if (api[0] < 0) { nvn_api(api); const char *e = getenv("DM_NVN_API"); if (e) sscanf(e, "%d.%d", &api[0], &api[1]); } *out = api[w]; }
     OLOG("DeviceGetInteger %#x -> %d", w, *out);
@@ -543,6 +548,9 @@ NVN(nvnSamplerBuilderGetMinMagFilter, void, const NVNsamplerBuilder *b, NVNminFi
 }
 NVN(nvnSamplerBuilderGetWrapMode, void, const NVNsamplerBuilder *b, NVNwrapMode *s, NVNwrapMode *t, NVNwrapMode *r) {
     const samp_par *o = &((const samp_builder_t *)b)->p; *s = (NVNwrapMode)o->ws; *t = (NVNwrapMode)o->wt; *r = (NVNwrapMode)o->wr;
+}
+NVN(nvnSamplerBuilderGetLodClamp, void, const NVNsamplerBuilder *b, float *lo, float *hi) {   // Bayonetta 3 reads it back while building its samplers
+    const samp_par *o = &((const samp_builder_t *)b)->p; *lo = o->lod_min; *hi = o->lod_max;
 }
 NVN(nvnSamplerInitialize, NVNboolean, NVNsampler *s, const NVNsamplerBuilder *b) {
     samp_t *o = (samp_t *)s; o->magic = MAGIC('S', 'M', 'P', 0); o->p = ((const samp_builder_t *)b)->p; return 1;
@@ -1207,6 +1215,11 @@ NVN(nvnWindowSetCrop, void, NVNwindow *w, int x, int y, int ww, int hh) {
     win_t *o = (win_t *)w; int v[4] = {x, y, ww, hh};
     if (memcmp(o->crop, v, sizeof v)) LOG("[nvn] WindowCrop %d,%d %dx%d", x, y, ww, hh);
     memcpy(o->crop, v, sizeof v);
+}
+NVN(nvnWindowGetCrop, void, const NVNwindow *w, NVNrectangle *r) {   // Bayonetta 3 reads it back every few frames; before any SetCrop it is the whole first texture, as NVN starts it
+    const win_t *o = (const win_t *)w;
+    if (o->crop[2] > 0 && o->crop[3] > 0) { r->x = o->crop[0]; r->y = o->crop[1]; r->width = o->crop[2]; r->height = o->crop[3]; return; }
+    r->x = r->y = 0; r->width = o->ntex && o->tex[0] ? (int)CTX(o->tex[0])->d.width : 0; r->height = o->ntex && o->tex[0] ? (int)CTX(o->tex[0])->d.height : 0;
 }
 static void trow(uint64_t f, const char *name, double v);
 static void set_time_constraint(uint64_t period_ns);
@@ -2023,6 +2036,9 @@ NVN(nvnTextureViewGetSwizzle, NVNboolean, const NVNtextureView *v, NVNtextureSwi
 NVN(nvnTextureGetDepthStencilMode, NVNtextureDepthStencilMode, const NVNtexture *t) { return ((const tex_t *)t)->stencil ? NVN_TEXTURE_DEPTH_STENCIL_MODE_STENCIL : NVN_TEXTURE_DEPTH_STENCIL_MODE_DEPTH; }
 // Queue priority: the host has one Metal queue
 NVN_NOPROTO(nvnQueueBuilderSetQueuePriority, void, NVNqueueBuilder *b, int prio) { (void)b; (void)prio; }
+// The driver's external graphics debugger switch (Nsight / NVN debugger attach): Super Smash Bros. Ultimate fetches it with nvnDeviceGetProcAddress(NULL, …) before creating its device and calls
+// it without a null check (main+0x37fe92c); the host has no debugger to attach
+NVN_NOPROTO(nvnSetExternalDebuggerEnabledNVX, void, NVNboolean enable) { (void)enable; }
 // Transform feedback (vertex outputs captured into buffers): Pokémon Legends: Z-A skins its characters this way. A vertex-only program writes skinned positions and packed normals / tangents
 // under rasterizer discard, and the character draws read those buffers as vertex streams. Recorded here and run at replay by the shader's main0_tf entry point, a vertex function that stores the
 // captured outputs into the bound buffers (dmsh_build.py vs_tf, the layout from the program's control section; nvn_mtl.m tf_* for the replay)
@@ -2222,7 +2238,7 @@ NVN(nvnCommandBufferSetViewportSwizzles, void, NVNcommandBuffer *c, int first, i
 NVN(nvnCommandBufferSetAlphaRef, void, NVNcommandBuffer *c, float r) { (void)c; ONCE_LOG("SetAlphaRef %.3f: the host has no alpha test (ColorStateSetAlphaTest is only recorded)", r); }
 NVN(nvnCommandBufferSetLineWidth, void, NVNcommandBuffer *c, float w) { (void)c; if (w != 1.0f) ONCE_LOG("SetLineWidth %.2f: Metal has only 1-pixel lines", w); }
 NVN(nvnCommandBufferSetPointSize, void, NVNcommandBuffer *c, float s) { (void)c; (void)s; ONCE_LOG("SetPointSize: the point size comes from the shader"); }
-NVN(nvnCommandBufferSetPrimitiveRestart, void, NVNcommandBuffer *c, uint32_t en, int idx) { (void)c; if ((en & 0xff) && idx != -1 && idx != 0xffff) ONCE_LOG("[RED] SetPrimitiveRestart index %#x: Metal only accepts all ones", idx); }
+NVN(nvnCommandBufferSetPrimitiveRestart, void, NVNcommandBuffer *c, uint32_t en, int idx) { *REC(c, OP_PRIM_RESTART, p_prim_restart) = (p_prim_restart){(en & 0xff) != 0, (uint32_t)idx}; }
 // Rasterizer discard: draws run their vertex stage only (with transform feedback, the capture); recorded, and at replay such a draw rasterizes nothing (nvn_mtl.m)
 NVN(nvnCommandBufferSetRasterizerDiscard, void, NVNcommandBuffer *c, uint32_t en) { REC(c, OP_RAST_DISCARD, p_rast_discard)->on = (en & 0xff) != 0; }
 NVN(nvnCommandBufferSetSampleMask, void, NVNcommandBuffer *c, int m) { (void)c; if ((m & 0xffff) != 0xffff) ONCE_LOG("SetSampleMask %#x: ignored by the host for now", m); }

@@ -3,6 +3,8 @@
 // The window is fullscreen-capable (the green button and ⌃⌘F); DM_FULLSCREEN starts it that way. ⌘Q quits; the left mouse button is the touchscreen, except BOTW uses it for look while enabled.
 // Key map (Nintendo layout): WASD left stick, arrow keys D-pad, J=A K=B U=X I=Y, Q=L E=R, Z=ZL C=ZR, F=press left stick G=press right stick, Return=+ Tab=−, Space=shake the controller.
 // Controllers: buttons by position as on the iPhone (right A, bottom B, top X, left Y), shoulders L R, triggers ZL ZR, Menu + Options −, both sticks and their presses.
+// Each controller is a player of its own (local co-op): the first one connected is player 1, together with the keyboard, the next player 2, and so on up to 8 (pad_slots.h);
+// DM_PAD_MERGE=1 merges every controller into player 1 instead, DM_KBD_PLAYER=own makes the keyboard player 1 on its own, with the controllers from player 2 on.
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
@@ -11,7 +13,10 @@
 #include "dm_input.h"
 #include "front.h"
 #include "hle.h"
+#include "pad_slots.h"
+#include "haptics_apple.h"
 #include <signal.h>
+#include <math.h>
 
 static CAMetalLayer *g_layer;
 static uint64_t g_btn;
@@ -23,6 +28,62 @@ int front_screen_max_fps(void) { return g_screen_fps; }
 static int32_t g_mouse_rx, g_mouse_ry;
 static void push(void);
 void front_look_mode_changed(void) {} // Mac input sources are separate before and after look mode installs.
+// The screen's refresh rate matched to the game's frame rate in fullscreen (front_screen_match, from PR #79; DM_SCREEN_MATCH=0 turns it off). 60 fps on a 144 Hz screen cannot be paced
+// evenly: the display link counts a tick on the refresh nearest each 1/60 s slot (nvn_mtl.m link_range), so frames stay up 2 and 3 refreshes in turn (13.9 / 20.8 ms) and Apple's HUD shows
+// the frame interval jumping between them. In fullscreen, a screen whose rate is not a multiple of the game's switches to the mode of the same size with the highest rate that is (144 → 120 Hz
+// for 60 and 30 fps), for this app only: macOS switches it back when the host quits, crashes included, and leaving fullscreen or that screen switches it back at once. A window keeps the
+// screen's rate, because the switch changes the whole screen for every app and most external screens go black for a second or more. A screen with no such mode keeps the virtual ticks
+static NSWindow *g_win; static _Atomic int g_match_want;   // the game's window; the frame rate to match (0 = not known yet), written by the present thread only
+static CGDirectDisplayID g_match_id; static CGDisplayModeRef g_match_orig;   // main thread: the screen this host switched and its own mode (NULL = none switched)
+static double mode_hz(CGDisplayModeRef m) { double hz = CGDisplayModeGetRefreshRate(m); return hz > 0 ? hz : 0; }   // 0 = not known (older built-in screens report none)
+static int hz_multiple(double hz, int fps) { double k = round(hz / fps); return k >= 1 && fabs(hz / fps - k) < 0.01; }   // 59.94 Hz counts as 60
+static CGError screen_set_mode(CGDirectDisplayID id, CGDisplayModeRef m) {   // for this app only (kCGConfigureForAppOnly)
+    CGDisplayConfigRef cfg; CGError r = CGBeginDisplayConfiguration(&cfg);
+    if (r != kCGErrorSuccess) return r;
+    r = CGConfigureDisplayWithDisplayMode(cfg, id, m, NULL);
+    if (r != kCGErrorSuccess) { CGCancelDisplayConfiguration(cfg); return r; }
+    return CGCompleteDisplayConfiguration(cfg, kCGConfigureForAppOnly);
+}
+static void screen_match_restore(int on_it) {   // main thread: the screen this host switched gets its own mode again; on_it: the window is on that screen
+    double hz = mode_hz(g_match_orig); CGError r = screen_set_mode(g_match_id, g_match_orig);
+    LOG("front end: screen %s %.0f Hz", r == kCGErrorSuccess ? "back at" : "could not be switched back to", hz);
+    if (r == kCGErrorSuccess && on_it && hz > 0) g_screen_fps = (int)round(hz);
+    CGDisplayModeRelease(g_match_orig); g_match_orig = NULL;
+}
+static void screen_match_apply(void) {   // main thread: on a new frame rate, on entering and leaving fullscreen and on a move to another screen
+    static int off = -1; if (off < 0) { const char *e = getenv("DM_SCREEN_MATCH"); off = e && !strcmp(e, "0"); if (off) LOG("front end: the screen keeps its refresh rate in fullscreen too (DM_SCREEN_MATCH=0)"); }
+    NSScreen *scr = g_win.screen; int want = g_match_want, full = (g_win.styleMask & NSWindowStyleMaskFullScreen) != 0;
+    CGDirectDisplayID id = scr ? [scr.deviceDescription[@"NSScreenNumber"] unsignedIntValue] : kCGNullDirectDisplay;
+    if (g_match_orig && (!full || id != g_match_id)) screen_match_restore(id == g_match_id);
+    if (off || !full || want <= 0 || !scr) return;
+    CGDisplayModeRef cur = CGDisplayCopyDisplayMode(id);
+    if (!cur) return;
+    double hz = mode_hz(cur);
+    if (hz <= 0 || hz_multiple(hz, want)) {   // already a multiple, or not known
+        if (g_match_orig && hz > 0) g_screen_fps = (int)round(hz);   // the screen this host switched: its rate from the mode, which maximumFramesPerSecond (the screen observer) may not show yet
+        CGDisplayModeRelease(cur); return;
+    }
+    size_t w = CGDisplayModeGetWidth(cur), h = CGDisplayModeGetHeight(cur), pw = CGDisplayModeGetPixelWidth(cur), ph = CGDisplayModeGetPixelHeight(cur);
+    CFArrayRef modes = CGDisplayCopyAllDisplayModes(id, (__bridge CFDictionaryRef)@{(__bridge NSString *)kCGDisplayShowDuplicateLowResolutionModes: @YES});
+    CGDisplayModeRef pick = NULL; double pick_hz = 0;
+    for (CFIndex i = 0; modes && i < CFArrayGetCount(modes); i++) {
+        CGDisplayModeRef m = (CGDisplayModeRef)CFArrayGetValueAtIndex(modes, i); double r = mode_hz(m);
+        if (CGDisplayModeGetWidth(m) != w || CGDisplayModeGetHeight(m) != h || CGDisplayModeGetPixelWidth(m) != pw || CGDisplayModeGetPixelHeight(m) != ph || !CGDisplayModeIsUsableForDesktopGUI(m)) continue;
+        if (hz_multiple(r, want) && r > pick_hz) { pick = m; pick_hz = r; }
+    }
+    if (!pick) LOG("front end: screen at %.0f Hz has no mode of this size at a multiple of %d Hz: frames are paced on the nearest refreshes", hz, want);
+    else {
+        CGError r = screen_set_mode(id, pick);
+        LOG("front end: screen at %.0f Hz %s %.0f Hz for %d fps in fullscreen (DM_SCREEN_MATCH=0 keeps it)", hz, r == kCGErrorSuccess ? "switched to" : "could not be switched to", pick_hz, want);
+        if (r == kCGErrorSuccess) { if (!g_match_orig) { g_match_orig = CGDisplayModeRetain(cur); g_match_id = id; } g_screen_fps = (int)round(pick_hz); }
+    }
+    if (modes) CFRelease(modes);
+    CGDisplayModeRelease(cur);
+}
+void front_screen_match(int fps) {
+    if (!g_layer || g_match_want == fps) return;   // no window (a windowless run's main thread runs the guest), or the rate as before
+    g_match_want = fps; dispatch_async(dispatch_get_main_queue(), ^{ screen_match_apply(); });
+}
 static void push(void) {
     int32_t lx = (g_d - g_a) * 32767, ly = (g_w - g_s) * 32767;
     dm_input_set(g_btn, lx, ly, g_mouse_rx, g_mouse_ry);
@@ -46,10 +107,18 @@ static void on_key(NSEvent *e, int down) {
     push();
 }
 
-// Physical controllers (GameController) go to dm_pad_set, as the iPhone's do (DmGamepad.m read_pad, same layout): ORed with the keyboard, a non-zero stick wins.
-// DM_KEYS uses the same path, so a controller touched during a script takes it over
+// Physical controllers (GameController) go to dm_pad_set_player, mapped as the iPhone's (DmGamepad.m read_pad, same layout); player 1's is ORed with the keyboard, a stick takes
+// whichever is deflected more (hle_hid.c). DM_KEYS uses player 1's path, so player 1's controller touched during a script takes it over.
+// Players: every controller with an extended gamepad profile holds a slot (pad_slots.h: player 1 first, a reconnected controller gets its player back), and hle_hid.c reports
+// player n on its own npad while the slot is held (dm_pad_players). A one-player game that supports only No1 / Handheld still sees every controller as player 1 (hle_hid.c).
+// With DM_PAD_MERGE=1 every controller is player 1, as before (the last one moved wins; when the last one goes away its buttons and sticks are released)
+static pad_slots g_slots;
+static GCController *g_held[DM_PLAYERS];   // the controller of each slot, kept alive while it holds it (the slot table keys on its pointer)
+static int g_merge, g_kbd_own;
 static int32_t pad_axis(float v) { return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * DM_STICK_MAX); }
 static void pad_read(GCExtendedGamepad *g) {
+    int p = g_merge ? 0 : pad_slot_of(&g_slots, (__bridge const void *)g.controller); if (p < 0) return;
+    dm_haptics_apple_controller(p, g.controller);
     uint64_t m = 0;
     #define K(btn, bit) if (btn.isPressed) m |= bit
     K(g.buttonB, DM_BTN_A); K(g.buttonA, DM_BTN_B); K(g.buttonY, DM_BTN_X); K(g.buttonX, DM_BTN_Y);   // by position: right A, bottom B, top X, left Y
@@ -57,15 +126,47 @@ static void pad_read(GCExtendedGamepad *g) {
     K(g.buttonMenu, DM_BTN_PLUS); K(g.buttonOptions, DM_BTN_MINUS); K(g.leftThumbstickButton, DM_BTN_LS); K(g.rightThumbstickButton, DM_BTN_RS);   // nil on pads without them: not pressed
     K(g.dpad.left, DM_BTN_LEFT); K(g.dpad.up, DM_BTN_UP); K(g.dpad.right, DM_BTN_RIGHT); K(g.dpad.down, DM_BTN_DOWN);
     #undef K
-    dm_pad_set(m, pad_axis(g.leftThumbstick.xAxis.value), pad_axis(g.leftThumbstick.yAxis.value), pad_axis(g.rightThumbstick.xAxis.value), pad_axis(g.rightThumbstick.yAxis.value));
+    dm_pad_set_player(p, m, pad_axis(g.leftThumbstick.xAxis.value), pad_axis(g.leftThumbstick.yAxis.value), pad_axis(g.rightThumbstick.xAxis.value), pad_axis(g.rightThumbstick.yAxis.value));
 }
-static void pads_changed(void) {   // every connected pad reports (the last one moved wins); when the last one goes away its buttons and sticks are released
-    int any = 0;
-    for (GCController *c in GCController.controllers) if (c.extendedGamepad) {
-        any = 1; c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; pad_read(g); };
+static const char *pad_name(GCController *c) { return c.vendorName.UTF8String ?: "?"; }
+static void npad_name(int p, char *out, size_t cap) { uint32_t id = dm_player_npad(p); if (id == 0x20) snprintf(out, cap, "handheld"); else snprintf(out, cap, "%u", id); }
+// Called at start and on every connect / disconnect (gone: the controller that was just removed, nil on a connect)
+static void pads_changed(GCController *gone) {
+    if (g_merge) {
+        int any = 0;
+        for (GCController *c in GCController.controllers) if (c.extendedGamepad && c != gone) {
+            any = 1; c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; pad_read(g); };
+            pad_read(c.extendedGamepad);
+        }
+        if (!any) { dm_pad_set(0, 0, 0, 0, 0); dm_haptics_apple_controller(0, nil); }
+        return;
+    }
+    NSArray<GCController *> *now = GCController.controllers; char nb[16];
+    for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p] && (g_held[p] == gone || ![now containsObject:g_held[p]])) {
+        npad_name(p, nb, sizeof nb); LOG("controller '%s' disconnected: player %d (npad %s) is free", pad_name(g_held[p]), p + 1, nb);
+        g_held[p].extendedGamepad.valueChangedHandler = nil;
+        dm_haptics_apple_controller(p, nil);
+        pad_slot_free(&g_slots, (__bridge const void *)g_held[p]); g_held[p] = nil;
+        dm_pad_set_player(p, 0, 0, 0, 0, 0);   // nothing stays pressed
+    }
+    for (GCController *c in now) if (c.extendedGamepad && c != gone && pad_slot_of(&g_slots, (__bridge const void *)c) < 0) {
+        int p = pad_slot_take(&g_slots, (__bridge const void *)c, pad_name(c));
+        if (p < 0) { LOG("controller '%s' connected: all %d players are taken, not used", pad_name(c), DM_PLAYERS); continue; }
+        g_held[p] = c;
+        c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; pad_read(g); };
+        npad_name(p, nb, sizeof nb); LOG("controller '%s' connected: player %d (npad %s)", pad_name(c), p + 1, nb);
         pad_read(c.extendedGamepad);
     }
-    if (!any) dm_pad_set(0, 0, 0, 0, 0);
+    dm_pad_players(pad_slot_mask(&g_slots));
+}
+static void pads_start(void) {
+    const char *e = getenv("DM_PAD_MERGE"); g_merge = e && atoi(e);
+    e = getenv("DM_KBD_PLAYER"); g_kbd_own = !g_merge && e && !strcmp(e, "own");
+    static const char kbd = 0;
+    if (g_kbd_own) pad_slot_take(&g_slots, &kbd, "keyboard");   // holds player 1 for good
+    LOG("front end: %s", g_merge ? "every controller is player 1 (DM_PAD_MERGE)" : g_kbd_own ? "the keyboard is player 1, each controller a player of its own from player 2 on (DM_KBD_PLAYER=own)"
+                                                                           : "each controller is a player of its own, the keyboard plays with player 1");
+    pads_changed(nil);
 }
 
 // Mouse input stays on the content view, so titlebar, window-button and resize-edge clicks remain native AppKit events.
@@ -208,6 +309,7 @@ void front_run(void (*guest)(void)) {
         [win center];
         [win makeKeyAndOrderFront:nil];
         g_screen_fps = (int)(win.screen ?: NSScreen.mainScreen).maximumFramesPerSecond;
+        g_win = win;
         [NSApp activateIgnoringOtherApps:YES];
         // Main menu: AppKit runs ⌘ shortcuts only through menu items, so ⌘Q quits and ⌃⌘F toggles fullscreen from here (AppKit shows the item as Globe-F and keeps ⌃⌘F as a hidden twin)
         NSMenu *bar = [NSMenu new], *app = [NSMenu new], *wm = [[NSMenu alloc] initWithTitle:@"Window"];
@@ -220,10 +322,11 @@ void front_run(void (*guest)(void)) {
         if (fs && *fs && strcmp(fs, "0")) dispatch_async(dispatch_get_main_queue(), ^{ [win toggleFullScreen:nil]; });   // start in fullscreen (DM_FULLSCREEN=0 keeps the window)
         for (NSNotificationName nm in @[GCControllerDidConnectNotification, GCControllerDidDisconnectNotification])
             [NSNotificationCenter.defaultCenter addObserverForName:nm object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) {
-                GCController *c = n.object; LOG("controller %s: %s%s", n.name == GCControllerDidConnectNotification ? "connected" : "disconnected",
-                                                c.vendorName.UTF8String ?: "?", c.extendedGamepad ? "" : " (no extended gamepad profile: not used)");
-                pads_changed(); }];
-        pads_changed();
+                GCController *c = n.object; int conn = n.name == GCControllerDidConnectNotification;
+                if (!c.extendedGamepad || g_merge) LOG("controller %s: %s%s", conn ? "connected" : "disconnected", pad_name(c), c.extendedGamepad ? "" : " (no extended gamepad profile: not used)");
+                pads_changed(conn ? nil : c); }];
+        dm_haptics_apple_init();
+        pads_start();
         [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown | NSEventMaskKeyUp handler:^NSEvent *(NSEvent *e) {
             if (e.window != win) return e;   // Only swallow keys for the game window; other windows such as the software keyboard input box receive typing as usual
             if (e.type == NSEventTypeKeyDown && (e.modifierFlags & NSEventModifierFlagCommand)) return e;   // ⌘ shortcuts go to the menu; a key released while ⌘ is held still reaches the game, or it would stay pressed
@@ -234,11 +337,11 @@ void front_run(void (*guest)(void)) {
                                                       usingBlock:^(NSNotification *n) { (void)n; exit(0); }];
         // Lifecycle (hle.h / dm.h): focus lost → 2, focus regained → 1; minimized → 3 + audio paused + GPU suspended, restored → resume (followed by focus regained → 1)
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
-        [nc addObserverForName:NSWindowDidChangeScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; if (win.screen) { g_screen_fps = (int)win.screen.maximumFramesPerSecond; g_layer.contentsScale = win.backingScaleFactor; } }];
+        [nc addObserverForName:NSWindowDidChangeScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; if (win.screen) { g_screen_fps = (int)win.screen.maximumFramesPerSecond; g_layer.contentsScale = win.backingScaleFactor; } screen_match_apply(); }];
         // Entering and leaving fullscreen: the layer is layer-backed, so its frame (and with it the drawable) follows the
-        // content view by itself; only the scale factor has to be carried over to the screen the window ended up on.
-        [nc addObserverForName:NSWindowDidEnterFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; g_layer.contentsScale = win.backingScaleFactor; }];
-        [nc addObserverForName:NSWindowDidExitFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; g_layer.contentsScale = win.backingScaleFactor; }];
+        // content view by itself; only the scale factor has to be carried over to the screen the window ended up on. The screen's rate is matched in fullscreen only (screen_match_apply)
+        [nc addObserverForName:NSWindowDidEnterFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; g_layer.contentsScale = win.backingScaleFactor; screen_match_apply(); }];
+        [nc addObserverForName:NSWindowDidExitFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; g_layer.contentsScale = win.backingScaleFactor; screen_match_apply(); }];
         [nc addObserverForName:NSWindowDidResignKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; [(DmGameView *)v cancelLook]; if (!win.miniaturized) dm_focus_set(2); }];
         [nc addObserverForName:NSWindowDidBecomeKeyNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_focus_set(1); }];
         [nc addObserverForName:NSWindowDidMiniaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; [(DmGameView *)v cancelLook]; dm_focus_set(3); dm_audio_suspend(1); dm_gfx_suspend(1); }];

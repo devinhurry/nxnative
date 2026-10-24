@@ -13,9 +13,15 @@ enum {
 #define DM_STICK_MAX 32767
 void dm_input_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);
 uint64_t dm_input_samples(void);   // Cumulative number of times the game has sampled the controller
-// Physical / virtual controller (iOS GameController, dm_gamepad.m): stored separately from touch input; when the game reads the controller, buttons are
-// ORed bitwise and a stick uses the controller's value if it is non-zero. All 0 when no controller is connected, so values are bit-for-bit the same as before
+// Physical controller path (Mac GameController, DM_KEYS / DM_CTL): stored separately from the keyboard / touch input; when the game reads player 1, buttons are
+// ORed bitwise and each stick axis takes whichever source is deflected more. All 0 when no controller is connected, so values are bit-for-bit the same as before.
+// dm_pad_set is player 1's controller (DM_BTN_SHAKE counts there only); dm_pad_set_player sets player n + 1's, which the game reads on its own npad (hle_hid.c) while
+// dm_pad_players has its bit set; a player whose npad the game does not support (SetSupportedNpadIdType) feeds player 1 instead, so a one-player game sees every controller
+#define DM_PLAYERS 8   // npads No1..No8; player 1 is the Handheld npad in handheld mode (DM_OPMODE=0)
 void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);
+void dm_pad_set_player(int player, uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry);   // player 0..DM_PLAYERS-1 (player 1..8)
+void dm_pad_players(uint32_t mask);   // bit p: player p + 1 has a controller; player 1 always counts as connected (the keyboard, the touch gamepad, DM_KEYS)
+uint32_t dm_player_npad(int player);  // the npad id the game reads player p + 1 on: Handheld (0x20) or No1 (0) for player 1, No n (id n - 1) for player n
 
 // BOTW relative-look adapter: the latest immutable right-stick source frozen by a valid
 // connected Npad read at or before the requested guest frame. A newer valid read supersedes it.

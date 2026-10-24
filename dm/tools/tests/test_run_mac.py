@@ -24,6 +24,13 @@ def game_profile(game_id='010015100B514000'):
         sys.path.pop(0)
 
 
+def stamp_nvn(lib, g):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('dmsh_chain_test', REPO / 'dm/gfx/tools/dmsh_chain.py')
+    chain = importlib.util.module_from_spec(spec); spec.loader.exec_module(chain)
+    chain.write_stamp(lib, g.id, chain.inputs(g))
+
+
 class MacLauncherTests(unittest.TestCase):
     def make_layout(self, root, g):
         v = g.get('package')
@@ -133,38 +140,48 @@ class MacLauncherTests(unittest.TestCase):
                 def table(self, name): return self.dir / name
             bare = BareProfile(root / 'bare-profile'); bare.dir.mkdir()
             (bare.table('shader_map.tsv')).write_text('header\n')
-            (bare.table('dmsh_chain.h')).write_text('#define DMSH_CHAIN "chain-id"\n')
-            nvn = root / 'shader/cache/b-chain-id'; nvn.mkdir(parents=True)
+            (bare.table('dmsh_chain.h')).write_text('#define DMSH_CHAIN "ignored-per-profile-header"\n')
+            bare.id, bare.rows = g.id, g.rows
+            chain = run_mac.chain_id(REPO)
+            nvn = root / 'shader/cache' / f'b-{chain}'; nvn.mkdir(parents=True)
             (nvn / 'test_b.metallib').write_bytes(b'x')
+            stamp_nvn(nvn, bare)
             (root / 'shader/vk').mkdir()
-            cache, api, _ = run_mac.resolve_shader_cache(root, bare, None, 'nsp')
+            cache, api, _ = run_mac.resolve_shader_cache(root, bare, None, 'nsp', chain)
             self.assertEqual((cache, api), ((root / 'shader/cache').resolve(), 'nvn'))
 
             external = root / 'external shader output'; (external / 'vk').mkdir(parents=True)
             (external / 'vk/vk_shaders.tsv').write_text('table')
             (external / 'vk/vk_shaders.metallib').write_bytes(b'x')
-            cache, api, _ = run_mac.resolve_shader_cache(root, bare, external, 'nsp')
+            cache, api, _ = run_mac.resolve_shader_cache(root, bare, external, 'nsp', chain)
             self.assertEqual((cache, api), (external.resolve(), 'vulkan'))
             (external / 'gl').mkdir()
             (external / 'gl/gl_shaders.tsv').write_text('table')
             (external / 'gl/gl_shaders.metallib').write_bytes(b'x')
             with self.assertRaisesRegex(run_mac.LaunchError, 'multiple complete'):
-                run_mac.resolve_shader_cache(root, bare, external, 'nsp')
+                run_mac.resolve_shader_cache(root, bare, external, 'nsp', chain)
             (external / 'vk/vk_shaders.tsv').unlink(); (external / 'vk/vk_shaders.metallib').unlink()
-            cache, api, _ = run_mac.resolve_shader_cache(root, bare, external, 'nsp')
+            cache, api, _ = run_mac.resolve_shader_cache(root, bare, external, 'nsp', chain)
             self.assertEqual((cache, api), (external.resolve(), 'gl'))
+
+            # Global chain folders are shared by profiles; a library's pipeline stamp must match this profile.
+            stamp_nvn(nvn, game_profile('0100000000010000'))
+            _, rejected_api, _ = run_mac.resolve_shader_cache(root, bare, None, 'nsp', chain)
+            self.assertIsNone(rejected_api)
+            stamp_nvn(nvn, bare)
 
     def test_external_profile_shadow_is_forwarded_to_make(self):
         g0 = game_profile()
         with tempfile.TemporaryDirectory(prefix='External profiles ') as t:
             root = Path(t); profiles = root / 'profiles'; ext = profiles / g0.id; ext.mkdir(parents=True)
-            for name in ('game.tsv', 'dmsh_chain.h', 'shader_map.tsv'):
+            for name in ('game.tsv', 'shader_map.tsv'):
                 shutil.copy2(g0.dir / name, ext / name)
             env = {'DM_GAMES_DIR': str(profiles), 'DM_GAMES_FIRST': '1'}
             build = root / 'game work'; build.mkdir()
             exefs, romfs, patched, msl = self.make_layout(build, g0)
-            chain = run_mac.chain_id(g0)
+            chain = run_mac.chain_id(REPO)
             cache = msl / f'b-{chain}'; cache.mkdir(parents=True); (cache / 'test_b.metallib').write_bytes(b'x')
+            stamp_nvn(cache, run_mac.profile(REPO, str(ext), env))
             args = SimpleNamespace(game=g0.id, build=str(build), version=None, patched=None, exefs=None, romfs=None, msl=None)
             plan = run_mac.resolve(args, env, REPO)
             self.assertEqual(plan['game'].dir.resolve(), ext.resolve())
@@ -177,6 +194,7 @@ class MacLauncherTests(unittest.TestCase):
                                make_call=make, exec_call=lambda *_: None)
             self.assertEqual(observed, [str(profiles.resolve()), '1', str((ext / 'shader_map.tsv').resolve())])
 
+            stamp_nvn(cache, g0)
             repo_args = SimpleNamespace(game=str(g0.dir), build=str(build), version=None, patched=None, exefs=None, romfs=None, msl=None)
             repo_plan = run_mac.resolve(repo_args, env, REPO)
             self.assertEqual(repo_plan['game'].dir.resolve(), g0.dir.resolve())
@@ -210,13 +228,59 @@ class MacLauncherTests(unittest.TestCase):
             (exefs / g.words('modules')[0]).write_bytes(b'changed-original')
             self.assertFalse(b.rewrite_freshness(REPO, exefs, out, {}, g)[0])
 
+    def test_nro_manifest_patch_and_explicit_romfs_share_freshness_inputs(self):
+        from importlib.util import spec_from_file_location, module_from_spec
+        spec = spec_from_file_location('build_ipa_from_nsp', REPO / 'scripts/build_ipa_from_nsp.py')
+        b = module_from_spec(spec); spec.loader.exec_module(b)
+        g = game_profile()
+        with tempfile.TemporaryDirectory(prefix='NRO rewrite contract ') as t:
+            root = Path(t); exefs = root / 'ExeFS'; sibling_romfs = root / 'RomFS'
+            explicit_romfs = root / 'elsewhere' / 'RomFS'; out = root / 'patched'; nro_dir = root / 'nro_patched'
+            exefs.mkdir(); sibling_romfs.mkdir(); explicit_romfs.mkdir(parents=True); out.mkdir(); nro_dir.mkdir()
+            for mod in g.words('modules'):
+                (exefs / mod).write_bytes(bytes(0x80))
+            module_build = '00112233445566778899aabbccddeeff'
+            nro = nro_dir / 'plugin.nro'; blob = bytearray(0x80); blob[0x40:0x50] = bytes.fromhex(module_build); nro.write_bytes(blob)
+            (explicit_romfs / 'plugin.nrr').write_bytes(b'registration')
+            manifest = nro_dir / 'nro.tsv'; manifest.write_text('plugin\tregistered\n')
+            nro_dir.with_name(nro_dir.name + '.key').write_text(b.nro_collection_key(REPO, explicit_romfs, b.nrr_files(explicit_romfs)) + '\n')
+
+            # A patch registry entry selected solely by an NRO's build ID is a rewrite input.
+            patch_repo = root / 'repo'; (patch_repo / 'dm/tools').mkdir(parents=True); (patch_repo / 'dm/games/plugin').mkdir(parents=True)
+            (patch_repo / 'dm/tools/sdk_patches.py').write_text('')
+            nro_patch = patch_repo / 'dm/games/plugin/patches.py'; nro_patch.write_text(f"build = '{module_build}'\n")
+            self.assertIn(nro_patch, b.patch_files(patch_repo, exefs, g.words('modules'), [nro]))
+
+            # The rewrite entry point must collect from the launcher's explicit RomFS, not ExeFS.parent.
+            import sys
+            from unittest.mock import patch
+            seen = []
+            with patch.object(b, 'collect_nros', side_effect=lambda _py, _repo, source, _dst, _env, logs: (seen.append((Path(source), Path(logs).is_dir())) or {})), \
+                 patch.object(b, 'rewrite_state', return_value=(True, 'current', 'key')):
+                b.PROG.plan(1)
+                b.rewrite(Path(sys.executable), REPO, exefs, out, {}, root / 'logs', g, explicit_romfs)
+            self.assertEqual(seen, [(explicit_romfs, True)])
+
+            fresh, reason, key = b.rewrite_freshness(REPO, exefs, out, {}, g, explicit_romfs)
+            self.assertFalse(fresh)
+            names = g.words('modules') + ['plugin']
+            for name in b.rewrite_outputs(names, has_nro_manifest=True): (out / name).write_bytes(b'generated')
+            out.with_name(out.name + '.key').write_text(key + '\n')
+            self.assertTrue(b.rewrite_freshness(REPO, exefs, out, {}, g, explicit_romfs)[0])
+            self.assertFalse(b.rewrite_freshness(REPO, exefs, out, {}, g)[0], 'sibling RomFS must not validate an explicit RomFS rewrite')
+            nro.unlink()
+            fresh, reason, _ = b.rewrite_freshness(REPO, exefs, out, {}, g, explicit_romfs)
+            self.assertFalse(fresh)
+            self.assertIn('missing collected NRO', reason)
+
     def test_stale_rewrite_updates_then_reuses_without_rewrite(self):
         g = game_profile()
         with tempfile.TemporaryDirectory(prefix='Launcher work ') as t:
             root = Path(t); exefs, romfs, patched, msl = self.make_layout(root, g)
             args = SimpleNamespace(check=False, windowed=True)
-            chain = run_mac.chain_id(g)
+            chain = run_mac.chain_id(REPO)
             cache = msl / f'b-{chain}'; cache.mkdir(parents=True); (cache / 'test_b.metallib').write_bytes(b'x')
+            stamp_nvn(cache, g)
             plan = {'game': g, 'base': root, 'version': g.get('package'), 'patched': patched, 'exefs': exefs, 'romfs': romfs, 'msl': msl, 'chain': chain, 'graphics': 'nvn'}
             env = {'DM_ASPECT_RATIO': '21:10'}
             calls = {'rewrite': 0, 'make': 0, 'exec': 0}
@@ -243,7 +307,7 @@ class MacLauncherTests(unittest.TestCase):
         g = game_profile()
         with tempfile.TemporaryDirectory() as t:
             root = Path(t); exefs, romfs, patched, msl = self.make_layout(root, g)
-            chain = run_mac.chain_id(g)
+            chain = run_mac.chain_id(REPO)
             cache = msl / f'b-{chain}'; cache.mkdir(parents=True); (cache / 'test_b.metallib').write_bytes(b'x')
             for name in b.rewrite_outputs(g.words('modules')): (patched / name).write_bytes(b'old-good-output')
             fresh, _, key = b.rewrite_freshness(REPO, exefs, patched, {}, g)
@@ -260,7 +324,7 @@ class MacLauncherTests(unittest.TestCase):
             calls = []
             with self.assertRaises(run_mac.LaunchError), redirect_stdout(io.StringIO()):
                 run_mac.launch(plan, SimpleNamespace(check=False, windowed=False), {}, REPO,
-                               rewrite_call=lambda _py, repo, source, out, env, logs, game: b.rewrite(fake_python, repo, source, out, env, logs, game),
+                               rewrite_call=lambda _py, repo, source, out, env, logs, game, romfs: b.rewrite(fake_python, repo, source, out, env, logs, game, romfs),
                                make_call=lambda *a: calls.append('make'), exec_call=lambda *a: calls.append('exec'))
             self.assertEqual(sentinel.read_bytes(), b'old-good-output')
             self.assertEqual(patched.with_name(patched.name + '.key').read_text(), key + '\n')

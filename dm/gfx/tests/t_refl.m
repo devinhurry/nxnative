@@ -4,7 +4,7 @@
 #import <Foundation/Foundation.h>
 #include <stdio.h>
 #include <string.h>
-#include "dmsh_chain.h"   // the game profile folder (-I from the Makefile)
+#include "dmsh_chain.h"   // dm/gfx/nvn (-I from the Makefile)
 
 enum { C = NVN_RB_CBUF, S = NVN_RB_SAMP, T = NVN_RB_TEX, I = NVN_RB_IMG, TB = NVN_RB_TBUF };
 enum { F = NVN_DPF_FLOAT, U = NVN_DPF_UINT, D = NVN_DPF_DEPTH };

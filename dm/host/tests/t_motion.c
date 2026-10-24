@@ -21,7 +21,9 @@ void objmap_put(const void *p, void *host) { (void)p; (void)host; }
 void *objmap_del(const void *p) { (void)p; return NULL; }
 void hle_bind_system_event(void *guest, int autoclear) { (void)guest; (void)autoclear; }
 void hle_signal_system_event(void *guest) { (void)guest; }
+int hle_signal_bound_system_event(void *guest) { (void)guest; return 1; }
 int touch_fill_n(void *out, int max, uint64_t now) { (void)out; (void)max; (void)now; return 0; }
+int gesture_fill(void *out, int n, uint64_t now) { (void)out; (void)n; (void)now; return 0; }
 void dm_gfx_shot_at(long count, const char *path) { (void)count; (void)path; }
 void dm_gfx_texlist(int target) { (void)target; }
 void dm_gfx_texraw(uint64_t serial, const char *path) { (void)serial; (void)path; }
@@ -31,6 +33,15 @@ void dm_ctl_cvar_i32(uint64_t offset, int32_t value) { (void)offset; (void)value
 void dm_ctl_cvar_f32(uint64_t offset, float value) { (void)offset; (void)value; }
 void dm_gfx_texdump_next(const char *path) { (void)path; }
 void dm_gfx_passdump_next(long frames) { (void)frames; }
+void dm_haptics_init(void (*sink)(dm_haptic_state), int enabled) { (void)sink; (void)enabled; }
+void dm_haptics_route(int player, int available) { (void)player; (void)available; }
+void dm_haptics_clear(int player) { (void)player; }
+uint64_t dm_haptics_epoch(int player) { (void)player; return 0; }
+uint32_t dm_haptics_available(void) { return 0; }
+void dm_haptics_suspend(unsigned reason, int suspended) { (void)reason; (void)suspended; }
+void dm_haptics_send(const dm_vibration_update *updates, int count) { (void)updates; (void)count; }
+dm_vibration dm_haptics_actual(int player, int motor) { (void)player; (void)motor; return (dm_vibration){0}; }
+dm_haptic_level dm_haptics_level(const dm_vibration *values, int count, float gain) { (void)values; (void)count; (void)gain; return (dm_haptic_level){0}; }
 
 void dm_hid_test_reset_look_sample(void);
 void dm_hid_test_fill(uint32_t id, uint32_t style, int64_t *sampling, uint64_t *buttons,
@@ -164,11 +175,27 @@ int main(void) {
     // legacy merge remains unchanged when the feature is unavailable.
     const uint32_t npad = 0x20, full_key = 1, handheld = 2;
     int32_t rx, ry; uint32_t attrs; int64_t sampling; uint64_t buttons;
+    dm_hid_look_sample look_sample;
+    // A reported second player uses its own Npad and must never publish player-1 provenance.
+    dm_pad_players(0x3); h_hid_SetIds((const uint32_t[]){0, 1, npad}, 3);
+    dm_pad_set_player(1, 0, 0, 0, 7000, -8000);
     dm_hid_test_reset_look_sample(); dm_look_set_available(1);
+    test_frame = 19;
+    dm_hid_test_fill(1, full_key, NULL, NULL, &rx, &ry, &attrs);
+    assert(attrs && rx == 7000 && ry == -8000 && !dm_hid_look_sample_at(test_frame, &look_sample));
+    dm_input_set(0, 0, 0, 11000, 2000);
+    dm_hid_test_fill(npad, handheld, NULL, NULL, &rx, &ry, NULL);
+    assert(rx == 11000 && ry == 2000 && dm_hid_look_sample_at(test_frame, &look_sample) &&
+           look_sample.source == DM_HID_LOOK_VIRTUAL);
+    dm_hid_test_fill(1, full_key, NULL, NULL, &rx, &ry, NULL);
+    assert(rx == 7000 && ry == -8000 && dm_hid_look_sample_at(test_frame, &look_sample) &&
+           look_sample.source == DM_HID_LOOK_VIRTUAL && look_sample.virtual_rx == 11000 &&
+           look_sample.virtual_ry == 2000);
+    dm_pad_set_player(1, 0, 0, 0, 0, 0); dm_pad_players(1); h_hid_SetIds(NULL, 0);
+    dm_hid_test_reset_look_sample();
     dm_input_set(0, 0, 0, 1000, -1000); dm_pad_set(0, 0, 0, 2000, 1000);
     test_frame = 20;
     dm_hid_test_fill(npad, full_key, &sampling, &buttons, &rx, &ry, &attrs);
-    dm_hid_look_sample look_sample;
     assert(!dm_hid_look_sample_at(test_frame, &look_sample)); // invalid style cannot publish provenance
     dm_input_set(0, 0, 0, 12000, 3000);
     dm_hid_test_fill(npad, handheld, &sampling, &buttons, &rx, &ry, &attrs);

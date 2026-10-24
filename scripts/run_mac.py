@@ -109,15 +109,23 @@ def resolve_layout(base, version, mods, patched_arg=None, exefs_arg=None, romfs_
     return valid[0]
 
 
-def chain_id(g):
-    try: return re.search(r'#define DMSH_CHAIN "([^"]+)"', g.table('dmsh_chain.h').read_text()).group(1)
+def chain_id(repo):
+    try: return re.search(r'#define DMSH_CHAIN "([^"]+)"', (repo / 'dm/gfx/nvn/dmsh_chain.h').read_text()).group(1)
     except (OSError, AttributeError): return None
 
 
-def resolve_shader_cache(base, g, override, layout):
+def nvn_stamp_matches(repo, library_dir, g):
+    """Use the build pipeline's profile digest to distinguish games sharing the global chain folder."""
+    from importlib.util import spec_from_file_location, module_from_spec
+    spec = spec_from_file_location('dmsh_chain', repo / 'dm/gfx/tools/dmsh_chain.py')
+    chain = module_from_spec(spec); spec.loader.exec_module(chain)
+    stamp = chain.read_stamp(library_dir)
+    return stamp.get('game') == g.id and stamp.get('inputs') == chain.inputs(g)
+
+
+def resolve_shader_cache(base, g, override, layout, chain):
     """Select a cache by complete backend artifacts, never by game-name prose."""
     root = _path(override)
-    chain = chain_id(g)
     if root and root.name.startswith('b-'):
         if not chain or root.name != f'b-{chain}': raise LaunchError(f'--msl must be the shader-cache parent, not mismatched chain folder {root}')
         root = root.parent
@@ -126,7 +134,7 @@ def resolve_shader_cache(base, g, override, layout):
     matches = []
     for candidate in roots:
         nvn = candidate / f'b-{chain}' if chain else None
-        if nvn and nvn.is_dir() and any(nvn.glob('*_b.metallib')) and g.table('shader_map.tsv').is_file(): matches.append(('nvn', candidate))
+        if nvn and nvn.is_dir() and any(nvn.glob('*_b.metallib')) and g.table('shader_map.tsv').is_file() and nvn_stamp_matches(Path(__file__).resolve().parent.parent, nvn, g): matches.append(('nvn', candidate))
         for api, subdir, table, lib in (('vulkan', 'vk', 'vk_shaders.tsv', 'vk_shaders.metallib'), ('gl', 'gl', 'gl_shaders.tsv', 'gl_shaders.metallib')):
             d = candidate / subdir
             if (d / table).is_file() and (d / lib).is_file(): matches.append((api, candidate))
@@ -147,8 +155,9 @@ def resolve(args, env, repo):
     if version not in g.builds(): raise LaunchError(f'profile {g.id} has no build row for {version}; choose one of: {", ".join(g.builds())}')
     patched, exefs, romfs = resolve_layout(base, version, g.words('modules'), args.patched, args.exefs or env.get('DM_EXEFS'), args.romfs or env.get('DM_ROMFS'))
     layout = 'manual' if patched.parent == base / 'build' else 'runtime' if patched.parent == base else 'nsp'
-    msl, graphics, cache_roots = resolve_shader_cache(base, g, args.msl or env.get('DM_MSL_DIR'), layout)
-    return {'game': g, 'base': base, 'version': version, 'patched': patched, 'exefs': exefs, 'romfs': romfs, 'msl': msl, 'chain': chain_id(g), 'layout': layout, 'graphics': graphics, 'cache_roots': cache_roots}
+    chain = chain_id(repo)
+    msl, graphics, cache_roots = resolve_shader_cache(base, g, args.msl or env.get('DM_MSL_DIR'), layout, chain)
+    return {'game': g, 'base': base, 'version': version, 'patched': patched, 'exefs': exefs, 'romfs': romfs, 'msl': msl, 'chain': chain, 'layout': layout, 'graphics': graphics, 'cache_roots': cache_roots}
 
 
 def launch(plan, args, env, repo, rewrite_call=None, make_call=None, exec_call=None, builder=None):
@@ -157,12 +166,12 @@ def launch(plan, args, env, repo, rewrite_call=None, make_call=None, exec_call=N
         spec = spec_from_file_location('build_ipa_from_nsp', repo / 'scripts/build_ipa_from_nsp.py')
         builder = module_from_spec(spec); spec.loader.exec_module(builder)
     logs = plan['base'] / 'logs' / 'mac_rewrite'
-    fresh, reason, _ = builder.rewrite_freshness(repo, plan['exefs'], plan['patched'], env, plan['game'])
+    fresh, reason, _ = builder.rewrite_freshness(repo, plan['exefs'], plan['patched'], env, plan['game'], plan['romfs'])
     print(f'game: {plan["game"].id} ({plan["game"].get("name", "")})\nprofile: {plan["game"].dir}\nversion: {plan["version"]}\nbuild: {plan["base"]}\npatched: {plan["patched"]}\nExeFS: {plan["exefs"]}\nRomFS: {plan["romfs"]}\nshader cache root: {plan["msl"]}')
     graphics = plan.get('graphics')
     if graphics == 'nvn':
         shader_dir = plan['msl'] / f'b-{plan["chain"]}' if plan['chain'] else None
-        shader_ready = bool(shader_dir and shader_dir.is_dir() and any(shader_dir.glob('*_b.metallib')) and plan['game'].table('shader_map.tsv').is_file())
+        shader_ready = bool(shader_dir and shader_dir.is_dir() and any(shader_dir.glob('*_b.metallib')) and plan['game'].table('shader_map.tsv').is_file() and nvn_stamp_matches(repo, shader_dir, plan['game']))
         shader_reason = f'NVN chain cache or profile shader map missing: {shader_dir}' if not shader_ready else 'NVN chain cache and profile shader map present'
     elif graphics in ('vulkan', 'gl'):
         api = 'vk' if graphics == 'vulkan' else 'gl' if graphics == 'gl' else None
@@ -187,9 +196,9 @@ def launch(plan, args, env, repo, rewrite_call=None, make_call=None, exec_call=N
         except ImportError as e:
             raise LaunchError(f'cannot rewrite stale modules; install the Python dependency {e.name!r} first') from e
         builder.PROG.plan(1)
-        try: (rewrite_call or builder.rewrite)(Path(sys.executable), repo, plan['exefs'], plan['patched'], env, logs, plan['game'])
+        try: (rewrite_call or builder.rewrite)(Path(sys.executable), repo, plan['exefs'], plan['patched'], env, logs, plan['game'], plan['romfs'])
         except Exception as e: raise LaunchError(f'module rewrite failed: {e}') from e
-        fresh, reason, _ = builder.rewrite_freshness(repo, plan['exefs'], plan['patched'], env, plan['game'])
+        fresh, reason, _ = builder.rewrite_freshness(repo, plan['exefs'], plan['patched'], env, plan['game'], plan['romfs'])
         if not fresh: raise LaunchError(f'rewrite did not produce a complete current output: {reason}')
     game_id = plan['game'].id
     env.update(DM_GAME=game_id, DM_ROOT=str(plan['base']), DM_ROMFS=str(plan['romfs']), DM_MSL_DIR=str(plan['msl']))

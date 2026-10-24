@@ -545,7 +545,7 @@ void svc_thread_dump(void) {
 // On per the game profile's core_preempt (off by default: Mario's loader threads would wait for busy high-priority decompression threads, pushing its first frame from 0.6 s to 2.9 s); DM_PREEMPT=0 / 1 overrides the profile. Counts are in the thread state dump
 static int svc_thread_impl(int num, uint64_t *regs);
 // Yield back-off: on the Switch a yield with nothing else runnable costs nothing, but a guest loop that polls the tick and yields (Three Houses' frame limiter main+0x5be430 waited out each 33 ms frame this way:
-// 228,105 yields per frame on an iPhone, a P-core at full clock; a per-build cut in patch_nso.py now makes it sleep) becomes a host busy spin. A run of yields with no other SVC between them (and no progress, thr_yield) is let through as plain sched_yield for its first 2 ms;
+// 228,105 yields per frame on an iPhone, a P-core at full clock; a per-build cut in its patches.py now makes it sleep) becomes a host busy spin. A run of yields with no other SVC between them (and no progress, thr_yield) is let through as plain sched_yield for its first 2 ms;
 // after that each yield sleeps an eighth of the run so far, between 10 and 250 µs (a 23 ms limiter wait: about 90 sleeps instead of 200k yields, ending at most 250 µs late; idle workers polling for jobs the same).
 // The back-off used to start after 200 µs: that also caught Tears of the Kingdom's main thread waiting for its ModuleSystem workers (about 350 yields a frame, runs of a few hundred µs on the
 // frame's critical path). A sleep that overran the moment the workers finished pushed frames past 33 ms, and the game then drops itself to present interval 3 (20 fps) for a while:
@@ -955,6 +955,16 @@ void hle_signal_system_event(void *ev) {   // An unbound one is bound on the spo
         if (bound) die("SystemEvent %p still not found after binding", ev);
         hle_bind_system_event(ev, 0);   // guest code (SVCs take G): outside the lock
     }
+}
+// Signal only a bound one, from any thread; 0 when it is not bound (never bound, or the game destroyed it). For state changes the front end reports (hle_hid.c: a controller
+// connected or removed), where binding on the spot is impossible off a guest thread and a destroyed event must not be bound again
+int hle_signal_bound_system_event(void *ev) {
+    pthread_mutex_lock(&G);
+    pthread_mutex_lock(&g_se_lock); uint32_t wh = se_find(ev); pthread_mutex_unlock(&g_se_lock);
+    event_t *e = wh ? h_get(wh, O_EVENT_W) : NULL;
+    if (e) { e->signaled = 1; wake_sync_waiters(e); }
+    pthread_mutex_unlock(&G);
+    return e != NULL;
 }
 void hle_clear_system_event(void *ev) {   // Clear a bound service-layer SystemEvent (any thread), as the service does when its condition ends; an unbound one has nothing to clear
     pthread_mutex_lock(&G);

@@ -8,6 +8,9 @@ namespace Ryujinx.Graphics.Shader
     /// </summary>
     public interface IGpuAccessor : ILogger
     {
+        // Fixed VS capture ABI used by the offline Metal geometry path.
+        bool QueryGeometryInputFixed() => false;
+
         /// <summary>
         /// Reads data from the constant buffer 1.
         /// </summary>

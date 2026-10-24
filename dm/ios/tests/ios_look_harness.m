@@ -47,6 +47,7 @@ static uint64_t g_buttons;
 static int32_t g_lx, g_ly, g_rx, g_ry;
 static uint64_t g_pad_buttons;
 static int32_t g_pad_lx, g_pad_ly, g_pad_rx, g_pad_ry;
+static int g_pad_player;
 static int g_input_sets, g_pad_sets;
 static dm_touch g_last_touch;
 static int g_touch_count, g_touch_sets;
@@ -74,9 +75,13 @@ void dm_input_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t 
     ++g_input_sets;
     g_buttons = buttons; g_lx = lx; g_ly = ly; g_rx = rx; g_ry = ry;
 }
-void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
+void dm_pad_set_player(int player, uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     ++g_pad_sets;
+    g_pad_player = player;
     g_pad_buttons = buttons; g_pad_lx = lx; g_pad_ly = ly; g_pad_rx = rx; g_pad_ry = ry;
+}
+void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
+    dm_pad_set_player(0, buttons, lx, ly, rx, ry);
 }
 void dm_touch_set(const dm_touch *touches, int count) {
     g_touch_count = count; ++g_touch_sets;
@@ -141,7 +146,7 @@ static void test_look_drag(DmGamepad *view) {
     near_value(g_look_events[1].dy, 15.0f / 390.0f, "downward delta is positive and normalized by the logical short edge");
     near_value(g_look_events[2].dx, 5.0f / 390.0f, "release-only horizontal displacement is delivered");
     near_value(g_look_events[2].dy, 5.0f / 390.0f, "release-only vertical displacement is delivered");
-    CHECK(g_pad_buttons == 0 && g_pad_lx == 0 && g_pad_ly == 0 && g_pad_rx == 0 && g_pad_ry == 0,
+    CHECK(g_pad_player == 0 && g_pad_buttons == 0 && g_pad_lx == 0 && g_pad_ly == 0 && g_pad_rx == 0 && g_pad_ry == 0,
           "virtual touch right-stick axes stay separate from the physical-pad channel");
     CHECK(g_touch_count == 0, "look drag does not become a game touchscreen touch");
     float split_x, split_y; sum_moves(&split_x, &split_y);
@@ -158,7 +163,7 @@ static void test_look_drag(DmGamepad *view) {
     int input_sets_before_republish = g_input_sets, pad_sets_before_republish = g_pad_sets;
     front_look_mode_changed();
     CHECK(g_input_sets == input_sets_before_republish + 1 && g_pad_sets == pad_sets_before_republish + 1 &&
-          g_rx == 32767 && g_pad_rx == 0,
+          g_rx == 32767 && g_pad_player == 0 && g_pad_rx == 0,
           "look-mode installation republishes the current virtual and physical source split");
     ended(view, t, 701, 150);
     CHECK(g_rx == 0 && g_ry == 0, "ending look clears the virtual right-stick axes after the final relative delta");

@@ -17,13 +17,15 @@ sys.path.insert(0, str(HERE.parent / 'tools')); import nso_syms   # dynamic symb
 MAGICS = [(b'UnityFS\0', 'UnityFS'), (b'UnityWeb', 'UnityWeb'), (b'UnityRaw', 'UnityRaw'), (b'BNSH', 'BNSH'), (b'BAHS', 'BAHS'), (b'SARC', 'SARC'), (b'Yaz0', 'Yaz0'),
           (bytes.fromhex('28b52ffd'), 'zstd'), (b'FRES', 'bfres'), (b'BNTX', 'BNTX'), (b'BWAV', 'BWAV'), (b'FSAR', 'BFSAR'), (b'CPK ', 'CRI CPK'), (b'CRID', 'CRI USM'),
           (b'@UTF', 'CRI UTF'), (b'AKPK', 'Wwise pck'), (b'BKHD', 'Wwise bnk'), (b'FSB5', 'FMOD'), (b'\x89PNG', 'PNG'), (b'RIFF', 'RIFF'), (b'OggS', 'Ogg'), (b'PK\x03\x04', 'zip'), (b'NSO0', 'NSO'),
-          (bytes.fromhex('03022307'), 'SPIR-V'), (b'ONEPACK\0', 'Trinity pack'), (b'ARC\0', 'MT Framework ARC'), (b'SCNE', 'Bezel Engine archive'), (b'XNB', 'XNB')]
-PACKED = {'UnityFS', 'UnityWeb', 'Yaz0', 'zstd', 'BWAV', 'CRI CPK', 'CRI USM', 'Wwise pck', 'FMOD', 'PNG', 'Ogg', 'zip', 'Trinity pack', 'MT Framework ARC', 'Bezel Engine archive'}   # file headers of compressed / media formats (zip_store)
+          (bytes.fromhex('03022307'), 'SPIR-V'), (b'ONEPACK\0', 'Trinity pack'), (b'ARC\0', 'MT Framework ARC'), (b'SCNE', 'Bezel Engine archive'), (b'XNB', 'XNB'), (b'pkzl', 'PlatinumGames PKZ')]
+PACKED = {'UnityFS', 'UnityWeb', 'Yaz0', 'zstd', 'BWAV', 'CRI CPK', 'CRI USM', 'Wwise pck', 'FMOD', 'PNG', 'Ogg', 'zip', 'Trinity pack', 'MT Framework ARC', 'Bezel Engine archive', 'PlatinumGames PKZ'}   # file headers of compressed / media formats (zip_store)
 # IL2CPP by the metadata file every IL2CPP player opens: Unity 2022's main (Ace Attorney Investigations Collection) has no il2cpp_ API names, Engage's 2020.3 has both
 MARKERS = [(b'nvnBootstrapLoader', 'NVN'), (b'vkCreateInstance', 'Vulkan'), (b'eglGetProcAddress', 'EGL / OpenGL'), (b'global-metadata.dat', 'Unity IL2CPP'), (b'UnityEngine', 'Unity'),
            (b'sead::', 'Nintendo sead'), (b'agl::', 'Nintendo agl'), (b'gsys::', 'Nintendo gsys'), (b'Unreal', 'Unreal'), (b'UE4', 'Unreal 4'), (b'Havok', 'Havok'), (b'CRIWARE', 'CRIWARE'), (b'Wwise', 'Wwise'),
            (b'MonoGame.Framework', 'MonoGame'), (b'FMOD mixer', 'FMOD')]
 GLSLC_MAGIC = b'\x91\x68\x86\x19'   # GLSLC compiler outputs (shader_split.py glslc_shaders)
+GL_SRC = rb'\0#version [0-9]'      # a GLSL source string as dm/gfx/tools/gl_shaders.py takes it from main (Balatro's main has none, only glslang's messages that start with '#version:')
+GL_FILES = ('.mvgl', '.vert', '.frag')   # the RomFS files gl_shaders.py reads GLSL from
 APP_POOL = 0xCD500000               # the application memory pool of a 4 GB Switch (3285 MiB), what every profile but Engage's reports
 MiB = 1 << 20
 
@@ -70,7 +72,7 @@ def npdm(path):   # (system resource size, program ID) from main.npdm; a non-zer
 def facts_of(exefs, romfs):
     """What the profile rules (and the survey report) need from a game's code modules and RomFS"""
     exefs = Path(exefs)
-    F = {'mods': {}, 'markers': {}, 'sdkver': set(), 'comps': set(), 'unity': set(), 'glslc': 0, 'glsl_src': 0, 'gl_names': 0, 'sysres': 0, 'program': None}
+    F = {'mods': {}, 'markers': {}, 'sdkver': set(), 'comps': set(), 'unity': set(), 'glslc': 0, 'glsl_src': 0, 'gl_names': 0, 'gl_src': 0, 'sysres': 0, 'program': None}
     for p in sorted(exefs.iterdir()):
         with open(p, 'rb') as f:
             if f.read(4) != b'NSO0': continue
@@ -87,6 +89,7 @@ def facts_of(exefs, romfs):
         if p.name == 'main':
             F['unity'] = {v.decode() for v in re.findall(rb'20[12][0-9]\.[0-9]+\.[0-9]+f[0-9]', img)}
             F['glslc'], F['glsl_src'], F['gl_names'] = img.count(GLSLC_MAGIC), img.count(b'#version '), img.count(b'glShaderSource')
+            F['gl_src'] = len(re.findall(GL_SRC, img))
             F['main_markers'] = {name for pat, name in MARKERS if pat in img}
         m['kind'] = {'main': 'the game', 'sdk': 'nnSdk', 'rtld': 'rtld'}.get(p.name) or kind(m)
     F['sysres'], F['program'] = npdm(exefs / 'main.npdm')
@@ -167,31 +170,35 @@ GPU_DRIVERS = {'NintendoSDK_OpenGL', 'NintendoSDK_Vulkan'}
 
 
 # ---- Shader sources: decided from the game files at every build, not kept in the profile (scripts/build_ipa_from_nsp.py; shader_split.py reads what those steps write) ----
-def shader_sources(imports, glsl_src, glslc_mods, spirv, unreal_paks, trinity_packs=0, legacy_paks=0, gl_names=0):
+def shader_sources(imports, glsl_src, glslc_mods, spirv, unreal_paks, trinity_packs=0, legacy_paks=0, gl_names=0, gl_src=0, gl_files=0, oodle_pkz=0):
     """{name: (value, reason)}: graphics (vulkan when main imports Vulkan functions and not nvnBootstrapLoader; gl when it imports eglCreateWindowSurface and names glShaderSource, so it compiles
-    GLSL through OpenGL (gl_names: how often main has that name; Absolum imports the same EGL functions for SDL3 but renders with NVN and names no GL function); else nvn), vk_capture (a Vulkan game without SPIR-V files generates its shaders at
-    run time), glslc_capture (main holds GLSL sources and calls glslcCompile in a module the game loads: it compiles some shaders at run time), ue_decode (Unreal paks keep the shaders Oodle-compressed
-    in their shader code archives, which only the game's own Oodle decodes), oodle_packs (Trinity packs, Oodle-compressed file by file, which the shader split decodes with the game's own decoder in
-    the Mac host's tool mode), ue_legacy (legacy Unreal paks, version 4: the shaders are inline in the cooked packages, which the shader split reads through the game's own decoder the same way).
+    GLSL through OpenGL (gl_names: how often main has that name; Absolum imports the same EGL functions for SDL3 but renders with NVN and names no GL function); else nvn; vkGetInstanceProcAddr
+    alone is SDL's Vulkan loader, which Balatro's LÖVE links and never uses), vk_capture (a Vulkan game without SPIR-V files generates its shaders at run time), gl_capture (an OpenGL game with no
+    GLSL source where gl_shaders.py looks, gl_src strings in main and gl_files files in the RomFS: it puts its shaders together at run time, LÖVE from its Lua), glslc_capture (main holds GLSL sources and calls glslcCompile in a module the game loads: it compiles some shaders at run time), ue_decode (Unreal paks keep the shaders Oodle-compressed
+    in their shader code archives, which only the game's own Oodle decodes), oodle_packs (Trinity packs, or oodle_pkz PlatinumGames PKZ archives with Oodle Kraken entries:
+    Oodle-compressed file by file, which the shader split decodes with the game's own decoder in the Mac host's tool mode), ue_legacy (legacy Unreal paks, version 4: the shaders are inline in the cooked packages, which the shader split reads through the game's own decoder the same way).
     unreal_paks counts the version 11 paks, legacy_paks the older ones. Checked against every profile: Hades and Super Mario Galaxy Vulkan, Galaxy alone with no SPIR-V file, Three Houses alone compiling
     shaders (13 Sentinels holds 106 GLSL sources but does not import glslcCompile; Captain Toad: Treasure Tracker imports it with agl's GLSL sources, but no module defines it), Octopath Traveler 0
-    alone with version 11 Unreal paks, DRAGON QUEST XI S alone with legacy ones, Pokémon Legends: Z-A alone with Trinity packs, Digimon Story Cyber Sleuth alone with OpenGL (of the 22 games extracted)"""
-    vk = sum(1 for s in imports if re.match(r'vk[A-Z]', s)); vulkan = bool(vk) and 'nvnBootstrapLoader' not in imports
+    alone with version 11 Unreal paks, DRAGON QUEST XI S alone with legacy ones, Pokémon Legends: Z-A alone with Trinity packs, Digimon Story Cyber Sleuth and Balatro alone with OpenGL (of the 23 games
+    extracted; Hades and both Galaxies import 99 or 100 Vulkan functions, Balatro only vkGetInstanceProcAddr), Balatro alone composing its GLSL"""
+    vk = sum(1 for s in imports if re.match(r'vk[A-Z]', s) and s != 'vkGetInstanceProcAddr'); vulkan = bool(vk) and 'nvnBootstrapLoader' not in imports
     gl = not vulkan and 'eglCreateWindowSurface' in imports and bool(gl_names)
     return {'graphics': ('vulkan', f'main imports {vk} Vulkan functions and not nvnBootstrapLoader: the host\'s Vulkan layer (dm/gfx/vk/hle_vk.m)') if vulkan else
                         ('gl', 'main imports EGL and names glShaderSource: it renders with OpenGL and compiles GLSL, the host\'s GL layer (dm/gfx/gl/hle_gl.m)') if gl else ('nvn', 'main imports nvnBootstrapLoader'),
             'vk_capture': (vulkan and not spirv, 'no SPIR-V file in the RomFS: the game generates its shaders at run time (Super Mario Galaxy), captured by booting it on the Mac'),
+            'gl_capture': (gl and not gl_src and not gl_files, 'no GLSL source in the RomFS or main: the game puts its shaders together at run time (LÖVE: Balatro), captured by booting it on the Mac'),
             'glslc_capture': (not vulkan and not gl and bool(glsl_src) and 'glslcCompile' in imports and bool(glslc_mods),
                               f'main holds {glsl_src} GLSL sources and calls glslcCompile in {", ".join(glslc_mods) or "no module it loads"}: shaders compiled at run time (Fire Emblem: Three Houses), captured by booting it on the Mac'),
             'ue_decode': (not vulkan and not gl and bool(unreal_paks), f'{unreal_paks} Unreal pak(s): the shaders are Oodle-compressed in their shader code archives (Octopath Traveler 0), decoded by booting the game on the Mac'),
-            'oodle_packs': (not vulkan and not gl and bool(trinity_packs), f'{trinity_packs} Trinity pack file(s) (ONEPACK, arc/data.trpfs: Pokémon Legends: Z-A), Oodle-compressed: the shader split decodes them with the game\'s own decoder in the Mac host (dm/host/hle_oodle.c DM_OODLE_SERVE)'),
+            'oodle_packs': (not vulkan and not gl and bool(trinity_packs or oodle_pkz), (f'{trinity_packs} Trinity pack file(s) (ONEPACK, arc/data.trpfs: Pokémon Legends: Z-A)' if trinity_packs else
+                            f'{oodle_pkz} PlatinumGames PKZ archive(s) with Oodle Kraken entries (Bayonetta 3)') + ', Oodle-compressed: the shader split decodes them with the game\'s own decoder in the Mac host (dm/host/hle_oodle.c DM_OODLE_SERVE)'),
             'ue_legacy': (not vulkan and not gl and bool(legacy_paks), f'{legacy_paks} legacy Unreal pak(s) (version 4, UE 4.18: DRAGON QUEST XI S): the shaders are inline in the cooked packages, compressed in the pak; the shader split decodes them with the game\'s own decoder in the Mac host (dm/host/hle_oodle.c DM_OODLE_SERVE)')}
 
 
 def build_sources(exefs, romfs, modules):
     """shader_sources from an extraction (its ExeFS and RomFS folders) and the modules the profile loads"""
     exefs = Path(exefs); main = nso(exefs / 'main')[0]
-    imports = {s for s, defined, _ in nso_syms.dynsyms(main) if not defined}; glsl_src = main.count(b'#version '); gl_names = main.count(b'glShaderSource')
+    imports = {s for s, defined, _ in nso_syms.dynsyms(main) if not defined}; glsl_src = main.count(b'#version '); gl_names = main.count(b'glShaderSource'); gl_src = len(re.findall(GL_SRC, main))
     glslc_mods = [m for m in modules if m != 'main' and glsl_src and 'glslcCompile' in imports and (exefs / m).exists()
                   and any(s == 'glslcCompile' and defined for s, defined, _ in nso_syms.dynsyms(nso(exefs / m)[0]))]
     spirv = 0
@@ -203,7 +210,16 @@ def build_sources(exefs, romfs, modules):
         for n in names:
             if n.endswith('.trpfs'):
                 with open(os.path.join(d, n), 'rb') as f: trinity += f.read(8) == b'ONEPACK\0'
-    return shader_sources(imports, glsl_src, glslc_mods, spirv, len(uepak.unreal_paks(str(romfs), legacy=False)), trinity, len(uepak.unreal_paks(str(romfs), legacy=True)), gl_names)
+    gl_files = sum(1 for _, _, names in os.walk(romfs) for n in names if n.lower().endswith(GL_FILES)) if 'eglCreateWindowSurface' in imports else 0
+    oodle_pkz = 0   # PlatinumGames PKZ archives whose name table (after the 0x20-byte entries) names Oodle Kraken: their entries are decoded with the game's own decoder
+    for d, _, names in os.walk(romfs):
+        for n in names:
+            if n.endswith('.pkz'):
+                with open(os.path.join(d, n), 'rb') as f:
+                    h = f.read(0x20)
+                    if h[:4] == b'pkzl':
+                        cnt, eo, nl = struct.unpack_from('<III', h, 0x10); f.seek(eo + 0x20 * cnt); oodle_pkz += b'OodleKraken\0' in f.read(nl)
+    return shader_sources(imports, glsl_src, glslc_mods, spirv, len(uepak.unreal_paks(str(romfs), legacy=False)), trinity, len(uepak.unreal_paks(str(romfs), legacy=True)), gl_names, gl_src, gl_files, oodle_pkz)
 
 
 def va_heap(sysres, imports):   # virtual address memory (an NPDM system resource) and a heap: the alias / heap split is a starting point the heap check corrects (Wonder, Tears of the Kingdom; Engage's pool is its own measurement)

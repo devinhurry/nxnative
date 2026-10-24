@@ -161,7 +161,7 @@ static const shinfo *sh_find(const char *key) { shinfo k; memcpy(k.key, key, 16)
 
 static void dev_init_once(void) {
     @autoreleasepool {
-        g_dev = (__bridge id<MTLDevice>)mtl_device();
+        g_dev = (__bridge id<MTLDevice>)mtl_device_classic();
         g_q = [g_dev newCommandQueueWithMaxCommandBufferCount:64]; g_q.label = @"vk";
         g_ev = [g_dev newSharedEvent];
         g_dss_off = [g_dev newDepthStencilStateWithDescriptor:[MTLDepthStencilDescriptor new]];
@@ -506,7 +506,9 @@ VKB(vkCreateImage, VkResult, VkDevice d, const VkImageCreateInfo *ci, const VkAl
         MTLTextureUsage u = MTLTextureUsageShaderRead;
         if (ci->usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT)) u |= MTLTextureUsageRenderTarget;
         if (ci->usage & VK_IMAGE_USAGE_STORAGE_BIT) u |= MTLTextureUsageShaderWrite;
-        if (ci->flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) u |= MTLTextureUsagePixelFormatView;
+        // A stencil-aspect view of a depth-stencil image is an X32_Stencil8 view, which Metal allows only with the format-view usage (Vulkan needs no mutable-format flag for it;
+        // the API validation layer aborts without it). As in the NVN layer, it costs nothing measured on a depth-stencil texture
+        if ((ci->flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) || f->pf == MTLPixelFormatDepth32Float_Stencil8) u |= MTLTextureUsagePixelFormatView;
         td.usage = u; td.storageMode = MTLStorageModePrivate;
         id<MTLTexture> t = [g_dev newTextureWithDescriptor:td];
         if (!t) { LOG("[vk] [RED] cannot create image %ux%ux%u format %d levels %u layers %u", ci->extent.width, ci->extent.height, ci->extent.depth, ci->format, ci->mipLevels, layers); return VK_ERROR_OUT_OF_DEVICE_MEMORY; }

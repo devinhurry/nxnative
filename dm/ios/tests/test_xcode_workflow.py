@@ -41,7 +41,7 @@ class XcodePipelineTests(unittest.TestCase):
             profile = SimpleNamespace(id=registered.id, dir=root / 'profile' / registered.id,
                                       get=registered.get, words=registered.words,
                                       builds=lambda: {'v0': {'display': '1.0.0', 'main': 'other-build'}})
-            sources = {key: (False, '') for key in ('glslc_capture', 'vk_capture', 'ue_decode', 'oodle_packs', 'ue_legacy')}
+            sources = {key: (False, '') for key in ('glslc_capture', 'vk_capture', 'gl_capture', 'ue_decode', 'oodle_packs', 'ue_legacy')}
             sources['graphics'] = (graphics, 'fixture')
             fam = {'base': base, 'updates': [] if derived else [(327680, update)], 'dlc': []}
             version = 'v0' if derived else 'v327680'
@@ -55,7 +55,7 @@ class XcodePipelineTests(unittest.TestCase):
                 'extract': extraction, 'can_clone': False, 'build_mismatch': [],
                 'extract_aoc': None, 'rewrite': None, 'split_shaders': 'fixture-key',
                 'build_shaders': root / 'shaders', 'build_vk_shaders': root / 'shaders',
-                'build_gl_shaders': root / 'shaders', 'provisional_prep': None,
+                'build_gl_shaders': root / 'shaders', 'provisional_prep': None, 'chain_header': None,
                 'refine_after_rewrite': profile, 'derive_profile': '1.0.0', 'run': None,
             }.items():
                 mocks[name] = stack.enter_context(patch.object(build, name, return_value=value))
@@ -107,7 +107,7 @@ class XcodePipelineTests(unittest.TestCase):
         output = io.StringIO()
         profile = SimpleNamespace(dir=Path('/external/profile/fixture'), id='fixture')
         with patch.object(build, 'PROG', build.Progress('json')), redirect_stdout(output):
-            build.report_profile_status(profile, profile, 'v0', False, True, prepare_xcode=True)
+            build.report_profile_status(profile, profile, 'v0', False, True, 'Xcode project')
         events = [json.loads(line) for line in output.getvalue().splitlines()]
         self.assertIn('Xcode project was built from a provisional', events[0]['msg'])
 

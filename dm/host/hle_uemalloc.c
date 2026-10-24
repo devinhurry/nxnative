@@ -1,6 +1,6 @@
 // Unreal Engine's allocator on a host malloc zone. Octopath Traveler 0's engine allocator is an FMallocBinned3 constructed in place in nninitStartup; its constructor reserves 37 GB of
-// address space (74 pools of 512 MB), which an iPhone cannot give (about 5 GB without the extended virtual addressing entitlement), and its pools are too uneven to shrink (patch_nso.py
-// CUTS: the constructor call is cut). The host puts this vtable in the object instead: every FMemory allocation reaches it through the object (FPlatformMemory::BaseAllocator returns it,
+// address space (74 pools of 512 MB), which an iPhone cannot give (about 5 GB without the extended virtual addressing entitlement), and its pools are too uneven to shrink (CUTS in
+// the game's patches.py: the constructor call is cut). The host puts this vtable in the object instead: every FMemory allocation reaches it through the object (FPlatformMemory::BaseAllocator returns it,
 // and the thread-local storage allocator calls its Malloc / Free slots), and the guest's own trivial functions stay in the slots that do nothing.
 // The FMalloc slots (the engine's FMalloc interface, measured from the vtable and the thread-local callbacks): 0-1 destructors, 2-5 FExec, 6 Malloc, 7 TryMalloc, 8 Realloc, 9 TryRealloc, 10 Free, 11 QuantizeSize, 12 GetAllocationSize, 13 Trim, 14 SetupTLSCachesOnCurrentThread,
 // 15 ClearAndDisableTLSCachesOnCurrentThread, 16 InitializeStatsMetadata, 17 UpdateStats, 18 GetAllocatorStats, 19 DumpAllocatorStats, 20 IsInternallyThreadSafe, 21 ValidateHeap,
@@ -9,7 +9,7 @@
 // 9 GetAllocationSize, 10 Trim, 11 SetupTLSCachesOnCurrentThread, 12 ClearAndDisableTLSCachesOnCurrentThread, 13 InitializeStatsMetadata, 14 UpdateStats, 15 GetAllocatorStats,
 // 16 DumpAllocatorStats, 17 IsInternallyThreadSafe, 18 ValidateHeap, 19 GetDescriptiveName, 20 OnMallocInitialized (main+0x5e4c0e8: TryMalloc / TryRealloc call +0x18 / +0x28, GCreateMalloc
 // calls +0x88 and +0xa0; Free is main+0x10, which reads the pool base as GetAllocationSize does). Its allocator object is made at run time (GCreateMalloc mallocs it), so the host puts the
-// vtable in at an observation gate right after the cut constructor call (patch_nso.py OBS, OBS_UE_MALLOC: x19 = the object)
+// vtable in at an observation gate right after the cut constructor call (OBS in the game's patches.py, OBS_UE_MALLOC: x19 = the object)
 // Unreal Engine 5.6 (FINAL FANTASY RESONANCE) adds MallocZeroed / TryMallocZeroed after Free and two TLS cache calls after the setup, and two cached-memory queries at the end: 0-1 destructors,
 // 2-5 FExec, 6 Malloc, 7 TryMalloc, 8 Realloc, 9 TryRealloc, 10 Free, 11 MallocZeroed, 12 TryMallocZeroed, 13 QuantizeSize, 14 GetAllocationSize, 15 Trim, 16 SetupTLSCachesOnCurrentThread,
 // 17 MarkTLSCachesAsUsedOnCurrentThread, 18 MarkTLSCachesAsUnusedOnCurrentThread, 19 ClearAndDisableTLSCachesOnCurrentThread, 20 InitializeStatsMetadata, 21 UpdateStats, 22 GetAllocatorStats,
@@ -92,8 +92,8 @@ void dm_ue_malloc_install(void) {
     for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main"))
         for (int k = 0; k < (int)(sizeof k_ue / sizeof k_ue[0]); k++) if (!strcmp(g_mod[i].build_id, k_ue[k].build)) {
             uint8_t *b = g_mod[i].base; int L = k_ue[k].layout;
-            if (*(uint32_t *)(b + k_ue[k].cut) != 0xd503201f) { LOG("[RED] %s: main is rewritten without the allocator cut (patch_nso.py): Unreal's own FMallocBinned3 runs", k_ue[k].what); return; }
-            if (!k_ue[k].obj && !gate_obs_present(OBS_UE_MALLOC)) { LOG("[RED] %s: main is rewritten without the allocator gate (patch_nso.py OBS): the allocator would have no vtable", k_ue[k].what); return; }
+            if (*(uint32_t *)(b + k_ue[k].cut) != 0xd503201f) { LOG("[RED] %s: main is rewritten without the allocator cut (its patches.py): Unreal's own FMallocBinned3 runs", k_ue[k].what); return; }
+            if (!k_ue[k].obj && !gate_obs_present(OBS_UE_MALLOC)) { LOG("[RED] %s: main is rewritten without the allocator gate (OBS of its patches.py): the allocator would have no vtable", k_ue[k].what); return; }
             memcpy(g_vt, b + k_ue[k].vtable, sizeof g_vt[0] * k_lay[L].nslot);   // the relocated vtable: the trivial slots stay the guest's
             g_vt[k_lay[L].malloc_] = (void *)m_Malloc; g_vt[k_lay[L].try_malloc] = (void *)m_TryMalloc; g_vt[k_lay[L].realloc_] = (void *)m_Realloc;
             g_vt[k_lay[L].try_realloc] = (void *)m_TryRealloc; g_vt[k_lay[L].free_] = (void *)m_Free;

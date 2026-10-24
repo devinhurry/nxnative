@@ -28,10 +28,10 @@ camera_ui_aspect	19:0xa0:0xa8:0x74
 camera_aspect	cd57b23fa4bbad65803d9788c01821ee:0x1e39d10:0x38:0x1d05380:0xb0:0x8
 # BOTW 1.9.0 relative look enters the native right-stick vector after filtering; gain is a normalized-input impulse scale.
 camera_look	cd57b23fa4bbad65803d9788c01821ee:0xd5801c:0x128:0x1e93890:0x3c:60
-# The frame-interval controller (60 fps cuts in patch_nso.py) and dynamic resolution read the GPU time between the frame's two timestamp reports: each report takes its segment's GPU start / end
+# The frame-interval controller (60 fps cuts in patches.py) and dynamic resolution read the GPU time between the frame's two timestamp reports: each report takes its segment's GPU start / end
 gpu_timestamps	segment
 # 60 fps (30 on the Switch): the host decides each frame's step in whole vsyncs and holds the frame that long (rewriter stubs at setWaitVsyncInterval and VFR::updateInterval,
-# patch_nso.py FRAME_STEP); 30 when 60 does not hold, game time = real time. DM_FPS_TARGET=30 (Documents/env.txt on the iPhone) saves power; 0 runs the game's own
+# patches.py FRAME_STEP); 30 when 60 does not hold, game time = real time. DM_FPS_TARGET=30 (Documents/env.txt on the iPhone) saves power; 0 runs the game's own
 # interval controller (with the 60 fps cuts, which also serve while the game's VFR override is set)
 fps_target	60
 

@@ -540,3 +540,4 @@ typedef void (*NVNT_nvnCommandBufferSignalEvent)(NVNcommandBuffer*, const NVNeve
 //   nvnDeviceSetAutomaticCheckpointsMask
 //   nvnProgramGetSubtileSize
 //   nvnTextureBuilderGetViewOffset
+//   nvnSetExternalDebuggerEnabledNVX

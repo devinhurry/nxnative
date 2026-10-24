@@ -35,7 +35,7 @@ pad_layout	full
 # ---- Memory ----
 # Unreal Engine 4.18: nninitStartup takes one address region for the whole engine (16 GB by default), which a NumberLineAllocator (main+0x177c4d0) hands out; the game's argument
 # -SwitchVirtualAddressSpaceSize= caps it, in MB up to 4095 (main+0x177c440: atoi, and a larger number is taken as bytes; 4224 gave a 4 KB region and a crash in the allocator's
-# Compaction at boot). Two cuts on the SDK 7.3.2 build (dm/tools/patch_nso.py) put it 64 MB into the alias region: the node area 62 MB instead of 1 GB, and regions of 1 GB and more
+# Compaction at boot). Two cuts on the SDK 7.3.2 build (dm/tools/sdk_patches.py) put it 64 MB into the alias region: the node area 62 MB instead of 1 GB, and regions of 1 GB and more
 # 32 MB aligned instead of 1 GB. Engage's 5 GB block: 256 MB in front + 4.375 GB alias region + 256 MB stack region + 128 MB heap region (the game sets no heap)
 game_args	-SwitchVirtualAddressSpaceSize=4064
 mem_reserve	0x140000000
