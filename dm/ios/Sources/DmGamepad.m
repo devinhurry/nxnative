@@ -266,7 +266,7 @@ static BOOL botwTouchHudSupported(void) { return dm_botw_touch_hud_available(); 
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     for (int b = 0; b < B_N; b++) _key[b].hidden = _tap || (fullOnly(b) && !_full);
     BOOL hideDpadArt = botwTouchHudSupported() && _full && !_tap && !_padOff;
-    _key[B_LEFT].hidden = _key[B_UP].hidden = _key[B_RIGHT].hidden = _key[B_DOWN].hidden = hideDpadArt;
+    _key[B_LEFT].hidden = _key[B_UP].hidden = _key[B_RIGHT].hidden = _key[B_DOWN].hidden = _tap || !_full || hideDpadArt;
     _ring.hidden = _knob.hidden = _tap;
     _swapLabel.string = _tap ? @"Tap" : _full ? @"3D" : @"2D";
     [CATransaction commit];
@@ -286,7 +286,7 @@ static BOOL botwTouchHudSupported(void) { return dm_botw_touch_hud_available(); 
 }
 - (void)refreshTouchHudMode {
     BOOL hideDpadArt = dm_botw_touch_hud_available() && _full && !_tap && !_padOff;
-    _key[B_LEFT].hidden = _key[B_UP].hidden = _key[B_RIGHT].hidden = _key[B_DOWN].hidden = hideDpadArt;
+    _key[B_LEFT].hidden = _key[B_UP].hidden = _key[B_RIGHT].hidden = _key[B_DOWN].hidden = _tap || !_full || hideDpadArt;
     [self publishTouchHudForController:_padOff];
     [self setNeedsLayout];
 }
@@ -582,6 +582,16 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
     [self publishTouchHudForController:_padOff];
     [self refresh];
 }
+#ifdef DM_TEST_HOOKS
+- (void)dm_testSetTouchHudModeFull:(BOOL)full tap:(BOOL)tap connected:(BOOL)connected {
+    _full = full; _tap = tap; _padOff = connected; _controls.hidden = connected;
+    [self applyLayout];
+}
+- (BOOL)dm_testDpadArtworkHidden {
+    return _key[B_LEFT].hidden && _key[B_UP].hidden && _key[B_RIGHT].hidden && _key[B_DOWN].hidden;
+}
+- (BOOL)dm_testControlsHidden { return _controls.hidden; }
+#endif
 - (void)safeAreaInsetsDidChange { [super safeAreaInsetsDidChange]; [self setNeedsLayout]; }
 - (void)refresh {   // pressed state → fill, sticks → knob position
     uint64_t all = _faceBits | _dpadBits | _btnBits;

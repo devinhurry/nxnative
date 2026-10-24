@@ -15,6 +15,8 @@ void dm_test_motion_recenter(void);
 void dm_test_motion_publish(CMQuaternion q, CMAcceleration a, CMRotationRate r);
 void dm_gamepad_geometry_changed(UIInterfaceOrientation orientation);
 void front_look_mode_changed(void);
+int dm_botw_touch_hud_available(void);
+void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
 
 @interface DmGamepad : UIView
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event;
@@ -22,6 +24,9 @@ void front_look_mode_changed(void);
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event;
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event;
 - (void)setFull:(BOOL)full;
+- (void)dm_testSetTouchHudModeFull:(BOOL)full tap:(BOOL)tap connected:(BOOL)connected;
+- (BOOL)dm_testDpadArtworkHidden;
+- (BOOL)dm_testControlsHidden;
 - (void)reset;
 - (void)padsChanged;
 - (void)deviceOrientationChanged;
@@ -53,8 +58,11 @@ static dm_touch g_last_touch;
 static int g_touch_count, g_touch_sets;
 static dm_motion g_motion_samples[16];
 static int g_motion_count;
+static BOOL g_botw_touchhud_available;
 
 int dm_look_enabled(void) { return g_look_enabled; }
+int dm_botw_touch_hud_available(void) { return g_botw_touchhud_available; }
+void dm_botw_touch_hud_publish(int active, float center_x, float center_y) { (void)active; (void)center_x; (void)center_y; }
 void dm_look_input(int phase, float dx, float dy) {
     if (g_look_count >= (int)(sizeof g_look_events / sizeof g_look_events[0])) abort();
     g_look_events[g_look_count++] = (look_event){phase, dx, dy};
@@ -129,6 +137,25 @@ static void sum_moves(float *dx, float *dy) {
     for (int i = 0; i < g_look_count; i++) if (g_look_events[i].phase == DM_LOOK_MOVE) {
         *dx += g_look_events[i].dx; *dy += g_look_events[i].dy;
     }
+}
+
+static void test_dpad_art_visibility(DmGamepad *view) {
+    g_botw_touchhud_available = NO;
+    [view dm_testSetTouchHudModeFull:NO tap:NO connected:NO];
+    CHECK([view dm_testDpadArtworkHidden], "2D layout keeps the 3D D-pad artwork hidden when BOTW relocation is unavailable");
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+    CHECK(![view dm_testDpadArtworkHidden], "ordinary 3D layout keeps D-pad artwork visible when BOTW relocation is unavailable");
+    [view dm_testSetTouchHudModeFull:YES tap:YES connected:NO];
+    CHECK([view dm_testDpadArtworkHidden], "Tap layout keeps the D-pad artwork hidden");
+
+    g_botw_touchhud_available = YES;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+    CHECK([view dm_testDpadArtworkHidden], "active BOTW touch 3D mode hides D-pad artwork");
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES];
+    CHECK([view dm_testDpadArtworkHidden] && [view dm_testControlsHidden],
+          "a connected physical controller hides the touch overlay and keeps the D-pad artwork hidden");
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+    g_botw_touchhud_available = NO;
 }
 
 static void test_look_drag(DmGamepad *view) {
@@ -347,6 +374,7 @@ static void test_motion_orientation(void) {
 }
 
 static void run_tests(DmGamepad *view) {
+    test_dpad_art_visibility(view);
     test_motion_orientation();
     test_look_drag(view);
     test_priority_and_multitouch(view);
