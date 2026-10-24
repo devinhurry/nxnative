@@ -1,5 +1,6 @@
 #!/bin/bash
-# Build one unsigned all-in-one IPA: the rewritten modules compiled into the executable, iOS shader libraries at DmIOS.app/msl, and the game files (RomFS) at DmIOS.app/romfs.
+# Build an unsigned IPA: rewritten modules and iOS shaders, plus game files unless DM_SEPARATE_ROM=1.
+# DM_SEPARATE_ROM=1 writes RomFS and DLC to DM_GAME_DATA_OUT (.nxrom beside the IPA by default) for in-app import; also applies to --prepare-xcode.
 # In IPA mode Xcode skips the large resource copy; tools/pack_ipa.py packs the shader libraries, add-on content and RomFS straight from where they are (no Payload/ copy, nothing through the home disk).
 # In --prepare-xcode mode the generated project copies those resources before Xcode signs it with the team the user selects. This script never signs or installs anything.
 # Prerequisites: the rewriter (patched directory) and the iOS shader build (IOSOUT) have been run as in the README; Xcode and xcodegen are installed.
@@ -25,6 +26,11 @@ PKG=$(gp package)
 PATCHED=${PATCHED:-$W/build/patched_$PKG}; ROMFS=${ROMFS:-$W/data/$PKG/RomFS}; MSL_IOS=${MSL_IOS:-$W/build/ios/dmsh_b}; AOC=${AOC-$W/data/aoc}
 PREPARE_XCODE=NO; [ "${1:-}" != --prepare-xcode ] || PREPARE_XCODE=YES
 OUT_IPA=${1:-$(dirname "$W")/$(gp ipa)}; O=$W/build/ios/pkg; DD=$O/dd
+case "${DM_SEPARATE_ROM:-0}" in 0|1) ;; *) die "DM_SEPARATE_ROM must be 0 or 1";; esac
+export DM_SEPARATE_ROM=${DM_SEPARATE_ROM:-0}
+DATA_IPA=$OUT_IPA; [ "$PREPARE_XCODE" != YES ] || DATA_IPA=$(dirname "$W")/$(gp ipa)
+DATA_OUT=${DM_GAME_DATA_OUT:-${DATA_IPA%.ipa}.nxrom}
+[ "$DATA_OUT" != "$OUT_IPA" ] || die "the game-data package and IPA must have different output paths"
 XCODE_DD=${DM_XCODE_DERIVED_DATA:-$W/build/ios/xcode-dd}
 MODS=$(gp modules); MARKER=$(gp romfs_marker)
 NACP=$W/data/v0/control.nacp; [ -f "$NACP" ] || NACP=$(dirname "$ROMFS")/control.nacp
@@ -78,6 +84,13 @@ else cp "$GD/shader_map.tsv" "$GD/pso_manifest.tsv" "$GD/c1_full.tsv" Gen/dm/ ||
   if [ -f "$GD/cb_extent.tsv" ]; then cp "$GD/cb_extent.tsv" Gen/dm/ || die "copy cb_extent.tsv"; else t "no $GD/cb_extent.tsv: the host copies whole uniform bindings"; fi; fi   # optional
 # The launcher's settings for this game (Launcher.swift): dm/games/settings.tsv filtered by the profile, main's rewriter table and the game's languages (dm/games/settings.py)
 L=$(python3 "$DM/games/settings.py" "$GAME" "$PATCHED" "$VNACP" Gen/dm/launcher.json) || die "launcher settings (dm/games/settings.py)"; t "launcher: $L"
+if [ "$DM_SEPARATE_ROM" = 1 ]; then
+  t "pack game data (.nxrom; unchanged sources reuse the existing package)"
+  DATA_ARGS=(); if [ -n "$AOC" ] && [ -d "$AOC" ]; then DATA_ARGS+=(--aoc "$AOC"); fi
+  python3 tools/game_data.py "$DATA_OUT" --romfs "$ROMFS" --title-id "$GAME" --version "$DM_APP_VERSION" --marker "$MARKER" \
+    --metadata Gen/dm/game-data.json --stamp "$W/game-data-stamp.json" "${DATA_ARGS[@]}" || die "pack game data"
+  t "game data ready: $DATA_OUT"
+fi
 # Diagnostic build: DM_ENV_FILE=file → dm/env.txt in the bundle (main.m sets one environment variable per line at boot)
 if [ -n "${DM_ENV_FILE:-}" ]; then cp "$DM_ENV_FILE" Gen/dm/env.txt || die "copy DM_ENV_FILE"; t "env: $(grep -v '^#' "$DM_ENV_FILE" | tr '\n' ' ')"; fi
 # The shader libraries go into the archive as DmIOS.app/msl/<folder> (main.m sets DM_MSL_DIR to it)
@@ -130,9 +143,11 @@ APP=$DD/Build/Products/Release-iphoneos/DmIOS.app
 # msl/ is also deleted there, it took 1.5 GB of the home disk), then the shader libraries, the add-on content (the RomFS extracted from the player's DLC NSPs, one folder per index:
 # the app sets DM_AOC_DIR at launch, the host reports them as owned and mounts them from it) and the RomFS
 rm -rf "$APP/msl" "$O/Payload" "$O/out.ipa"   # (the last two: what the copy-and-zip packing left behind)
-P=Payload/DmIOS.app; MAPS=("$P=$APP" "$P/msl/$MSLDIR=$MSL_IOS/$MSLDIR")
-if [ -n "$AOC" ] && [ -d "$AOC" ]; then MAPS+=("$P/aoc=$AOC"); t "add-on content: $(ls "$AOC" | tr '\n' ' ')"; fi
-MAPS+=("$P/romfs=$ROMFS")
+P=Payload/DmIOS.app; MAPS=("$P=$APP" "$P/dm=$IOS/Gen/dm" "$P/msl/$MSLDIR=$MSL_IOS/$MSLDIR")
+if [ "$DM_SEPARATE_ROM" = 0 ]; then
+  if [ -n "$AOC" ] && [ -d "$AOC" ]; then MAPS+=("$P/aoc=$AOC"); t "add-on content: $(ls "$AOC" | tr '\n' ' ')"; fi
+  MAPS+=("$P/romfs=$ROMFS")
+fi
 t "pack IPA (already-compressed game files stored, everything else deflated)"
 python3 tools/pack_ipa.py "$OUT_IPA" --store "$(gp zip_store)" --skip $P/_CodeSignature --skip $P/embedded.mobileprovision --skip $P/msl --skip $P/aoc --skip $P/romfs "${MAPS[@]}" || die "pack_ipa"
 t "done: $OUT_IPA ($(du -h "$OUT_IPA" | cut -f1))"

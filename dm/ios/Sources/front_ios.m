@@ -14,6 +14,8 @@ UIView *dm_gamepad_view(CGRect frame);
 void dm_gamepad_reset(void);
 void front_ios_boot(void);
 int front_ios_boot_ok(void);
+int front_ios_prepare_game(void);
+void dm_show_game_import(void *view_controller, void (*done)(void));
 bool dm_show_launcher(void *view_controller, void (*done)(void));   // Launcher.swift: false = no launcher (no dm/launcher.json, or DM_LAUNCHER=0)
 
 static CAMetalLayer *g_layer;
@@ -48,21 +50,16 @@ static UILabel *front_ios_fps_label(void);
 @property (nonatomic, strong) UILabel *fps;
 @property (nonatomic) BOOL launched;
 - (void)startGame;
+- (void)showLauncher;
 @end
 static DmRootVC *g_root;
 static void launcher_done(void) { [g_root startGame]; }
+static void import_done(void) { if (front_ios_prepare_game()) [g_root showLauncher]; }
 @implementation DmRootVC
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.blackColor;
     front_ios_power_watch();
-    if (!front_ios_boot_ok()) {   // No game files: show a hint and do not start the host
-        UILabel *lb = [[UILabel alloc] initWithFrame:CGRectInset(self.view.bounds, 40, 40)];
-        lb.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        lb.numberOfLines = 0; lb.textAlignment = NSTextAlignmentCenter; lb.textColor = UIColor.whiteColor;
-        lb.text = @"Game files not found.\nPut the RomFS folder into this App's Documents as \"romfs\" (Files app), then restart.";
-        [self.view addSubview:lb]; return;
-    }
     front_ios_audio_watch();
 }
 // The game view, the pad and the frame-rate counter are made once the launcher has set the switches they read (DM_SHOW_FPS, DM_METAL_HUD); the host's loading began at app launch (main.m)
@@ -99,8 +96,12 @@ static void launcher_done(void) { [g_root startGame]; }
 }
 - (void)viewDidAppear:(BOOL)a {
     [super viewDidAppear:a];
-    if (self.launched || !front_ios_boot_ok()) return;
+    if (self.launched) return;
     self.launched = YES; g_root = self;
+    if (!front_ios_boot_ok()) { dm_show_game_import((__bridge void *)self, import_done); return; }
+    [self showLauncher];
+}
+- (void)showLauncher {
     if (!dm_show_launcher((__bridge void *)self, launcher_done)) [self startGame];   // the settings screen first (Launcher.swift), when the app has one
 }
 - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
