@@ -23,11 +23,12 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event;
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event;
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event;
-- (void)setFull:(BOOL)full;
 - (void)dm_testSetTouchHudModeFull:(BOOL)full tap:(BOOL)tap connected:(BOOL)connected;
+- (void)setFull:(BOOL)full;
 - (BOOL)dm_testDpadArtworkHidden;
 - (BOOL)dm_testControlsHidden;
 - (BOOL)dm_testL3ArtworkHidden;
+- (BOOL)dm_testR3ArtworkHidden;
 - (BOOL)dm_testMinusArtworkHidden;
 - (BOOL)dm_testL3GestureEnabled;
 - (BOOL)dm_testLeftStickOwnsPoint:(CGPoint)point;
@@ -47,11 +48,13 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
 
 @interface FakeTouch : UITouch
 @property(nonatomic) CGPoint point;
+@property(nonatomic) NSTimeInterval timeValue;
 - (instancetype)initAt:(CGPoint)point;
 @end
 @implementation FakeTouch
 - (instancetype)initAt:(CGPoint)point { if ((self = [super init])) _point = point; return self; }
 - (CGPoint)locationInView:(UIView *)view { (void)view; return self.point; }
+- (NSTimeInterval)timestamp { return self.timeValue; }
 @end
 
 static BOOL g_look_enabled = YES, g_look_held;
@@ -77,6 +80,9 @@ static BOOL g_botw_touchhud_available;
 int dm_look_enabled(void) { return g_look_enabled; }
 int dm_botw_touch_hud_available(void) { return g_botw_touchhud_available; }
 void dm_botw_touch_hud_publish(int active, float center_x, float center_y) { (void)active; (void)center_x; (void)center_y; }
+void dm_botw_touch_hud_map_tapped(void) {}
+void dm_haptics_apple_controller(int player, GCController *controller) { (void)player; (void)controller; }
+int dm_opmode(void) { return 0; }
 void dm_look_input(int phase, float dx, float dy) {
     if (g_look_count >= (int)(sizeof g_look_events / sizeof g_look_events[0])) abort();
     g_look_events[g_look_count++] = (look_event){phase, dx, dy};
@@ -124,8 +130,10 @@ void dm_motion_set(const dm_motion *motion) {
 
 static FakeTouch *touch(CGFloat x, CGFloat y) { return [[FakeTouch alloc] initAt:CGPointMake(x, y)]; }
 static void began(DmGamepad *view, FakeTouch *t) { [view touchesBegan:[NSSet setWithObject:t] withEvent:nil]; }
+static void beganAt(DmGamepad *view, FakeTouch *t, NSTimeInterval time) { t.timeValue = time; began(view, t); }
 static void moved(DmGamepad *view, FakeTouch *t, CGFloat x, CGFloat y) { t.point = CGPointMake(x, y); [view touchesMoved:[NSSet setWithObject:t] withEvent:nil]; }
 static void ended(DmGamepad *view, FakeTouch *t, CGFloat x, CGFloat y) { t.point = CGPointMake(x, y); [view touchesEnded:[NSSet setWithObject:t] withEvent:nil]; }
+static void endedAt(DmGamepad *view, FakeTouch *t, CGFloat x, CGFloat y, NSTimeInterval time) { t.timeValue = time; ended(view, t, x, y); }
 static void cancelled(DmGamepad *view, FakeTouch *t, CGFloat x, CGFloat y) { t.point = CGPointMake(x, y); [view touchesCancelled:[NSSet setWithObject:t] withEvent:nil]; }
 static void reset_look(void) {
     if (g_look_held) { fprintf(stderr, "FAIL: test left look session held\n"); ++g_failures; g_look_held = NO; }
@@ -157,10 +165,10 @@ static void sum_moves(float *dx, float *dy) {
 
 static void test_dpad_art_visibility(DmGamepad *view) {
     g_botw_touchhud_available = NO;
-    [view dm_testSetTouchHudModeFull:NO tap:NO connected:NO];
+    [view setFull:NO];
     [view layoutIfNeeded];
     CHECK([view dm_testDpadArtworkHidden], "2D layout keeps the 3D D-pad artwork hidden when BOTW relocation is unavailable");
-    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+    [view setFull:YES];
     [view layoutIfNeeded];
     CHECK(![view dm_testDpadArtworkHidden], "ordinary 3D layout keeps D-pad artwork visible when BOTW relocation is unavailable");
     [view dm_testSetTouchHudModeFull:YES tap:YES connected:NO];
@@ -168,7 +176,7 @@ static void test_dpad_art_visibility(DmGamepad *view) {
     CHECK([view dm_testDpadArtworkHidden], "Tap layout keeps the D-pad artwork hidden");
 
     g_botw_touchhud_available = YES;
-    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+    [view setFull:YES];
     CHECK([view dm_testDpadArtworkHidden], "active BOTW touch 3D mode hides D-pad artwork");
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES];
     CHECK([view dm_testDpadArtworkHidden] && [view dm_testControlsHidden],
@@ -179,8 +187,8 @@ static void test_dpad_art_visibility(DmGamepad *view) {
 
 static void test_botw_virtual_buttons(DmGamepad *view) {
     g_botw_touchhud_available = NO;
-    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
-    CHECK(![view dm_testL3ArtworkHidden] && ![view dm_testMinusArtworkHidden],
+    [view setFull:YES];
+    CHECK(![view dm_testL3ArtworkHidden] && ![view dm_testR3ArtworkHidden] && ![view dm_testMinusArtworkHidden],
           "non-BOTW 3D layout keeps L3 and Minus artwork visible");
     CHECK(![view dm_testL3GestureEnabled], "non-BOTW 3D layout keeps L3 double-tap disabled");
     CHECK(![view dm_testLeftStickOwnsPoint:[view stickHome]],
@@ -191,14 +199,14 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
           "non-BOTW reset does not touch pending virtual button edges");
 
     g_botw_touchhud_available = YES;
-    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+    [view setFull:YES];
     [view reset];
     CHECK(g_virtual_latch_cancels == cancellations + 1 &&
-          g_virtual_latch_cancel_mask == (DM_BTN_LS | DM_BTN_MINUS),
-          "BOTW reset cancels only the virtual L3 and Minus edge latches");
+          g_virtual_latch_cancel_mask == (DM_BTN_LS | DM_BTN_RS | DM_BTN_MINUS),
+          "BOTW reset cancels virtual stick-click and Minus edge latches");
     CGPoint stick = [view stickHome];
-    CHECK([view dm_testL3ArtworkHidden] && ![view dm_testMinusArtworkHidden],
-          "active BOTW mode hides L3 while keeping Minus available until the map hit area is installed");
+    CHECK([view dm_testL3ArtworkHidden] && [view dm_testR3ArtworkHidden] && ![view dm_testMinusArtworkHidden],
+          "active BOTW mode hides both stick-click artworks and keeps Minus until map hit area is installed");
     CHECK([view dm_testL3GestureEnabled], "active BOTW 3D touch mode enables L3 double-tap");
     CHECK([view dm_testLeftStickOwnsPoint:stick],
           "left-stick double tap accepts the actual left stick owner area");
@@ -250,8 +258,54 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
           [view dm_testMinusArtworkHidden] && [view dm_testBotwMapOwnsPoint:mapPoint],
           "a fresh collapsed-map publication rearms map taps");
 
+    g_look_enabled = YES; reset_look(); g_input_sets = 0; g_input_history[0] = g_input_history[1] = 0;
+    CGPoint camera = CGPointMake(view.bounds.size.width * .82, view.bounds.size.height * .38);
+    CHECK([view dm_testBtnAt:camera] < 0, "BOTW camera area has no visible or active R3 button hit region");
+    FakeTouch *cameraTap = touch(camera.x,camera.y); beganAt(view,cameraTap,1.0); endedAt(view,cameraTap,camera.x,camera.y,1.08);
+    BOOL r3Pressed = NO, r3Released = NO;
+    for (int i=0; i<g_input_sets; i++) { r3Pressed |= (g_input_history[i] & DM_BTN_RS) != 0; r3Released |= !(g_input_history[i] & DM_BTN_RS); }
+    CHECK(!r3Pressed && !(g_buttons & DM_BTN_RS), "one short camera-area tap is silent");
+    FakeTouch *cameraTap2 = touch(camera.x+2,camera.y+2); beganAt(view,cameraTap2,1.20); endedAt(view,cameraTap2,camera.x+2,camera.y+2,1.28);
+    for (int i=0; i<g_input_sets; i++) { r3Pressed |= (g_input_history[i] & DM_BTN_RS) != 0; r3Released |= !(g_input_history[i] & DM_BTN_RS); }
+    CHECK(r3Pressed && r3Released && !(g_buttons & DM_BTN_RS),
+          "two nearby short camera-area taps emit one R3 press and release");
+
+    reset_look(); g_input_sets = 0; g_input_history[0] = g_input_history[1] = 0;
+    FakeTouch *pendingTap = touch(camera.x,camera.y); beganAt(view,pendingTap,2.0); endedAt(view,pendingTap,camera.x,camera.y,2.08);
+    FakeTouch *cameraDrag = touch(camera.x,camera.y); began(view,cameraDrag);
+    moved(view,cameraDrag,camera.x+40,camera.y); moved(view,cameraDrag,camera.x,camera.y);
+    ended(view,cameraDrag,camera.x,camera.y);
+    BOOL dragR3 = NO; for (int i=0; i<g_input_sets; i++) dragR3 |= (g_input_history[i] & DM_BTN_RS) != 0;
+    CHECK(g_look_count >= 4 && g_look_events[g_look_count-1].phase == DM_LOOK_END && !dragR3,
+          "camera drag cancels a pending tap sequence and returning to start never emits R3");
+
+    reset_look(); g_input_sets = 0; FakeTouch *pendingTap2 = touch(camera.x,camera.y); beganAt(view,pendingTap2,3.0); endedAt(view,pendingTap2,camera.x,camera.y,3.08);
+    FakeTouch *cameraCancel = touch(camera.x,camera.y); began(view,cameraCancel);
+    cancelled(view,cameraCancel,camera.x,camera.y);
+    BOOL cancelR3 = NO; for (int i=0; i<g_input_sets; i++) cancelR3 |= (g_input_history[i] & DM_BTN_RS) != 0;
+    CHECK(g_look_events[g_look_count-1].phase == DM_LOOK_CANCEL && !cancelR3,
+          "cancelled gesture clears pending R3 tap and does not leave look active");
+
+    reset_look(); g_input_sets = 0;
+    FakeTouch *pendingTap3 = touch(camera.x,camera.y); beganAt(view,pendingTap3,4.0); endedAt(view,pendingTap3,camera.x,camera.y,4.08);
+    FakeTouch *mapAgain = touch(mapPoint.x,mapPoint.y); began(view,mapAgain); ended(view,mapAgain,mapPoint.x,mapPoint.y);
+    FakeTouch *afterMap = touch(camera.x,camera.y); beganAt(view,afterMap,4.2); endedAt(view,afterMap,camera.x,camera.y,4.28);
+    BOOL mapSequenceR3 = NO; for (int i=0; i<g_input_sets; i++) mapSequenceR3 |= (g_input_history[i] & DM_BTN_RS) != 0;
+    CHECK(!mapSequenceR3, "map tap has priority and invalidates the pending camera double tap");
+
+    reset_look(); g_input_sets = 0;
+    FakeTouch *pendingBeforeController = touch(camera.x,camera.y);
+    beganAt(view,pendingBeforeController,5.0); endedAt(view,pendingBeforeController,camera.x,camera.y,5.08);
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES];
-    CHECK(![view dm_testL3GestureEnabled] && ![view dm_testMinusArtworkHidden],
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+    FakeTouch *afterController = touch(camera.x,camera.y);
+    beganAt(view,afterController,5.2); endedAt(view,afterController,camera.x,camera.y,5.28);
+    BOOL controllerSequenceR3 = NO; for (int i=0; i<g_input_sets; i++) controllerSequenceR3 |= (g_input_history[i] & DM_BTN_RS) != 0;
+    CHECK(!controllerSequenceR3, "controller connection clears an incomplete camera double tap");
+    g_look_enabled = NO;
+
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES];
+    CHECK(![view dm_testL3GestureEnabled] && ![view dm_testR3ArtworkHidden] && ![view dm_testMinusArtworkHidden],
           "connected physical controller restores Minus and disables L3 double-tap");
     CHECK(![view dm_testLeftStickOwnsPoint:stick],
           "connected physical controller disables BOTW double-tap recognition");
@@ -339,7 +393,7 @@ static void test_priority_and_multitouch(DmGamepad *view) {
     CGPoint r3point = [view clickCenter:5];
     FakeTouch *r3 = touch(r3point.x, r3point.y); began(view, r3);
     CHECK(g_look_count == 0 && (g_buttons & DM_BTN_RS) != 0,
-          "R3 button priority keeps the hit out of the look region");
+          "non-BOTW R3 button priority keeps the hit out of the look region");
     ended(view, r3, r3point.x, r3point.y);
 
     reset_look();
@@ -354,10 +408,10 @@ static void test_priority_and_multitouch(DmGamepad *view) {
     ended(view, first, 600, 150);
     CHECK(g_rx == 0 && g_ry == 0, "lifting the look owner clears its virtual right-stick axes immediately");
     moved(view, second, 720, 200); ended(view, second, 720, 200);
-    CHECK(g_look_count == held_look_count + 1 && g_look_events[g_look_count - 1].phase == DM_LOOK_END,
+    CHECK(g_look_count == held_look_count + 2 && g_look_events[g_look_count - 1].phase == DM_LOOK_END,
           "an inert second finger does not take over after the owner lifts");
     FakeTouch *next = touch(650, 180); began(view, next);
-    CHECK(g_look_count == held_look_count + 2 && g_look_events[g_look_count - 1].phase == DM_LOOK_BEGIN, "a fresh finger can begin look after the old gesture ends");
+    CHECK(g_look_count == held_look_count + 3 && g_look_events[g_look_count - 1].phase == DM_LOOK_BEGIN, "a fresh finger can begin look after the old gesture ends");
     ended(view, next, 650, 180);
 }
 

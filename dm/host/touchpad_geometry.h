@@ -41,6 +41,12 @@ typedef struct { float x, y, width, height; } dm_touchpad_rect;
 #define DM_TP_RSWIPE (1.0f / 2.0f)
 #define DM_TP_CLICK_X 102.0f
 #define DM_TP_CLICK_R 17.0f
+#define DM_TP_LOOK_TAP_SLOP 12.0f
+#define DM_TP_LOOK_TAP_MAX_SECONDS 0.35f
+#define DM_TP_LOOK_DOUBLE_TAP_INTERVAL 0.35f
+#define DM_TP_LOOK_DOUBLE_TAP_DISTANCE 48.0f
+#define DM_TP_SHOULDER_GAP 8.0f
+#define DM_TP_SHOULDER_HIT_SCALE 1.0f
 
 static inline float dm_touchpad_u(float height) {
     float u = height / 430.0f;
@@ -69,6 +75,36 @@ static inline dm_touchpad_point dm_touchpad_face_center(float width, float heigh
     float u = dm_touchpad_u(height);
     return (dm_touchpad_point){c.x + c.width - DM_TP_FACE_X * u,
                                c.y + c.height - DM_TP_PAD_Y * u};
+}
+
+// R and ZR sit together just above the face cluster on BOTW's virtual pad.
+static inline dm_touchpad_point dm_touchpad_right_shoulder(float width, float height,
+                                                            float left, float top,
+                                                            float right, float bottom,
+                                                            int zr) {
+    dm_touchpad_point face = dm_touchpad_face_center(width, height, left, top, right, bottom);
+    float u = dm_touchpad_u(height);
+    float half = (DM_TP_ZL_R + DM_TP_SHOULDER_GAP * .5f) * u;
+    float y = face.y - (DM_TP_FACE_GAP + DM_TP_FACE_R + DM_TP_ZL_R + 18.0f) * u;
+    return (dm_touchpad_point){face.x + (zr ? half : -half), y};
+}
+
+static inline int dm_touchpad_look_dragged(float down_x, float down_y,
+                                          float x, float y, float slop) {
+    float dx = x - down_x, dy = y - down_y;
+    return dx * dx + dy * dy > slop * slop;
+}
+static inline int dm_touchpad_look_tap(float duration, int dragged) {
+    return !dragged && duration >= 0.0f && duration <= DM_TP_LOOK_TAP_MAX_SECONDS;
+}
+static inline int dm_touchpad_look_double_tap(double first_time, double second_time,
+                                               float first_x, float first_y,
+                                               float second_x, float second_y,
+                                               float u) {
+    float dx = second_x - first_x, dy = second_y - first_y;
+    double dt = second_time - first_time;
+    float limit = DM_TP_LOOK_DOUBLE_TAP_DISTANCE * u;
+    return dt >= 0.0f && dt <= DM_TP_LOOK_DOUBLE_TAP_INTERVAL && dx*dx + dy*dy <= limit*limit;
 }
 
 static inline dm_touchpad_point dm_touchpad_stick_home(float width, float height,
