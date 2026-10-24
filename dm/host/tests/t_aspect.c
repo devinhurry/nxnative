@@ -7,6 +7,7 @@
 #define DM_GAME_ASPECT_NATIVE 1
 #define DM_GAME_CAMERA_ASPECT "cd57b23fa4bbad65803d9788c01821ee:0x1e39d10:0x38:0x1d05380:0xb0:0x8"
 #define DM_GAME_CAMERA_UI_ASPECT "19:0xa0:0xa8:0x74"
+#define DM_GAME_CAMERA_WORLD_ASPECT "19:0x41c0"
 #include "../hle_aspect.c"
 #include <assert.h>
 #include <signal.h>
@@ -15,19 +16,21 @@
 module_t g_mod[MAX_MOD]; int g_nmod = 1;
 static void (*callback)(const uint64_t *);
 static void (*ui_callback)(const uint64_t *);
+static void (*screen_callback)(const uint64_t *);
 static int have_gate = 1;
 void gate_obs_set(int id, void (*fn)(const uint64_t *)) {
     if (id == OBS_ASPECT_PROJECTION) callback = fn;
-    else { assert(id == OBS_ASPECT_UI_CAMERA); ui_callback = fn; }
+    else if (id == OBS_ASPECT_UI_CAMERA) ui_callback = fn;
+    else { assert(id == OBS_ASPECT_WORLD_PROJECTION); screen_callback = fn; }
 }
-int gate_obs_present(int id) { return (id == OBS_ASPECT_PROJECTION || id == OBS_ASPECT_UI_CAMERA) && have_gate && !(id == OBS_ASPECT_UI_CAMERA && have_gate == 2); }
+int gate_obs_present(int id) { return (id == OBS_ASPECT_PROJECTION || id == OBS_ASPECT_UI_CAMERA || id == OBS_ASPECT_WORLD_PROJECTION) && have_gate && !(id == OBS_ASPECT_UI_CAMERA && have_gate == 2) && !(id == OBS_ASPECT_WORLD_PROJECTION && have_gate == 3); }
 static void failure(const char *value, int bad_build, int stale) {
     pid_t pid = fork(); assert(pid >= 0);
     if (!pid) {
         freopen("/dev/null", "w", stderr);
         if (value) setenv("DM_ASPECT_RATIO", value, 1);
         if (bad_build) strcpy(g_mod[0].build_id, "00000000000000000000000000000000");
-        if (stale) have_gate = stale == 1 ? 0 : 2;
+        if (stale) have_gate = stale == 1 ? 0 : stale == 2 ? 2 : 3;
         dm_aspect_install(); _exit(0);
     }
     int status; assert(waitpid(pid, &status, 0) == pid);
@@ -38,8 +41,8 @@ int main(void) {
     strcpy(g_mod[0].name, "main"); strcpy(g_mod[0].build_id, "cd57b23fa4bbad65803d9788c01821ee");
     g_mod[0].size = 0x2000000; g_mod[0].base = calloc(1, g_mod[0].size); assert(g_mod[0].base);
     failure("20:0", 0, 0); failure("nan", 0, 0); failure("20:9junk", 0, 0); failure("2.2x", 0, 0);
-    failure("20:9", 1, 0); failure("20:9", 0, 1); failure("20:9", 0, 2);
-    dm_aspect_install(); assert(callback);
+    failure("20:9", 1, 0); failure("20:9", 0, 1); failure("20:9", 0, 2); failure("20:9", 0, 3);
+    dm_aspect_install(); assert(callback && screen_callback);
     uint8_t object[512] = {0}; uint8_t *proj = object + 0x38;
     *(void **)(g_mod[0].base + g_single_off) = object;
     *(uintptr_t *)proj = (uintptr_t)(g_mod[0].base + g_vt_off);
@@ -52,6 +55,23 @@ int main(void) {
     dm_aspect_set_display(4.f / 3); callback(regs); assert(*aspect == 4.f / 3);
     *aspect = 2.4f; dm_aspect_set_display(GAME_ASPECT); callback(regs); assert(*aspect == GAME_ASPECT);
     uint8_t other[512] = {0}; regs[0] = (uint64_t)other; callback(regs); assert(!other[g_dirty_off]);
+    // The world-UI screen copies its 16:9 source into this clone each frame. Correct every reset
+    // immediately after the copy, marking the matrix dirty only when the target aspect differs.
+    uint8_t screen[0x41c0 + 512] = {0}, *clone = screen + 0x41c0;
+    *(uintptr_t *)clone = (uintptr_t)(g_mod[0].base + g_vt_off);
+    float *clone_aspect = (float *)(clone + g_field_off);
+    regs[0] = (uint64_t)clone; regs[19] = (uint64_t)screen;
+    const float world_ratios[] = {20.f/9, GAME_ASPECT, 4.f/3, 20.f/9};
+    for (unsigned i = 0; i < sizeof(world_ratios)/sizeof(world_ratios[0]); i++) {
+        dm_aspect_set_display(world_ratios[i]);
+        for (int frame = 0; frame < 3; frame++) {
+            *clone_aspect = GAME_ASPECT; clone[g_dirty_off] = 0; // game recopied the 16:9 lens
+            screen_callback(regs);
+            assert(*clone_aspect == world_ratios[i]);
+            assert(clone[g_dirty_off] == (world_ratios[i] != GAME_ASPECT));
+        }
+    }
+    regs[0] = (uint64_t)other; callback(regs); assert(!other[g_dirty_off]);
     float r[4]; dm_aspect_touch_rect(1600, 720, r); assert(r[0] == 160 && r[1] == 0 && r[2] == 1280 && r[3] == 720);
     // The UI camera's source lens is rebuilt by the game on every update. Apply the same mapping as a 16:9 UI rectangle:
     // wide screens shrink clip x; narrow screens shrink clip y, including the optical center, without accumulating scaling.
