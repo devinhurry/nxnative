@@ -9,6 +9,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+import zipfile
 from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parents[3]
@@ -29,7 +30,10 @@ class XcodePipelineTests(unittest.TestCase):
                 with self.subTest(graphics=graphics, derived=derived):
                     self.prepare_fixture(graphics, derived)
 
-    def prepare_fixture(self, graphics, derived):
+    def test_prepare_separates_game_data(self):
+        self.prepare_fixture('gl', False, separate_rom=True)
+
+    def prepare_fixture(self, graphics, derived, separate_rom=False):
         with tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
             root = Path(temporary).resolve()
             (root / 'prod.keys').touch()
@@ -75,7 +79,7 @@ class XcodePipelineTests(unittest.TestCase):
             try:
                 with redirect_stdout(output):
                     code = build.cli([str(root), '-k', str(root / 'prod.keys'), '--prepare-xcode',
-                                      '--language', 'ja', '--no-show-fps', '--progress', 'json'])
+                                      '--language', 'ja', '--no-show-fps', '--progress', 'json'] + (['--separate-rom'] if separate_rom else []))
             finally:
                 progress.close()
             self.assertEqual(code, 0)
@@ -87,6 +91,9 @@ class XcodePipelineTests(unittest.TestCase):
             environment = mocks['run'].call_args.kwargs['env']
             self.assertEqual(environment['DM_LANG'], 'ja')
             self.assertEqual(environment['DM_SHOW_FPS'], '0')
+            self.assertEqual(environment['DM_SEPARATE_ROM'], '1' if separate_rom else '0')
+            if separate_rom:
+                self.assertEqual(Path(environment['DM_GAME_DATA_OUT']).suffix, '.nxrom')
             self.assertEqual(environment['GFXAPI'], graphics)
             self.assertEqual(environment['DM_BUNDLE_ID'], 'com.example.saved')
             self.assertEqual(environment['DM_TEAM_ID'], 'ABCDEFGHIJ')
@@ -113,11 +120,70 @@ class XcodePipelineTests(unittest.TestCase):
 
 
 class ResourceStagingTests(unittest.TestCase):
+    def test_shell_packs_slim_and_bundled_ipa(self):
+        # Run the real generators/packer; replace only Xcode's expensive compile with a tiny app.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dm, ios = root / 'dm', root / 'dm/ios'
+            (ios / 'tools').mkdir(parents=True)
+            for name in ('games', 'host', 'gfx', 'tools'):
+                (dm / name).symlink_to(REPO / 'dm' / name, target_is_directory=True)
+            (ios / 'Sources').symlink_to(REPO / 'dm/ios/Sources', target_is_directory=True)
+            (ios / 'project.yml').write_bytes((REPO / 'dm/ios/project.yml').read_bytes())
+            for tool in (REPO / 'dm/ios/tools').iterdir():
+                if tool.is_file(): (ios / 'tools' / tool.name).symlink_to(tool)
+            patched, romfs, shaders, aoc = [root / name for name in ('patched', 'romfs', 'shaders', 'aoc')]
+            for folder in (patched, romfs / 'System/Resource', shaders / 'gl', aoc / '1', root / 'work', root / 'bin'):
+                folder.mkdir(parents=True)
+            (romfs / 'System/Resource/file').write_bytes(b'game')
+            (shaders / 'gl/gl_shaders.metallib').write_bytes(b'shader')
+            (aoc / '1/file').write_bytes(b'dlc')
+            for module in ('main', 'sdk'):
+                (patched / f'{module}.patched.bin').write_bytes(bytes(0xC000))
+                (patched / f'{module}.fixups.tsv').write_text('# TEXT_END\t0x4000\n# PATCH_OFF\t0x8000\n# KEY_PAGE_OFF\t0x4000\n# KEY_PAGE_SIZE\t0x4000\n')
+                for suffix in ('gates', 'cuts', 'obs'):
+                    (patched / f'{module}.{suffix}.tsv').touch()
+            (root / 'control.nacp').write_bytes(bytes(0x4000))
+            xcode = root / 'bin/xcodebuild'
+            xcode.write_text('''#!/usr/bin/env python3
+import pathlib, sys
+dd = pathlib.Path(sys.argv[sys.argv.index('-derivedDataPath') + 1])
+app = dd / 'Build/Products/Release-iphoneos/DmIOS.app'
+for directory in ('romfs', 'aoc', 'dm'):
+    (app / directory).mkdir(parents=True, exist_ok=True)
+(app / 'dm/game-data.json').write_text('stale descriptor')
+(app / 'romfs/stale').write_text('stale game')
+(app / 'aoc/stale').write_text('stale dlc')
+(app / 'DmIOS').write_bytes(b'executable')
+''')
+            xcode.chmod(0o755)
+            environment = dict(os.environ, PATH=str(root / 'bin') + os.pathsep + os.environ['PATH'],
+                               GAME='010015100B514000', W=str(root / 'work'), PATCHED=str(patched), ROMFS=str(romfs),
+                               MSL_IOS=str(shaders), AOC=str(aoc), GFXAPI='gl', DM_DISPLAY_NAME='Fixture', DM_APP_VERSION='1.2.1')
+            for excluded in ('1', '0'):
+                with self.subTest(excluded=excluded):
+                    environment['DM_SEPARATE_ROM'] = excluded
+                    out = root / 'Fixture.ipa'
+                    result = subprocess.run(['bash', str(ios / 'tools/build_ipa.sh'), str(out)], env=environment, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    with zipfile.ZipFile(out) as archive:
+                        names = archive.namelist()
+                        self.assertIn('Payload/DmIOS.app/msl/gl/gl_shaders.metallib', names)
+                        self.assertEqual('Payload/DmIOS.app/romfs/System/Resource/file' in names, excluded == '0')
+                        self.assertEqual('Payload/DmIOS.app/aoc/1/file' in names, excluded == '0')
+                        self.assertNotIn('Payload/DmIOS.app/romfs/stale', names)
+                        self.assertNotIn('Payload/DmIOS.app/aoc/stale', names)
+                        self.assertEqual('Payload/DmIOS.app/dm/game-data.json' in names, excluded == '1')
+                        if excluded == '1':
+                            descriptor = json.loads(archive.read('Payload/DmIOS.app/dm/game-data.json'))
+                            import hashlib
+                            self.assertEqual(descriptor['sha256'], hashlib.sha256((root / 'Fixture.nxrom').read_bytes()).hexdigest())
+
     def test_nvn_vulkan_gl_and_incremental_cleanup(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve() / "Game's $ literal `ticks`"
             ios, romfs, shaders, aoc = [root / name for name in ('xcode', 'romfs', 'shaders', 'aoc')]
-            for folder in (ios / 'Gen', romfs, aoc / '1'):
+            for folder in (ios / 'Gen/dm', romfs, aoc / '1'):
                 folder.mkdir(parents=True)
             (ios / 'Gen/dm.xcconfig').touch()
             (romfs / 'marker').write_text('game')
@@ -159,6 +225,27 @@ class ResourceStagingTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertTrue((app / 'romfs/marker').exists())
             self.assertTrue((app / 'msl/gl/fixture.metallib').exists())
+            # External-data projects remove stale bundled assets, and need only shaders on the drive.
+            (ios / 'Gen/dm/game-data.json').write_text('{}')
+            with patch.dict(os.environ, DM_SEPARATE_ROM='1'), patch.object(sys, 'argv',
+                    ['gen_resources.py', str(ios), str(romfs), 'marker', str(shaders / 'gl'), 'gl', str(aoc), str(root / 'dd'), str(chain_h)]):
+                gen_resources.main()
+            result = subprocess.run(['bash', str(REPO / 'dm/ios/tools/stage_resources.sh')],
+                                    env=environment, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((app / 'romfs').exists())
+            self.assertFalse((app / 'aoc').exists())
+            self.assertTrue((app / 'msl/gl/fixture.metallib').exists())
+            self.assertTrue((app / 'dm/game-data.json').exists())
+            (romfs / 'marker').write_text('game')
+            (ios / 'Gen/dm/game-data.json').unlink()
+            with patch.dict(os.environ, DM_SEPARATE_ROM='0'), patch.object(sys, 'argv', arguments):
+                gen_resources.main()
+            chain_h.write_text('#define DMSH_CHAIN "fixture"\n')
+            result = subprocess.run(['bash', str(REPO / 'dm/ios/tools/stage_resources.sh')], env=environment, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((app / 'dm/game-data.json').exists())
+            self.assertTrue((app / 'romfs/marker').exists())
             # Unsigned IPA mode bypasses staging even without a device or mounted data.
             environment.update(DM_COPY_GAME_RESOURCES='NO', PLATFORM_NAME='iphonesimulator')
             result = subprocess.run(['bash', str(REPO / 'dm/ios/tools/stage_resources.sh')], env=environment)

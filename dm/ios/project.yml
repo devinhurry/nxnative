@@ -35,6 +35,12 @@ targets:
         UILaunchStoryboardName: ""
         UIFileSharingEnabled: true          # Documents (log.txt, saves) visible in the Files app
         LSSupportsOpeningDocumentsInPlace: true
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: org.nxnative.game-data
+            UTTypeDescription: NXNative Game Data
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [nxrom]
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationLandscapeRight
           - UIInterfaceOrientationLandscapeLeft

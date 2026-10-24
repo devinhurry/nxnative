@@ -82,6 +82,12 @@ python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys
 
 The IPA appears in the same folder (here `~/Games/MarioWonder/SMBWMobile.ipa`). The first build takes 30–60 minutes, later ones about 10. You need free disk space of about twice the NSPs' size plus 10 GB. Options such as `-o` (output path) and `--app-name` are listed by `-h`.
 
+For a smaller IPA, add `--separate-rom` (or set `SEPARATE_ROM = True` in Spyder). The build writes `SMBWMobile.ipa` and `SMBWMobile.nxrom` beside it. Install the IPA, transfer the `.nxrom` to your phone using Files, then open the app and choose **Import Game Data**. Select the `.nxrom`, not the original NSP. The app verifies the package before enabling Play; keep the app open during import. RomFS and included DLC are in the data package; the game's rewritten code and compiled shaders stay in the IPA. The normal build still includes everything.
+
+The `.nxrom` is deterministic and reused when its inputs are unchanged. Host fixes, shader rebuilds, signing, and launcher settings do not change its contents, so an updated IPA can keep using the imported data. A different game update or DLC changes the data hash and requires importing the new matching package. Import needs free space for the extracted data in addition to the `.nxrom` already on the phone (plus filesystem overhead); delete the transferred `.nxrom` after successful import to reclaim space. Saves remain separate. `--separate-rom` also works with `--prepare-xcode`; the `.nxrom` is produced during preparation and Xcode installs the smaller app.
+
+If you already have a prepared Xcode project, run preparation again once to generate the updated resource configuration.
+
 **4. Install** the IPA with your sideloading tool (AltStore, Sideloadly, LiveContainer, …). The app gets the game's name, icon and version (the update's version, for example 1.2.1 for Mario Wonder; the base game's when there is no update). Sign it with the **Increased Memory Limit** capability (`com.apple.developer.kernel.increased-memory-limit`) if your tool can: without it iOS gives the app about 3.4 GB and closes the bigger games (Hyrule Warriors: Age of Calamity and Hades II use more, Breath of the Wild and Cuphead come close); with it a recent iPhone gives about 6 GB.
 
 With an Apple developer account you can instead build and install from Xcode: `--prepare-xcode` makes an Xcode project for the game rather than an IPA ([Build and run on a device with Xcode](docs/development.md#build-and-run-on-a-device-with-xcode)).

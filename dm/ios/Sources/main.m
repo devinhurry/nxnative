@@ -12,15 +12,30 @@ void dm_host_preload_start(int argc, char **argv);
 UIViewController *front_ios_root(void);
 void front_ios_focus_event(int ev);
 void dm_gamepad_geometry_changed(UIInterfaceOrientation orientation);
+bool dm_imported_game_ready(void);   // GameDataImport.swift: validates the installed data receipt
 
 static char *g_argv[4]; static int g_argc;
+static int g_boot_ok;
 
 static NSString *romfs_locate(void) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
+    if ([fm fileExistsAtPath:[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"dm/game-data.json"]])
+        return dm_imported_game_ready() ? [NSString stringWithUTF8String:getenv("DM_ROMFS")] : nil;
     for (NSString *d in @[[doc stringByAppendingPathComponent:@"romfs"], [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"romfs"]])
         if ([fm fileExistsAtPath:[d stringByAppendingPathComponent:@DM_GAME_ROMFS_MARKER]]) return d;   // only a directory containing the game profile's romfs_marker path counts (Mario: System/Resource, the resource size table)
     return nil;
+}
+
+int front_ios_prepare_game(void) {
+    if (g_boot_ok) return 1;
+    NSString *romfs = romfs_locate();
+    if (!romfs) { fprintf(stderr, "boot: game files not found; waiting for import\n"); return 0; }
+    fprintf(stderr, "boot: game files %s\n", romfs.fileSystemRepresentation);
+    setenv("DM_ROMFS", romfs.fileSystemRepresentation, 0);
+    dm_host_preload_start(g_argc, g_argv);
+    g_boot_ok = 1;
+    return 1;
 }
 
 // Boot prerequisites (done before UIApplicationMain): directories / environment variables / log -- the host's early load reads these
@@ -56,10 +71,6 @@ static int boot_env(void) {
     NSString *lang = [NSBundle.mainBundle objectForInfoDictionaryKey:@"DMLanguage"];
     if (!getenv("DM_LANG") && [lang isKindOfClass:NSString.class] && lang.length) setenv("DM_LANG", lang.UTF8String, 0);
     fprintf(stderr, "boot: game language %s\n", getenv("DM_LANG") ?: "en-US");
-    NSString *romfs = romfs_locate();
-    if (!romfs) { fprintf(stderr, "boot: game files not found (<App>/romfs or Documents/romfs)\n"); return 0; }
-    fprintf(stderr, "boot: game files %s\n", romfs.fileSystemRepresentation);
-    setenv("DM_ROMFS", romfs.fileSystemRepresentation, 0);
     setenv("DM_SAVE", [doc stringByAppendingPathComponent:@"save"].fileSystemRepresentation, 0);
     setenv("DM_TEMP", [doc stringByAppendingPathComponent:@"temp"].fileSystemRepresentation, 0);
     NSString *dm = [res stringByAppendingPathComponent:@"dm"];
@@ -70,10 +81,8 @@ static int boot_env(void) {
     if ([fm fileExistsAtPath:aoc]) setenv("DM_AOC_DIR", aoc.fileSystemRepresentation, 0);
     chdir(doc.fileSystemRepresentation);
     g_argv[0] = strdup("dmhost"); g_argv[1] = strdup(dm.fileSystemRepresentation); g_argc = 2;
-    dm_host_preload_start(g_argc, g_argv);   // Module tables / relocation / takeover run early in the background, in parallel with UIKit startup (and the launcher: the settings it sets are read when the game starts)
-    return 1;
+    return front_ios_prepare_game();   // Preload early when files are ready; otherwise the import UI calls it after installation.
 }
-static int g_boot_ok;
 
 static void *boot_thread(void *p) {
     (void)p;
