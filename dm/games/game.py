@@ -127,6 +127,8 @@ def header(g):
         sys.exit(f'{g.id}: camera_look_tail and camera_look_aim were replaced by the shared camera_look vector hook')
     cu = g.get('camera_ui_aspect', '')
     if cu and not re.fullmatch(r'(?:[0-9]|1[0-9]|2[0-8])(:0x[0-9a-f]+){3}', cu): sys.exit(f'{g.id}: camera_ui_aspect must be <register 0..28>:<source pointer>:<projection pointer>:<source fovy> (hex offsets)')
+    cw = g.get('camera_world_aspect', '')
+    if cw and not re.fullmatch(r'(?:[0-9]|1[0-9]|2[0-8]):0x[0-9a-f]+', cw): sys.exit(f'{g.id}: camera_world_aspect must be <owner register 0..28>:<projection member offset> (hex)')
     au = g.get('aspect_ui', '')   # vertex shader identities of the game's font and layout libraries; runtime viewport transform only
     ac = g.get('aspect_canvas', '')   # fragment shader that composites the UI canvas into the present target
     if any(not re.fullmatch(r'[0-9a-f]{16}', k) for k in au.split()): sys.exit(f'{g.id}: aspect_ui must list full 16-digit shader keys')
@@ -186,6 +188,7 @@ def header(g):
          f'#define DM_GAME_CAMERA_ASPECT {q(ca)}',
          f'#define DM_GAME_CAMERA_LOOK {q(cl)}',
          f'#define DM_GAME_CAMERA_UI_ASPECT {q(cu)}',
+         f'#define DM_GAME_CAMERA_WORLD_ASPECT {q(cw)}',
          *([f'#define DM_GAME_NVN_API_MAJOR {api.split(".")[0]}', f'#define DM_GAME_NVN_API_MINOR {api.split(".")[1]}'] if g.get('device_api', '') else []),   # without the key: by the SDK version (hle_nvn.c nvn_api)
          '']
     return '\n'.join(L)
