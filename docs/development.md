@@ -77,6 +77,10 @@ The game language (`--language`, `LANGUAGE`; English by default) is what `nn::oe
 
 On the device, environment switches go in `Documents/env.txt` (one `KEY=VALUE` per line), and game files are also accepted at `Documents/romfs`.
 
+## Run a game in the Mac host
+
+Use `python3 scripts/run_mac.py --game /path/to/game-folder` to select a game from a direct `<title ID>_build` or `<title ID>-work` folder, or from a parent containing exactly one such folder. For advanced use, `--game <title ID>` (or a profile folder) can be paired with `--build <game work folder>`. The launcher recognizes the NSP layout (`patched_<version>` beside `extract/<version>/{ExeFS,RomFS}`) and manual layout (`build/patched_<version>` beside `data/<version>/{ExeFS,RomFS}`). Pass `--version`, `--patched`, `--exefs`, `--romfs` or `--msl` when the folders differ; `DM_ROOT`, `DM_ROMFS`, `DM_MSL_DIR`, `DM_SAVE` and `DM_TEMP` remain available. `--check` prints the selected folders and verifies rewrite freshness and the expected shader-cache artifacts without writing files or building. `--windowed` disables fullscreen and uses `DM_ASPECT_RATIO` to choose the window height when `DM_WINDOW_SIZE` is unset.
+
 ## Build and run on a device with Xcode
 
 With an Apple developer account, Xcode can sign and install the app itself:

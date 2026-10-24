@@ -786,16 +786,35 @@ def build_mismatch(d, name, g):   # the modules of an extraction whose build ID 
     return [f'{m} {build_id(d / "ExeFS" / m)} (registered {bid})' for m, bid in want.items() if m != 'display' and build_id(d / 'ExeFS' / m) != bid]
 
 
+def rewrite_outputs(mods):
+    """Every file produced by patch_nso.py that the host may consume."""
+    return [f'{m}.{suffix}.tsv' for m in mods for suffix in ('fixups', 'gates', 'sites', 'cuts', 'obs')] + [f'{m}.patched.bin' for m in mods] + ['build_src.sha256']
+
+
+def rewrite_freshness(repo, exe_dir, out, env, g):
+    """Return (fresh, reason, key) using the same inputs and outputs as rewrite()."""
+    try:
+        import capstone
+    except ImportError as e:
+        return False, f'capstone is unavailable: {e}', None
+    mods = g.words('modules')
+    key = fingerprint(('files', [repo / 'dm/tools/patch_nso.py', repo / 'dm/tools/nso_code.py'] + [exe_dir / m for m in mods]), mods, capstone.__version__, {k: env.get(k) for k in ('DM_PATCH_FRONT',)})
+    missing = [name for name in rewrite_outputs(mods) if not (out / name).is_file()]
+    if missing: return False, 'missing rewrite output(s): ' + ', '.join(missing), key
+    if reused(out.with_name(out.name + '.key'), key) is None: return False, 'rewrite inputs changed or rewrite key is missing', key
+    return True, 'rewrite inputs and outputs are current', key
+
+
 def rewrite(py, repo, exe_dir, out, env, logs, g):
     """patch_nso.py on every code module at once (each writes its own <module>.* files, all the same build_src.sha256 line), each with its log.
     Reused when the modules, patch_nso.py (with nso_code.py), its switch and capstone are as at the last successful rewrite (Monster Hunter Rise's main alone takes 5.5 min)"""
-    import capstone
     mods = g.words('modules')
     PROG.stage('rewrite', step='checking the inputs')
     kf = out.with_name(out.name + '.key')
-    key = fingerprint(('files', [repo / 'dm/tools/patch_nso.py', repo / 'dm/tools/nso_code.py'] + [exe_dir / m for m in mods]), mods, capstone.__version__, {k: env.get(k) for k in ('DM_PATCH_FRONT',)})
-    if all((out / f'{m}.patched.bin').is_file() for m in mods) and reused(kf, key) is not None:
+    fresh, reason, key = rewrite_freshness(repo, exe_dir, out, env, g)
+    if fresh:
         PROG.end(f'{", ".join(mods)}, reused (inputs unchanged)'); return
+    if key is None: raise BuildError(reason)
     tmp = out.with_name(out.name + '.partial'); rmtree(tmp); tmp.mkdir(parents=True); logs.mkdir(parents=True, exist_ok=True)
     PROG.set(step=', '.join(mods), done=0, total=len(mods), unit='modules')
     procs, logf = {}, {}
@@ -810,13 +829,16 @@ def rewrite(py, repo, exe_dir, out, env, logs, g):
                 if procs[m].returncode:
                     log = logs / f'rewrite_{m}.log'; logf[m].close()
                     PROG.end(ok=False)
-                    PROG.say(f'---- last lines of {log} ----\n' + ''.join(collections.deque(open(log, errors='replace'), maxlen=40)).rstrip('\n'))
+                    with open(log, errors='replace') as f: tail = ''.join(collections.deque(f, maxlen=40)).rstrip('\n')
+                    PROG.say(f'---- last lines of {log} ----\n' + tail)
                     raise BuildError(f'patch_nso.py exit code {procs[m].returncode} on {m} (full output: {log})')
             time.sleep(0.2)
     finally:   # an error or an interrupt stops the other rewrites
         for p in procs.values():
             if p.poll() is None: p.terminate(); p.wait()
         for f in logf.values(): f.close()
+    missing = [name for name in rewrite_outputs(mods) if not (tmp / name).is_file()]
+    if missing: raise BuildError(f'patch_nso.py completed without required output(s): {", ".join(missing)}')
     rmtree(kf); swap_in(tmp, out); kf.write_text(f'{key}\n')
     PROG.end(', '.join(mods))
 
