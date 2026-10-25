@@ -8,7 +8,8 @@
 #   sub sp, sp, xN      → xN rounded up to 16 first (Apple's kernel faults on a misaligned sp, Horizon does not; site_sp_align)
 #   spin wait loops     → a copy whose back-edges pass a spin gate (the host yields there; a busy poll costs nothing on the Switch, see "Spin waits")
 #   Registered cuts (CUTS of the patch files, restricted by NSO build ID, see "Registered patches"): before rewriting, the original bytes are asserted one by one and any mismatch aborts; results are listed in <name>.cuts.tsv
-#   Registered observation gates (OBS of the patch files, restricted by build ID): one instruction at the entry is replaced with "enter the host observation callback → execute the original instruction → jump back", so diagnostics modify zero code at runtime; listed in <name>.obs.tsv
+#   Registered observation gates (OBS of the patch files, restricted by build ID): one instruction at the entry is replaced with "enter the host callback → execute the original instruction → jump back".
+#   Ordinary observers are read-only; a separate opt-in result filter may change x0 for the exact instruction's downstream consumer. Sites are listed in <name>.obs.tsv
 # The key page only stores "actual key number × 8" at the end of the data segment, and patch code fetches thread slots indirectly through the key page: the loader may use any key number.
 # Output: <name>.patched.bin (key page and patch area appended after the image at PATCH_OFF; when that would start beyond 112 MB the patch area sits before the base, see FAR), <name>.fixups.tsv (layout and key page index header), <name>.gates.tsv, <name>.sites.tsv, <name>.cuts.tsv, <name>.obs.tsv
 import struct, re, sys, os, glob, types, importlib.util
@@ -64,6 +65,7 @@ else:
 # A file may define:
 #   CUTS = {build ID: [(offset, original bytes, new bytes, reason)]}: before rewriting, the original bytes are asserted one by one (listed in <name>.cuts.tsv)
 #   OBS = {build ID: [(offset, number, original instruction word, reason)]}: position-independent observation gates (listed in <name>.obs.tsv)
+#       ordinary callbacks inspect registers; gate_obs_result_set explicitly filters x0 after the saved-register callback returns
 #   OBS_SAFE = {build ID: {offset, ...}}: exceptional interior observation sites whose register liveness is established by that build's validation
 #   FRAME_STEP = {build ID: function(ctx)}: frame step stubs of a main
 #   VALIDATE = {build ID: function(ctx)}: build-specific invariants checked against the unmodified image before any patches are applied

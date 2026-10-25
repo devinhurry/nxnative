@@ -121,11 +121,32 @@ static void test_botw_right_cluster_and_camera_tap(void) {
     }
 }
 
+static void test_botw_new_touch_geometry(void) {
+    for (int i = 0; i < 2; i++) {
+        float w = i ? 1680.0f : 844.0f, h = i ? 800.0f : 390.0f;
+        float u = dm_touchpad_u(h);
+        dm_touchpad_point stick = dm_touchpad_stick_home(w,h,42,0,42,21);
+        dm_touchpad_point shield = dm_touchpad_shield_stick_home(w,h,42,0,42,21);
+        dm_touchpad_point rune = dm_touchpad_rune_button(w,h,42,0,42,21);
+        nearf(shield.x, stick.x, 0.001f);
+        assert(shield.y < rune.y && rune.y < stick.y);
+        nearf(hypotf(rune.x-stick.x, rune.y-stick.y), (DM_TP_STICK_R+DM_TP_L_R)*u, 0.01f);
+        assert(hypotf(rune.x-shield.x, rune.y-shield.y) > (DM_TP_STICK_R+DM_TP_L_R)*u);
+        assert(!dm_touchpad_cancel_outside(60,50,50,50,DM_TP_CANCEL_RADIUS));
+        assert(dm_touchpad_cancel_outside(50+DM_TP_CANCEL_RADIUS+1,50,50,50,DM_TP_CANCEL_RADIUS));
+        dm_touchpad_rect map = {0.1f,0.2f,0.4f,0.3f};
+        dm_touchpad_point badge = dm_touchpad_map_badge(40,20,1280,720,map,DM_TP_MAP_BADGE_RADIUS*u);
+        nearf(badge.x,40+0.5f*1280-DM_TP_MAP_BADGE_RADIUS*u*0.55f,0.01f);
+        nearf(badge.y,20+0.2f*720+DM_TP_MAP_BADGE_RADIUS*u*0.55f,0.01f);
+    }
+}
+
 int main(void) {
     test_directional_ownership();
     test_stick_shaping();
     test_safe_insets_and_resize();
     test_botw_right_cluster_and_camera_tap();
-    puts("touchpad geometry: direction ownership, layout, and stick shaping passed");
+    test_botw_new_touch_geometry();
+    puts("touchpad geometry: direction ownership, layout, and BOTW control geometry passed");
     return 0;
 }

@@ -7,10 +7,12 @@
 #include "hle.h"
 #include "hle_haptics.h"
 #include "dm_input.h"
+#include "botw_touch_actions.h"
 #include "front.h"
 #include <stdatomic.h>
 #include <unistd.h>
 #include <strings.h>
+#include <string.h>
 #include <pthread.h>
 #include <time.h>
 #include <math.h>
@@ -279,9 +281,9 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
     if (!(style_of(id) & style)) return;   // no controller of this id / style: attributes = 0
     // Player 1: the keyboard / touch path, its controller path and those of the players merged into it; another player: its own controller path
     int pl = player_of(id); uint32_t src = pl ? 1u << pl : 1u | merged_players();
-    uint64_t b = 0; int32_t a[4] = {0};
+    uint64_t b = 0, virtual_buttons = 0; int32_t a[4] = {0};
     uint64_t k = atomic_load(&g_axes);
-    if (!pl) { b = atomic_load(&g_btn) | atomic_exchange(&g_latch, 0); for (int i = 0; i < 4; i++) a[i] = ax(k, i); }
+    if (!pl) { virtual_buttons = atomic_load(&g_btn); b = atomic_exchange(&g_latch, 0); for (int i = 0; i < 4; i++) a[i] = ax(k, i); }
     int32_t pad_axes[4] = {0};
     for (int p = 0; p < DM_PLAYERS; p++) if (src >> p & 1) {
         b |= atomic_load(&g_pad_btn[p]) | atomic_exchange(&g_pad_latch[p], 0);
@@ -310,6 +312,9 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
         // All Npad reads in one guest frame must return the exact pair whose source was frozen.
         if (frozen.frame == sample.frame) { s->rx = frozen.selected_rx; s->ry = frozen.selected_ry; }
     }
+    if (!pl && !strcmp(DM_GAME_ID, "01007EF00011E000"))
+        dm_botw_touch_actions_apply(&b, &virtual_buttons, dm_guest_frame());
+    if (!pl) b |= virtual_buttons;
     b &= 0xffffull;
     if (s->lx < -STICK_THRESH) b |= 1u << 16;
     if (s->ly > STICK_THRESH) b |= 1u << 17;

@@ -47,6 +47,9 @@ typedef struct { float x, y, width, height; } dm_touchpad_rect;
 #define DM_TP_LOOK_DOUBLE_TAP_DISTANCE 48.0f
 #define DM_TP_SHOULDER_GAP 8.0f
 #define DM_TP_SHOULDER_HIT_SCALE 1.0f
+#define DM_TP_SHIELD_GAP 8.0f
+#define DM_TP_CANCEL_RADIUS 70.0f
+#define DM_TP_MAP_BADGE_RADIUS 17.0f
 
 static inline float dm_touchpad_u(float height) {
     float u = height / 430.0f;
@@ -114,6 +117,41 @@ static inline dm_touchpad_point dm_touchpad_stick_home(float width, float height
     float u = dm_touchpad_u(height);
     return (dm_touchpad_point){c.x + DM_TP_STICK_X * u,
                                c.y + c.height - DM_TP_PAD_Y * u};
+}
+
+// BOTW's ZL shield stick is fixed above the ordinary left stick. The gap keeps
+// its ring clear of the adjacent L/rune badge at the left stick's upper-right.
+static inline dm_touchpad_point dm_touchpad_shield_stick_home(float width, float height,
+                                                               float left, float top,
+                                                               float right, float bottom) {
+    dm_touchpad_point p = dm_touchpad_stick_home(width, height, left, top, right, bottom);
+    float u = dm_touchpad_u(height);
+    p.y -= (2.0f * DM_TP_STICK_R + DM_TP_L_R + DM_TP_SHIELD_GAP) * u;
+    return p;
+}
+
+static inline dm_touchpad_point dm_touchpad_rune_button(float width, float height,
+                                                         float left, float top,
+                                                         float right, float bottom) {
+    dm_touchpad_point p = dm_touchpad_stick_home(width, height, left, top, right, bottom);
+    float d = (DM_TP_STICK_R + DM_TP_L_R) * 0.70710678118f * dm_touchpad_u(height);
+    p.x += d; p.y -= d;
+    return p;
+}
+
+// The published map rectangle is normalized to the visible 16:9 UI canvas.
+// Place the + badge half inside its upper-right corner so it stays visible and
+// its hit target follows the native pane geometry at every aspect ratio.
+static inline dm_touchpad_point dm_touchpad_map_badge(float canvas_x, float canvas_y,
+                                                       float canvas_width, float canvas_height,
+                                                       dm_touchpad_rect map, float radius) {
+    return (dm_touchpad_point){canvas_x + (map.x + map.width) * canvas_width - radius * 0.55f,
+                               canvas_y + map.y * canvas_height + radius * 0.55f};
+}
+
+static inline int dm_touchpad_cancel_outside(float x, float y, float cx, float cy, float radius) {
+    float dx = x - cx, dy = y - cy;
+    return dx * dx + dy * dy > radius * radius;
 }
 
 static inline dm_touchpad_point dm_touchpad_dpad_center(float width, float height,

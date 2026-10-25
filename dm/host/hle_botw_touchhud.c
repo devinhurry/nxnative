@@ -3,6 +3,8 @@
 // translations only to freshly composed global matrices.
 #include "hle.h"
 #include "front.h"
+#include "botw_rune_icon.h"
+#include "botw_touch_actions.h"
 #include <math.h>
 #include <stdatomic.h>
 #include <TargetConditionals.h>
@@ -18,7 +20,13 @@ static struct {
     float x, y, home_x, home_y, map_dx, map_dy, map_rect[4];
     int cut_bounds_valid, sibling_bounds_valid, sensor_bounds_valid;
     float cut_right, cut_top, sibling_right, sensor_right;
+    int rune_crop_valid;
+    float rune_crop[4];
+    uint64_t rune_token;
+    uintptr_t rune_pane;
+    uintptr_t rune_chain[10];
 } g_touchhud;
+static dm_botw_rune_icon_state g_rune_icon;
 static _Atomic int g_touchhud_active;
 static _Atomic(uintptr_t) g_touchhud_pane;
 static _Atomic int g_touchhud_available;
@@ -27,14 +35,23 @@ static _Atomic(uintptr_t) g_touchhud_map_root;
 static module_t *g_touchhud_main;
 static uint8_t *pane_parent(uint8_t *pane);
 static int visible_to_root(uint8_t *pane);
+static int transform_bounds(uint8_t *pane, float *left, float *bottom, float *right, float *top);
 
 int dm_botw_touch_hud_available(void) { return atomic_load_explicit(&g_touchhud_available, memory_order_acquire); }
+
+int dm_botw_touch_hud_active(void) {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000") || !dm_botw_touch_hud_available() ||
+        strcmp(dm_main_build(), BOTW_BUILD)) return 0;
+    return atomic_load_explicit(&g_touchhud_active, memory_order_acquire);
+}
 
 void dm_botw_touch_hud_publish(int active, float center_x, float center_y) {
     if (!strcmp(DM_GAME_ID, "01007EF00011E000")) {
         if (!isfinite(center_x) || !isfinite(center_y)) active = 0;
         if (center_x < 0 || center_x > 1 || center_y < 0 || center_y > 1) active = 0;
+        int became_inactive;
         pthread_mutex_lock(&g_touchhud_mu);
+        became_inactive = g_touchhud.active && !active;
         g_touchhud.active = !!active;
         g_touchhud.x = center_x;
         g_touchhud.y = center_y;
@@ -44,7 +61,77 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y) {
             front_botw_touch_hud_map_region(0, 0, 0, 0, 0);
         }
         pthread_mutex_unlock(&g_touchhud_mu);
+        if (became_inactive) dm_botw_touch_actions_reset();
+        if (!active) dm_botw_rune_icon_clear();
     }
+}
+
+int dm_botw_rune_icon_snapshot(dm_botw_rune_icon_state *out) {
+    if (!out) return 0;
+    pthread_mutex_lock(&g_touchhud_mu);
+    *out = g_rune_icon;
+    pthread_mutex_unlock(&g_touchhud_mu);
+    return 1;
+}
+
+int dm_botw_rune_icon_crop(float rect[4], uint64_t *token) {
+    if (!rect || !token) return 0;
+    pthread_mutex_lock(&g_touchhud_mu);
+    int valid = g_touchhud.active && g_touchhud.rune_crop_valid;
+    if (valid) {
+        memcpy(rect, g_touchhud.rune_crop, sizeof g_touchhud.rune_crop);
+        *token = g_touchhud.rune_token;
+    }
+    pthread_mutex_unlock(&g_touchhud_mu);
+    return valid;
+}
+
+void dm_botw_rune_icon_clear(void) {
+    int changed = 0;
+    pthread_mutex_lock(&g_touchhud_mu);
+    if (g_touchhud.rune_crop_valid || g_rune_icon.valid || g_touchhud.rune_pane) {
+        g_touchhud.rune_crop_valid = 0;
+        g_touchhud.rune_token++;
+        g_touchhud.rune_pane = 0;
+        memset(g_touchhud.rune_chain, 0, sizeof g_touchhud.rune_chain);
+        if (g_rune_icon.valid) g_rune_icon.generation++;
+        g_rune_icon.valid = 0;
+        g_rune_icon.width = g_rune_icon.height = g_rune_icon.stride = 0;
+        memset(g_rune_icon.rgba, 0, sizeof g_rune_icon.rgba);
+        changed = 1;
+    }
+    pthread_mutex_unlock(&g_touchhud_mu);
+    if (changed) front_botw_rune_icon_changed();
+}
+
+static int rune_icon_clear_pixels_locked(void) {
+    if (!g_rune_icon.valid) return 0;
+    g_rune_icon.generation++;
+    g_rune_icon.valid = 0;
+    g_rune_icon.width = g_rune_icon.height = g_rune_icon.stride = 0;
+    memset(g_rune_icon.rgba, 0, sizeof g_rune_icon.rgba);
+    return 1;
+}
+
+void dm_botw_rune_icon_publish(uint64_t token, const uint8_t *rgba,
+                               uint32_t width, uint32_t height, uint32_t stride) {
+    if (!rgba || width != DM_BOTW_RUNE_ICON_SIDE || height != DM_BOTW_RUNE_ICON_SIDE ||
+        stride != DM_BOTW_RUNE_ICON_STRIDE) return;
+    int changed = 0;
+    pthread_mutex_lock(&g_touchhud_mu);
+    if (g_touchhud.active && g_touchhud.rune_crop_valid && token == g_touchhud.rune_token) {
+        if (!g_rune_icon.valid || memcmp(g_rune_icon.rgba, rgba, sizeof g_rune_icon.rgba)) {
+            memcpy(g_rune_icon.rgba, rgba, sizeof g_rune_icon.rgba);
+            g_rune_icon.valid = 1;
+            g_rune_icon.width = width;
+            g_rune_icon.height = height;
+            g_rune_icon.stride = stride;
+            g_rune_icon.generation++;
+            changed = 1;
+        }
+    }
+    pthread_mutex_unlock(&g_touchhud_mu);
+    if (changed) front_botw_rune_icon_changed();
 }
 
 // A tap consumes the published rectangle immediately. The next native
@@ -113,6 +200,67 @@ static int main_environment_pane(uint8_t *pane) {
     const char *names[] = {"Pa_Sensor_00", "Pa_SoundGauge_00", "Pa_TempMeter_00", "Pa_Weather_00", "Pa_Time_00"};
     for (int i = 0; i < (int)(sizeof names / sizeof names[0]); i++) if (pane_named(pane, names[i])) return 1;
     return 0;
+}
+
+static const char *const g_rune_chain_names[10] = {
+    "P_Icon_00", "N_PicLoad_00", "Pa_IconNow_00", "N_All_00", "Pa_MainU_00",
+    "N_MainU_00", "N_Pos_00", "N_MainAll_00", "N_All_00", "RootPane"
+};
+static int rune_chain_collect(uint8_t *pane, uintptr_t chain[10], int require_visible) {
+    uint8_t *p = pane;
+    for (size_t i = 0; i < 10; i++) {
+        if (!pane_named(p, g_rune_chain_names[i]) || (require_visible && !pane_visible(p))) return 0;
+        chain[i] = (uintptr_t)p;
+        if (i + 1 < 10) p = pane_parent(p);
+    }
+    return 1;
+}
+static int main_shortcut_rune_pane(uint8_t *pane) {
+    uintptr_t chain[10]; return rune_chain_collect(pane, chain, 0);
+}
+static int rune_chain_entry_hidden(uint8_t *pane) {
+    int member = 0;
+    pthread_mutex_lock(&g_touchhud_mu);
+    for (size_t i = 0; i < 10; i++) if (g_touchhud.rune_chain[i] && g_touchhud.rune_chain[i] == (uintptr_t)pane) {
+        member = 1; break;
+    }
+    pthread_mutex_unlock(&g_touchhud_mu);
+    return member && !pane_visible(pane);
+}
+static void rune_icon_record(uint8_t *pane) {
+    uintptr_t chain[10];
+    if (!atomic_load_explicit(&g_touchhud_active, memory_order_acquire) ||
+        !rune_chain_collect(pane, chain, 1)) {
+        dm_botw_rune_icon_clear();
+        return;
+    }
+    float left, bottom, right, top;
+    if (!transform_bounds(pane, &left, &bottom, &right, &top)) {
+        dm_botw_rune_icon_clear();
+        return;
+    }
+    float rect[4] = {left + 640.0f, 360.0f - top, right - left, top - bottom};
+    int identity_changed = 0, bounds_changed = 0, notify = 0;
+    pthread_mutex_lock(&g_touchhud_mu);
+    identity_changed = g_touchhud.rune_pane != (uintptr_t)pane || !g_touchhud.rune_crop_valid;
+    bounds_changed = !g_touchhud.rune_crop_valid ||
+        fabsf(g_touchhud.rune_crop[0] - rect[0]) > .25f || fabsf(g_touchhud.rune_crop[1] - rect[1]) > .25f ||
+        fabsf(g_touchhud.rune_crop[2] - rect[2]) > .25f || fabsf(g_touchhud.rune_crop[3] - rect[3]) > .25f;
+    if (bounds_changed) {
+        memcpy(g_touchhud.rune_crop, rect, sizeof rect);
+        g_touchhud.rune_crop_valid = 1;
+    }
+    if (identity_changed) {
+        // Tokens guard native pane lifetime/visibility, not its animated
+        // matrix. The crop is refreshed every Calculate; bumping the token on
+        // each small animation step would reject every asynchronous GPU copy.
+        g_touchhud.rune_token++;
+        g_touchhud.rune_pane = (uintptr_t)pane;
+        memcpy(g_touchhud.rune_chain, chain, sizeof chain);
+        notify = rune_icon_clear_pixels_locked();
+    }
+    pthread_mutex_unlock(&g_touchhud_mu);
+    if (identity_changed && notify) front_botw_rune_icon_changed();
 }
 
 static void invalidate_map_rect(void) {
@@ -207,6 +355,10 @@ static void publish_map_rect(uint8_t *pane) {
 static void botw_touchhud_pane(const uint64_t *regs) {
     uint8_t *pane = (uint8_t *)(uintptr_t)regs[0];
     if (!pane) return;
+    // The child matrix hook may not run when a parent becomes hidden. Invalidate
+    // the duplicate from the live pre-calculate callback while the chain is safe.
+    if (atomic_load_explicit(&g_touchhud_active, memory_order_acquire) && rune_chain_entry_hidden(pane))
+        dm_botw_rune_icon_clear();
     if (pane_named(pane, "RootPane") && (uintptr_t)pane == atomic_load(&g_touchhud_map_root) &&
         !pane_visible(pane)) {
         atomic_store_explicit(&g_touchhud_map_collapsed, 0, memory_order_release);
@@ -270,6 +422,10 @@ static void botw_touchhud_matrix(const uint64_t *regs) {
     uint8_t *pane = (uint8_t *)(uintptr_t)regs[19];
     if (!pane) return;
     int active = atomic_load_explicit(&g_touchhud_active, memory_order_acquire);
+    if (active && main_shortcut_rune_pane(pane)) {
+        rune_icon_record(pane);
+        return;
+    }
     int collapsed = atomic_load_explicit(&g_touchhud_map_collapsed, memory_order_acquire);
     if ((uintptr_t)pane == atomic_load_explicit(&g_touchhud_pane, memory_order_acquire)) {
         float tx, ty, x, y;
