@@ -38,6 +38,11 @@ void dm_gfx_passdump_next(long frames) { (void)frames; }
 void dm_botw_touch_actions_apply(uint64_t *other_buttons, uint64_t *virtual_buttons, uint64_t frame) {
     (void)other_buttons; (void)virtual_buttons; (void)frame;
 }
+int dm_botw_touch_menu_apply(uint64_t *buttons, int32_t axes[4], uint64_t frame) {
+    (void)buttons; (void)axes; (void)frame;
+    return 0;
+}
+void dm_botw_touch_menu_pointer(int phase, float x, float y) { (void)phase; (void)x; (void)y; }
 void dm_haptics_init(void (*sink)(dm_haptic_state), int enabled) { (void)sink; (void)enabled; }
 void dm_haptics_route(int player, int available) { (void)player; (void)available; }
 void dm_haptics_clear(int player) { (void)player; }

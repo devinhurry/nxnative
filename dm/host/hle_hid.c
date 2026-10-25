@@ -8,6 +8,7 @@
 #include "hle_haptics.h"
 #include "dm_input.h"
 #include "botw_touch_actions.h"
+#include "botw_touch_menu.h"
 #include "front.h"
 #include <stdatomic.h>
 #include <unistd.h>
@@ -167,6 +168,22 @@ static void *ctl_main(void *arg) {
                     LOG("DM_CTL: look phase=%ld delta=(%.5f,%.5f)", phase, dx, dy);
                     continue;
                 }
+                if (!strncmp(line, "menu ", 5)) {
+                    char phase_name[16], extra;
+                    float x, y;
+                    if (sscanf(line + 5, "%15s %f %f %c", phase_name, &x, &y, &extra) != 3 ||
+                        !isfinite(x) || !isfinite(y)) {
+                        LOG("[RED] DM_CTL menu wants begin|move|end|cancel x y"); continue;
+                    }
+                    int phase = !strcmp(phase_name, "begin") ? DM_BOTW_MENU_BEGIN :
+                                !strcmp(phase_name, "move") ? DM_BOTW_MENU_MOVE :
+                                !strcmp(phase_name, "end") ? DM_BOTW_MENU_END :
+                                !strcmp(phase_name, "cancel") ? DM_BOTW_MENU_CANCEL : -1;
+                    if (phase < 0) { LOG("[RED] DM_CTL invalid menu phase: %s", phase_name); continue; }
+                    dm_botw_touch_menu_pointer(phase, x, y);
+                    LOG("DM_CTL: menu phase=%s point=(%.4f,%.4f)", phase_name, x, y);
+                    continue;
+                }
                 if (!strncmp(line, "texdump ", 8)) { void dm_gfx_texdump_next(const char *path); dm_gfx_texdump_next(line + 8); LOG("DM_CTL: colour targets of the next frame → %s (as DM_NVN_TEXDUMP)", line + 8); continue; }
                 if (!strncmp(line, "passdump ", 9)) { void dm_gfx_passdump_next(long n); dm_gfx_passdump_next(atol(line + 9)); LOG("DM_CTL: passes of the next %ld frames (as DM_NVN_PASSDUMP)", atol(line + 9)); continue; }
                 if (!strncmp(line, "drag ", 5)) {   // one finger, a step every 8 ms
@@ -312,8 +329,16 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
         // All Npad reads in one guest frame must return the exact pair whose source was frozen.
         if (frozen.frame == sample.frame) { s->rx = frozen.selected_rx; s->ry = frozen.selected_ry; }
     }
-    if (!pl && !strcmp(DM_GAME_ID, "01007EF00011E000"))
-        dm_botw_touch_actions_apply(&b, &virtual_buttons, dm_guest_frame());
+    if (!pl && !strcmp(DM_GAME_ID, "01007EF00011E000")) {
+        uint64_t frame = dm_guest_frame();
+        dm_botw_touch_actions_apply(&b, &virtual_buttons, frame);
+        if (dm_botw_touch_menu_apply(&b, a, frame)) {
+            // Menu-only synthetic R-stick pulses are applied after ordinary
+            // look-source freezing, so they reach this Npad result without
+            // changing the immutable camera-input provenance.
+            s->rx = a[2]; s->ry = a[3];
+        }
+    }
     if (!pl) b |= virtual_buttons;
     b &= 0xffffull;
     if (s->lx < -STICK_THRESH) b |= 1u << 16;

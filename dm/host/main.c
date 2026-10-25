@@ -2,6 +2,7 @@
 #include "dm.h"
 #include "front.h"
 #include "botw_touch_actions.h"
+#include "botw_touch_menu.h"
 #include <stdatomic.h>
 #include <sys/resource.h>
 #include <sys/sysctl.h>
@@ -98,6 +99,7 @@ static void host_preload(int argc, char **argv) {
     dm_aspect_install();   // validate support and update the camera on the guest projection-update gate
     dm_look_install();     // validate BOTW's shared native stick-vector gate before enabling relative input
     dm_botw_touch_hud_install(); // validate BOTW's MainShortCut pane transform gates
+    dm_botw_touch_menu_install(); // observe the supported BOTW inventory and native pointer on existing pane gates
     dm_botw_touch_actions_install(); // BOTW touch-mode R/ZR sequencing and its native Dash-result filter are build-gated
     dm_sdk_major();   // logs the SDK version, which SDK-dependent behaviour follows (loader.c)
     uint64_t ta = now_ns();

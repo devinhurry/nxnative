@@ -152,6 +152,19 @@ def validate_main(ctx):
         0x1a9fd7e8, 0x0a080008, 0x37080854, 0x340005c8,
         0xaa1303e0, 0x940065c3,
     ), 'BOTW native Dash query/result/speed-gate sequence changed; revalidate sprint filter and scratch liveness'
+    assert tuple(word(o) for o in range(0xf57ba0, 0xf57bb8, 4)) == (
+        0xd10143ff, 0xa9027bfd, 0xa90357f6, 0xa9044ff4, 0x910083fd, 0xf9401008,
+    ), 'BOTW native BoxCursorControl update entry changed; revalidate requested-entry hook and x0 manager'
+    assert tuple(word(o) for o in range(0xe39c08, 0xe39c20, 4)) == (
+        0xa9bd7bfd, 0xf9000bf5, 0xa9024ff4, 0x910003fd, 0xaa0003f4, 0x9105e000,
+    ), 'BOTW inventory transition-flag setter changed; revalidate native category request staging'
+    assert tuple(word(o) for o in range(0xe3b9f0, 0xe3b9fc, 4)) == (
+        0xb9768c08, 0x35000048, 0xd65f03c0,
+    ), 'BOTW inventory page-commit entry changed; revalidate native category commit sequence'
+    assert tuple(word(o) for o in range(0xe3ddcc, 0xe3ddcc + 0x20, 4)) == (
+        0xa9be7bfd, 0xa9014ff4, 0x910003fd, 0xb9763808,
+        0x2a0103f4, 0xaa0003f3, 0x3100051f, 0x54000220,
+    ), 'BOTW native inventory navigation/update entry changed; revalidate zero-delta category refresh'
 
 VALIDATE = {'cd57b23fa4bbad65803d9788c01821ee': validate_main}
 
@@ -166,6 +179,7 @@ OBS = {
     (0xd58008, 33, 'f9409408', 'shared stick getter: snapshot the selected raw child pair before the native dead-zone/filter branches'),
     (0xd5801c, 32, 'fd400be8', 'shared normalized stick getter: inject one frame of relative input after native filtering and before return'),
     (0xccfd5c, 36, '0a080008', 'PlayerActor native Dash decision: filter only the id-12 input result before the native speed and movement-state guards'),
+    (0xf57ba0, 37, 'd10143ff', 'BoxCursorControl update entry: x0 is the native manager; observe focused/requested item before native validation and focus callbacks'),
   ],
 }
 

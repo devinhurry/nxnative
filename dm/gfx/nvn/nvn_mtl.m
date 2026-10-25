@@ -6798,8 +6798,10 @@ static int ui_squeeze_scale(NvProg *pr, double *ux, double *uy) {
 }
 
 static NSUInteger rune_align_row(NSUInteger n) { return (n + 255u) & ~(NSUInteger)255u; }
+typedef struct { float crop[4], exclusion[4]; } rune_capture_geometry_t;
 static void rune_capture_completed(id<MTLBuffer> buffer, NSUInteger row_bytes, NSUInteger crop_w, NSUInteger crop_h,
-                                   MTLPixelFormat format, double display_aspect, uint64_t token,
+                                   MTLPixelFormat format, double display_aspect, rune_capture_geometry_t geometry,
+                                   uint64_t token,
                                    uint64_t source_serial) {
     void *pool = objc_autoreleasePoolPush();
     if (source_serial == atomic_load_explicit(&g_rune_canvas_serial, memory_order_acquire)) {
@@ -6834,6 +6836,15 @@ static void rune_capture_completed(id<MTLBuffer> buffer, NSUInteger row_bytes, N
                 d[0] = p[2]; d[1] = p[1]; d[2] = p[0]; d[3] = p[3];
             } else memcpy(d, p, 4);
         }
+        dm_botw_rune_icon_mask_guide(out, DM_BOTW_RUNE_ICON_SIDE,
+                                     DM_BOTW_RUNE_ICON_SIDE, DM_BOTW_RUNE_ICON_STRIDE,
+                                     geometry.crop, geometry.exclusion, (uint32_t)ox,
+                                     (uint32_t)oy, (uint32_t)out_w, (uint32_t)out_h);
+        // Canvas readback is straight RGBA; remove undefined RGB under zero
+        // alpha before the provider is filtered by CoreGraphics/CoreAnimation.
+        dm_botw_rune_icon_premultiply_rgba(out, DM_BOTW_RUNE_ICON_SIDE,
+                                            DM_BOTW_RUNE_ICON_SIDE,
+                                            DM_BOTW_RUNE_ICON_STRIDE);
         dm_botw_rune_icon_publish(token, out, DM_BOTW_RUNE_ICON_SIDE, DM_BOTW_RUNE_ICON_SIDE, DM_BOTW_RUNE_ICON_STRIDE);
     }
     res_remove(buffer); // no submission can still reference this buffer after its completion callback
@@ -6847,8 +6858,8 @@ static void rune_capture_completed(id<MTLBuffer> buffer, NSUInteger row_bytes, N
 static void botw_rune_capture(void) {
     if (strcmp(DM_GAME_ID, "01007EF00011E000")) return;
     if (g_ui_tex_tid <= 0 || g_ui_tex_tid >= g_ntreg || !g_treg[g_ui_tex_tid].ok || g_treg[g_ui_tex_tid].t.serial != g_ui_tex) return;
-    float rect[4]; uint64_t token;
-    if (!dm_botw_rune_icon_crop(rect, &token)) return;
+    float rect[4], exclusion[4]; uint64_t token;
+    if (!dm_botw_rune_icon_crop(rect, exclusion, &token)) return;
     uint64_t frame = atomic_load_explicit(&g_cur_frame, memory_order_relaxed);
     if (g_rune_last_capture_frame && frame - g_rune_last_capture_frame < 8) return;
     if (atomic_exchange_explicit(&g_rune_capture_pending, 1, memory_order_acq_rel)) return;
@@ -6896,7 +6907,16 @@ static void botw_rune_capture(void) {
     enc_b_copy_texture_buffer(encoder, texture, 0, 0, MTLOriginMake(x0, copy_y, 0), MTLSizeMake(w, h, 1), buffer, 0, row, row * h);
     g_wr_epoch++; g_mdx_epoch++; g_gp_copies++;
     double display_aspect = rect[2] / rect[3];
-    [g_commit_blocks addObject:^{ rune_capture_completed(buffer, row, w, h, pf, display_aspect, token, source_serial); }];
+    rune_capture_geometry_t geometry = {0};
+    // Use the exact copied pixel rectangle, mapped back through the same
+    // viewport squeeze above. This keeps the mask aligned at crop edges when
+    // floor/ceil adds a border pixel, including ultrawide canvas output.
+    geometry.crop[0] = (float)(640.0 + ((double)x0 - texture.width * .5) * sux / sx);
+    geometry.crop[1] = (float)(360.0 + ((double)y0 - texture.height * .5) * suy / sy);
+    geometry.crop[2] = (float)((double)w * sux / sx);
+    geometry.crop[3] = (float)((double)h * suy / sy);
+    memcpy(geometry.exclusion, exclusion, sizeof exclusion);
+    [g_commit_blocks addObject:^{ rune_capture_completed(buffer, row, w, h, pf, display_aspect, geometry, token, source_serial); }];
 }
 static void draw(const p_draw *dw, const p_draw_idx *di) {
     g_draw_binst = (uint32_t)(dw ? dw->base_instance : di ? di->base_instance : 0);   // c0 + 0x644 of the stages that read the driver segment (encode_args)
