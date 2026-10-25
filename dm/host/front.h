@@ -33,6 +33,12 @@ void dm_botw_touch_hud_map_tapped(void);   // consume the published host hit reg
 int dm_botw_touch_hud_available(void);
 void front_botw_touch_hud_map_region(int valid, float x, float y, float width, float height);
 void front_botw_touch_hud_mode_changed(void);
+// The guest renderer published or invalidated the copied current-rune image.
+// Front ends snapshot it on their UI thread and discard stale generations.
+void front_botw_rune_icon_changed(void);
+// Native BOTW touch-action acknowledgements may arrive on the guest thread.
+// Front ends marshal this to their UI thread and release acknowledged inputs.
+void front_botw_touch_action_changed(void);
 
 // Touchscreen (implemented by the host's hle_touch.c; called by the iOS / Mac front end): whenever the set of touch points changes (down / move / up / cancel) the whole set is pushed once; n = 0 = all lifted.
 // id = finger slot number 0–15 (the lowest free slot on down, unchanged until up; used directly as finger_id); x / y = normalized coordinates [0,1) on the output frame, origin at top left.

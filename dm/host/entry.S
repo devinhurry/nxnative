@@ -2,7 +2,7 @@
 // 0) unimpl_stubs: named stubs for unimplemented imports, the k-th = movz x9,#k; b unimpl_entry (static code; iOS does not allow runtime generation)
 // 1) unimpl_entry: stub entry for unimplemented imports, x9 = stub number; save x0-x8+lr and call unimpl_c(idx, regs).
 // 2) dm_gate: the rewriter replaces svc / cntpct reads with "bl to this entry". On entry lr = the gate block return point (gate_dispatch uses it to look up which gate this is),
-//    save x0-x30 to a contiguous area on the stack, call gate_dispatch(ret, regs), write back x0 (gate return value), return.
+//    save x0-x30, vectors and condition state, call gate_dispatch(ret, regs), write back x0..x30 (including an explicit observation result filter), return.
     .text
     .globl _unimpl_stubs
     .p2align 3

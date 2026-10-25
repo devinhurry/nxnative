@@ -8,7 +8,9 @@
 #include <unistd.h>
 #include "dm.h"
 #include "dm_input.h"
+#include "../../host/touchpad_geometry.h"
 #include "front.h"
+#include "../../host/botw_rune_icon.h"
 UIView *dm_gamepad_view(CGRect frame);
 void dm_test_motion_reset(void);
 void dm_test_motion_recenter(void);
@@ -26,6 +28,8 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
 - (void)dm_testSetTouchHudModeFull:(BOOL)full tap:(BOOL)tap connected:(BOOL)connected;
 - (void)setFull:(BOOL)full;
 - (BOOL)dm_testDpadArtworkHidden;
+- (BOOL)dm_testZLArtworkHidden;
+- (BOOL)dm_testZLArtworkHidden;
 - (BOOL)dm_testControlsHidden;
 - (BOOL)dm_testL3ArtworkHidden;
 - (BOOL)dm_testR3ArtworkHidden;
@@ -35,6 +39,12 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
 - (BOOL)dm_testSetBotwMapRectValid:(BOOL)valid x:(CGFloat)x y:(CGFloat)y width:(CGFloat)width height:(CGFloat)height;
 - (int)dm_testBtnAt:(CGPoint)point;
 - (BOOL)dm_testBotwMapOwnsPoint:(CGPoint)point;
+- (CGPoint)dm_testShieldHome;
+- (CGPoint)dm_testStickHome;
+- (CGPoint)dm_testRuneButtonCenter;
+- (CGPoint)dm_testMapBadgeCenter;
+- (CGPoint)dm_testDropCenter:(int)button;
+- (void)dm_testBotwTouchActionChanged;
 - (void)dm_testPulseBotwL3;
 - (void)reset;
 - (void)padsChanged;
@@ -76,11 +86,22 @@ static int g_touch_count, g_touch_sets;
 static dm_motion g_motion_samples[16];
 static int g_motion_count;
 static BOOL g_botw_touchhud_available;
+static dm_botw_rune_icon_state g_botw_rune_icon_snapshot;
+static BOOL g_botw_touch_actions_available;
+static uint64_t g_botw_cancel_complete;
+static uint64_t g_botw_cancel_requested;
+static int g_botw_sprint_requested;
 
 int dm_look_enabled(void) { return g_look_enabled; }
 int dm_botw_touch_hud_available(void) { return g_botw_touchhud_available; }
+int dm_botw_rune_icon_snapshot(dm_botw_rune_icon_state *out) { if (!out) return 0; *out = g_botw_rune_icon_snapshot; return 1; }
 void dm_botw_touch_hud_publish(int active, float center_x, float center_y) { (void)active; (void)center_x; (void)center_y; }
 void dm_botw_touch_hud_map_tapped(void) {}
+int dm_botw_touch_actions_available(void) { return g_botw_touch_actions_available; }
+void dm_botw_touch_sprint_request(int active) { g_botw_sprint_requested = active; }
+void dm_botw_touch_cancel_trigger(uint64_t bit) { g_botw_cancel_requested |= bit; }
+int dm_botw_touch_cancel_complete(uint64_t bit) { return (g_botw_cancel_complete & bit) != 0; }
+void dm_botw_touch_actions_reset(void) { g_botw_sprint_requested=0; g_botw_cancel_requested=0; g_botw_cancel_complete=0; }
 void dm_haptics_apple_controller(int player, GCController *controller) { (void)player; (void)controller; }
 int dm_opmode(void) { return 0; }
 void dm_look_input(int phase, float dx, float dy) {
@@ -168,12 +189,16 @@ static void test_dpad_art_visibility(DmGamepad *view) {
     [view setFull:NO];
     [view layoutIfNeeded];
     CHECK([view dm_testDpadArtworkHidden], "2D layout keeps the 3D D-pad artwork hidden when BOTW relocation is unavailable");
+    CHECK(![view dm_testZLArtworkHidden], "ordinary 2D layout keeps ZL visible when BOTW relocation is unavailable");
+    CHECK(![view dm_testZLArtworkHidden], "ordinary 2D layout keeps ZL visible when BOTW relocation is unavailable");
     [view setFull:YES];
     [view layoutIfNeeded];
     CHECK(![view dm_testDpadArtworkHidden], "ordinary 3D layout keeps D-pad artwork visible when BOTW relocation is unavailable");
     [view dm_testSetTouchHudModeFull:YES tap:YES connected:NO];
     [view layoutIfNeeded];
     CHECK([view dm_testDpadArtworkHidden], "Tap layout keeps the D-pad artwork hidden");
+    CHECK([view dm_testZLArtworkHidden], "Tap layout keeps ZL hidden when BOTW relocation is unavailable");
+    CHECK([view dm_testZLArtworkHidden], "Tap layout keeps ZL hidden when BOTW relocation is unavailable");
 
     g_botw_touchhud_available = YES;
     [view setFull:YES];
@@ -257,6 +282,71 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
     CHECK([view dm_testSetBotwMapRectValid:YES x:0.05 y:0.16 width:0.36 height:0.40] &&
           [view dm_testMinusArtworkHidden] && [view dm_testBotwMapOwnsPoint:mapPoint],
           "a fresh collapsed-map publication rearms map taps");
+    CGPoint badge = [view dm_testMapBadgeCenter]; CGRect oldPlus = [view pillRect:10];
+    CHECK([view dm_testBtnAt:badge] == 10 &&
+          [view dm_testBtnAt:CGPointMake(CGRectGetMidX(oldPlus),CGRectGetMidY(oldPlus))] < 0,
+          "the live-map + badge owns the relocated hit and removes the old + hit");
+    CHECK([view dm_testBtnAt:CGPointMake(badge.x + DM_TP_MAP_BADGE_RADIUS * dm_touchpad_u(view.bounds.size.height) + 1, badge.y)] < 0,
+          "the relocated + hit stays within its displayed badge circle");
+
+    g_botw_touch_actions_available = YES;
+    CGPoint shield = [view dm_testShieldHome]; FakeTouch *shieldTouch=touch(shield.x+30,shield.y+5); began(view,shieldTouch);
+    CHECK((g_buttons & DM_BTN_ZL) && g_lx == 0 && g_ly == 0,
+          "off-center stationary shield-stick press holds ZL with a neutral axis");
+    moved(view,shieldTouch,shield.x+85,shield.y+5);
+    CHECK((g_buttons & DM_BTN_ZL) && g_lx > 0,
+          "shield-stick drag publishes ZL and the left-stick axis together");
+    ended(view,shieldTouch,shield.x+85,shield.y+5);
+    CHECK(!(g_buttons & DM_BTN_ZL) && g_lx == 0,
+          "lifting the shield stick releases ZL and its axis");
+
+    CGPoint stickHome=[view dm_testStickHome], shieldHome=[view dm_testShieldHome];
+    FakeTouch *ordinaryStick=touch(stickHome.x,stickHome.y), *shieldConcurrent=touch(shieldHome.x+25,shieldHome.y);
+    began(view,ordinaryStick); moved(view,ordinaryStick,stickHome.x+110,stickHome.y);
+    CHECK(g_botw_sprint_requested && g_lx > 0,
+          "ordinary left-stick overshoot requests sprint independently");
+    began(view,shieldConcurrent); moved(view,shieldConcurrent,shieldHome.x+75,shieldHome.y);
+    CHECK((g_buttons&DM_BTN_ZL) && g_lx > 0 && !g_botw_sprint_requested,
+          "shield-stick movement owns the left axis and clears the suspended ordinary-stick sprint request");
+    ended(view,shieldConcurrent,shieldHome.x+75,shieldHome.y);
+    CHECK(!(g_buttons&DM_BTN_ZL) && g_lx > 0 && g_botw_sprint_requested,
+          "lifting the shield stick restores the still-held ordinary left-stick axis and its overshoot sprint request");
+    ended(view,ordinaryStick,stickHome.x+110,stickHome.y);
+    CHECK(g_lx == 0 && !g_botw_sprint_requested,
+          "lifting the ordinary left stick clears its axis and sprint request");
+
+    CGPoint shoulder=[view dm_testDropCenter:7]; FakeTouch *trigger=touch(shoulder.x,shoulder.y); began(view,trigger);
+    moved(view,trigger,shoulder.x+150,shoulder.y);
+    CHECK(g_botw_cancel_requested==DM_BTN_R && (g_buttons&DM_BTN_R),
+          "dragging outside R requests native cancel while retaining the trigger until acknowledgement");
+    g_botw_cancel_complete=DM_BTN_R; [view dm_testBotwTouchActionChanged];
+    CHECK(!(g_buttons&DM_BTN_R),
+          "native cancel acknowledgement releases R while its touch remains latched");
+    ended(view,trigger,shoulder.x+100,shoulder.y);
+    CHECK(!(g_buttons&DM_BTN_R), "lifting after cancel acknowledgement does not reassert R");
+    g_botw_cancel_complete=0;
+    CGPoint zrCenter=[view dm_testDropCenter:9]; FakeTouch *earlyLift=touch(zrCenter.x,zrCenter.y); began(view,earlyLift);
+    moved(view,earlyLift,zrCenter.x+150,zrCenter.y); ended(view,earlyLift,zrCenter.x+150,zrCenter.y);
+    CHECK(g_botw_cancel_requested==DM_BTN_ZR && (g_buttons&DM_BTN_ZR),
+          "lifting before the first native sample keeps the canceled ZR published for acknowledgement");
+    g_botw_cancel_complete=DM_BTN_ZR; [view dm_testBotwTouchActionChanged];
+    CHECK(!(g_buttons&DM_BTN_ZR), "an acknowledgement after finger-up releases the retained ZR source");
+    g_botw_cancel_complete=0; g_botw_cancel_requested=0;
+
+    CGPoint rCenter=[view dm_testDropCenter:7], zrCenter2=[view dm_testDropCenter:9];
+    FakeTouch *r2=touch(rCenter.x,rCenter.y), *zr2=touch(zrCenter2.x,zrCenter2.y);
+    began(view,r2); began(view,zr2); moved(view,r2,rCenter.x+150,rCenter.y); moved(view,zr2,zrCenter2.x+150,zrCenter2.y);
+    CHECK((g_botw_cancel_requested & (DM_BTN_R|DM_BTN_ZR))==(DM_BTN_R|DM_BTN_ZR) &&
+          (g_buttons & (DM_BTN_R|DM_BTN_ZR))==(DM_BTN_R|DM_BTN_ZR),
+          "simultaneous R and ZR cancel requests keep both triggers pending");
+    g_botw_cancel_complete=DM_BTN_R; [view dm_testBotwTouchActionChanged];
+    CHECK(!(g_buttons&DM_BTN_R) && (g_buttons&DM_BTN_ZR),
+          "R acknowledgement releases only R while ZR cancellation remains pending");
+    g_botw_cancel_complete=DM_BTN_R|DM_BTN_ZR; [view dm_testBotwTouchActionChanged];
+    CHECK(!(g_buttons&(DM_BTN_R|DM_BTN_ZR)),
+          "the independent ZR acknowledgement releases the remaining trigger");
+    ended(view,r2,rCenter.x+150,rCenter.y); ended(view,zr2,zrCenter2.x+150,zrCenter2.y);
+    g_botw_touch_actions_available=NO; g_botw_cancel_complete=0; g_botw_cancel_requested=0;
 
     g_look_enabled = YES; reset_look(); g_input_sets = 0; g_input_history[0] = g_input_history[1] = 0;
     CGPoint camera = CGPointMake(view.bounds.size.width * .82, view.bounds.size.height * .38);

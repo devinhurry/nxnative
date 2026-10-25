@@ -33,6 +33,11 @@ void dm_ctl_cvar_i32(uint64_t offset, int32_t value) { (void)offset; (void)value
 void dm_ctl_cvar_f32(uint64_t offset, float value) { (void)offset; (void)value; }
 void dm_gfx_texdump_next(const char *path) { (void)path; }
 void dm_gfx_passdump_next(long frames) { (void)frames; }
+// This harness tests motion/look routing only; BOTW touch-action sequencing is
+// covered by t_botw_touch_actions and is inert in the motion-only binary.
+void dm_botw_touch_actions_apply(uint64_t *other_buttons, uint64_t *virtual_buttons, uint64_t frame) {
+    (void)other_buttons; (void)virtual_buttons; (void)frame;
+}
 void dm_haptics_init(void (*sink)(dm_haptic_state), int enabled) { (void)sink; (void)enabled; }
 void dm_haptics_route(int player, int available) { (void)player; (void)available; }
 void dm_haptics_clear(int player) { (void)player; }

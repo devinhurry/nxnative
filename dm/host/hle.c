@@ -57,9 +57,13 @@ void stubs_report(void) { LOG("stubs=%u", g_nstub); }
 // The rewriter replaces every svc #n / mrs cntpct with a call to dm_gate; here we remember, by gate block return point (absolute address), what it originally was.
 // Lookup: open-addressing hash, one hit (it used to do module_of + a linear compare over 110 entries on every gate call, keyed by in-module offset, which would collide across modules).
 enum { G_SVC, G_CNTPCT, G_CNTVCT, G_OBS, G_SPIN };
-// Observation gates (inserted offline from the rewriter's OBS table): number → read-only callback; with no callback attached the gate returns after one pass in and out
-static void (*g_obs_fn[OBS_MAX])(const uint64_t *regs); static int g_obs_have[OBS_MAX];
+// Observation gates (inserted offline from the rewriter's OBS table): ordinary observers are read-only;
+// an explicitly registered result filter may change only x0.
+static void (*g_obs_fn[OBS_MAX])(const uint64_t *regs);
+static uint64_t (*g_obs_result_fn[OBS_MAX])(const uint64_t *regs);
+static int g_obs_have[OBS_MAX];
 void gate_obs_set(int id, void (*fn)(const uint64_t *regs)) { if (id <= 0 || id >= OBS_MAX) die("observation gate number out of range %d", id); g_obs_fn[id] = fn; }
+void gate_obs_result_set(int id, uint64_t (*fn)(const uint64_t *regs)) { if (id <= 0 || id >= OBS_MAX) die("observation result gate number out of range %d", id); g_obs_result_fn[id] = fn; }
 int gate_obs_present(int id) { return id > 0 && id < OBS_MAX && g_obs_have[id]; }
 typedef struct { uint64_t ret; int kind, arg; uint64_t orig; } gate_t;
 #define GATE_BITS 15                     // 32768 slots, gate count ≤ 8192, load factor ≤ 1/4 (spin wait gates: Tears of the Kingdom's main has 843)
@@ -89,7 +93,10 @@ uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs) {
                 regs[g->arg] = t;
                 return t;
             }
-            case G_OBS: if (g_obs_fn[g->arg]) g_obs_fn[g->arg](regs); return 0;   // Registers are read-only; the x0–x8 that dm_gate writes back are the original values
+            case G_OBS:
+                if (g_obs_fn[g->arg]) g_obs_fn[g->arg](regs);
+                if (g_obs_result_fn[g->arg]) regs[0] = g_obs_result_fn[g->arg](regs);
+                return 0;
             case G_SPIN: {   // a pass of a spin wait loop (patch_nso.py "Spin waits"), where the thread may sleep (hle_thread.c dm_spin_wait): inside an SVC frame, so that a thread paused there has its context
                 void thr_svc_enter(uint64_t *, uint64_t), thr_svc_leave(void), dm_spin_wait(uint64_t, uint64_t);
                 thr_svc_enter(regs, g->orig); dm_spin_wait(ret_addr, g->orig); thr_svc_leave(); return 0; }

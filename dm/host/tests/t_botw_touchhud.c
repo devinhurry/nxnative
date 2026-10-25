@@ -4,16 +4,20 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "../botw_touch_actions.h"
 #include "../hle_botw_touchhud.c"
 
 module_t g_mod[MAX_MOD]; int g_nmod;
 static void (*test_gates[OBS_MAX])(const uint64_t *);
 static int map_region_valid;
 static int map_region_events;
+static int actions_reset_count;
 static float map_region[4];
 int gate_obs_present(int id) { return id == OBS_BOTW_TOUCH_PANE || id == OBS_BOTW_TOUCH_MATRIX; }
 void gate_obs_set(int id, void (*fn)(const uint64_t *)) { assert(id > 0 && id < OBS_MAX); test_gates[id] = fn; }
 void front_botw_touch_hud_mode_changed(void) {}
+void front_botw_rune_icon_changed(void) {}
+void dm_botw_touch_actions_reset(void) { actions_reset_count++; }
 void front_botw_touch_hud_map_region(int valid, float x, float y, float width, float height) {
     map_region_events++;
     map_region_valid = valid; map_region[0] = x; map_region[1] = y; map_region[2] = width; map_region[3] = height;
@@ -54,6 +58,7 @@ int main(void) {
     dm_botw_touch_hud_install();
     assert(dm_botw_touch_hud_available());
     assert(test_gates[OBS_BOTW_TOUCH_PANE] && test_gates[OBS_BOTW_TOUCH_MATRIX]);
+    assert(actions_reset_count == 0);
 
     uint8_t root[0x100] = {0}, all[0x100] = {0}, target[0x100] = {0};
     pane_name(root, "RootPane"); pane_name(all, "N_All_00"); pane_name(target, "N_MainAll_00");
@@ -168,8 +173,67 @@ int main(void) {
     assert(!map_region_valid);
     map_root[BOTW_TOUCH_FLAGS] = 1;
 
+    // The current rune comes from the P_Icon_00 capture picture in the
+    // MainShortCut / MainU / Pa_IconNow component, not the static category icon.
+    uint8_t rune_root[0x100] = {0}, rune_all[0x100] = {0}, rune_mainall[0x100] = {0}, rune_pos[0x100] = {0};
+    uint8_t rune_mainu[0x100] = {0}, rune_pamainu[0x100] = {0}, rune_innerall[0x100] = {0}, rune_now[0x100] = {0};
+    uint8_t rune_picload[0x100] = {0}, rune_icon[0x100] = {0};
+    pane_name(rune_root, "RootPane"); pane_name(rune_all, "N_All_00"); pane_name(rune_mainall, "N_MainAll_00");
+    pane_name(rune_mainu, "N_MainU_00"); pane_name(rune_pamainu, "Pa_MainU_00"); pane_name(rune_pos, "N_Pos_00");
+    pane_name(rune_innerall, "N_All_00"); pane_name(rune_now, "Pa_IconNow_00"); pane_name(rune_picload, "N_PicLoad_00");
+    pane_name(rune_icon, "P_Icon_00");
+    set_pane_parent(rune_all, rune_root); set_pane_parent(rune_mainall, rune_all); set_pane_parent(rune_pos, rune_mainall);
+    set_pane_parent(rune_mainu, rune_pos); set_pane_parent(rune_pamainu, rune_mainu); set_pane_parent(rune_innerall, rune_pamainu);
+    set_pane_parent(rune_now, rune_innerall); set_pane_parent(rune_picload, rune_now); set_pane_parent(rune_icon, rune_picload);
+    rune_root[BOTW_TOUCH_FLAGS] = rune_all[BOTW_TOUCH_FLAGS] = rune_mainall[BOTW_TOUCH_FLAGS] = rune_pos[BOTW_TOUCH_FLAGS] = 1;
+    rune_mainu[BOTW_TOUCH_FLAGS] = rune_pamainu[BOTW_TOUCH_FLAGS] = rune_innerall[BOTW_TOUCH_FLAGS] = rune_now[BOTW_TOUCH_FLAGS] = 1;
+    rune_picload[BOTW_TOUCH_FLAGS] = rune_icon[BOTW_TOUCH_FLAGS] = 1;
+    pane_size(rune_icon, 100, 80); matrix_translation(rune_icon, 100, 200);
+    calculate_entry(rune_icon); calculated_matrix(rune_icon);
+    float rune_rect[4]; uint64_t rune_token;
+    assert(dm_botw_rune_icon_crop(rune_rect, &rune_token));
+    assert(fabsf(rune_rect[0] - 690) < .001f && fabsf(rune_rect[1] - 120) < .001f);
+    assert(fabsf(rune_rect[2] - 100) < .001f && fabsf(rune_rect[3] - 80) < .001f);
+    matrix_translation(rune_icon, 101, 201); calculate_entry(rune_icon); calculated_matrix(rune_icon);
+    float animated_rect[4]; uint64_t animated_token;
+    assert(dm_botw_rune_icon_crop(animated_rect, &animated_token) && animated_token == rune_token);
+    assert(fabsf(animated_rect[0] - rune_rect[0] - 1) < .001f && fabsf(animated_rect[1] - rune_rect[1] + 1) < .001f);
+    uint8_t rune_pixels[DM_BOTW_RUNE_ICON_SIDE * DM_BOTW_RUNE_ICON_SIDE * 4]; memset(rune_pixels, 7, sizeof rune_pixels);
+    dm_botw_rune_icon_publish(animated_token, rune_pixels, DM_BOTW_RUNE_ICON_SIDE, DM_BOTW_RUNE_ICON_SIDE, DM_BOTW_RUNE_ICON_STRIDE);
+    dm_botw_rune_icon_state rune_state; assert(dm_botw_rune_icon_snapshot(&rune_state));
+    assert(rune_state.valid && rune_state.width == 64 && rune_state.height == 64 && rune_state.rgba[0] == 7);
+    uint8_t rune_icon2[0x100] = {0}; pane_name(rune_icon2, "P_Icon_00");
+    set_pane_parent(rune_icon2, rune_picload); pane_size(rune_icon2, 100, 80); matrix_translation(rune_icon2, 100, 200);
+    rune_icon2[BOTW_TOUCH_FLAGS] = 1;
+    calculate_entry(rune_icon2); calculated_matrix(rune_icon2);
+    float rune_rect2[4]; uint64_t rune_token2;
+    assert(dm_botw_rune_icon_crop(rune_rect2, &rune_token2) && rune_token2 != rune_token);
+    assert(dm_botw_rune_icon_snapshot(&rune_state) && !rune_state.valid);
+    dm_botw_rune_icon_publish(rune_token, rune_pixels, DM_BOTW_RUNE_ICON_SIDE, DM_BOTW_RUNE_ICON_SIDE, DM_BOTW_RUNE_ICON_STRIDE);
+    assert(dm_botw_rune_icon_snapshot(&rune_state) && !rune_state.valid);
+    dm_botw_rune_icon_publish(rune_token2, rune_pixels, DM_BOTW_RUNE_ICON_SIDE, DM_BOTW_RUNE_ICON_SIDE, DM_BOTW_RUNE_ICON_STRIDE);
+    assert(dm_botw_rune_icon_snapshot(&rune_state) && rune_state.valid);
+    uint8_t unrelated_hidden_root[0x100] = {0}; pane_name(unrelated_hidden_root, "RootPane");
+    calculate_entry(unrelated_hidden_root); // unrelated hidden layout root must not clear the live icon
+    float still_valid_rect[4]; uint64_t still_valid_token;
+    assert(dm_botw_rune_icon_crop(still_valid_rect, &still_valid_token) && still_valid_token == rune_token2);
+    assert(dm_botw_rune_icon_snapshot(&rune_state) && rune_state.valid);
+    rune_now[BOTW_TOUCH_FLAGS] = 0;
+    calculate_entry(rune_now); // clear before hidden ancestors can skip the child's matrix callback
+    assert(dm_botw_rune_icon_snapshot(&rune_state) && !rune_state.valid);
+    assert(!dm_botw_rune_icon_crop(still_valid_rect, &still_valid_token));
+    dm_botw_rune_icon_clear();
+    dm_botw_rune_icon_publish(rune_token2, rune_pixels, DM_BOTW_RUNE_ICON_SIDE, DM_BOTW_RUNE_ICON_SIDE, DM_BOTW_RUNE_ICON_STRIDE);
+    assert(dm_botw_rune_icon_snapshot(&rune_state) && !rune_state.valid && rune_state.rgba[0] == 0);
+
     // Controller connect / non-3D mode publishes inactive and restores a fresh native matrix.
     dm_botw_touch_hud_publish(0, 0.25f, 0.75f);
+    assert(actions_reset_count == 1);
+    dm_botw_touch_hud_publish(0, 0.25f, 0.75f);
+    assert(actions_reset_count == 1); // repeated inactive publications do not reset on every Npad poll
+    dm_botw_touch_hud_publish(1, 0.5f, 0.5f);
+    dm_botw_touch_hud_publish(0, 0.5f, 0.5f);
+    assert(actions_reset_count == 2); // each active-to-inactive transition clears once
     matrix_translation(target2, -509, 210);
     calculate_entry(target2);
     assert(target2[BOTW_TOUCH_FLAGS] & BOTW_TOUCH_DIRTY);

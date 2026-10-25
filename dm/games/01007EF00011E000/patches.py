@@ -142,6 +142,16 @@ def validate_main(ctx):
         0x54fffde0, 0xd503201f, 0xf85f8ee8, 0xaa1503e1, 0xaa1703e0, 0xaa1403e2,
         0xf9405108, 0x2a1603e3, 0xd63f0100, 0xf9400af7,
     ), 'BOTW Pane::Calculate OBS35 scratch-register liveness changed'
+    # PlayerActor's native Dash transition reads input id 12 (B) at ccfD44,
+    # combines the result with the speed threshold at ccfD5c, then checks the
+    # existing action/equipment/state guards. OBS36 filters only that returned
+    # boolean. From the filter site through the next call, x9-x17 are not read.
+    assert tuple(word(o) for o in range(0xccfd38, 0xccfd70, 4)) == (
+        0xf94bea60, 0x52800181, 0xb94c4274, 0x94011c72,
+        0xd0004e88, 0xbd609e60, 0xbd425509, 0x1e292000,
+        0x1a9fd7e8, 0x0a080008, 0x37080854, 0x340005c8,
+        0xaa1303e0, 0x940065c3,
+    ), 'BOTW native Dash query/result/speed-gate sequence changed; revalidate sprint filter and scratch liveness'
 
 VALIDATE = {'cd57b23fa4bbad65803d9788c01821ee': validate_main}
 
@@ -155,10 +165,11 @@ OBS = {
     (0xe1a628, 24, 'f960de68', 'MainScreen3D update: correct its copied projection before rebuilding the world-label view'),
     (0xd58008, 33, 'f9409408', 'shared stick getter: snapshot the selected raw child pair before the native dead-zone/filter branches'),
     (0xd5801c, 32, 'fd400be8', 'shared normalized stick getter: inject one frame of relative input after native filtering and before return'),
+    (0xccfd5c, 36, '0a080008', 'PlayerActor native Dash decision: filter only the id-12 input result before the native speed and movement-state guards'),
   ],
 }
 
 # OBS_SAFE sites are interior instructions whose scratch-register liveness is established below:
 # 0xe1a628 follows MainScreen3D's successful camera check and the profile verifies x9-x17 stay unread
 # through the world-view setup until the next call; the getter / pane sites have their own proofs.
-OBS_SAFE = {'cd57b23fa4bbad65803d9788c01821ee': {0xd5801c, 0x27ae4, 0xe1a628}}
+OBS_SAFE = {'cd57b23fa4bbad65803d9788c01821ee': {0xd5801c, 0x27ae4, 0xe1a628, 0xccfd5c}}
