@@ -49,7 +49,14 @@ typedef struct { float x, y, width, height; } dm_touchpad_rect;
 #define DM_TP_SHOULDER_HIT_SCALE 1.0f
 #define DM_TP_SHIELD_GAP 8.0f
 #define DM_TP_CANCEL_RADIUS 70.0f
-#define DM_TP_MAP_BADGE_RADIUS 17.0f
+#define DM_TP_SPRINT_OVERSHOOT 1.2f
+#define DM_TP_MAP_BADGE_WIDTH 38.0f
+#define DM_TP_MAP_BADGE_HEIGHT 32.0f
+#define DM_TP_MAP_BADGE_RADIUS 8.0f
+
+static inline int dm_touchpad_sprint_requested(float displacement, float visible_radius) {
+    return visible_radius > 0.0f && displacement > visible_radius * DM_TP_SPRINT_OVERSHOOT;
+}
 
 static inline float dm_touchpad_u(float height) {
     float u = height / 430.0f;
@@ -134,9 +141,23 @@ static inline dm_touchpad_point dm_touchpad_rune_button(float width, float heigh
                                                          float left, float top,
                                                          float right, float bottom) {
     dm_touchpad_point p = dm_touchpad_stick_home(width, height, left, top, right, bottom);
-    float d = (DM_TP_STICK_R + DM_TP_L_R) * 0.70710678118f * dm_touchpad_u(height);
+    float d = (DM_TP_STICK_R * DM_TP_STICK_GRAB + DM_TP_L_R * 1.45f + DM_TP_SHIELD_GAP) *
+              0.70710678118f * dm_touchpad_u(height);
     p.x += d; p.y -= d;
     return p;
+}
+
+static inline dm_touchpad_rect dm_touchpad_map_badge_rect(float cx, float cy, float u) {
+    float w = DM_TP_MAP_BADGE_WIDTH * u, h = DM_TP_MAP_BADGE_HEIGHT * u;
+    return (dm_touchpad_rect){cx - w * .5f, cy - h * .5f, w, h};
+}
+
+static inline int dm_touchpad_rounded_rect_contains(dm_touchpad_rect r, float radius, float x, float y) {
+    float rr = fminf(radius, fminf(r.width, r.height) * .5f);
+    float cx = fminf(fmaxf(x, r.x + rr), r.x + r.width - rr);
+    float cy = fminf(fmaxf(y, r.y + rr), r.y + r.height - rr);
+    float dx = x - cx, dy = y - cy;
+    return x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height && dx*dx + dy*dy <= rr*rr;
 }
 
 // The published map rectangle is normalized to the visible 16:9 UI canvas.
@@ -144,9 +165,10 @@ static inline dm_touchpad_point dm_touchpad_rune_button(float width, float heigh
 // its hit target follows the native pane geometry at every aspect ratio.
 static inline dm_touchpad_point dm_touchpad_map_badge(float canvas_x, float canvas_y,
                                                        float canvas_width, float canvas_height,
-                                                       dm_touchpad_rect map, float radius) {
-    return (dm_touchpad_point){canvas_x + (map.x + map.width) * canvas_width - radius * 0.55f,
-                               canvas_y + map.y * canvas_height + radius * 0.55f};
+                                                       dm_touchpad_rect map, float badge_width,
+                                                       float badge_height) {
+    return (dm_touchpad_point){canvas_x + (map.x + map.width) * canvas_width - badge_width * 0.52f,
+                               canvas_y + map.y * canvas_height + badge_height * 0.52f};
 }
 
 static inline int dm_touchpad_cancel_outside(float x, float y, float cx, float cy, float radius) {

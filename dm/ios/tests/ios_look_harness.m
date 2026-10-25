@@ -11,6 +11,7 @@
 #include "../../host/touchpad_geometry.h"
 #include "front.h"
 #include "../../host/botw_rune_icon.h"
+#include "../../host/botw_touch_menu.h"
 UIView *dm_gamepad_view(CGRect frame);
 void dm_test_motion_reset(void);
 void dm_test_motion_recenter(void);
@@ -26,11 +27,18 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event;
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event;
 - (void)dm_testSetTouchHudModeFull:(BOOL)full tap:(BOOL)tap connected:(BOOL)connected;
+- (void)dm_testRefreshTouchHudMode;
+- (void)refreshBotwTouchMenuMode;
+- (BOOL)dm_testIsFull;
+- (BOOL)dm_testIsTap;
+- (BOOL)dm_testLeftStickRingHidden;
 - (void)setFull:(BOOL)full;
 - (BOOL)dm_testDpadArtworkHidden;
 - (BOOL)dm_testZLArtworkHidden;
-- (BOOL)dm_testZLArtworkHidden;
 - (BOOL)dm_testControlsHidden;
+- (BOOL)dm_testSwapHidden;
+- (BOOL)dm_testInSwap:(CGPoint)point;
+- (void)dm_testNextLayout;
 - (BOOL)dm_testL3ArtworkHidden;
 - (BOOL)dm_testR3ArtworkHidden;
 - (BOOL)dm_testMinusArtworkHidden;
@@ -40,6 +48,7 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
 - (int)dm_testBtnAt:(CGPoint)point;
 - (BOOL)dm_testBotwMapOwnsPoint:(CGPoint)point;
 - (CGPoint)dm_testShieldHome;
+- (CGPoint)dm_testShieldRingCenter;
 - (CGPoint)dm_testStickHome;
 - (CGPoint)dm_testRuneButtonCenter;
 - (CGPoint)dm_testMapBadgeCenter;
@@ -91,9 +100,18 @@ static BOOL g_botw_touch_actions_available;
 static uint64_t g_botw_cancel_complete;
 static uint64_t g_botw_cancel_requested;
 static int g_botw_sprint_requested;
+static BOOL g_botw_touch_menu_active;
+typedef struct { int phase; float x, y; } menu_pointer_event;
+static menu_pointer_event g_menu_pointer_events[64];
+static int g_menu_pointer_count;
 
 int dm_look_enabled(void) { return g_look_enabled; }
 int dm_botw_touch_hud_available(void) { return g_botw_touchhud_available; }
+int dm_botw_touch_menu_active(void) { return g_botw_touch_menu_active; }
+void dm_botw_touch_menu_pointer(int phase, float x, float y) {
+    if (g_menu_pointer_count < (int)(sizeof g_menu_pointer_events / sizeof g_menu_pointer_events[0]))
+        g_menu_pointer_events[g_menu_pointer_count++] = (menu_pointer_event){phase,x,y};
+}
 int dm_botw_rune_icon_snapshot(dm_botw_rune_icon_state *out) { if (!out) return 0; *out = g_botw_rune_icon_snapshot; return 1; }
 void dm_botw_touch_hud_publish(int active, float center_x, float center_y) { (void)active; (void)center_x; (void)center_y; }
 void dm_botw_touch_hud_map_tapped(void) {}
@@ -200,9 +218,22 @@ static void test_dpad_art_visibility(DmGamepad *view) {
     CHECK([view dm_testZLArtworkHidden], "Tap layout keeps ZL hidden when BOTW relocation is unavailable");
     CHECK([view dm_testZLArtworkHidden], "Tap layout keeps ZL hidden when BOTW relocation is unavailable");
 
+    // Host preload can install the BOTW hook after the view read a stored Tap
+    // or 2D preference. Mode refresh must force local 3D without rewriting it.
+    [view dm_testSetTouchHudModeFull:NO tap:YES connected:NO];
+    [NSUserDefaults.standardUserDefaults setObject:@0 forKey:@"DmPadLayout"];
     g_botw_touchhud_available = YES;
+    [view dm_testRefreshTouchHudMode];
+    CHECK([view dm_testIsFull] && ![view dm_testIsTap] && ![view dm_testLeftStickRingHidden],
+          "late BOTW capability activation moves a saved Tap layout into local 3D mode");
+    CHECK([[NSUserDefaults.standardUserDefaults objectForKey:@"DmPadLayout"] isEqual:@0],
+          "late BOTW activation does not overwrite the shared layout preference");
     [view setFull:YES];
     CHECK([view dm_testDpadArtworkHidden], "active BOTW touch 3D mode hides D-pad artwork");
+    CHECK([view dm_testSwapHidden] && ![view dm_testInSwap:CGPointMake(view.bounds.size.width*.5,20)],
+          "BOTW touch removes both the visible layout toggle and its hit area");
+    [view dm_testNextLayout];
+    CHECK([view dm_testL3GestureEnabled], "BOTW supported touch remains in its required 3D control layout");
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES];
     CHECK([view dm_testDpadArtworkHidden] && [view dm_testControlsHidden],
           "a connected physical controller hides the touch overlay and keeps the D-pad artwork hidden");
@@ -241,6 +272,22 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
           "left-stick double tap rejects the face-button area");
     CHECK(![view dm_testLeftStickOwnsPoint:[view clickCenter:4]],
           "left-stick double tap rejects the hidden L3 button area");
+
+    CGPoint lCenter = [view dm_testRuneButtonCenter];
+    CGPoint lOverlapShieldHome = [view dm_testShieldHome];
+    float lHitRadius = DM_TP_L_R * dm_touchpad_u(view.bounds.size.height) * 1.45f;
+    float towardShieldX = lOverlapShieldHome.x-lCenter.x, towardShieldY = lOverlapShieldHome.y-lCenter.y;
+    float towardShieldD = hypotf(towardShieldX,towardShieldY);
+    CGPoint lOverlapEdge = CGPointMake(lCenter.x+towardShieldX/towardShieldD*lHitRadius*.9f,
+                                       lCenter.y+towardShieldY/towardShieldD*lHitRadius*.9f);
+    CHECK(hypot(lOverlapEdge.x-lOverlapShieldHome.x,lOverlapEdge.y-lOverlapShieldHome.y) < DM_TP_STICK_R * dm_touchpad_u(view.bounds.size.height) * 1.4f &&
+          [view dm_testBtnAt:lOverlapEdge] == 6,
+          "the L button hit region takes priority where it overlaps the shield-stick grab area");
+    g_buttons=0; g_lx=g_ly=0;
+    FakeTouch *lEdgeTouch=touch(lOverlapEdge.x,lOverlapEdge.y); began(view,lEdgeTouch);
+    CHECK((g_buttons&DM_BTN_L) && !(g_buttons&DM_BTN_ZL) && g_lx==0 && g_ly==0,
+          "touching the overlapping L edge presses L instead of capturing the floating ZL stick");
+    ended(view,lEdgeTouch,lOverlapEdge.x,lOverlapEdge.y);
 
     g_input_sets = g_pad_sets = 0; g_input_history[0] = g_input_history[1] = 0;
     g_pad_buttons = 0;
@@ -286,19 +333,29 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
     CHECK([view dm_testBtnAt:badge] == 10 &&
           [view dm_testBtnAt:CGPointMake(CGRectGetMidX(oldPlus),CGRectGetMidY(oldPlus))] < 0,
           "the live-map + badge owns the relocated hit and removes the old + hit");
-    CHECK([view dm_testBtnAt:CGPointMake(badge.x + DM_TP_MAP_BADGE_RADIUS * dm_touchpad_u(view.bounds.size.height) + 1, badge.y)] < 0,
-          "the relocated + hit stays within its displayed badge circle");
+    CGFloat mapBadgeU=dm_touchpad_u(view.bounds.size.height);
+    CGFloat badgeHalfW=DM_TP_MAP_BADGE_WIDTH*mapBadgeU*.5, badgeHalfH=DM_TP_MAP_BADGE_HEIGHT*mapBadgeU*.5;
+    CHECK([view dm_testBtnAt:CGPointMake(badge.x+badgeHalfW-1,badge.y)]==10 &&
+          [view dm_testBtnAt:CGPointMake(badge.x+badgeHalfW+1,badge.y)]<0 &&
+          [view dm_testBtnAt:CGPointMake(badge.x+badgeHalfW-1,badge.y+badgeHalfH-1)]<0,
+          "the white rounded-rectangle + artwork and hit region share the same bounds and rounded corners");
 
     g_botw_touch_actions_available = YES;
     CGPoint shield = [view dm_testShieldHome]; FakeTouch *shieldTouch=touch(shield.x+30,shield.y+5); began(view,shieldTouch);
+    [view layoutIfNeeded]; CGPoint floatingRing=[view dm_testShieldRingCenter];
+    CHECK(fabs(floatingRing.x-shieldTouch.point.x)<0.01 && fabs(floatingRing.y-shieldTouch.point.y)<0.01,
+          "the ZL ring follows its touch-down point while its idle home remains fixed");
     CHECK((g_buttons & DM_BTN_ZL) && g_lx == 0 && g_ly == 0,
           "off-center stationary shield-stick press holds ZL with a neutral axis");
     moved(view,shieldTouch,shield.x+85,shield.y+5);
     CHECK((g_buttons & DM_BTN_ZL) && g_lx > 0,
           "shield-stick drag publishes ZL and the left-stick axis together");
     ended(view,shieldTouch,shield.x+85,shield.y+5);
+    [view layoutIfNeeded]; CGPoint restoredRing=[view dm_testShieldRingCenter];
     CHECK(!(g_buttons & DM_BTN_ZL) && g_lx == 0,
           "lifting the shield stick releases ZL and its axis");
+    CHECK(fabs(restoredRing.x-shield.x)<0.01 && fabs(restoredRing.y-shield.y)<0.01,
+          "lifting the shield stick restores the ring to its idle home");
 
     CGPoint stickHome=[view dm_testStickHome], shieldHome=[view dm_testShieldHome];
     FakeTouch *ordinaryStick=touch(stickHome.x,stickHome.y), *shieldConcurrent=touch(shieldHome.x+25,shieldHome.y);
@@ -317,16 +374,29 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
 
     CGPoint shoulder=[view dm_testDropCenter:7]; FakeTouch *trigger=touch(shoulder.x,shoulder.y); began(view,trigger);
     moved(view,trigger,shoulder.x+150,shoulder.y);
+    CHECK(g_botw_cancel_requested==0 && (g_buttons&DM_BTN_R),
+          "crossing the R cancel boundary while held does not cancel or release the trigger");
+    moved(view,trigger,shoulder.x+20,shoulder.y);
+    ended(view,trigger,shoulder.x+20,shoulder.y);
+    CHECK(g_botw_cancel_requested==0 && !(g_buttons&DM_BTN_R),
+          "dragging out and back before an inside release fires R normally without cancel");
+    FakeTouch *releaseOutside=touch(shoulder.x,shoulder.y); began(view,releaseOutside);
+    ended(view,releaseOutside,shoulder.x+150,shoulder.y);
     CHECK(g_botw_cancel_requested==DM_BTN_R && (g_buttons&DM_BTN_R),
-          "dragging outside R requests native cancel while retaining the trigger until acknowledgement");
+          "an outside release requests native cancel even when no move event crossed the boundary");
     g_botw_cancel_complete=DM_BTN_R; [view dm_testBotwTouchActionChanged];
     CHECK(!(g_buttons&DM_BTN_R),
           "native cancel acknowledgement releases R while its touch remains latched");
-    ended(view,trigger,shoulder.x+100,shoulder.y);
-    CHECK(!(g_buttons&DM_BTN_R), "lifting after cancel acknowledgement does not reassert R");
+    g_botw_cancel_complete=0; g_botw_cancel_requested=0;
+    FakeTouch *cancelledOutside=touch(shoulder.x,shoulder.y); began(view,cancelledOutside);
+    cancelled(view,cancelledOutside,shoulder.x+150,shoulder.y);
+    CHECK(g_botw_cancel_requested==0 && !(g_buttons&DM_BTN_R),
+          "UIKit touch cancellation outside the circle releases R without requesting its cancel action");
     g_botw_cancel_complete=0;
     CGPoint zrCenter=[view dm_testDropCenter:9]; FakeTouch *earlyLift=touch(zrCenter.x,zrCenter.y); began(view,earlyLift);
-    moved(view,earlyLift,zrCenter.x+150,zrCenter.y); ended(view,earlyLift,zrCenter.x+150,zrCenter.y);
+    moved(view,earlyLift,zrCenter.x+150,zrCenter.y);
+    CHECK(g_botw_cancel_requested==0, "ZR boundary crossing alone does not request cancellation");
+    ended(view,earlyLift,zrCenter.x+150,zrCenter.y);
     CHECK(g_botw_cancel_requested==DM_BTN_ZR && (g_buttons&DM_BTN_ZR),
           "lifting before the first native sample keeps the canceled ZR published for acknowledgement");
     g_botw_cancel_complete=DM_BTN_ZR; [view dm_testBotwTouchActionChanged];
@@ -336,16 +406,18 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
     CGPoint rCenter=[view dm_testDropCenter:7], zrCenter2=[view dm_testDropCenter:9];
     FakeTouch *r2=touch(rCenter.x,rCenter.y), *zr2=touch(zrCenter2.x,zrCenter2.y);
     began(view,r2); began(view,zr2); moved(view,r2,rCenter.x+150,rCenter.y); moved(view,zr2,zrCenter2.x+150,zrCenter2.y);
+    CHECK(g_botw_cancel_requested==0 && (g_buttons&(DM_BTN_R|DM_BTN_ZR))==(DM_BTN_R|DM_BTN_ZR),
+          "simultaneous R/ZR drags keep both actions held until release without early cancellation");
+    ended(view,r2,rCenter.x+150,rCenter.y); ended(view,zr2,zrCenter2.x+150,zrCenter2.y);
     CHECK((g_botw_cancel_requested & (DM_BTN_R|DM_BTN_ZR))==(DM_BTN_R|DM_BTN_ZR) &&
           (g_buttons & (DM_BTN_R|DM_BTN_ZR))==(DM_BTN_R|DM_BTN_ZR),
-          "simultaneous R and ZR cancel requests keep both triggers pending");
+          "simultaneous outside releases keep both native cancel requests pending");
     g_botw_cancel_complete=DM_BTN_R; [view dm_testBotwTouchActionChanged];
     CHECK(!(g_buttons&DM_BTN_R) && (g_buttons&DM_BTN_ZR),
           "R acknowledgement releases only R while ZR cancellation remains pending");
     g_botw_cancel_complete=DM_BTN_R|DM_BTN_ZR; [view dm_testBotwTouchActionChanged];
     CHECK(!(g_buttons&(DM_BTN_R|DM_BTN_ZR)),
           "the independent ZR acknowledgement releases the remaining trigger");
-    ended(view,r2,rCenter.x+150,rCenter.y); ended(view,zr2,zrCenter2.x+150,zrCenter2.y);
     g_botw_touch_actions_available=NO; g_botw_cancel_complete=0; g_botw_cancel_requested=0;
 
     g_look_enabled = YES; reset_look(); g_input_sets = 0; g_input_history[0] = g_input_history[1] = 0;
@@ -405,6 +477,64 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
     [view dm_testSetTouchHudModeFull:YES tap:YES connected:NO];
     CHECK(![view dm_testL3GestureEnabled], "Tap layout disables L3 double-tap");
     CHECK(![view dm_testLeftStickOwnsPoint:stick], "Tap layout disables BOTW double-tap recognition");
+    g_botw_touchhud_available = NO;
+}
+
+static void test_botw_inventory_pointer(DmGamepad *view) {
+    g_botw_touchhud_available = YES;
+    g_botw_touch_menu_active = NO;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+    g_menu_pointer_count = 0;
+    g_botw_touch_menu_active = YES;
+    [view refreshBotwTouchMenuMode];
+    CHECK([view dm_testControlsHidden], "supported BOTW inventory mode hides the gameplay control artwork");
+    CHECK(![view dm_testL3GestureEnabled], "inventory mode disables the gameplay L3 gesture recognizer");
+    CHECK(g_virtual_latch_cancel_mask == 0xffffull,
+          "inventory mode clears every pending virtual button edge without touching physical input sources");
+
+    int touch_sets = g_touch_sets, look_events = g_look_count;
+    uint64_t buttons = g_buttons; int32_t lx = g_lx, ly = g_ly, rx = g_rx, ry = g_ry;
+    FakeTouch *primary = touch(422,195), *secondary = touch(600,180);
+    began(view, primary);
+    CHECK(g_menu_pointer_count == 1 && g_menu_pointer_events[0].phase == DM_BOTW_MENU_BEGIN,
+          "inventory touch begins one native menu pointer session");
+    near_value(g_menu_pointer_events[0].x, .5f, "inventory pointer x uses the normalized canvas");
+    near_value(g_menu_pointer_events[0].y, .5f, "inventory pointer y uses the normalized canvas");
+    began(view, secondary); moved(view, secondary, 610,190); moved(view, primary, 444,215);
+    CHECK(g_menu_pointer_count == 2 && g_menu_pointer_events[1].phase == DM_BOTW_MENU_MOVE,
+          "extra fingers are ignored while the primary inventory pointer pans");
+    near_value(g_menu_pointer_events[1].x, 444.0f/844.0f, "inventory drag keeps normalized x coordinates");
+    ended(view, secondary,610,190); ended(view, primary,444,215);
+    CHECK(g_menu_pointer_count == 3 && g_menu_pointer_events[2].phase == DM_BOTW_MENU_END,
+          "inventory release ends the native pointer session once");
+    CHECK(g_touch_sets == touch_sets && g_look_count == look_events && g_buttons == buttons &&
+          g_lx == lx && g_ly == ly && g_rx == rx && g_ry == ry,
+          "inventory pointer gestures do not leak into game touch, look, buttons, or sticks");
+
+    g_menu_pointer_count = 0;
+    CGRect oldBounds = view.bounds;
+    primary = touch(CGRectGetMidX(oldBounds), CGRectGetMidY(oldBounds)); began(view,primary);
+    CGRect resizedBounds = oldBounds; resizedBounds.size.width += 40; view.bounds = resizedBounds; [view layoutIfNeeded];
+    CHECK(g_menu_pointer_count == 2 && g_menu_pointer_events[1].phase == DM_BOTW_MENU_CANCEL &&
+          fabsf(g_menu_pointer_events[1].x-.5f)<1e-6f && fabsf(g_menu_pointer_events[1].y-.5f)<1e-6f,
+          "resizing cancels the menu pointer with its cached normalized location");
+    secondary = touch(CGRectGetMidX(resizedBounds), CGRectGetMidY(resizedBounds)); began(view,secondary);
+    CHECK(g_menu_pointer_count == 2, "a replacement pointer waits until the resized gesture owner lifts");
+    ended(view,primary,CGRectGetMidX(oldBounds),CGRectGetMidY(oldBounds));
+    began(view,secondary);
+    CHECK(g_menu_pointer_count == 3 && g_menu_pointer_events[2].phase == DM_BOTW_MENU_BEGIN,
+          "menu pointer ownership can begin again after the cancelled touch lifts");
+    ended(view,secondary,CGRectGetMidX(resizedBounds),CGRectGetMidY(resizedBounds));
+    view.bounds = oldBounds; [view layoutIfNeeded];
+
+    g_menu_pointer_count = 0;
+    primary = touch(422,195); began(view,primary);
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES];
+    CHECK(g_menu_pointer_count == 2 && g_menu_pointer_events[1].phase == DM_BOTW_MENU_CANCEL,
+          "controller connection cancels an active inventory pointer instead of leaking it");
+    CHECK([view dm_testControlsHidden], "controller connection keeps the normal controller-mode overlay hidden");
+    g_botw_touch_menu_active = NO;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
     g_botw_touchhud_available = NO;
 }
 
@@ -626,6 +756,7 @@ static void test_motion_orientation(void) {
 static void run_tests(DmGamepad *view) {
     test_dpad_art_visibility(view);
     test_botw_virtual_buttons(view);
+    test_botw_inventory_pointer(view);
     test_motion_orientation();
     test_look_drag(view);
     test_priority_and_multitouch(view);

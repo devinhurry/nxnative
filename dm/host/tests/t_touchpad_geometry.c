@@ -128,16 +128,26 @@ static void test_botw_new_touch_geometry(void) {
         dm_touchpad_point stick = dm_touchpad_stick_home(w,h,42,0,42,21);
         dm_touchpad_point shield = dm_touchpad_shield_stick_home(w,h,42,0,42,21);
         dm_touchpad_point rune = dm_touchpad_rune_button(w,h,42,0,42,21);
+        float rune_dist = hypotf(rune.x-stick.x, rune.y-stick.y);
         nearf(shield.x, stick.x, 0.001f);
         assert(shield.y < rune.y && rune.y < stick.y);
-        nearf(hypotf(rune.x-stick.x, rune.y-stick.y), (DM_TP_STICK_R+DM_TP_L_R)*u, 0.01f);
+        assert(rune_dist >= (DM_TP_STICK_R*DM_TP_STICK_GRAB + DM_TP_L_R*1.45f + DM_TP_SHIELD_GAP)*u - 0.01f);
         assert(hypotf(rune.x-shield.x, rune.y-shield.y) > (DM_TP_STICK_R+DM_TP_L_R)*u);
+        float stick_r = DM_TP_STICK_R * u;
+        assert(!dm_touchpad_sprint_requested(stick_r * 1.19f, stick_r));
+        assert(!dm_touchpad_sprint_requested(stick_r * 1.2f, stick_r));
+        assert(dm_touchpad_sprint_requested(stick_r * 1.21f, stick_r));
+        assert(!dm_touchpad_sprint_requested(stick_r * 1.21f, 0.0f));
         assert(!dm_touchpad_cancel_outside(60,50,50,50,DM_TP_CANCEL_RADIUS));
         assert(dm_touchpad_cancel_outside(50+DM_TP_CANCEL_RADIUS+1,50,50,50,DM_TP_CANCEL_RADIUS));
         dm_touchpad_rect map = {0.1f,0.2f,0.4f,0.3f};
-        dm_touchpad_point badge = dm_touchpad_map_badge(40,20,1280,720,map,DM_TP_MAP_BADGE_RADIUS*u);
-        nearf(badge.x,40+0.5f*1280-DM_TP_MAP_BADGE_RADIUS*u*0.55f,0.01f);
-        nearf(badge.y,20+0.2f*720+DM_TP_MAP_BADGE_RADIUS*u*0.55f,0.01f);
+        float badge_w=DM_TP_MAP_BADGE_WIDTH*u,badge_h=DM_TP_MAP_BADGE_HEIGHT*u;
+        dm_touchpad_point badge = dm_touchpad_map_badge(40,20,1280,720,map,badge_w,badge_h);
+        nearf(badge.x,40+0.5f*1280-badge_w*0.52f,0.01f);
+        nearf(badge.y,20+0.2f*720+badge_h*0.52f,0.01f);
+        dm_touchpad_rect badge_rect=dm_touchpad_map_badge_rect(badge.x,badge.y,u);
+        assert(dm_touchpad_rounded_rect_contains(badge_rect,DM_TP_MAP_BADGE_RADIUS*u,badge.x,badge.y));
+        assert(!dm_touchpad_rounded_rect_contains(badge_rect,DM_TP_MAP_BADGE_RADIUS*u,badge_rect.x,badge_rect.y));
     }
 }
 

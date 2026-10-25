@@ -4,13 +4,14 @@ B = build
 # tests that use the game profile need GAME=<base game title ID> (there is no default game); GINC only expands when used, so tests without the profile build as before
 GINC = $(if $(strip $(GAME)),-I../gen/$(GAME) -I../../games/$(GAME),$(error GAME is not set: make GAME=<base game title ID>: $(shell python3 ../../games/game.py list | awk -F'\t' '{printf "%s (%s)  ", $$1, $$3}')))
 GAME_H = ../gen/$(GAME)/game_profile.h
-run: $(B)/t_aspect $(B)/t_touch $(B)/t_look $(B)/t_botw_touchhud $(B)/t_botw_touch_actions $(B)/t_gate_obs_result $(B)/t_motion $(B)/t_gesture $(B)/t_oe $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_audio_spsc $(B)/t_swkbd $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pctl $(B)/t_time $(B)/t_shared_font $(B)/t_vorbis $(B)/t_vorbis_divides $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple $(B)/t_nro
+run: $(B)/t_aspect $(B)/t_touch $(B)/t_look $(B)/t_botw_touchhud $(B)/t_botw_touch_actions $(B)/t_botw_touch_menu $(B)/t_gate_obs_result $(B)/t_motion $(B)/t_gesture $(B)/t_oe $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_audio_spsc $(B)/t_swkbd $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pctl $(B)/t_time $(B)/t_shared_font $(B)/t_vorbis $(B)/t_vorbis_divides $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple $(B)/t_nro
 
 	$(B)/t_aspect
 	$(B)/t_touch
 	$(B)/t_look
 	$(B)/t_botw_touchhud
 	$(B)/t_botw_touch_actions
+	$(B)/t_botw_touch_menu
 	$(B)/t_gate_obs_result
 	$(B)/t_motion
 	$(B)/t_gesture
@@ -60,6 +61,11 @@ botw_touch_actions: $(B)/t_botw_touch_actions
 	$(B)/t_botw_touch_actions
 $(B)/t_botw_touch_actions: t_botw_touch_actions.c ../botw_touch_actions.h ../hle_botw_touch_actions.c ../dm.h ../dm_input.h $(GAME_H) | $(B)
 	clang -O1 -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_botw_touch_actions.c -lpthread
+.PHONY: botw_touch_menu
+botw_touch_menu: $(B)/t_botw_touch_menu
+	$(B)/t_botw_touch_menu
+$(B)/t_botw_touch_menu: t_botw_touch_menu.c ../botw_touch_menu.h ../hle_botw_touch_menu.c ../front.h ../hle.h ../dm.h ../dm_input.h $(GAME_H) | $(B)
+	clang -O1 -Wall -Werror -Wno-unused-function -DDM_TEST_HOOKS -I.. $(GINC) -o $@ t_botw_touch_menu.c -lpthread -lm
 $(B)/t_gate_obs_result: t_gate_obs_result.c ../hle.c ../dm.h $(GAME_H) | $(B)
 	clang -O1 -Wall -Werror -Wno-unused-function -ffunction-sections -fdata-sections -Wl,-dead_strip -I.. $(GINC) -o $@ t_gate_obs_result.c
 $(B)/t_motion: t_motion.c ../hle_hid.c ../hle_look.c ../front.h ../hle.h ../dm.h ../dm_input.h $(GAME_H) | $(B)

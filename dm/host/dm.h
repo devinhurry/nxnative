@@ -78,12 +78,14 @@ enum { OBS_MOVIE_RING_LINK = 19, OBS_MOVIE_RING_UNLINK = 20,   // Metroid Dread 
        OBS_BOTW_LOOK_SOURCE = 33,                            // BOTW 1.9.0 selected raw stick pair before filtering (hle_look.c)
        OBS_BOTW_TOUCH_PANE = 34, OBS_BOTW_TOUCH_MATRIX = 35, // BOTW 1.9.0 MainShortCut equipment subtree (hle_botw_touchhud.c)
        OBS_BOTW_SPRINT_QUERY = 36,                         // BOTW 1.9.0 native Dash input result (hle_botw_touch_actions.c)
-       OBS_MAX = 37 };
+       OBS_BOTW_MENU_SELECT = 37,                          // BOTW 1.9.0 native box-cursor update before requested-entry consumption
+       OBS_MAX = 38 };
 void gate_obs_set(int id, void (*fn)(const uint64_t *regs));
 // Separate opt-in API for the rare observation that intentionally filters x0;
 // ordinary observers keep their register-preserving, read-only contract.
 void gate_obs_result_set(int id, uint64_t (*fn)(const uint64_t *regs));
 int gate_obs_present(int id);
+int dm_guest_as_contains(uintptr_t address);
 void dm_aspect_install(void);
 void dm_look_install(void);
 void dm_botw_touch_hud_install(void);
