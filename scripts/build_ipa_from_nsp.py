@@ -1654,6 +1654,31 @@ def mac_host(py, repo, work, env, logs, g):
     return host, font
 
 
+def write_mac_runtime(work, host, patched, renv, g, gfx, chain=None, description='prepared Mac build', cwd=None):
+    """Record one matched runtime for run_mac.py --quick; never pin its save path."""
+    host, patched = Path(host).resolve(), Path(patched).resolve()
+    msl = Path(renv['DM_MSL_DIR']).resolve()
+    files = [host]
+    if (patched / 'build_src.sha256').is_file(): files.append(patched / 'build_src.sha256')
+    files += [patched / f'{mod}.{suffix}' for mod in g.words('modules')
+              for suffix in ('patched.bin', 'fixups.tsv', 'gates.tsv')]
+    if gfx == 'nvn':
+        files += [msl / f'b-{chain}' / 'inputs.tsv', Path(renv['DM_NVN_SHMAP'])]
+        files += [g.table(name) for name in ('shader_pairs.tsv', 'c1_full.tsv', 'cb_extent.tsv') if g.table(name).is_file()]
+    else:
+        api = 'vk' if gfx == 'vulkan' else 'gl'
+        files += [msl / api / f'{api}_shaders.{suffix}' for suffix in ('tsv', 'metallib')]
+    data = dict(schema=1, game=g.id, version=g.get('package'), host=str(host), patched=str(patched),
+                cwd=str(Path(cwd or Path(work) / 'run').resolve()),
+                romfs=str(Path(renv['DM_ROMFS']).resolve()), msl=str(msl), graphics=gfx, chain=chain,
+                description=description, checksums={str(p.resolve()): hashlib.sha256(p.read_bytes()).hexdigest() for p in files},
+                environment={k: str(v) for k, v in renv.items() if k not in ('DM_ROOT', 'DM_SAVE', 'DM_TEMP', 'DM_CTL', 'DM_TOUCH_PREVIEW')})
+    manifest = Path(work) / 'run/mac-runtime.json'
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = manifest.with_suffix('.json.tmp'); tmp.write_text(json.dumps(data, indent=2) + '\n'); tmp.replace(manifest)
+    return manifest
+
+
 def mac_run(work, game, patched, host, font, msl, aoc, gfx, lang, env, logs, g, env_file=''):
     """The command that runs the game in a window with sound after a Mac-only build (PLATFORM 'mac'; docs/development.md, Build by hand (Mac), step 5): its save and temporary storage in
     <id>_build/run (kept from run to run), the extracted RomFS, the Mac shader libraries (msl), the DLC, the profile's shader map (a host outside dm/host does not find it beside itself;
@@ -1676,6 +1701,8 @@ def mac_run(work, game, patched, host, font, msl, aoc, gfx, lang, env, logs, g, 
         run([host], logs / 'pso_prebuild.log', env=penv, cwd=rd)
         PROG.end()
     q = lambda v: shlex.quote(str(v))
+    write_mac_runtime(work, host, patched, renv, g, gfx,
+                      chain_of(Path(__file__).resolve().parent.parent) if gfx == 'nvn' else None)
     return f'cd {q(rd)} && ' + ' '.join(f'{k}={q(v)}' for k, v in renv.items()) + f' {q(host)} {q(patched)}'
 
 

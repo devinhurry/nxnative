@@ -41,6 +41,27 @@ def builds_of(g):   # {build ID: module name} of a profile's build rows (a profi
 
 
 class Registry(unittest.TestCase):
+    def test_observation_gate_after_direct_or_indirect_call(self):
+        # Execute the production classifier: BLR returns through the same ABI
+        # as BL, while BR, RET and plain branches do not establish a call site.
+        nodes = [n for n in ast.walk(tree) if isinstance(n, ast.Assign) and
+                 any(isinstance(t, ast.Name) and t.id in ('previous', 'after_bl') for t in n.targets)]
+        code = compile(ast.Module(body=nodes, type_ignores=[]), str(source), 'exec')
+        import struct
+        for instruction, accepted in (
+            (0x94000001, True), (0x97ffffff, True),
+            (0xd63f0000, True), (0xd63f0100, True), (0xd63f03c0, True),
+            (0xd61f0100, False), (0xd65f03c0, False), (0x14000001, False),
+            (0x54000020, False), (0xd503201f, False),
+        ):
+            with self.subTest(instruction=hex(instruction)):
+                env = {'struct': struct, 'IMG': struct.pack('<II', instruction, 0), 'off': 4}
+                exec(code, env)
+                self.assertEqual(env['after_bl'], accepted)
+        env = {'struct': struct, 'IMG': b'', 'off': 0}
+        exec(code, env)
+        self.assertFalse(env['after_bl'])
+
     def test_generic_rewriter_requires_validator_for_obs_safe(self):
         src = (REPO / 'dm/tools/patch_nso.py').read_text()
         self.assertIn("for safe_build in PATCHES['OBS_SAFE']:", src)

@@ -4,6 +4,19 @@ Update 1.9.0 (v1114112) over the base game, SDK 20.5.22. Nintendo EPD's engine (
 
 ## What it needs
 
+Resolved: rewriting the UI-camera observation at `main+0xd44a2c` after
+`blr x8` was rejected by the generic post-call classifier. See
+[Observation gates where x9-x17 are dead](../../../docs/reference/rewriter.md#observation-gates-where-x9x17-are-dead).
+The real `main`, `subsdk0` and `sdk` rewrite and cache-freshness check passed
+on 2026-10-27; subsequent shader and host stages were not rerun for this fix.
+
+BOTW touch-menu coverage and remaining runtime validation are tracked in
+[Menu touch progress](../../../docs/botw-menu-touch-progress.md). The current
+Mac checks cover direct quest selection, category changes and paging, and
+Options adjustments and list swipes, stable control visibility during menu
+animations, and direct map dragging. NPC/shop, album, physical-controller and
+iPhone checks remain open; see the tracker for evidence and scope.
+
 | Setting | Where | Why |
 |---|---|---|
 | Frame step, `fps_target 60` | [`patches.py`](patches.py) `FRAME_STEP` (`main` `cd57b23f…`), [`game.tsv`](game.tsv) | 60 fps at normal speed; see [Frame rate](#frame-rate) |

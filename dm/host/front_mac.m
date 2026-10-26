@@ -440,7 +440,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
 - (void)mouseDown:(NSEvent *)e {
     dm_touchpad_point p = [self topPoint:e];
     _down = _last = NSMakePoint(p.x, p.y); _hasTouch = YES; _held = _cancelPending; _owner = PREVIEW_NONE;
-    [self setBotwMenuActive:_active && dm_botw_touch_menu_active()];
+    [self setBotwMenuActive:_active && !dm_botw_touch_controls_visible()];
     if (_menuMode) {
         _owner = PREVIEW_MENU; _menuPointerActive = YES;
         [self sendBotwMenuPointer:DM_BOTW_MENU_BEGIN point:p];
@@ -681,7 +681,7 @@ static void preview_refresh(void) {
         else if (g_touch_preview_requested) LOG("front end: BOTW Mac touch preview paused while a physical controller is connected or HUD build is unavailable");
     }
     [g_preview_view setPreviewActive:active];
-    [g_preview_view setBotwMenuActive:active && dm_botw_touch_menu_active()];
+    [g_preview_view setBotwMenuActive:active && !dm_botw_touch_controls_visible()];
     float rect[4]; dm_aspect_touch_rect((float)g_preview_view.bounds.size.width, (float)g_preview_view.bounds.size.height, rect);
     dm_touchpad_point d = [g_preview_view dpadCenter];
     if (active && rect[2] > 0 && rect[3] > 0)

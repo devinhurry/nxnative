@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Rewrite and launch a game's Mac host from an extracted game build."""
 import argparse
+import hashlib
+import json
 import os
 import re
 import subprocess
@@ -150,6 +152,55 @@ def resolve_shader_cache(base, g, override, layout, chain):
     return roots[0], None, roots
 
 
+def resolve_quick(base, g):
+    """Load an explicitly recorded host/game/shader combination, without rebuilding it."""
+    manifest = base / 'run/mac-runtime.json'
+    try:
+        data = json.loads(manifest.read_text())
+    except (OSError, ValueError) as e:
+        raise LaunchError(f'no readable prepared runtime at {manifest}: {e}; prepare a Mac build first') from e
+    if not isinstance(data, dict) or data.get('schema') != 1 or data.get('game') != g.id:
+        raise LaunchError(f'prepared runtime schema or game does not match {g.id}: {manifest}')
+    def path(value):
+        p = Path(value).expanduser()
+        return (p if p.is_absolute() else manifest.parent / p).resolve()
+    try:
+        result = {k: path(data[k]) for k in ('host', 'patched', 'romfs', 'msl', 'cwd')}
+        checks = data['checksums']
+        if not isinstance(checks, dict): raise ValueError('missing checksums')
+        checked_paths = {path(k) for k in checks}
+        if result['host'] not in checked_paths: raise ValueError('missing host checksum')
+        if not isinstance(data['version'], str): raise ValueError('missing version')
+        for value, digest in checks.items():
+            item = path(value)
+            if hashlib.sha256(item.read_bytes()).hexdigest() != digest:
+                raise LaunchError(f'prepared runtime changed: {item}; prepare it again')
+        if not os.access(result['host'], os.X_OK): raise ValueError('host is not executable')
+        for k in ('patched', 'romfs', 'msl', 'cwd'):
+            if not result[k].is_dir(): raise ValueError(f'missing {k}: {result[k]}')
+        for mod in g.words('modules'):
+            for suffix in ('patched.bin', 'fixups.tsv', 'gates.tsv'):
+                item = (result['patched'] / f'{mod}.{suffix}').resolve()
+                if not item.is_file() or item not in checked_paths:
+                    raise ValueError(f'missing prepared module: {mod}.{suffix}')
+        if data['graphics'] == 'nvn':
+            lib = result['msl'] / f'b-{data["chain"]}'
+            if not any(lib.glob('*_b.metallib')): raise ValueError(f'missing prepared shaders: {lib}')
+            if (lib / 'inputs.tsv').resolve() not in checked_paths:
+                raise ValueError('missing shader stamp checksum')
+        elif data['graphics'] not in ('vulkan', 'gl'):
+            raise ValueError('unsupported prepared graphics backend')
+        runtime_env = data.get('environment', {})
+        if not isinstance(runtime_env, dict) or not all(k.startswith('DM_') and isinstance(v, str) for k, v in runtime_env.items()):
+            raise ValueError('invalid prepared environment')
+        if data['graphics'] == 'nvn' and path(runtime_env['DM_NVN_SHMAP']) not in checked_paths:
+            raise ValueError('missing prepared shader map checksum')
+    except (KeyError, TypeError, ValueError, OSError) as e:
+        raise LaunchError(f'incomplete prepared runtime {manifest}: {e}') from e
+    return dict(result, game=g, base=base, version=data['version'], runtime=manifest,
+                runtime_env=runtime_env, description=data.get('description', 'prepared Mac build'))
+
+
 def resolve(args, env, repo):
     game_id = args.game or env.get('DM_GAME')
     g, discovered_build = resolve_game_input(repo, game_id, env)
@@ -157,6 +208,10 @@ def resolve(args, env, repo):
         raise LaunchError('--touch-preview is currently available only for Breath of the Wild (01007EF00011E000)')
     base = _path(args.build) or discovered_build or _path(env.get('DM_ROOT'))
     if not base or not base.is_dir(): raise LaunchError('set --build or DM_ROOT to an existing game build folder, or pass a game folder containing <ID>_build / <ID>-work')
+    if getattr(args, 'quick', False):
+        if any(getattr(args, k, None) for k in ('version', 'patched', 'exefs', 'romfs', 'msl')):
+            raise LaunchError('--quick uses the recorded runtime; omit --version/--patched/--exefs/--romfs/--msl')
+        return resolve_quick(base, g)
     version = args.version or env.get('DM_VERSION') or g.get('package', '')
     if not version: raise LaunchError(f'{g.id} profile has no package version; pass --version')
     if version not in g.builds(): raise LaunchError(f'profile {g.id} has no build row for {version}; choose one of: {", ".join(g.builds())}')
@@ -168,6 +223,10 @@ def resolve(args, env, repo):
 
 
 def launch(plan, args, env, repo, rewrite_call=None, make_call=None, exec_call=None, builder=None):
+    if plan.get('runtime'):
+        print(f'quick runtime: {plan["runtime"]}\nversion: {plan["version"]}\nsource: {plan["description"]}\nhost: {plan["host"]}\npatched: {plan["patched"]}\nshader cache: {plan["msl"]}\nUsing the recorded build; source changes are not rebuilt.')
+        if args.check: return 0
+        return launch_host(plan, args, env, repo, exec_call=exec_call, prepared_host=plan['host'])
     from importlib.util import spec_from_file_location, module_from_spec
     if builder is None:
         spec = spec_from_file_location('build_ipa_from_nsp', repo / 'scripts/build_ipa_from_nsp.py')
@@ -207,6 +266,14 @@ def launch(plan, args, env, repo, rewrite_call=None, make_call=None, exec_call=N
         except Exception as e: raise LaunchError(f'module rewrite failed: {e}') from e
         fresh, reason, _ = builder.rewrite_freshness(repo, plan['exefs'], plan['patched'], env, plan['game'], plan['romfs'])
         if not fresh: raise LaunchError(f'rewrite did not produce a complete current output: {reason}')
+    return launch_host(plan, args, env, repo, make_call, exec_call)
+
+
+def launch_host(plan, args, env, repo, make_call=None, exec_call=None, prepared_host=None):
+    env = dict(plan.get('runtime_env', {}), **env)
+    if prepared_host:
+        for key in ('DM_NVN_SHMAP', 'DM_FONT_DIR', 'DM_AOC_DIR', 'DM_PSO_PAIRS'):
+            if key in plan['runtime_env']: env[key] = plan['runtime_env'][key]
     game_id = plan['game'].id
     env.update(DM_GAME=game_id, DM_ROOT=str(plan['base']), DM_ROMFS=str(plan['romfs']), DM_MSL_DIR=str(plan['msl']))
     if getattr(args, 'touch_preview', False): env['DM_TOUCH_PREVIEW'] = '1'
@@ -237,11 +304,17 @@ def launch(plan, args, env, repo, rewrite_call=None, make_call=None, exec_call=N
     Path(env['DM_SAVE']).mkdir(parents=True, exist_ok=True)
     Path(env['DM_TEMP']).mkdir(parents=True, exist_ok=True)
     cmd = ['make', '-s', '-C', str(repo / 'dm/host'), f'GAME={game_id}', 'dmhost']
-    if make_call: make_call(cmd, env)
-    else: subprocess.run(cmd, env=env, check=True)
-    exe = repo / 'dm/host/dmhost'
+    if not prepared_host:
+        if make_call: make_call(cmd, env)
+        else: subprocess.run(cmd, env=env, check=True)
+    exe = prepared_host or repo / 'dm/host/dmhost'
     print(f'launch: {exe} {plan["patched"]}')
-    (exec_call or os.execvpe)(str(exe), [str(exe), str(plan['patched'])], env)
+    previous_cwd = Path.cwd()
+    try:
+        if prepared_host: os.chdir(plan['cwd'])
+        (exec_call or os.execvpe)(str(exe), [str(exe), str(plan['patched'])], env)
+    finally:
+        os.chdir(previous_cwd)
     return 0
 
 
@@ -256,6 +329,7 @@ def parser():
     p.add_argument('--msl', help='shader cache parent (default: DM_MSL_DIR or detected layout)')
     p.add_argument('--windowed', action='store_true', help='disable fullscreen; DM_ASPECT_RATIO still sets the window size')
     p.add_argument('--touch-preview', action='store_true', help='BOTW-only Mac preview of the iOS virtual touch controls and relocated touch HUD')
+    p.add_argument('--quick', action='store_true', help='launch the recorded run/mac-runtime.json without rebuilding host, game modules or shaders')
     p.add_argument('--check', action='store_true', help='report resolved paths and rewrite freshness without changing files or building')
     return p
 

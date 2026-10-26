@@ -309,6 +309,8 @@ static BOOL botwTouchHudSupported(void) { return dm_botw_touch_hud_available(); 
         if (botwTouchHudSupported()) l = 1;
         if (l == 2 && dm_opmode() != 0) l = 0;   // Tap only in handheld mode (env.txt's DM_OPMODE may have changed it)
         _full = l == 1; _tap = l == 2;
+        _botwMenuMode = !dm_botw_touch_controls_visible();
+        _controls.hidden = _botwMenuMode;
         [self applyLayout];
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
         [nc addObserver:self selector:@selector(padsChanged) name:GCControllerDidConnectNotification object:nil];
@@ -460,7 +462,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     _botwMenuPointerActive = NO;
 }
 - (void)refreshBotwTouchMenuMode {
-    BOOL active = botwTouchHudSupported() && !atomic_load(&g_any_controller_connected) && dm_botw_touch_menu_active();
+    BOOL active = !atomic_load(&g_any_controller_connected) && !dm_botw_touch_controls_visible();
     if (_botwMenuMode == active) return;
     [self reset];
     if (botwTouchHudSupported()) dm_input_cancel_virtual_latch(0xffffull);

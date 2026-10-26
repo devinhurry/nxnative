@@ -18,6 +18,14 @@ enum {
 // the validated selector hook is installed; controller/off-mode bypasses it.
 int dm_botw_touch_menu_active(void);
 
+// Menu presentation also includes native opening, closing and tab-slide
+// animations, when no target accepts input. Hide gameplay controls throughout.
+int dm_botw_touch_menu_visible(void);
+
+// BOTW controls start hidden. Show them only with a fresh, shown gameplay HUD
+// and no presented menu. Other games retain their existing control policy.
+int dm_botw_touch_controls_visible(void);
+
 // Diagnostic for DM_CTL ("panes <hex root> [max depth]"): log the live pane tree
 // below a native layout root with names, flags, alpha and normalized geometry,
 // so a bar or button that the host does not route yet can be identified by the
@@ -45,7 +53,9 @@ typedef struct {
     uintptr_t owner_pane;
     uintptr_t entry;
     uintptr_t root;
+    int adjustment; // -1/+1 for a native horizontal value adjustment; zero confirms normally
     float rect[4];
+    float swipe_rect[4]; // Optional full native row bounds, including its label/value gaps.
 } dm_botw_touch_menu_target;
 
 typedef struct {
@@ -65,6 +75,7 @@ typedef struct {
     int generic_group;
     int generic_mode;
     int generic_count;
+    uintptr_t quest_category_widget;
     dm_botw_touch_menu_target generic_targets[DM_BOTW_MENU_MAX_GENERIC_TARGETS];
     int inventory_visible;
     int map_visible;
