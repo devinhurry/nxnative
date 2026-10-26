@@ -27,7 +27,7 @@ static int arr_len(NSString *ty, NSString **el) {
     return [[ty substringWithRange:NSMakeRange(NSMaxRange(c), ty.length - 1 - NSMaxRange(c))] intValue];
 }
 
-// Whether a storage buffer binding may be written: route A's reflection says so ("rw"); route B's does not, and there SPIRV-Cross types a buffer the shader never writes as const device
+// Whether a storage buffer binding may be written: current B reflection carries the translator's write flag ("rw"); old samples without it fall back to SPIRV-Cross's const device qualifier.
 static int sbuf_rw(NSDictionary *b) { id rw = b[@"rw"]; if (rw) return [rw boolValue]; id ty = b[@"msl_type"]; return !([ty isKindOfClass:[NSString class]] && [ty hasPrefix:@"const "]); }
 int nvn_refl_from_json(NSDictionary *j, nvn_refl *o, char *err, int errlen) {
     memset(o, 0, sizeof *o);

@@ -19,7 +19,8 @@ For the build steps of the whole project see [README.md](../../README.md) and [d
 - **Replay layer `nvn/nvn_mtl.m`**: at submit time it replays the record stream as Metal commands.
   - Memory pools are created as zero-copy `MTLBuffer`s, with the GPU address equal to the CPU address, so only unified-memory devices are supported.
   - The visible effects of "GPU completion" (sync objects becoming ready, events writing their value, counters) happen only after the Metal command buffer has actually completed.
-  - Pipeline states and depth-stencil states are cached by state hash; at startup, shaders and pipelines are pre-built in the background according to the warm-up manifests (the bundled seed `pso_manifest.tsv`, then this device's `pso_user.tsv`; see below). A pipeline that fails to build is cached as failed and reported once with its shader keys.
+  - Pipeline states and depth-stencil states are cached by state hash; at startup, shaders and pipelines are pre-built according to the warm-up manifests (the bundled seed `pso_manifest.tsv`, then this device's `pso_user.tsv`; see below): with a window, on every core before the game's first frame behind a "Preparing shaders" screen (docs/development.md, "The prepare step"), else in the background. A pipeline that fails to build is cached as failed and reported once with its shader keys.
+  - Render pipelines are made through `MTL4Compiler` from a base whose colour state is left unspecialized, one base per pipeline less its colour state, specialized per colour state; the bases are kept in the per-game pipeline archive (`pso_archive/` beside `pso_user.tsv`) and taken from it at the next start (`pso_build`; see docs/development.md, "Pipeline bases and the pipeline archive"). A draw whose pipeline is not built yet draws with its shader pair's pulling pipeline (no vertex descriptor) while its own is built in the background (docs/development.md, "Hybrid pipelines").
   - The game's packaged textures are in Tegra block-linear layout and are deswizzled before upload (see `tex/README.md`).
   - Presentation: the game's swapchain texture is drawn to a `CAMetalLayer`, and presentation timing is scheduled by the pacer in `nvn/nvn_pace.h`.
 
@@ -131,6 +132,7 @@ The tests in `dm/gfx/tests` compile the production code in directly and need a M
 | `t_nvn` | Interface layer: fetches addresses from `nvnBootstrapLoader` the way the game does, all the way through to presentation |
 | `t_builtin` | The 4 embedded compute shaders |
 | `t_refl`, `t_hmap`, `t_cover`, `t_pace`, `t_pso_skey`, `t_dirty_slots` | Reflection parsing, hash table, full-coverage proof, pacer, pipeline manifest key, dirty page tracking |
+| `t_pso_warm` | Historical manifest normalization and deduplication, draw-time cache reuse and GPU pixels for normal and merged passes, through MTLDevice and Metal 4 |
 | `t_deswz_gpu` | GPU deswizzling |
 | `t_present_crop` | Presentation cropping |
 | `t_mip_extent` | Effective size when rendering to a mip level other than level 0 |
@@ -148,8 +150,17 @@ Resource locations:
 | `DM_NVN_SHMAP=path` | The shader map. The default is `../games/<id>/shader_map.tsv` relative to the executable's directory; `c1_full.tsv` and `pso_manifest.tsv` are taken from the same directory |
 | `DM_MSL_DIR=directory` | The parent directory of the shader libraries; the host loads from `b-<V>/` beneath it. When running the host on a Mac, set it to `$DM_ROOT/build/cache/metal_shader_cache` |
 | `DM_PSO_MANIFEST=path` or `off` | Use a different warm-up manifest, or turn warm-up off |
+| `DM_PSO_PREPARE=0` or `1` | `0`: the warm-up runs in the background while the game starts, as without a window; `1`: the game waits for it before its first frame also without a window (`DM_PSO_PREPARE_THREADS=<n>` workers; docs/development.md, "The prepare step") |
 | `DM_PSO_RECORD=path` | Appends the shaders and pipelines used in this run to a file, for re-recording the warm-up manifest |
 | `DM_PSO_USER=path` | Where to keep the per-device list of shaders and pipelines built on the spot (default: `pso_user.tsv` in the parent of `DM_SAVE`) |
+| `DM_PSO_ARCHIVE=folder` or `off` | Where to keep the per-game pipeline archive of pipeline bases (default: `pso_archive/` beside `pso_user.tsv`), or no archive |
+| `DM_PSO_MTL4=0` / `=1` | `0`: build render pipelines through the `MTLDevice` as before, with no unspecialized bases and no archive (the Mac's default is on). `1`: turn them on on iOS, where they are off by default |
+| `DM_PSO_HYBRID=0` | A draw whose pipeline is not built yet waits for it, instead of drawing with the pair's pulling pipeline meanwhile (docs/development.md, "Hybrid pipelines") |
+| `DM_PSO_PREBUILD=0` or `tool` | No prebuild of the pulling bases into the archive (in the prepare step, or in the background without one); `tool`: run the prebuild alone and exit (`DM_PSO_PREBUILD_DEPTH=zero`, `DM_PSO_PREBUILD_THREADS=<n>`) |
+| `DM_PSO_PAIRS=path` | The prebuild's second pair table (default: `pso_pairs.tsv` beside the shader map) |
+| `DM_PSO_BUNDLE=folder` or `off` | The pipeline archive made offline (`dm/gfx/tools/pso_offline.py`): `<GPU architecture>.mtl4a` and `prebuilt.tsv`, read only; when it covers the shader pairs the device builds no prebuild bases. The iOS app sets it to its `pso/` folder when it has one (docs/development.md, "The pipeline archive made offline") |
+| `DM_PSO_WAITLOG=1` | Log each draw that waited more than 20 ms for its pipeline, with why no stand-in served it |
+| `DM_PSO_PULL_ALL=1` | Diagnostic: every draw that has a pulling pipeline draws with it |
 
 Logging and capture:
 
@@ -173,9 +184,12 @@ Comparison and testing:
 | `DM_NVN_TBDR=1` | Turns on the pass optimizations of the replay layer (store / load elision, pass merging). They are off by default: they infer which textures a draw reads from its bound slots, which bindless textures defeat ([docs/agents/04-graphics.md](../../docs/agents/04-graphics.md) section 4) |
 | `DM_NVN_UNWRITTEN_DC=0` | With `DM_NVN_TBDR=1`, turns off the single item "attachments not written in this pass are not stored" |
 | `DM_NVN_FUSE_CHECK=1` | Same-frame check of pass merging; logs the comparison result every time |
+| `DM_NVN_CS_HOIST=0` | A compute dispatch between the draws of a pass ends it (by default it runs ahead of the pass when that changes nothing the draws before it read: [reference](../../docs/reference/rendering.md#compute-dispatches-between-the-draws-of-a-pass-run-ahead-of-it)) |
+| `DM_NVN_SLICE_MERGE=0` | Passes into other layers of one array or cube texture level stay apart (by default they run as one layered pass: [reference](../../docs/reference/rendering.md#passes-into-other-layers-of-one-texture-level-run-as-one-layered-pass)) |
 | `DM_FPS=30` or `60` | Pins the target frame rate |
 | `DM_NVN_BARRIER=game`, `DM_NVN_CUT` | Pass ordering and segment commits: see [docs/agents/04-graphics.md](../../docs/agents/04-graphics.md) section 7 |
 | `DM_PRESENT_HZ=N` | The frequency of presentation pacing (default 60); 0 means no frame limit and is for performance profiling only |
+| `DM_PRESENT_UPSCALE=metalfx` or `off` | How the present scales a picture smaller than its rectangle on the screen: `metalfx` through MetalFX's spatial scaler, `off` (the default) bilinearly. An option on both platforms (the iOS launcher's Upscaling; `env.txt` on the Mac); rendering at the screen's resolution stays the reference for sharpness ([reference](../../docs/reference/rendering.md#the-present-upscales-through-metalfx)) |
 
 ## Known limitations
 

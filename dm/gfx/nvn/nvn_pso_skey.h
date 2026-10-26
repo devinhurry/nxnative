@@ -16,6 +16,16 @@ typedef struct {
 
 typedef struct { char vs[24], fs[24]; uint8_t vs_stage, fs_stage, merged, fz; pso_fz_desc fz_desc; pso_key k; } pso_skey;
 
+// Drop blend factors when blending is disabled, and blend / mask bits for absent normal-pass attachments. Merged passes index logical blend / mask state through lmap,
+// so physical formats cannot decide which logical targets to drop. Depth / stencil formats stay for MTLDevice pipelines. Normalize both live keys and old prewarm rows.
+// See docs/reference/shaders.md, Pipeline keys omit unused colour state; measurements belong to the linked game notes.
+static inline void pso_key_norm(pso_key *k, int merged) {
+    for (int i = 0; i < 8; i++) {
+        if (!merged && !k->cfmt[i]) { k->blend_en &= ~(1u << i); k->chmask &= ~(0xfu << (4 * i)); }
+        if (!(k->blend_en >> i & 1)) memset(&k->blend[i], 0, sizeof k->blend[i]);
+    }
+}
+
 static inline void pso_skey_from(const pso_key *k, NvShader *vs, NvShader *fs, int merged, const pso_fz_desc *fz, pso_skey *out) {
     memset(out, 0, sizeof *out);
     memcpy(&out->k, k, sizeof out->k);
@@ -44,5 +54,6 @@ static inline int pso_skey_parse(const char *hex, pso_skey *out) {
         if (a < 0 || b < 0) return -1;
         p[i / 2] = (uint8_t)(a << 4 | b);
     }
+    pso_key_norm(&out->k, out->merged);
     return 0;
 }

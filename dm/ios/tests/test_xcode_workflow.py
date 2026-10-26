@@ -42,7 +42,7 @@ class XcodePipelineTests(unittest.TestCase):
             base.touch()
             update.touch()
             registered = game.load('0100A6301214E000')
-            profile = SimpleNamespace(id=registered.id, dir=root / 'profile' / registered.id,
+            profile = SimpleNamespace(id=registered.id, title_id=registered.title_id, dir=root / 'profile' / registered.id,
                                       get=registered.get, words=registered.words,
                                       builds=lambda: {'v0': {'display': '1.0.0', 'main': 'other-build'}})
             sources = {key: (False, '') for key in ('glslc_capture', 'vk_capture', 'gl_capture', 'ue_decode', 'oodle_packs', 'ue_legacy')}
@@ -57,7 +57,7 @@ class XcodePipelineTests(unittest.TestCase):
                 'scan_nsps': (int(registered.id, 16), fam), 'check_prereqs': None,
                 'free_gb': 10000, 'build_nx_extract': root / 'nx_extract',
                 'extract': extraction, 'can_clone': False, 'build_mismatch': [],
-                'extract_aoc': None, 'rewrite': None, 'split_shaders': 'fixture-key',
+                'extract_aoc': None, 'rewrite': profile, 'split_shaders': 'fixture-key',
                 'build_shaders': root / 'shaders', 'build_vk_shaders': root / 'shaders',
                 'build_gl_shaders': root / 'shaders', 'provisional_prep': None, 'chain_header': None,
                 'refine_after_rewrite': profile, 'derive_profile': '1.0.0', 'run': None,
@@ -250,6 +250,41 @@ for directory in ('romfs', 'aoc', 'dm'):
             environment.update(DM_COPY_GAME_RESOURCES='NO', PLATFORM_NAME='iphonesimulator')
             result = subprocess.run(['bash', str(REPO / 'dm/ios/tools/stage_resources.sh')], env=environment)
             self.assertEqual(result.returncode, 0)
+
+    def test_pipeline_archive(self):   # the archive made offline goes to <App>/pso when build_ipa.sh names one, and leaves when it no longer does
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            ios, romfs, shader, pso = root / 'xcode', root / 'romfs', root / 'shaders/b-fixture', root / 'pso'
+            for folder in (ios / 'Gen/dm', romfs, shader, pso):
+                folder.mkdir(parents=True)
+            (ios / 'Gen/dm.xcconfig').touch(); (romfs / 'marker').write_text('game'); (shader / 'k_bp.metallib').write_text('lib')
+            (pso / 'prebuilt.tsv').write_text('chain\tfixture\n'); (pso / 'applegpu_g18p.mtl4a').write_text('archive')
+            chain_h = root / 'dmsh_chain.h'; chain_h.write_text('#define DMSH_CHAIN "fixture"\n')
+            app = root / 'products/DmIOS.app'
+            environment = dict(os.environ, SRCROOT=str(ios), TARGET_BUILD_DIR=str(app.parent), UNLOCALIZED_RESOURCES_FOLDER_PATH=app.name, PLATFORM_NAME='iphoneos')
+            def stage(*pso_arg, separate_rom=False):
+                if separate_rom:
+                    (ios / 'Gen/dm/game-data.json').write_text('{}')
+                with patch.dict(os.environ, DM_SEPARATE_ROM='1' if separate_rom else '0'), patch.object(sys, 'argv', ['gen_resources.py', str(ios), str(romfs), 'marker', str(shader), 'b-fixture', '', str(root / 'dd'), str(chain_h), *pso_arg]):
+                    gen_resources.main()
+                return subprocess.run(['bash', str(REPO / 'dm/ios/tools/stage_resources.sh')], env=environment, capture_output=True, text=True)
+            result = stage(str(pso))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((app / 'pso/applegpu_g18p.mtl4a').read_text(), 'archive')
+            self.assertTrue((app / 'msl/b-fixture/k_bp.metallib').exists())   # the pulling libraries the bases are made of
+            (pso / 'prebuilt.tsv').unlink()   # an archive folder without its stamp: stop before copying
+            self.assertNotEqual(stage(str(pso)).returncode, 0)
+            self.assertTrue((app / 'pso/applegpu_g18p.mtl4a').exists())
+            result = stage('')   # built without an archive (DM_PSO_GPUS=none)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((app / 'pso').exists())
+            (pso / 'prebuilt.tsv').write_text('chain\tfixture\n')
+            result = stage(str(pso), separate_rom=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((app / 'romfs').exists())
+            self.assertFalse((app / 'aoc').exists())
+            self.assertTrue((app / 'pso/applegpu_g18p.mtl4a').exists())
+            self.assertTrue((app / 'dm/game-data.json').exists())
 
 
 if __name__ == '__main__':

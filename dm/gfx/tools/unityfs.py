@@ -205,11 +205,22 @@ ComputeShaderCB: string name; int byteSize; vector<data:ComputeShaderParam> para
 ComputeShaderPlatformVariant: int targetRenderer; int targetLevel; vector<data:ComputeShaderKernelParent> kernels; vector<data:ComputeShaderCB> constantBuffers; bool! resourcesResolved
 ComputeShader: string m_Name; vector<data:ComputeShaderPlatformVariant> variants
 '''
+# Unity 2019.4.27f1's release tree (AssetRipper TypeTreeDumps, StructsDump/release/2019.4.27f1.dump): kernels hold code directly, without keyword variants or requirements.
+# Pokemon Brilliant Diamond's stripped built-ins use this hash; their GPU skinning dispatch needs these kernels. Checked against the dump's nodes and alignment flags.
+COMPUTE_2019_4 = '''ComputeShaderResource: string name; string generatedName; int bindPoint; int samplerBindPoint; int texDimension
+ComputeShaderBuiltinSampler: unsigned int sampler; int bindPoint
+ComputeShaderKernel: string name; vector<data:ComputeShaderResource> cbs; vector<data:ComputeShaderResource> textures; vector<data:ComputeShaderBuiltinSampler> builtinSamplers; vector<data:ComputeShaderResource> inBuffers; vector<data:ComputeShaderResource> outBuffers; vector<data:UInt8> code; staticvector<data:unsigned int>~ threadGroupSize
+ComputeShaderParam: string name; int type; int offset; int arraySize; int rowCount; int colCount
+ComputeShaderCB: string name; int byteSize; vector<data:ComputeShaderParam> params
+ComputeShaderVariant: int targetRenderer; int targetLevel; vector<data:ComputeShaderKernel> kernels; vector<data:ComputeShaderCB> constantBuffers; bool! resourcesResolved
+ComputeShader: string m_Name; vector<data:ComputeShaderVariant> variants
+'''
 CLASS_COMPUTE_SHADER = 72
 KNOWN_TREES = {(CLASS_SHADER, bytes.fromhex('ea424a5fc1e48db62144df956f9e1005')): ('Shader', SHADER_2022_3),
                (CLASS_SHADER, bytes.fromhex('a30e3dcf6c6d25153d6f64e5e41caf4e')): ('Shader', SHADER_2020_3),
                (CLASS_SHADER, bytes.fromhex('8db760073e1392061e4a36995f0735af')): ('Shader', SHADER_2018_3),
-               (CLASS_COMPUTE_SHADER, bytes.fromhex('bfdf63ab0ce84d5a2c765ee560d90fe7')): ('ComputeShader', COMPUTE_2022_3)}
+               (CLASS_COMPUTE_SHADER, bytes.fromhex('bfdf63ab0ce84d5a2c765ee560d90fe7')): ('ComputeShader', COMPUTE_2022_3),
+               (CLASS_COMPUTE_SHADER, bytes.fromhex('1a95529ac2eb1a97cd9d2a4356bd722f')): ('ComputeShader', COMPUTE_2019_4)}
 
 def _split_top(s, sep):   # s split at sep outside <> and ()
     out, depth, cur = [], 0, ''
@@ -235,7 +246,7 @@ def tree_from_layout(root, layout):
             a = Node('Array', 'Array', -1, arr_align); a.kids = [Node('int', 'size', 4, 0), el]; return a
         if t == 'string':
             n = Node('string', name, -1, flags); n.kids = [array(Node('char', 'data', 1, 0))]
-        elif t.startswith(('vector<', 'map<')):
+        elif t.startswith(('vector<', 'map<', 'staticvector<')):
             kind, inner = t[:-1].split('<', 1); el_name, el_type = inner.split(':', 1)
             n = Node(kind, name, -1, flags); n.kids = [array(node(el_type, el_name))]
         elif t.startswith('pair('):

@@ -622,6 +622,20 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
             ImageDeclaration declaration = context.Images[texOp.GetTextureSetAndBinding()];
             SpvInstruction image = declaration.Image;
 
+            bool bounded = context.HostCapabilities.Msl23ImageAtomics;
+            if (bounded && ((texOp.Flags & TextureFlags.AtomicBoundsMask) != 0 ||
+                !texOp.Flags.HasFlag(TextureFlags.AtomicDiscardResult)))
+            {
+                throw new NotSupportedException("MSL 2.3 image atomics require IGN with a discarded result; TRAP/returning semantics are not implemented.");
+            }
+            if (bounded && (declaration.IsIndexed ||
+                (texOp.Type != SamplerType.TextureBuffer && texOp.Type != SamplerType.Texture2D &&
+                 texOp.Type != (SamplerType.Texture2D | SamplerType.Array)) ||
+                (texOp.Format != TextureFormat.R32Uint && texOp.Format != TextureFormat.R32Sint)))
+            {
+                throw new NotSupportedException("MSL 2.3 bounded image atomics support non-indexed 32-bit buffer/2D/2D-array images only.");
+            }
+
             SpvInstruction resultType = context.GetType(componentType);
             SpvInstruction imagePointerType = context.TypePointer(StorageClass.Image, resultType);
 
@@ -658,6 +672,34 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
 
             SpvInstruction value = Src(componentType);
 
+            SpvInstruction merge = null;
+            if (bounded)
+            {
+                // Test each original coordinate, including the array layer, before
+                // constructing a raw pointer. Unsigned comparison also rejects
+                // negative signed coordinates; a final linear-index check would not.
+                SpvInstruction uintType = context.TypeU32();
+                SpvInstruction coordType = pCount == 1 ? uintType : context.TypeVector(uintType, pCount);
+                SpvInstruction boolType = context.TypeBool();
+                SpvInstruction compareType = pCount == 1 ? boolType : context.TypeVector(boolType, pCount);
+                SpvInstruction coords = context.Bitcast(coordType, pCoords);
+                SpvInstruction loaded = context.Load(declaration.ImageType, image);
+                SpvInstruction extent = context.ImageQuerySize(coordType, loaded);
+                SpvInstruction inside = context.ULessThan(compareType, coords, extent);
+                if (pCount != 1)
+                {
+                    inside = context.All(boolType, inside);
+                }
+
+                SpvInstruction valid = context.Label();
+                merge = context.Label();
+                context.SelectionMerge(merge, SelectionControlMask.MaskNone);
+                context.BranchConditional(inside, valid, merge);
+                context.AddLabel(valid);
+
+
+            }
+
             SpvInstruction pointer = context.ImageTexelPointer(imagePointerType, image, pCoords, context.Constant(context.TypeU32(), 0));
             SpvInstruction one = context.Constant(context.TypeU32(), 1);
             SpvInstruction zero = context.Constant(context.TypeU32(), 0);
@@ -681,6 +723,14 @@ namespace Ryujinx.Graphics.Shader.CodeGen.Spirv
                 _ => context.AtomicIAdd(resultType, pointer, one, zero, value),
             };
 
+            if (bounded)
+            {
+                context.Branch(merge);
+                context.AddLabel(merge);
+                // The source instruction discards this result. This constant is
+                // IR plumbing, not an invented OOB return value for SUATOM.
+                result = context.Constant(resultType, 0);
+            }
             return new OperationResult(componentType, result);
         }
 

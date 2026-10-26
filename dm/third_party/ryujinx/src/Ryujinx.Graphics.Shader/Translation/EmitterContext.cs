@@ -426,7 +426,13 @@ namespace Ryujinx.Graphics.Shader.Translation
                     {
                         WritePositionOutput(primIndex);
 
-                        int passthroughAttributes = TranslatorContext.AttributeUsage.PassthroughAttributes;
+                        // Independently compiled fixed-input stages meet through
+                        // the complete Maxwell map, with no linked next-stage
+                        // usage to populate PassthroughAttributes. Preserve every
+                        // captured generic output the GS did not replace.
+                        int passthroughAttributes = TranslatorContext.GpuAccessor.QueryGeometryInputFixed()
+                            ? ~TranslatorContext.AttributeUsage.UsedOutputAttributes
+                            : TranslatorContext.AttributeUsage.PassthroughAttributes;
                         while (passthroughAttributes != 0)
                         {
                             int index = BitOperations.TrailingZeroCount(passthroughAttributes);

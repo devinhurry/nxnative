@@ -45,11 +45,11 @@ static void swizzle_case(int tid, int format, int view_format, int uploaded, con
     view_t v = {0}; if (mapping) { v.set_swizzle = 1; memcpy(v.swz, mapping, 4); }
     if (view_format) { v.set_format = 1; v.format = view_format; }
     mtl_reg_tex(tid, &t, mapping || view_format ? &v : NULL);
-    pthread_mutex_lock(&g_rmu);
+    os_unfair_lock_lock(&g_rmu);
     id<MTLTexture> view = tex_by_id(tid);
     CHECK(view != nil, "registered view created");
     CHECK(tex_by_id(tid) == view, "cached view retained");
-    pthread_mutex_unlock(&g_rmu);
+    os_unfair_lock_unlock(&g_rmu);
     read_check(tid, view, expected, 0.001f);
 }
 // What Metal itself wrote into a texture of the RGB565 family is in Metal's order: a clear to red reads red, with no swap
@@ -64,7 +64,7 @@ static void cleared_case(int tid, int format) {
     id<MTLCommandBuffer> command = q_cb(); [[command renderCommandEncoderWithDescriptor:rp] endEncoding]; [command commit]; [command waitUntilCompleted];
     serial_put(t.serial, base);
     mtl_reg_tex(tid, &t, NULL);
-    pthread_mutex_lock(&g_rmu); id<MTLTexture> view = tex_by_id(tid); pthread_mutex_unlock(&g_rmu);
+    os_unfair_lock_lock(&g_rmu); id<MTLTexture> view = tex_by_id(tid); os_unfair_lock_unlock(&g_rmu);
     CHECK(view == base, "a cleared RGB565-family texture needs no view");
     read_check(tid, view, (const float[8]){1,0,0,1, 1,0,0,1}, 0.001f);
 }
@@ -77,7 +77,7 @@ static void image_case(int tid) {
     CHECK(base != nil && (base.usage & MTLTextureUsageShaderWrite), "image texture created");
     serial_put(t.serial, base);
     mtl_reg_tex(tid, &t, NULL);
-    pthread_mutex_lock(&g_rmu);
+    os_unfair_lock_lock(&g_rmu);
     id<MTLTexture> view = tex_by_id(tid); uint64_t rid = 0, rid2 = 0;
     CHECK(view != base && !(view.usage & MTLTextureUsageShaderWrite), "the sampled view is swizzled and read-only");
     id<MTLTexture> img = img_fit(tid, view, NVN_DPF_FLOAT, &rid);
@@ -85,7 +85,7 @@ static void image_case(int tid) {
     CHECK(img && (img.usage & MTLTextureUsageShaderWrite) && rid == img.gpuResourceID._impl, "the image slot gets a writable view");
     CHECK(s.red == MTLTextureSwizzleRed && s.green == MTLTextureSwizzleGreen && s.blue == MTLTextureSwizzleBlue && s.alpha == MTLTextureSwizzleAlpha, "the image view has no channel mapping");
     CHECK(img_fit(tid, view, NVN_DPF_FLOAT, &rid2) == img && rid2 == rid, "the image view is kept for the next bind");
-    pthread_mutex_unlock(&g_rmu);
+    os_unfair_lock_unlock(&g_rmu);
     run2(pipe_of(@"#include <metal_stdlib>\nusing namespace metal;\nkernel void store(texture2d<float, access::write> t [[texture(0)]], uint i [[thread_position_in_grid]]) { t.write(float4(0.25, 0.5, 0.75, 0.125), uint2(i, 0)); }\n", @"store"), img, nil);
     uint8_t px[8]; [base getBytes:px bytesPerRow:8 fromRegion:MTLRegionMake2D(0, 0, 2, 1) mipmapLevel:0];
     for (int i = 0; i < 8; i++) CHECK(abs((int)px[i] - (int[4]){64, 128, 191, 32}[i % 4]) <= 1, "the image write is stored as written");

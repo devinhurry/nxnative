@@ -1,8 +1,10 @@
 // Storage size / alignment / per-level offsets of NVN textures (Tegra X1 block-linear layout).
 // The algorithm is ported from deko3d source/dk_image.cpp (zlib license, Copyright (C) 2018-2020 fincs):
 //   one GOB = 64 bytes × 8 rows = 512 bytes; the block height (tileH, in GOBs) is picked by 'height×1.5'; levels are accumulated with block alignment.
-// The game's packaged textures (SetPackagedTextureLayout) carry 8 bytes of layout parameters: byte 0 = log2 of the block height (derived by comparing 16 cases from the real game,
-// 4 of which differ from the automatic algorithm); when present it takes precedence.
+// The game's packaged textures (SetPackagedTextureLayout) carry 8 bytes of layout parameters: byte 0's low nibble = log2 of the block height (derived by comparing 16 cases
+// from the real game, 4 of which differ from the automatic algorithm), its high nibble = log2 of the block depth (3D); when present they take precedence.
+// Linear storage counts pixel rows, also for block-compressed formats. The block depth nibble and the pixel rows were found by digitalhivehub against the original
+// NVN driver (nxnative PR #11) and taken from MacNativeGames 3c482a7, with the shapes of t_tex_layout.
 #include "nvn_tex.h"
 
 typedef struct { uint8_t bpb, bw, bh; } fmt_t;   // Bytes per block, block width, block height (for uncompressed formats block width and height = 1)
@@ -68,7 +70,7 @@ static void samples_xy(int s, uint32_t *sx, uint32_t *sy) {
 // its 1024×1024 ASTC 6×6 textures (48 GOBs wide instead of 43, level 1 at 0x90000 instead of 0x81000) read 2,183 all-zero blocks in level 0 and 3,043 in level 1, which ASTC
 // decodes as its error colour (magenta clothes)
 enum { SPARSE_TILE = 0x10000 };
-static int sparse_of(const nvn_texdesc *d) { return (d->flags & 0x20) && !(d->flags & 0x10) && d->target != 10; }
+static int sparse_of(const nvn_texdesc *d) { return (d->flags & 0x20) && !(d->flags & 0x50) && d->target != 10; }
 // Offset of level `level` from the start of its layer, and the GOB columns it is laid out with (*gobs, may be NULL)
 static uint64_t level_walk(const nvn_texdesc *d, unsigned level, unsigned dpl, uint32_t w, uint32_t h, uint32_t z,
                            unsigned tileH, unsigned tileD, fmt_t t, uint32_t *gobs) {
@@ -105,14 +107,21 @@ void nvn_tex_layout(const nvn_texdesc *d, nvn_texlayout *o) {
         o->layer_size = o->size = (uint64_t)t.bpb * d->width;
         o->align = t.bpb == 12 ? 4 : t.bpb; return;
     }
-    if (d->flags & 0x10) {                                            // LINEAR: row pitch = stride or aligned to 32
+    // LINEAR_RENDER_TARGET (0x40) is linear by itself. Persona 5 Royal creates
+    // a 16x16 RGBA8 target with flags 0x44 and stride 128; block-linear sizing
+    // returned 1024 instead of 2048 bytes and tripped its surface-memory assertion.
+    if (d->flags & 0x50) {                                            // LINEAR or LINEAR_RENDER_TARGET
         o->align = (d->flags & 0x40) ? 128 : 32;
         uint32_t stride = d->stride ? d->stride : (t.bpb * blk(w, t.bw) + o->align - 1) & ~(o->align - 1);
-        o->layer_size = o->size = (uint64_t)stride * blk(h, t.bh);
+        o->layer_size = o->size = (uint64_t)stride * h;               // the driver counts pixel rows, also for block-compressed formats
         return;
     }
     unsigned tileH = 0, tileD = 0;
-    if (dpl == 2) { uint32_t ah = blk(h * sy, t.bh); tileH = d->pkg_block_h ? (unsigned)d->pkg_block_h - 1 : pick_tile(ah * 3 / 16); }
+    if (d->pkg_block_h) {                                             // packaged byte 0: low nibble block height, high nibble block depth
+        unsigned pl = (unsigned)(d->pkg_block_h - 1) & 0xff;
+        if (dpl >= 2) tileH = pl & 0xf;
+        if (dpl == 3) tileD = pl >> 4;
+    } else if (dpl == 2) { uint32_t ah = blk(h * sy, t.bh); tileH = pick_tile(ah * 3 / 16); }
     else if (dpl == 3) tileD = pick_tile(z + z / 2);
     o->tileH = tileH; o->tileD = tileD;
     unsigned levels = d->levels ? d->levels : 1;
@@ -134,7 +143,7 @@ uint64_t nvn_tex_level_offset(const nvn_texdesc *d, unsigned level) {
     fmt_t t = fmt_of(d->format);
     unsigned dpl; int layered; uint32_t w, h, z;
     shape(d, &dpl, &layered, &w, &h, &z);
-    if (!t.bpb || (d->flags & 0x10) || d->target == 10) return 0;
+    if (!t.bpb || (d->flags & 0x50) || d->target == 10) return 0;
     nvn_texlayout L; nvn_tex_layout(d, &L);
     return level_offset(d, level, dpl, w, h, z, L.tileH, L.tileD, t);
 }
@@ -143,7 +152,7 @@ uint32_t nvn_tex_level_gobs(const nvn_texdesc *d, unsigned level) {
     fmt_t t = fmt_of(d->format);
     unsigned dpl; int layered; uint32_t w, h, z, g = 0;
     shape(d, &dpl, &layered, &w, &h, &z);
-    if (!t.bpb || (d->flags & 0x10) || d->target == 10) return 0;
+    if (!t.bpb || (d->flags & 0x50) || d->target == 10) return 0;
     nvn_texlayout L; nvn_tex_layout(d, &L);
     level_walk(d, level, dpl, w, h, z, L.tileH, L.tileD, t, &g);
     return g;

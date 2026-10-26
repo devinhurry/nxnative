@@ -71,7 +71,8 @@ module_t *module_of(const void *p);
 // Gate dispatch: rewritten svc / timer reads come in through the common entry, ret_addr = the return point of that gate block, regs points to the saved x0..x30
 uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs);
 // Observation gates (rewriter OBS tables in the profiles' patches.py, applied by patch_nso.py; numbering matches): ordinary callbacks preserve registers; explicit result filters can change x0.
-enum { OBS_MOVIE_RING_LINK = 19, OBS_MOVIE_RING_UNLINK = 20,   // Metroid Dread 2.1.0's movie request ring (hle_movie.c)
+// IDs 19 / 20 are retained for old rewritten modules; missing callbacks make those gates harmless pass-throughs.
+enum { OBS_MOVIE_RING_LINK = 19, OBS_MOVIE_RING_UNLINK = 20,   // legacy Metroid Dread movie request-ring gates
        OBS_UE_MALLOC = 21,                                  // DRAGON QUEST VII Reimagined 1.2.0: Unreal's allocator object just made (hle_uemalloc.c)
        OBS_ASPECT_PROJECTION = 22, OBS_ASPECT_UI_CAMERA = 23, OBS_ASPECT_WORLD_PROJECTION = 24, // BOTW guest camera updates (hle_aspect.c)
        OBS_BOTW_LOOK_VECTOR = 32,                            // BOTW 1.9.0 shared post-filter stick vector (hle_look.c)
@@ -115,6 +116,8 @@ void hle_signal_system_event(void *g);   // hle_thread.c: signal a service-layer
 void hle_bind_system_event(void *g, int autoclear);   // On a guest thread, bind a guest SystemEvent to a kernel event
 void hle_clear_system_event(void *g);    // hle_thread.c: clear a bound service-layer SystemEvent (any thread)
 int hle_signal_bound_system_event(void *g);   // hle_thread.c: signal a service-layer SystemEvent only if it is bound (any thread); 0 when it is not
+uint64_t hle_system_event_binding(void *g);   // Opaque lifetime ID of a binding, 0 if unbound; a rebind gets a new ID even if its address and handle are reused
+int hle_signal_system_event_binding(uint64_t binding);   // Signal only this binding lifetime (any thread); 0 after its write handle closes
 // Page fault hook / hook before the host writes guest memory (crash.c; used for write-protect dirty page tracking)
 void dm_fault_hook_register(int (*fn)(void *addr, int is_write, void *uc));
 void dm_guest_write_prep_register(void (*fn)(void *addr, size_t len));

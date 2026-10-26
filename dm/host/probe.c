@@ -291,8 +291,9 @@ static void *watch_arm(void *p) {
 }
 // DM_PROBE_POLL=<address>[+<length>] (hex guest address, up to 8 bytes, 4 by default): when even the watch above misses a write (a page that atomics keep unprotected), a host thread spins on
 // the bytes and, on each change, prints old → new and dumps every guest thread with its backtrace (svc_thread_dump, the first 8 changes): the writer is still inside the code that wrote.
-// Tears of the Kingdom's memory-shortage flag (a word its frame check compares with 1 and clears) lies on such a page
-static uint64_t g_poll, g_plen;
+// Tears of the Kingdom's memory-shortage flag (a word its frame check compares with 1 and clears) lies on such a page. A suffix =<value> (hex) snapshots and dumps only the changes to that value,
+// for a word that changes thousands of times before the bad store (Mario vs. Donkey Kong: a heap block's list link, rewritten by every allocation beside it, until 0x3f landed in it)
+static uint64_t g_poll, g_plen, g_pval; static int g_pwant;
 // All threads but this one stopped at once, then their pc, lr and 8 frame-pointer frames read and printed after they run again: the writer is caught a few microseconds after its store
 static void poll_snap(void) {
     enum { MT = 256, NF = 8 }; static uint64_t fr[MT][NF + 2]; static thread_act_t keep[MT];
@@ -327,17 +328,19 @@ static void *poll_run(void *p) {
     for (int n = 0;;) {
         uint64_t v = 0;
         if (vm_read_overwrite(mach_task_self(), g_poll, g_plen, (vm_address_t)&v, &got) || v == old) continue;
-        if (n < 8) poll_snap();
+        int hit = !g_pwant || v == g_pval;
+        if (hit && n < 8) poll_snap();
         fprintf(stderr, "[dm] POLL %#llx [%.4fs] %#llx → %#llx\n", (unsigned long long)g_poll, (now_ns() - g_t0_ns) / 1e9, (unsigned long long)old, (unsigned long long)v);
         old = v;
-        if (n++ < 2) svc_thread_dump();
+        if (hit && n++ < 2) svc_thread_dump();
     }
     return NULL;
 }
 static void watch_install(void) {
     { const char *e = getenv("DM_PROBE_POLL");
-      if (e) { char *end; g_poll = strtoull(e, &end, 16); g_plen = *end == '+' ? strtoull(end + 1, 0, 16) : 4;
-               if (!g_poll || !g_plen || g_plen > 8) die("DM_PROBE_POLL format: <address>[+<length up to 8>] (hex)");
+      if (e) { char *end; g_poll = strtoull(e, &end, 16); g_plen = *end == '+' ? strtoull(end + 1, &end, 16) : 4;
+               if (*end == '=') { g_pwant = 1; g_pval = strtoull(end + 1, 0, 16); }
+               if (!g_poll || !g_plen || g_plen > 8) die("DM_PROBE_POLL format: <address>[+<length up to 8>][=<value>] (hex)");
                pthread_t t; pthread_create(&t, NULL, poll_run, NULL); pthread_detach(t); } }
     const char *e = getenv("DM_PROBE_WATCH"); if (!e) return;
     char *end; g_wat = strtoull(e, &end, 16); g_wlen = *end == '+' ? strtoull(end + 1, 0, 16) : 8;

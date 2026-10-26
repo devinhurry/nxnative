@@ -32,7 +32,13 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                     continue;
                 }
 
-                if (!TryConvertBindless(block, resourceManager, gpuAccessor, texOp) &&
+                bool converted = TryConvertBindless(block, resourceManager, gpuAccessor, texOp);
+                if (!converted && texOp.Inst == Instruction.ImageAtomic && texOp.Flags.HasFlag(TextureFlags.AtomicMsl23))
+                {
+                    throw new NotSupportedException("MSL 2.3 image atomics require a statically resolved image handle.");
+                }
+
+                if (!converted &&
                     !GenerateBindlessAccess(block, resourceManager, gpuAccessor, texOp, node))
                 {
                     // If we can't do bindless elimination, remove the texture operation.
@@ -334,7 +340,8 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                     {
                         if (texOp.Inst == Instruction.ImageAtomic)
                         {
-                            texOp.Format = ShaderProperties.GetTextureFormatAtomic(gpuAccessor, cbufOffset, cbufSlot);
+                            texOp.Format = ShaderProperties.GetTextureFormatAtomic(gpuAccessor, cbufOffset, cbufSlot,
+                                strict: texOp.Flags.HasFlag(TextureFlags.AtomicMsl23));
                         }
                         else
                         {

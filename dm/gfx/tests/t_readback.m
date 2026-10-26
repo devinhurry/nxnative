@@ -15,6 +15,21 @@ uint64_t now_ns(void) { return bp_now(); }
 static int cases, failed;
 #define EXPECT(n,w,v) do { int a=(w), b=(v); cases++; printf("%s expected %d -> got %d %s\n",n,a,b,a==b?"PASS":"FAIL"); failed+=a!=b; } while (0)
 
+// Observe the real readback buffer without retaining it. The caller's outer pool stays open,
+// as on a long-lived guest thread; ReadTexels must drain its own temporary Metal objects.
+@interface ReadbackDevice : NSObject
+@property(nonatomic, strong) id<MTLDevice> device;
+@property(nonatomic, weak) id<MTLBuffer> lastBuffer;
+@property(nonatomic) NSUInteger allocations;
+@end
+@implementation ReadbackDevice
+- (id<MTLBuffer>)newBufferWithLength:(NSUInteger)length options:(MTLResourceOptions)options {
+    id<MTLBuffer> buffer = [_device newBufferWithLength:length options:options];
+    _lastBuffer = buffer; _allocations++; return buffer;
+}
+- (id)forwardingTargetForSelector:(SEL)selector { (void)selector; return _device; }
+@end
+
 int main(void) { @autoreleasepool {
     mtl_init();
     void *mem = NULL; if (posix_memalign(&mem, getpagesize(), 262144)) abort(); memset(mem, 0, 262144);
@@ -41,9 +56,13 @@ int main(void) { @autoreleasepool {
     for (int y=0; y<4; y++) { for (int x=0; x<8; x++) bad += memcmp(out+y*64+x*4, expected, 4) != 0;
         for (int x=32; x<64; x++) bad += out[y*64+x] != 0xEE; }
     EXPECT("pending clear -> GPU copy, literal pixels and untouched row padding", 0, bad);
+    ReadbackDevice *device = [ReadbackDevice new]; device.device = g_dev; g_dev = (id)device;
     uint8_t cpu[128]; memset(cpu, 0xEE, sizeof cpu); h_nvnTextureReadTexels(&tex, NULL, &region, cpu); bad = 0;
+    g_dev = device.device;
     for (int i=0; i<32; i++) bad += memcmp(cpu+i*4, expected, 4) != 0;
     EXPECT("GPU clear -> CPU ReadTexels, 32 literal pixels", 0, bad);
+    EXPECT("ReadTexels used the GPU readback path", 1, device.allocations);
+    EXPECT("ReadTexels releases its readback buffer before the caller's pool drains", 1, device.lastBuffer == nil);
     h_nvnTextureFinalize(&tex); mtl_pool_del(mem); free(mem);
     printf("READBACK cases=%d failed=%d\n", cases, failed); return failed != 0;
 } }

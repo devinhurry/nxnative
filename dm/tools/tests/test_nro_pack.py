@@ -1,5 +1,7 @@
 """NRO collection/rewrite cache lifecycle, using synthetic manifests and a fake rewriter."""
 import importlib.util
+import hashlib
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -19,7 +21,7 @@ class NroPack(unittest.TestCase):
         self.repo = self.tmp / 'repo'; self.exe = self.tmp / 'game/ExeFS'; self.rom = self.exe.parent / 'RomFS'
         self.exe.mkdir(parents=True); self.rom.mkdir(); (self.exe / 'main').write_bytes(b'NSO0' + bytes(0x50))
         (self.rom / 'game.nrr').write_bytes(b'registered')
-        for f in ('dm/tools/nro_collect.py', 'dm/tools/nso_syms.py', 'dm/tools/patch_nso.py', 'dm/tools/nso_code.py', 'dm/tools/nso_asm.py', 'dm/tools/sdk_patches.py', 'dm/gfx/tools/smash_arc.py'):
+        for f in ('dm/tools/nro_collect.py', 'dm/tools/nso_syms.py', 'dm/tools/patch_nso.py', 'dm/tools/nso_code.py', 'dm/tools/nso_asm.py', 'dm/tools/nso_match.py', 'dm/tools/sdk_patches.py', 'dm/gfx/tools/smash_arc.py'):
             p = self.repo / f; p.parent.mkdir(parents=True, exist_ok=True); p.write_text('v1')
         self.out = self.tmp / 'patched_test'; self.logs = self.tmp / 'logs'; self.logs.mkdir()
         self.g = types.SimpleNamespace(words=lambda k: ['main'])
@@ -34,7 +36,29 @@ class NroPack(unittest.TestCase):
         (dst / 'nro.tsv').write_text('# name\tsha256\tsize\tnrr\twhere\n' + self.row)
 
     def rewrite_process(self, cmd, **kwargs):
-        self.rewrites += 1; (Path(cmd[3]) / f'{cmd[4]}.patched.bin').write_bytes(b'rewritten')
+        self.rewrites += 1
+        out, module = Path(cmd[3]), cmd[4]
+        (out / f'{module}.patched.bin').write_bytes(b'rewritten')
+        build = nsp.build_id(self.exe / module)
+        (out / f'{module}.fixups.tsv').write_text(
+            f'# PATCH_OFF\t0x0\n# KEY_PAGE_OFF\t0x0\n# KEY_PAGE_SIZE\t0x4000\n# BUILD_ID\t{build}\n')
+        (out / f'{module}.gates.tsv').write_text('')
+        (out / f'{module}.sites.tsv').write_text('')
+        (out / f'{module}.cuts.tsv').write_text(f'# BUILD_ID\t{build}\n')
+        (out / f'{module}.obs.tsv').write_text(f'# BUILD_ID\t{build}\n')
+
+        tools = self.repo / 'dm/tools'
+        patch_files = [tools / 'sdk_patches.py'] + sorted((self.repo / 'dm/games').glob('*/patches.py'))
+        for root in filter(None, os.environ.get('DM_GAMES_DIR', '').split(os.pathsep)):
+            patch_files.extend(sorted(Path(root).glob('*/patches.py')))
+        unique = {}
+        for path in patch_files:
+            unique.setdefault(path.resolve(), path)
+        sources = [tools / name for name in ('patch_nso.py', 'nso_code.py', 'nso_asm.py')] + list(unique.values())
+        with (out / 'build_src.sha256').open('w') as stamp:
+            for path in sources:
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                stamp.write(f'{digest}  {os.path.relpath(path.resolve(), tools.resolve())}\n')
         return types.SimpleNamespace(poll=lambda: 0, returncode=0)
 
     def build(self): nsp.rewrite(sys.executable, self.repo, self.exe, self.out, {}, self.logs, self.g)
@@ -61,6 +85,22 @@ class NroPack(unittest.TestCase):
         self.assertFalse((self.out / 'nro.tsv').exists())
         self.assertFalse((self.tmp / 'nro_test').exists())
         self.assertEqual(self.rewrites, 2)
+
+    def test_unknown_build_reuse_counts_selected_rules_and_matcher(self):
+        selected = self.repo / 'dm/games/0100000000000001/patches.py'
+        foreign = self.repo / 'dm/games/0100000000000002/patches.py'
+        for p in (selected, foreign): p.parent.mkdir(parents=True); p.write_text('MATCH_CUTS = {}')
+        env = {'DM_GAME': selected.parent.name, 'DM_GAMES_DIR': '/derived/profile', 'DM_GAMES_FIRST': '1'}
+        def build(): nsp.rewrite(sys.executable, self.repo, self.exe, self.out, env, self.logs, self.g)
+        build(); build(); self.assertEqual(self.rewrites, 1)
+        foreign.write_text('MATCH_CUTS = {} # unrelated change')
+        build(); self.assertEqual(self.rewrites, 1)
+        selected.write_text('MATCH_CUTS = {} # selected change')
+        build(); self.assertEqual(self.rewrites, 2)
+        (self.repo / 'dm/tools/nso_match.py').write_text('matcher changed')
+        build(); self.assertEqual(self.rewrites, 3)
+        env['DM_GAME'] = foreign.parent.name
+        build(); self.assertEqual(self.rewrites, 4)
 
 
 if __name__ == '__main__': unittest.main()

@@ -90,6 +90,8 @@ int main(void) {
             {"2D array 5", {4, NVN_FORMAT_RGBA8, 0, 0, 17, 9, 5, 2, 0}},
             {"cube", {8, NVN_FORMAT_RGBA8, 0, 0, 17, 9, 1, 2, 0}},
             {"3D 64x64x16 mip", {2, NVN_FORMAT_RGBA8, 0, 0, 64, 64, 16, 7, 0}},
+            {"packaged 3D byte 0x00 mip", {2, NVN_FORMAT_RGBA8, 0, 0, 32, 32, 32, 6, 0, 1}},
+            {"packaged 3D byte 0x12 mip", {2, NVN_FORMAT_RGBA8, 0, 0, 32, 32, 32, 6, 0, 0x13}},
         };
         int fail = 0; unsigned n = 0;
         for (unsigned i = 0; i < sizeof(cases) / sizeof(*cases); i++) { fail |= run_case(dev, queue, &cases[i], i == 1); n++; }

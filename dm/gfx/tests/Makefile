@@ -8,13 +8,25 @@ endif
 endif
 GAME_DIR = ../../games/$(GAME)
 GAME_H = ../../host/gen/$(GAME)/game_profile.h
+
+# Portable admission contract only; native Metal binding remains an Apple test.
+.PHONY: imga-layout imga-layout-sanitize
+imga-layout: t_imga_layout
+	./t_imga_layout
+t_imga_layout: t_imga_layout.c ../nvn/nvn_imga_layout.h
+	$(CC) -std=c11 -O2 -g -Wall -Wextra -Werror -o $@ $<
+imga-layout-sanitize: t_imga_layout_sanitize
+	./t_imga_layout_sanitize
+t_imga_layout_sanitize: t_imga_layout.c ../nvn/nvn_imga_layout.h
+	$(CC) -std=c11 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer -o $@ $<
+
 CFLAGS=-O1 -g -Wall -Wno-unused-function -I../nvn/include -I$(dir $(GAME_H))
 GFX=$(filter-out ../nvn/hle_nvn.c,$(sort $(wildcard ../nvn/*.c ../nvn/*.m ../nvn/*.S ../tex/*.c ../tex/*.m)))
 GFX_H=$(wildcard ../nvn/*.h ../nvn/*.inc ../nvn/include/*.h ../tex/*.h) $(GAME_H)
 .DEFAULT_GOAL := t_nvn   # the profile header rule comes first, so keep the default goal as before
 $(GAME_H):
 	$(MAKE) -C ../../host game_profile GAME=$(GAME)
-FW=-framework Metal -framework Foundation -framework QuartzCore -framework ImageIO -framework CoreGraphics -framework UniformTypeIdentifiers
+FW=-framework Metal -framework MetalFX -framework Foundation -framework QuartzCore -framework ImageIO -framework CoreGraphics -framework UniformTypeIdentifiers
 # Host crash.c is linked in as well: the write-protect unit tests go through the same page-fault hook as production
 # Tests that #include nvn_mtl.m link the rest of the NVN layer beside it (hle_nvn.c: memory pools, sparse pools, serials) and the host's large stack, with weak stubs of what they need of the host (t_host_stubs.c)
 MTL_T_DEP=../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(GFX_H)
@@ -33,6 +45,8 @@ t_tbuf2d: t_tbuf2d.m ../nvn/nvn_tex.c ../nvn/nvn_tex.h
 	clang -O1 -g -Wall -fobjc-arc -o $@ t_tbuf2d.m ../nvn/nvn_tex.c -framework Metal -framework Foundation
 t_deswz_gpu: t_deswz_gpu.m ../tex/nvn_deswizzle.c ../tex/nvn_deswizzle_gpu.m ../tex/nvn_deswizzle.h ../tex/nvn_deswizzle_gpu.h ../nvn/nvn_tex.c ../nvn/nvn_tex.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_deswz_gpu.m ../tex/nvn_deswizzle.c ../tex/nvn_deswizzle_gpu.m ../nvn/nvn_tex.c -framework Metal -framework Foundation
+t_tex_layout: t_tex_layout.c ../nvn/nvn_tex.c ../nvn/nvn_tex.h
+	clang -O1 -Wall -o $@ t_tex_layout.c ../nvn/nvn_tex.c
 t_refl: t_refl.m ../nvn/nvn_refl.m ../nvn/nvn_refl.h ../nvn/dmsh_chain.h
 	clang -O1 -g -Wall -I../nvn -fobjc-arc -o $@ t_refl.m ../nvn/nvn_refl.m -framework Metal -framework Foundation
 t_hmap: t_hmap.c ../nvn/nvn_hmap.h
@@ -41,10 +55,43 @@ t_cover: t_cover.c ../nvn/nvn_cover.h
 	clang -O1 -Wall -o $@ t_cover.c
 t_pace: t_pace.c ../nvn/nvn_pace.h
 	clang -O1 -Wall -o $@ t_pace.c
+t_timestamp: t_timestamp.c ../nvn/nvn_timestamp.h
+	$(CC) -std=c11 -O2 -g -Wall -Wextra -Werror -o $@ $<
 t_fstep: t_fstep.c ../nvn/nvn_fstep.h
 	clang -O1 -Wall -o $@ t_fstep.c
+t_thermal: t_thermal.c $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_thermal.c $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
+t_thermal_tsan: t_thermal.c $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -fsanitize=thread -o $@ t_thermal.c $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
+.PHONY: check_t_thermal thermal-tsan
+check_t_thermal: t_thermal
+	./t_thermal
+	DM_THERMAL_CAP=0 ./t_thermal
+thermal-tsan: t_thermal_tsan
+	./t_thermal_tsan
+	DM_THERMAL_CAP=0 ./t_thermal_tsan
+run: check_t_thermal
 t_fuse_check: t_fuse_check.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_fuse_check.m $(MTL_T_SRC) $(FW)
+t_perf_order: t_perf_order.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_perf_order.m $(MTL_T_SRC) $(FW)
+t_perf_order_tsan: t_perf_order.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -fsanitize=thread -o $@ t_perf_order.m $(MTL_T_SRC) $(FW)
+.PHONY: perf-order-tsan
+perf-order-tsan: t_perf_order_tsan
+	./t_perf_order_tsan --cpu
+.PHONY: check_t_perf_order
+check_t_perf_order: t_perf_order
+	MTL_DEBUG_LAYER=1 ./t_perf_order
+	DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_perf_order
+	DM_NVN_FAST_WAKE=0 DM_NVN_SLICE_MERGE=0 DM_NVN_CS_HOIST=0 MTL_DEBUG_LAYER=1 ./t_perf_order
+run: check_t_perf_order
+t_cube_placeholder: t_cube_placeholder.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_cube_placeholder.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_cube_placeholder
+check_t_cube_placeholder: t_cube_placeholder
+	MTL_DEBUG_LAYER=1 ./t_cube_placeholder
+run: check_t_cube_placeholder
 t_readback: t_readback.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_readback.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
 .PHONY: check_t_readback
@@ -53,6 +100,27 @@ check_t_readback: t_readback
 run: check_t_readback
 t_present_crop: t_present_crop.m ../nvn/hle_nvn.c ../../host/hle_aspect.c ../../host/dm.h ../../host/hle.h ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_present_crop.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_present_rescue: t_present_rescue.m t_present_rescue_focus.c $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_present_rescue.m t_present_rescue_focus.c $(MTL_T_SRC) $(FW)
+.PHONY: check_t_present_rescue
+check_t_present_rescue: t_present_rescue
+	MTL_DEBUG_LAYER=1 ./t_present_rescue --metal
+run: check_t_present_rescue
+t_present_alloc: t_present_alloc.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_present_alloc.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_present_alloc
+check_t_present_alloc: t_present_alloc
+	MTL_DEBUG_LAYER=1 ./t_present_alloc
+run: check_t_present_alloc
+t_present_snap: t_present_snap.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_present_snap.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+.PHONY: check_t_present_snap
+check_t_present_snap: t_present_snap
+	DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_present_snap suspend
+	DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_present_snap pacing
+	DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_present_snap copy
+	DM_NVN_ENC_THREAD=0 MTL_DEBUG_LAYER=1 ./t_present_snap pacing
+run: check_t_present_snap
 t_reorder_chain: t_reorder_chain.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_reorder_chain.m $(MTL_T_SRC) $(FW)
 t_defer_chain: t_defer_chain.m $(MTL_T_DEP)
@@ -63,10 +131,18 @@ t_xv: t_xv.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_xv.m $(MTL_T_SRC) $(FW)
 t_ub: t_ub.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_ub.m $(MTL_T_SRC) $(FW)
+t_gpuprof: t_gpuprof.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_gpuprof.m $(MTL_T_SRC) $(FW)
 t_vbuf: t_vbuf.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_vbuf.m $(MTL_T_SRC) $(FW)
 t_geometry: t_geometry.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_geometry.m $(MTL_T_SRC) $(FW)
+t_feedback: t_feedback.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_feedback.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_feedback
+check_t_feedback: t_feedback
+	MTL_DEBUG_LAYER=1 ./t_feedback
+run: check_t_feedback
 t_mip_extent: t_mip_extent.m ../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_mip_extent.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
 t_rt_range_shape: t_rt_range_shape.m $(MTL_T_DEP)
@@ -79,14 +155,43 @@ t_rt_depth_ro: t_rt_depth_ro.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_rt_depth_ro.m $(MTL_T_SRC) $(FW)
 t_pso_pending: t_pso_pending.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_pending.m $(MTL_T_SRC) $(FW)
+t_pull: t_pull.m ../tools/dmsh_pull.metal $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pull.m $(MTL_T_SRC) $(FW)
+t_pull_inv: t_pull_inv.m ../tools/dmsh_pull.py ../tools/dmsh_pull.metal
+	clang -O1 -g -Wall -fobjc-arc -o $@ t_pull_inv.m -framework Metal -framework Foundation
+t_pso_archive: t_pso_archive.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_archive.m $(MTL_T_SRC) $(FW)
+t_pso_bundle: t_pso_bundle.m ../tools/pso_offline.py $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_bundle.m $(MTL_T_SRC) $(FW)
+t_pso_warm: t_pso_warm.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_warm.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_pso_warm
+check_t_pso_warm: t_pso_warm
+	DM_PSO_MTL4=0 MTL_DEBUG_LAYER=1 ./t_pso_warm
+	DM_PSO_MTL4=1 MTL_DEBUG_LAYER=1 ./t_pso_warm
+run: check_t_pso_warm
 t_pso_skey: t_pso_skey.m ../nvn/nvn_pso_skey.h ../nvn/nvn_obj.h
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_skey.m -framework Foundation
 t_view_swizzle: t_view_swizzle.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_view_swizzle.m $(MTL_T_SRC) $(FW)
 t_view_levels: t_view_levels.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_view_levels.m $(MTL_T_SRC) $(FW)
+t_upload_budget: t_upload_budget.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_upload_budget.m $(MTL_T_SRC) $(FW)
+check_t_upload_budget: t_upload_budget
+	MTL_DEBUG_LAYER=1 ./t_upload_budget
+	DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_upload_budget
+run: check_t_upload_budget
+.PHONY: check_t_upload_budget
 t_linear_readback: t_linear_readback.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_linear_readback.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_copy_alias: t_copy_alias.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_copy_alias.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+.PHONY: check_t_copy_alias
+check_t_copy_alias: t_copy_alias
+	DM_NVN_ENC_THREAD=0 MTL_DEBUG_LAYER=1 ./t_copy_alias
+	DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_copy_alias
+run: check_t_copy_alias
 .PHONY: check_t_linear_readback
 check_t_linear_readback: t_linear_readback
 	MTL_DEBUG_LAYER=1 ./t_linear_readback
@@ -97,8 +202,16 @@ t_integer_blend: t_integer_blend.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_integer_blend.m $(MTL_T_SRC) $(FW)
 t_primitive_restart: t_primitive_restart.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_primitive_restart.m $(MTL_T_SRC) $(FW)
+t_depth16_clear: t_depth16_clear.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_depth16_clear.m $(MTL_T_SRC) $(FW)
 t_clear_ds: t_clear_ds.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_clear_ds.m $(MTL_T_SRC) $(FW)
+t_clear_tex: t_clear_tex.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_clear_tex.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_clear_tex
+check_t_clear_tex: t_clear_tex
+	MTL_DEBUG_LAYER=1 ./t_clear_tex
+run: check_t_clear_tex
 t_upgrade_alias: t_upgrade_alias.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_upgrade_alias.m $(MTL_T_SRC) $(FW)
 t_stencil_view: t_stencil_view.m $(MTL_T_DEP)
@@ -106,15 +219,17 @@ t_stencil_view: t_stencil_view.m $(MTL_T_DEP)
 # The Vulkan layer (#included) over the whole NVN layer, whose device and present path it uses
 t_vk_desc: t_vk_desc.m ../vk/hle_vk.m $(MTL_T_DEP)
 	clang $(CFLAGS) -I../../third_party/vulkan-headers/include -fobjc-arc -o $@ t_vk_desc.m $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
-run: t_nvn t_dirty_slots t_dirty_race t_builtin t_vin t_tbuf2d t_deswz_gpu t_pace t_fstep t_refl t_hmap t_cover t_fuse_check t_present_crop t_reorder_chain t_defer_chain t_zskip t_xv t_ub t_vbuf t_geometry t_mip_extent t_rt_range_shape t_rt_range_ro t_rt_range t_rt_depth_ro t_pso_skey t_pso_pending t_pfv t_view_levels t_view_swizzle t_vk_desc t_integer_blend t_primitive_restart t_clear_ds t_upgrade_alias t_stencil_view
+run: t_nvn t_dirty_slots t_dirty_race t_tex_layout t_builtin t_vin t_tbuf2d t_deswz_gpu t_pace t_timestamp t_fstep t_refl t_hmap t_cover t_fuse_check t_present_crop t_reorder_chain t_defer_chain t_zskip t_xv t_ub t_vbuf t_geometry t_mip_extent t_rt_range_shape t_rt_range_ro t_rt_range t_rt_depth_ro t_pso_skey t_pso_archive t_pso_bundle t_pull t_pull_inv t_pso_pending t_pfv t_view_levels t_view_swizzle t_vk_desc t_integer_blend t_primitive_restart t_clear_ds t_depth16_clear t_upgrade_alias t_stencil_view
 	./t_nvn
 	./t_dirty_slots
 	./t_dirty_race
+	./t_tex_layout
 	./t_builtin
 	./t_vin
 	./t_tbuf2d
 	./t_deswz_gpu
 	./t_pace
+	./t_timestamp
 	./t_fstep
 	./t_refl
 	./t_hmap
@@ -141,6 +256,11 @@ run: t_nvn t_dirty_slots t_dirty_race t_builtin t_vin t_tbuf2d t_deswz_gpu t_pac
 	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_rt_range --sample-attachment --both-flags
 	./t_pso_skey
 	./t_pso_pending
+	MTL_DEBUG_LAYER=1 ./t_pso_archive
+	MTL_DEBUG_LAYER=1 ./t_pso_bundle
+	MTL_DEBUG_LAYER=1 ./t_pull
+	MTL_DEBUG_LAYER=1 ./t_pull_inv
+	python3 test_dmsh_pull.py
 	MTL_DEBUG_LAYER=1 ./t_pfv
 	MTL_DEBUG_LAYER=1 ./t_view_levels
 	MTL_DEBUG_LAYER=1 ./t_view_swizzle
@@ -148,6 +268,7 @@ run: t_nvn t_dirty_slots t_dirty_race t_builtin t_vin t_tbuf2d t_deswz_gpu t_pac
 	MTL_DEBUG_LAYER=1 ./t_integer_blend
 	MTL_DEBUG_LAYER=1 ./t_primitive_restart
 	MTL_DEBUG_LAYER=1 ./t_clear_ds
+	MTL_DEBUG_LAYER=1 ./t_depth16_clear
 	MTL_DEBUG_LAYER=1 ./t_upgrade_alias
 	MTL_DEBUG_LAYER=1 ./t_stencil_view
 	DM_GAME=$(GAME) python3 test_tbdr_budget.py

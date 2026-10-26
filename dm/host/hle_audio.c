@@ -148,7 +148,7 @@ static OSStatus au_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioT
     aout *a = ctx;
     atomic_fetch_add_explicit(&g_render_calls, 1, memory_order_relaxed); atomic_fetch_add_explicit(&a->cb_n, 1, memory_order_relaxed);
     {
-        // Every 2000 callbacks of each output, log one line: frames requested per call, pending blocks at callback start, underruns (check this line on a new device; docs/agents/03-bringup.md "Crackling on iOS only").
+        // Every 2000 callbacks of each output, log one line: frames requested per call, pending blocks at callback start, underruns (check this line on a new device; docs/reference/audio.md "RemoteIO's default I/O buffer duration").
         // Kept per output: with two outputs open, combined numbers mislead (one fully fed and one fed by nobody look like "every other callback underruns")
         uint32_t qd = atomic_load(&a->q_tail) - atomic_load(&a->q_head);
         if (!a->st_calls || frames < a->st_fmin) a->st_fmin = frames; if (frames > a->st_fmax) a->st_fmax = frames; a->st_qsum += qd;
@@ -318,12 +318,29 @@ static Result au_start_at(void *g, void *lr) {
     return RES_OK;
 }
 HLE_FORCE("_ZN2nn5audio13StartAudioOutEPNS0_8AudioOutE", "start playback", Result, h_au_Start, void *g) { return au_start_at(g, __builtin_return_address(0)); }
+// After the backend stops, return even its partly played buffer. FMOD can wait for these releases before joining its output thread (Pokemon Brilliant Diamond 1.0.0, PR #190).
+// g_aos_lock and backend_stop exclude the consumer; m excludes append/reclaim. Buffers appended while already stopped belong to the next Start, so only a started -> stopped transition calls this.
+static void au_release_pending(aout *a) {
+    pthread_mutex_lock(&a->m);
+    uint32_t qh = atomic_load_explicit(&a->q_head, memory_order_relaxed), qt = atomic_load_explicit(&a->q_tail, memory_order_acquire);
+    uint32_t rr = atomic_load_explicit(&a->rel_head, memory_order_acquire), rw = atomic_load_explicit(&a->rel_tail, memory_order_relaxed);
+    int released = qh != qt;
+    while (qh != qt) {
+        if (rw - rr >= RELMAX) die("AudioOut released queue overflow while stopping");
+        a->rel[rw++ & (RELMAX - 1)] = a->q[qh++ & (QMAX - 1)];
+    }
+    atomic_store_explicit(&a->rel_tail, rw, memory_order_release);
+    atomic_store_explicit(&a->q_head, qh, memory_order_release); a->pos = 0;
+    pthread_mutex_unlock(&a->m);
+    if (released) { if (a->event) notify_release(a); if (a->rel_sem) dispatch_semaphore_signal(a->rel_sem); }
+}
 static void au_stop_at(void *g, void *lr) {   // lr NULL: the stop inside Close, not logged separately
     aout *a = ao(g);
     pthread_mutex_lock(&g_aos_lock);
     int was = atomic_exchange_explicit(&a->state, STATE_STOPPED, memory_order_acq_rel);
     if (lr) au_note(a, was == STATE_STARTED ? "Stop" : "Stop (already stopped)", lr);
     backend_stop(a);   // the AudioUnit, or the silent sink (including one that took over during suspension)
+    if (was == STATE_STARTED) au_release_pending(a);
     pthread_mutex_unlock(&g_aos_lock);
 }
 HLE_FORCE("_ZN2nn5audio12StopAudioOutEPNS0_8AudioOutE", "stop playback", void, h_au_Stop, void *g) { au_stop_at(g, __builtin_return_address(0)); }

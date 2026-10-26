@@ -60,9 +60,11 @@ class SplitCache(unittest.TestCase):
     def fake_run(self, argv, log, **kwargs):
         self.calls += 1
         pkg = Path(argv[4]); pkg.mkdir(parents=True); (pkg / 'vs.bin').write_bytes(b'package')
-        for target, name in zip(argv[5:], ('shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv')):
+        for target, name in zip(argv[5:8], ('shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv')):
             data = self.profile.table(name).read_bytes()
             Path(target).write_bytes(data + (b'different row\n' if self.mismatch and name == 'shader_map.tsv' else b''))
+        # The splitter always writes this fourth, optional table; old profiles keep it as a package sidecar.
+        Path(argv[8]).write_bytes(b'# program pairs\n')
         Path(log).write_text('shaders: 1 (')
 
     def split(self):

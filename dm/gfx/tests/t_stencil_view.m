@@ -34,6 +34,7 @@ int main(void) { @autoreleasepool {
         tex_t sb = s, d = s; sb.serial++; sb.stencil = 1; d.serial += 2;   // sb: the same storage built in stencil mode; d: the copy's destination
         mtl_tex_init(&s); mtl_tex_init(&sb); mtl_tex_init(&d);
         id<MTLTexture> base = tex_mtl(&s), dst = tex_mtl(&d);
+        mtl_drain();   // finish production initialization before the fixture writes on its independent classic queue
         CHECK(base && base.pixelFormat == MTLPixelFormatDepth32Float_Stencil8, "the depth-stencil texture is Depth32Float_Stencil8");
         CHECK(base.usage & MTLTextureUsagePixelFormatView, "a depth-stencil texture is made with the format-view usage");
         if (!base || !dst) continue;
@@ -44,7 +45,7 @@ int main(void) { @autoreleasepool {
         // A stencil-mode view, and the texture built in stencil mode, are X32_Stencil8 views of the depth-stencil storage itself (no upgraded copy)
         view_t v = {.set_dsmode=1, .dsmode=NVN_TEXTURE_DEPTH_STENCIL_MODE_STENCIL};
         mtl_reg_tex(800 + 2 * i, &s, &v); mtl_reg_tex(801 + 2 * i, &sb, NULL);
-        pthread_mutex_lock(&g_rmu); id<MTLTexture> sv = tex_by_id(800 + 2 * i), bv = tex_by_id(801 + 2 * i); pthread_mutex_unlock(&g_rmu);
+        os_unfair_lock_lock(&g_rmu); id<MTLTexture> sv = tex_by_id(800 + 2 * i), bv = tex_by_id(801 + 2 * i); os_unfair_lock_unlock(&g_rmu);
         CHECK(sv.pixelFormat == MTLPixelFormatX32_Stencil8 && sv.parentTexture == base, "a stencil-mode view reads the stencil of the texture's own storage");
         CHECK(bv.pixelFormat == MTLPixelFormatX32_Stencil8 && bv.parentTexture == base, "a texture built in stencil mode reads the stencil of the same storage");
         CHECK(tex_get(s.serial) == base, "the depth-stencil texture is not replaced");

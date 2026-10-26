@@ -9,13 +9,16 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE)); sys.path.insert(0, str(HERE.parent / 'tools'))
 import game, nacp
 
+SECTIONS = ('Game', 'Controls', 'Performance')   # headings on the single settings screen
+
 
 def rows():
     for n, line in enumerate((HERE / 'settings.tsv').read_text(encoding='utf-8').splitlines(), 1):
         if not line.strip() or line.startswith('#'): continue
         c = line.split('\t')
-        if len(c) not in (6, 7): sys.exit(f'settings.tsv:{n}: 6 or 7 columns expected, {len(c)} found')
-        yield n, c + [''] * (7 - len(c))
+        if len(c) not in (7, 8): sys.exit(f'settings.tsv:{n}: 7 or 8 columns expected, {len(c)} found')
+        if c[5] not in SECTIONS: sys.exit(f'settings.tsv:{n}: unknown section: {c[5]}')
+        yield n, c + [''] * (8 - len(c))
 
 
 def fixups_keys(path):   # '# KEY<TAB>value' header rows of a rewriter table
@@ -37,6 +40,7 @@ def build(gid, patched, control):
         if cond == 'always': return True
         if cond == 'languages>1': return len(langs) > 1
         if cond.startswith('fixups:'): return cond[7:] in keys
+        if cond.startswith('gfxapi:'): return os.environ.get('GFXAPI', '') == cond[7:]
         m = re.fullmatch(r'(DM_GAME_\w+)(!=|==)(.*)', cond)
         if m: return (macro(m[1], n) == m[3]) == (m[2] == '==')
         sys.exit(f'settings.tsv:{n}: unknown condition {cond}')
@@ -49,9 +53,9 @@ def build(gid, patched, control):
         return d
 
     out = []
-    for n, (var, kind, values, default, cond, label, note) in rows():
+    for n, (var, kind, values, default, cond, section, label, note) in rows():
         if not shown(cond, n): continue
-        s = {'env': var, 'kind': kind, 'label': label, 'note': note, 'default': value(default, n)}
+        s = {'env': var, 'kind': kind, 'section': section, 'label': label, 'note': note, 'default': value(default, n)}
         if kind == 'choice':
             opts = [list(l) for l in langs] if values == 'languages' else [v.split('=', 1) for v in values.split(',')]
             if any(len(o) != 2 for o in opts): sys.exit(f'settings.tsv:{n}: choice values are value=label,...')
@@ -62,6 +66,9 @@ def build(gid, patched, control):
             s.update(min=lo, max=hi, step=st)
         elif kind == 'toggle':
             if s['default'] not in ('0', '1'): sys.exit(f'settings.tsv:{n}: a toggle defaults to 0 or 1: {s["default"]}')
+            on_off = ['1', '0'] if values == '-' else values.split('/')
+            if len(on_off) != 2 or not all(on_off) or on_off[0] == on_off[1]: sys.exit(f'settings.tsv:{n}: toggle values are - or <on>/<off>: {values}')
+            s.update(on=on_off[0], off=on_off[1], default=on_off[0] if s['default'] == '1' else on_off[1])   # the default as the value the variable takes
         else: sys.exit(f'settings.tsv:{n}: unknown kind {kind}')
         out.append(s)
     return {'game': g.id, 'settings': out}

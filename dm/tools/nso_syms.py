@@ -3,9 +3,9 @@
 Usage: nso_syms.py <repo dm/host dir> <gameA ExeFS | -> <gameB ExeFS>   (A = the game the host already supports, B = the new one; - = no reference game, compare with the host hooks only)
 dm/games/profile_guess.py imports it (dynsyms, host_hooks) to guess a provisional profile."""
 import collections, glob, os, re, struct, sys
-import lz4.block
 
 def load(path):
+    import lz4.block   # Only NSO decoding needs LZ4; profile log parsing does not.
     d = open(path, 'rb').read()
     flags = struct.unpack_from('<I', d, 0xc)[0]
     segs = [struct.unpack_from('<III', d, 0x10 + i * 0x10) for i in range(3)]

@@ -1,74 +1,64 @@
 // Launcher: the settings screen shown before the game starts (front_ios.m dm_show_launcher). Its settings come from the app's dm/launcher.json, which build_ipa.sh writes for this game
 // from dm/games/settings.tsv (dm/games/settings.py): each sets an environment variable the host reads when the game starts. A variable an env file set (Documents/env.txt, the bundle's
-// dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. The choices are kept in UserDefaults. DM_LAUNCHER=0 in Documents/env.txt starts the game at once, as an app
-// without launcher.json does
+// dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. All settings share one screen, grouped by section. Choices that differ from the game's default are kept
+// in UserDefaults; Reset to tested defaults forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once, as an app without launcher.json does
 import SwiftUI
 import UIKit
 import os
 
-private struct Setting: Decodable, Identifiable {
-    let env, kind, label, note, def: String
-    let options: [[String]]?   // choice: [value, label]
-    let min, max, step: Double?   // range
-    var id: String { env }
-    enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", options, min, max, step }
-}
-private struct SettingsFile: Decodable { let settings: [Setting] }
-
 private func info(_ key: String) -> Any? { Bundle.main.object(forInfoDictionaryKey: key) }
-private let defaults = UserDefaults.standard
 
-private final class LauncherModel: ObservableObject {
-    let settings: [Setting]
-    let fromFile: Set<String>   // set by an env file: shown, not changed
-    @Published var values: [String: String] = [:]
-
-    init(_ settings: [Setting]) {
-        self.settings = settings
-        fromFile = Set((ProcessInfo.processInfo.environment["DM_ENV_FILE_KEYS"] ?? "").split(separator: " ").map(String.init))
-        for s in settings {
-            if fromFile.contains(s.env), let v = ProcessInfo.processInfo.environment[s.env] { values[s.env] = v; continue }
-            let saved = defaults.string(forKey: "launcher." + s.env)
-            values[s.env] = saved.flatMap { v in s.options == nil || s.options!.contains { $0[0] == v } ? v : nil } ?? s.def   // a saved choice the game no longer offers: its default
-        }
-    }
-
+private extension LauncherModel {
     func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.values[s.env] = $0 }) }
-
-    // Before the game starts: every setting not set by an env file goes into the environment (DM_LANG replaces the packed language main.m set as a default)
-    func apply() {
-        for s in settings {
-            let v = values[s.env] ?? s.def
-            if fromFile.contains(s.env) { fputs("launcher: \(s.env) kept at \(v) (env file)\n", stderr); continue }
-            defaults.set(v, forKey: "launcher." + s.env)
-            setenv(s.env, v, 1); fputs("launcher: \(s.env)=\(v)\n", stderr)
-        }
-    }
 }
 
 private struct SettingRow: View {
     let s: Setting
     @ObservedObject var m: LauncherModel
+
+    private var locked: Bool { m.fromFile.contains(s.env) }
+    private var note: String {
+        locked ? (s.note.isEmpty ? "" : s.note + " · ") + "Set by an env file" : s.note
+    }
+    private var rangeValue: Binding<Double> {
+        Binding(get: { Double(m.values[s.env] ?? s.def) ?? s.max ?? 1 },
+                set: { m.values[s.env] = String(format: "%.2f", $0) })
+    }
+    private var percentage: String { "\(Int((rangeValue.wrappedValue * 100).rounded())) %" }
+
+    private var settingLabel: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(s.label)
+            if !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary) }
+        }
+    }
+
     var body: some View {
-        let locked = m.fromFile.contains(s.env)
-        Section {
+        Group {
             switch s.kind {
             case "choice":
-                Picker(s.label, selection: m.binding(s)) { ForEach(s.options ?? [], id: \.[0]) { Text($0[1]).tag($0[0]) } }
+                Picker(selection: m.binding(s)) {
+                    ForEach(s.options ?? [], id: \.[0]) { Text($0[1]).tag($0[0]) }
+                } label: {
+                    settingLabel
+                }
+                .pickerStyle(.menu)
             case "range":
-                let lo = s.min ?? 0, hi = s.max ?? 1
-                let v = Binding<Double>(get: { Double(m.values[s.env] ?? s.def) ?? hi }, set: { m.values[s.env] = String(format: "%.2f", $0) })
-                HStack {
-                    Text(s.label)
-                    Slider(value: v, in: lo...hi, step: s.step ?? 0.05)
-                    Text("\(Int((v.wrappedValue * 100).rounded())) %").monospacedDigit().foregroundStyle(.secondary).frame(width: 56, alignment: .trailing)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        settingLabel
+                        Spacer()
+                        Text(percentage).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
+                        .accessibilityLabel(s.label)
+                        .accessibilityValue(percentage)
                 }
             default:
-                Toggle(s.label, isOn: Binding(get: { (m.values[s.env] ?? s.def) == "1" }, set: { m.values[s.env] = $0 ? "1" : "0" }))
+                Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
+                    settingLabel
+                }
             }
-        } footer: {
-            let note = locked ? (s.note.isEmpty ? "" : s.note + " · ") + "Set by an env file" : s.note
-            if !note.isEmpty { Text(note) }
         }
         .disabled(locked)
     }
@@ -80,28 +70,46 @@ private struct LauncherView: View {
     @State private var memory = os_proc_available_memory()
 
     var body: some View {
-        HStack(spacing: 0) {
-            VStack(spacing: 16) {
-                if let icon = appIcon() {
-                    Image(uiImage: icon).resizable().frame(width: 96, height: 96).clipShape(RoundedRectangle(cornerRadius: 22))
+        GeometryReader { geometry in
+            HStack(spacing: 0) {
+                VStack(spacing: 16) {
+                    if let icon = appIcon() {
+                        Image(uiImage: icon).resizable().frame(width: 96, height: 96)
+                            .clipShape(RoundedRectangle(cornerRadius: 22))
+                            .accessibilityHidden(true)
+                    }
+                    Text((info("CFBundleDisplayName") as? String) ?? "Game")
+                        .font(.title.weight(.bold)).multilineTextAlignment(.center)
+                    Text("Version \((info("CFBundleShortVersionString") as? String) ?? "")")
+                        .font(.callout).foregroundStyle(.secondary)
+                    playButton
                 }
-                Text((info("CFBundleDisplayName") as? String) ?? "Game").font(.title.weight(.bold)).multilineTextAlignment(.center)
-                Text("Version \((info("CFBundleShortVersionString") as? String) ?? "")").font(.callout).foregroundStyle(.secondary)
-                playButton
-            }
-            .padding(24)
-            .frame(maxWidth: .infinity)
-            Form {
-                ForEach(m.settings) { SettingRow(s: $0, m: m) }
-                Section {
-                    HStack {
-                        Text("Memory available")
-                        Spacer()
-                        Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
+                .padding(16)
+                .frame(width: geometry.size.width / 3, height: geometry.size.height)
+                List {
+                    ForEach(m.sections, id: \.self) { section in
+                        Section(section) {
+                            ForEach(m.settings.filter { $0.sectionTitle == section }) { SettingRow(s: $0, m: m) }
+                        }
+                    }
+                    Section {
+                        Button("Reset to tested defaults") { m.reset() }
+                            .disabled(!m.changed)
+                    } footer: {
+                        Text("Brings back all settings this game was tested with.")
+                    }
+                    Section {
+                        HStack {
+                            Text("Memory available")
+                            Spacer()
+                            Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
+                        }
                     }
                 }
+                .listStyle(.insetGrouped)
+                .contentMargins(.horizontal, 12, for: .scrollContent)
+                .frame(width: geometry.size.width * 2 / 3)
             }
-            .frame(maxWidth: .infinity)
         }
         .preferredColorScheme(.dark)
         .task {

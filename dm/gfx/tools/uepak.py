@@ -25,6 +25,9 @@
 #   (i64, from the file start before version 5, from the entry after), the encrypted flag (u8) and the compression block size (u32). The FPakEntry is repeated in front of the data.
 #   The compression flags are no names: 1 zlib, 2 gzip, 4 custom; DRAGON QUEST XI S's engine uses 3, which is LZ5 2.0 (main exports LZ5_*; every block starts with its level, 0x2d = 45), and only the
 #   game's own decoder reads it (hle_oodle.c, through a decode function given to Pak.read).
+# Unreal Engine 4.27 with bShareMaterialShaderCode off (OCTOPATH TRAVELER II: Majesty/Content/Paks/Majesty-Switch.pak, version 11, 3.3 GB / 376,601 files, index not encrypted, Zlib blocks)
+#   has no shader code archive at all: each material keeps its shaders in its own cooked package (.uexp) and the engine's global shaders are in Engine/GlobalShaderCache-SF_GLSL_SWITCH.bin,
+#   every shader an LSLG record stored without compression, as in a legacy pak (inline_shaders; shader_split.py ue_legacy_jobs reads them). Zlib and LZ4 blocks are decoded here (Pak.read).
 # Shader code archive (version 2): shader map hashes (20 bytes each), shader hashes (20 each), shader map entries {u32 first index, u32 shader count, u32 first preload, u32 preload count}, shader
 #   entries {u64 offset, u32 size, u32 raw size, u8 frequency} (17 bytes, packed), preload entries (16 each), shader indices (u32): each array is a u32 count and its elements; the code follows,
 #   offsets relative to its start. A shader whose size differs from its raw size is compressed.
@@ -227,11 +230,13 @@ class Pak:
             for _ in range(nblk): s = r.take('<I'); blocks.append((cur, s)); cur += (s + 15) & ~15 if enc else s
         return dict(off=off, raw=raw, size=size, method=self.methods[meth - 1] if meth else '', encrypted=enc, block_size=bsz, blocks=blocks)
     def read(self, path, decode=None):
-        """A file's bytes. A compressed one needs decode(block bytes, raw length) → bytes, block by block (each block holds block_size raw bytes, the last one the rest):
-        the game's own decoder in the Mac host (shader_split.py oodle); Octopath Traveler 0's archives go through the Oodle job instead"""
+        """A file's bytes, block by block (each block holds block_size raw bytes, the last one the rest). Zlib and LZ4 blocks are decoded here (OCTOPATH TRAVELER II: Zlib); any other
+        method needs decode(block bytes, raw length) → bytes: the game's own decoder in the Mac host (shader_split.py oodle); Octopath Traveler 0's archives go through the Oodle job instead"""
         e = self.entry(path)
         if not e['method']: return self.read_at(e['off'] + 53, e['size'], e['encrypted'])
-        if not decode: raise ValueError(f'{path} is {e["method"]}-compressed in the pak')
+        if e['method'] == 'Zlib': import zlib; decode = lambda b, k: zlib.decompress(b)
+        elif e['method'] == 'LZ4': import lz4.block; decode = lambda b, k: lz4.block.decompress(b, uncompressed_size=k)
+        elif not decode: raise ValueError(f'{path} is {e["method"]}-compressed in the pak')
         out, left = [], e['raw']
         for s, n in e['blocks']:
             k = min(left, e['block_size']); out.append(decode(self.read_at(e['off'] + s, n, e['encrypted']), k)); left -= k
@@ -392,15 +397,28 @@ def paks(romfs):
     """Every pak under the RomFS"""
     return sorted(os.path.join(dp, f) for dp, _, fs in os.walk(romfs) for f in fs if f.endswith('.pak'))
 
-def unreal_paks(romfs, legacy=None):
-    """The paks under the RomFS that Unreal wrote (its magic in the footer; legacy None = any version, True = the legacy versions, False = the others): with version 11 the NSP script decodes
-    the shader code archives (decode_ue_shaders); legacy paks keep the shaders inline in the cooked packages, which shader_split.py reads through the game's decoder (ue_legacy_jobs)"""
+def inline_shaders(path):
+    """Whether a pak keeps its shaders inline in its cooked packages rather than in shader code archives: every legacy pak (DRAGON QUEST XI S), and a version 11 pak whose directory index
+    names cooked packages (.uexp) and no .ushaderbytecode (OCTOPATH TRAVELER II: bShareMaterialShaderCode off). FINAL FANTASY RESONANCE's pak holds configs only (its shaders are in its IoStore
+    container) and Octopath Traveler 0's index is encrypted (reading it takes main's key; it holds the archives): neither counts"""
+    with open(path, 'rb') as f:
+        enc, ioff, isz, _, ver = footer(f)
+        if ver in LEGACY: return True
+        if enc: return False
+        f.seek(ioff); r = R(f.read(isz)); r.fstr(); r.take('<iQ')
+        if r.take('<i'): r.take('<QQ'); r.raw(20)
+        if not r.take('<i'): return False
+        doff, dsz = r.take('<QQ'); f.seek(doff); d = f.read(dsz)
+    return b'.ushaderbytecode\0' not in d and b'.uexp\0' in d
+
+def unreal_paks(romfs, inline=None):
+    """The paks under the RomFS that Unreal wrote (its magic in the footer; inline None = any, True = those whose shaders are inline in the cooked packages, False = the others, inline_shaders):
+    the NSP script decodes the shader code archives of the others (decode_ue_shaders); shader_split.py reads the inline ones file by file (ue_legacy_jobs)"""
     out = []
     for p in paks(romfs):
-        try:
-            with open(p, 'rb') as f: ver = pak_version(f)
+        try: inl = inline_shaders(p)
         except (OSError, ValueError, struct.error): continue   # shorter than a footer, or no Unreal pak
-        if legacy is None or (ver in LEGACY) == legacy: out.append(p)
+        if inline is None or inl == inline: out.append(p)
     return out
 
 def job(romfs, main_nso, work, decode=None):
@@ -418,7 +436,7 @@ def job(romfs, main_nso, work, decode=None):
             name = io_library_name(t, i, names) + '.ushaderbytecode'; b = io_archive(t, i, decode)
             open(os.path.join(work, 'archives', name), 'wb').write(b)
             listing.append(dict(name=name, pak=os.path.relpath(tp, romfs), path=f'chunk {t.ids[i].hex()}', shaders=len(archive(b)['shaders']), compressed=0, compression='IoStore, decoded'))
-    for pak in unreal_paks(romfs, legacy=False):
+    for pak in unreal_paks(romfs, inline=False):
         with open(pak, 'rb') as f: enc = footer(f)[0]
         if enc and key is None:
             key = find_key(img, lo, hi, pak)

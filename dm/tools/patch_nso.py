@@ -8,8 +8,8 @@
 #   sub sp, sp, xN      → xN rounded up to 16 first (Apple's kernel faults on a misaligned sp, Horizon does not; site_sp_align)
 #   spin wait loops     → a copy whose back-edges pass a spin gate (the host yields there; a busy poll costs nothing on the Switch, see "Spin waits")
 #   Registered cuts (CUTS of the patch files, restricted by NSO build ID, see "Registered patches"): before rewriting, the original bytes are asserted one by one and any mismatch aborts; results are listed in <name>.cuts.tsv
-#   Registered observation gates (OBS of the patch files, restricted by build ID): one instruction at the entry is replaced with "enter the host callback → execute the original instruction → jump back".
-#   Ordinary observers are read-only; a separate opt-in result filter may change x0 for the exact instruction's downstream consumer. Sites are listed in <name>.obs.tsv
+#   Function-matched cuts (MATCH_CUTS of the selected game's patches.py): unknown builds only, unique complete-function and direct-callee fingerprints, then original-byte assertions
+#   Registered observation gates (OBS of the patch files, restricted by build ID): one instruction at the entry is replaced with "enter the host observation callback → execute the original instruction → jump back", so diagnostics modify zero code at runtime; listed in <name>.obs.tsv
 # The key page only stores "actual key number × 8" at the end of the data segment, and patch code fetches thread slots indirectly through the key page: the loader may use any key number.
 # Output: <name>.patched.bin (key page and patch area appended after the image at PATCH_OFF; when that would start beyond 112 MB the patch area sits before the base, see FAR), <name>.fixups.tsv (layout and key page index header), <name>.gates.tsv, <name>.sites.tsv, <name>.cuts.tsv, <name>.obs.tsv
 import struct, re, sys, os, glob, types, importlib.util
@@ -63,18 +63,33 @@ else:
 # ---- Registered patches of particular builds, keyed by NSO build ID: dm/tools/sdk_patches.py (Nintendo SDK module builds, which several games can ship) and dm/games/<id>/patches.py
 # (a game's own modules: its profile's builds). Every file is loaded, whatever the game, so a module gets the patches of its build wherever it comes from; a build ID claimed twice stops the rewrite.
 # A file may define:
-#   CUTS = {build ID: [(offset, original bytes, new bytes, reason)]}: before rewriting, the original bytes are asserted one by one (listed in <name>.cuts.tsv)
-#   OBS = {build ID: [(offset, number, original instruction word, reason)]}: position-independent observation gates (listed in <name>.obs.tsv)
-#       ordinary callbacks inspect registers; gate_obs_result_set explicitly filters x0 after the saved-register callback returns
-#   OBS_SAFE = {build ID: {offset, ...}}: exceptional interior observation sites whose register liveness is established by that build's validation
-#   FRAME_STEP = {build ID: function(ctx)}: frame step stubs of a main
+#   CUTS = {build ID: [(offset, original bytes, new bytes, reason)]}: before rewriting, the original bytes are asserted one by one and any mismatch aborts (listed in <name>.cuts.tsv)
+#   OBS = {build ID: [(offset, number, original instruction word, reason)]}: observation gates. Numbers match OBS_* in the host's hle.h; the original instruction must be position
+#     independent (no PC-relative / branch / anything involving x18 or tpidr), asserted offline; when the host has no callback attached the gate block goes in and out once and returns
+#   OBS_SAFE = {build ID: {offset, ...}}: exceptional interior observer sites whose register liveness is established by that build's validator
+#   FRAME_STEP = {build ID: function(ctx)}: the frame step stubs of a main ("Frame step in whole vsyncs" below)
 #   VALIDATE = {build ID: function(ctx)}: build-specific invariants checked against the unmodified image before any patches are applied
+#   MATCH_CUTS = {module name: [nso_match rule, ...]}: fallback for modules without registered CUTS. Only the profile selected by DM_GAME participates; a derived profile uses
+#     the repository's rules, an external-only provisional profile its own. Missing or ambiguous matches are reported and skipped; known builds retain their exact CUTS.
 PATCH_FILES = [os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sdk_patches.py')] + sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../games/*/patches.py')))
+# Profiles outside the repository (DM_GAMES_DIR, folders separated by os.pathsep, which is ':' as in dm/games/game.py: the NSP script's provisional profile of a game being brought up) may have a
+# patches.py of their own builds too; they are loaded after the repository's, under the same rule (a build ID claimed twice stops the rewrite)
+PATCH_FILES += [p for d in os.environ.get('DM_GAMES_DIR', '').split(os.pathsep) if d for p in sorted(glob.glob(os.path.join(glob.escape(d), '*', 'patches.py')))]
+patch_paths = {}
+for path in PATCH_FILES: patch_paths.setdefault(os.path.realpath(path), path)   # repeated roots and symlinks name the same file, not competing build claims
+PATCH_FILES = list(patch_paths.values())
 def load_patches():
-    tables, where = {'CUTS': {}, 'OBS': {}, 'OBS_SAFE': {}, 'FRAME_STEP': {}, 'VALIDATE': {}}, {}
+    tables, where = {'CUTS': {}, 'OBS': {}, 'OBS_SAFE': {}, 'FRAME_STEP': {}, 'VALIDATE': {}, 'MATCH_CUTS': {}}, {}
     for n, path in enumerate(PATCH_FILES):
         spec = importlib.util.spec_from_file_location(f'patches_{n}', path); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
         for kind, table in tables.items():
+            if kind == 'MATCH_CUTS':
+                profile = os.path.basename(os.path.dirname(path))
+                roots = [os.path.join(os.path.dirname(os.path.abspath(__file__)), '../games')] + [d for d in os.environ.get('DM_GAMES_DIR', '').split(os.pathsep) if d]
+                profile_dir = next((os.path.join(root, profile) for root in roots if os.path.isdir(os.path.join(root, profile))), None)
+                if profile_dir and os.path.realpath(os.path.dirname(path)) != os.path.realpath(profile_dir): continue
+                if getattr(m, kind, {}): table[profile] = m.MATCH_CUTS   # repository rules win for derived profiles; otherwise use the first external root
+                continue
             for bid, v in getattr(m, kind, {}).items():
                 assert bid not in table, f'{kind} of build {bid} in both {where[kind, bid]} and {path}'
                 table[bid], where[kind, bid] = v, path
@@ -87,6 +102,10 @@ validate = PATCHES['VALIDATE'].get(BUILD_ID)
 if validate:
     validate(types.SimpleNamespace(image=IMG, build_id=BUILD_ID, module=NAME))
 cuts = list(PATCHES['CUTS'].get(BUILD_ID, []))
+if BUILD_ID not in PATCHES['CUTS']:
+    from nso_match import resolve
+    profile = os.path.basename(os.environ.get('DM_GAME', '').rstrip('/'))
+    cuts += resolve(IMG, TEXT_END, PATCHES['MATCH_CUTS'].get(profile, {}).get(NAME, []))
 for off, ob, nb, why in cuts:
     ob, nb = bytes.fromhex(ob), bytes.fromhex(nb)
     assert len(ob) == len(nb) and IMG[off:off + len(ob)] == ob, f'cut original bytes mismatch {off:#x}: {bytes(IMG[off:off + len(ob)]).hex()}'
@@ -339,6 +358,12 @@ def find_windows(insl):
         if any(has18(x) for x in seg): out.append(seg)
     return out
 
+def window_adrp(x, S, pc):
+    """An adrp inside a window, copied to pc: the same page from the copy's address (x18 as its stand-in S). Pikmin 4 1.1.1 main+0x43da140 (Unreal Engine 4.26.2): ldaxr x9,[x9]; cmp; b.ne;
+    adrp x10 + add x10 (the same address again for the store); mov x18,x26; stlxr w9,x8,[x10]; …; cbnz w9"""
+    rd = num(x.reg_name(x.operands[0].reg))
+    return ADRP(S if rd == 18 else rd, pc, x.operands[1].imm)
+
 def site_window(seg):
     used = set()
     for x in seg: used |= regs_in(x)
@@ -364,6 +389,7 @@ def site_window(seg):
             if m in ('tbz', 'tbnz'): w = (w & 0xFFF8001F) | ((off & 0x3FFF) << 5)
             else: w = (w & 0xFF00001F) | ((off & 0x7FFFF) << 5)
             dd = dis(w, pc); assert dd.operands[-1].imm == newt and dd.mnemonic == m
+        elif m == 'adrp': w = window_adrp(x, S, copy0 + 4 * k)
         else:
             assert m not in ('adr', 'adrp', 'b', 'bl', 'br', 'blr', 'ret') and not (m == 'ldr' and '[' not in x.op_str), hex(x.address)
         words.append(w)
@@ -415,6 +441,7 @@ def site_retry_window(parts):
                 if m in ('tbz', 'tbnz'): w = (w & 0xFFF8001F) | ((off & 0x3FFF) << 5)
                 else: w = (w & 0xFF00001F) | ((off & 0x7FFFF) << 5)
                 dd = dis(w, pc); assert dd.operands[-1].imm == newt and dd.mnemonic == m
+            elif m == 'adrp': w = window_adrp(x, S, pc)
             else:
                 assert m not in ('adr', 'adrp', 'b', 'bl', 'br', 'blr', 'ret') and not (m == 'ldr' and '[' not in x.op_str), hex(x.address)
             emit(w)
@@ -660,7 +687,65 @@ def table_cands(insl, rb):
         m = re.fullmatch(rf'{rb}, {rb}, #(0x[0-9a-f]+|\d+)', q.op_str) if q is not None and q.mnemonic == 'add' else None
         if m: cands.add(p.operands[1].imm + int(m.group(1), 0))
     return sorted(cands)
-def tail_call(insl, j):
+def jump_masked_pred(insl, j):
+    """The offset-table form whose bounds check is on a masked copy of the index made in the block itself, while the index register was masked in the one block that branches here
+    (FINAL FANTASY CRYSTAL CHRONICLES Remastered Edition 1.0.0 main+0x2d103cc: and x6,x17,#0x7ff; ubfx w18,w17,#0xb,#2; cbz w18,#0x2d103b8 at main+0x2d1024c, then at main+0x2d103b8
+    and w18,w17,#0x7ff; cmp w18,#3; b.hi; ldrsw x18,[x27,x6,lsl #2]; add x18,x18,x27; br x18, with x27 from adrp + add 1,500 instructions back). Its neighbour main+0x2d10590
+    (predecessor main+0x2d102d4: and x6,x17,#0x7ff; ...; cbz w18,#0x2d10548) builds the base and moves registers inside the block: and w18,w17,#0x7ff; cmp w18,#3; b.hi; adrp x24 +
+    add x24,x24,#0x88c; mov x22,x30; ldrsw x18,[x24,x6,lsl #2]; add x18,x18,x24; then 10 register moves before br x18. The two ands give the same value (a mask below 2^32 makes the
+    64-bit and equal to the zero-extended 32-bit one), so the check bounds the index. Accepted only when the block, at most 32 instructions, is and wC,wS,#M; cmp wC,#N; b.hi, then
+    straight-line code (no branch, call or return) holding the ldrsw and the add, with the index unchanged from the b.hi to the load, the base unchanged and x18 untouched from the load
+    to the add and x18 untouched from the add to the br; the block is entered by branches alone (the instruction before it is b / br / ret, and no branch lands inside it after its and, nor any jump table already resolved in the function anywhere in it),
+    and every branch to it follows, within its own straight-line run, "and xI, xS, #M" with the check's source and mask and neither register written in between. The table base is found
+    as jump_offsets' far_base finds it, and every target must be an instruction of the function. Tried only after every other form has failed, so sites that rewrote before come out
+    the same. Returns all targets, or None if not recognized"""
+    def is_branch(p): return p.mnemonic in ('b', 'cbz', 'cbnz', 'tbz', 'tbnz') or p.mnemonic.startswith('b.')
+    def is_cf(p): return is_branch(p) or p.mnemonic in ('br', 'blr', 'bl', 'ret')
+    def writes(p):   # capstone lists a compare's first operand as written; it only sets the flags
+        return set() if p.mnemonic in ('cmp', 'cmn', 'tst') else {num({'lr': 'x30', 'fp': 'x29'}.get(p.reg_name(r), p.reg_name(r))) for r in p.regs_access()[1]}
+    kh = next((q for q in range(j - 1, max(0, j - 32) - 1, -1) if is_cf(insl[q])), None)   # the block's b.hi: the nearest control flow before the br
+    if kh is None or kh < 3 or insl[kh].mnemonic != 'b.hi': return None
+    k, a_, c_ = kh - 2, insl[kh - 2], insl[kh - 1]
+    ma = re.fullmatch(r'(w\d+), (w\d+), #(0x[0-9a-f]+|\d+)', a_.op_str) if a_.mnemonic == 'and' else None
+    mc = re.fullmatch(r'(w\d+), #(0x[0-9a-f]+|\d+)', c_.op_str) if c_.mnemonic == 'cmp' else None
+    if not (ma and mc and ma.group(1) == mc.group(1)): return None
+    if any(insl[q + 1].address != insl[q].address + 4 for q in range(k - 1, j)): return None   # an undecodable word may hide a write or a branch
+    kl = next((q for q in range(kh + 1, j) if insl[q].mnemonic == 'ldrsw' and insl[q].op_str.startswith('x18, ')), None)
+    ml = re.fullmatch(r'x18, \[(x\d+), x(\d+), lsl #2\]', insl[kl].op_str) if kl is not None else None
+    if not ml: return None
+    rb, ix = ml.group(1), int(ml.group(2))
+    src, mask, n = num(ma.group(2)), int(ma.group(3), 0), int(mc.group(2), 0) + 1
+    if ix in (src, num(ma.group(1)), 18) or num(rb) in (ix, 18) or mask >> 32: return None
+    if any(ix in writes(p) for p in insl[kh + 1:kl]): return None   # the index changes between the check and the load
+    ka = next((q for q in range(kl + 1, j) if 18 in writes(insl[q])), None)   # the first write of x18 after the load must be the add
+    if ka is None or insl[ka].mnemonic != 'add' or insl[ka].op_str != f'x18, x18, {rb}': return None
+    if any(num(rb) in writes(p) for p in insl[kl + 1:ka]) or any(18 in writes(p) for p in insl[ka + 1:j]): return None
+    if insl[k - 1].mnemonic not in ('b', 'br', 'ret'): return None   # no fall-through into the block
+    brs = [q for q, p in enumerate(insl) if (is_branch(p) or p.mnemonic == 'bl') and p.operands[-1].type == ARM64_OP_IMM]
+    into = {insl[q].operands[-1].imm for q in brs}
+    if any(p.address in into for p in insl[k + 1:j + 1]): return None   # a branch into the block past its and
+    tabs = {t for tgt in tabjumps.values() for t in tgt}   # a jump table already resolved in this function may land anywhere in the block, with any index value
+    def table_target(a): return a in tabs or any(b <= a < b + 4 * w for b, w in jumps.values())
+    if any(table_target(p.address) for p in insl[k:j + 1]): return None
+    preds = [q for q in brs if insl[q].operands[-1].imm == a_.address]
+    if not preds or any(insl[q].mnemonic == 'bl' for q in preds): return None
+    for q in preds:   # each predecessor must have masked the index the same way, in its own straight-line run
+        for i in range(q - 1, max(0, q - 16) - 1, -1):
+            p = insl[i]
+            m = re.fullmatch(r'([xw]\d+), ([xw]\d+), #(0x[0-9a-f]+|\d+)', p.op_str) if p.mnemonic == 'and' else None
+            if m and num(m.group(1)) == ix:
+                if num(m.group(2)) != src or int(m.group(3), 0) != mask: return None
+                if any(x.address in into or table_target(x.address) for x in insl[i + 1:q + 1]): return None   # a direct branch, call or table must not bypass the mask
+                if any(insl[z + 1].address != insl[z].address + 4 for z in range(i, q)): return None
+                break
+            if is_cf(p) or writes(p) & {ix, src}: return None
+        else: return None
+    tb = copied_base(insl, kl, rb)   # follows adrp + add too, rejecting wN clobbers of xN and calls through volatile bases
+    if tb is None or tb < 0 or tb + 4 * n > len(IMG): return None
+    t = [tb + struct.unpack_from('<i', IMG, tb + 4 * i)[0] for i in range(n)]
+    addresses = {p.address for p in insl}
+    return t if all(x in addresses for x in t) else None
+def tail_call_at_end(insl, j):
     """The br x18 is an indirect tail call, not a jump table: the last write of x18 before it is a plain pointer load and the br ends the function. Ace Attorney Investigations Collection
     (Unity 2022.3 IL2CPP) main+0x1d271bc: ldr x18,[x0,#0x18]; ...; ldr x16,[sp]; ...; br x18, a thunk that moves stack arguments and jumps to the method pointer at +0x18"""
     if j + 1 != len(insl): return False
@@ -668,6 +753,42 @@ def tail_call(insl, j):
         if 'x18' not in [p.reg_name(r) for r in p.regs_access()[1]]: continue
         return p.mnemonic == 'ldr' and bool(re.fullmatch(r'x18, \[(x\d+|sp)(, #(0x[0-9a-f]+|\d+))?\]', p.op_str))
     return False
+def tail_call(insl, j):
+    """Keep the existing terminal-tail rule; extend only the framed thunk with
+    a separate error call after its tail jump (Warm Snow, Unity IL2CPP).
+    The whole thunk must decode contiguously, restore its frame, and contain
+    only one forward null guard, this tail jump, and the trailing error call.
+    This deliberately does not generalize arbitrary mid-function br x18."""
+    if j + 1 == len(insl): return tail_call_at_end(insl, j)
+    if j < 4 or any(b.address != a.address + 4 for a, b in zip(insl, insl[1:])): return False
+    suffix = insl[j + 1:]
+    if suffix[0].mnemonic != 'bl' or any(p.mnemonic != 'udf' for p in suffix[1:]): return False
+    if insl[0].address <= suffix[0].operands[-1].imm <= insl[-1].address: return False
+    if insl[0].mnemonic != 'stp' or insl[0].op_str != 'x29, x30, [sp, #-0x10]!': return False
+    if insl[1].mnemonic != 'mov' or insl[1].op_str != 'x29, sp': return False
+    if insl[j - 1].mnemonic != 'ldp' or insl[j - 1].op_str != 'x29, x30, [sp], #0x10': return False
+    guard = insl[2]
+    if guard.mnemonic != 'cbz' or guard.operands[-1].imm != suffix[0].address: return False
+    load = None
+    for k in range(3, j - 1):
+        p = insl[k]
+        # Argument moves and memory transfers only. No hidden control flow,
+        # stack-pointer writes, or unmodelled instructions inside the new thunk form.
+        if p.mnemonic not in ('mov', 'ldr', 'ldur', 'ldp', 'str', 'stur', 'stp'): return False
+        writes = {p.reg_name(r) for r in p.regs_access()[1]}
+        if writes & {'sp', 'wsp', 'fp', 'lr', 'x29', 'w29', 'x30', 'w30'}: return False
+        if p.mnemonic in ('str', 'stur', 'stp'):
+            # regs_access does not report memory writes. Only fixed caller stack
+            # argument slots are proven clear of the saved FP/LR at sp + [0, 16).
+            # Other bases may alias that frame, and a register offset is unproven.
+            if p.writeback: return False
+            mem = p.operands[-1].mem
+            if p.reg_name(mem.base) not in ('sp', 'fp', 'x29') or mem.index or mem.disp < 16: return False
+        if writes & {'x18', 'w18'}:
+            if load is not None or p.mnemonic != 'ldr' or not re.fullmatch(r'x18, \[(x\d+|sp)(, #(0x[0-9a-f]+|\d+))?\]', p.op_str): return False
+            load = p
+    return load is not None
+
 def jump_bytes_far(insl, j):
     """The byte / halfword table form with its add further back (Octopath Traveler 0 main+0x37f9bc8: adr x18,#L; ldrb w0,[x17,x15]; add x18,x18,x0,lsl #2, then 17 register moves before br x18).
     Up to 32 instructions back, and x18 must not change between the add and the br. Tried only where the 16-instruction search and the offset forms find nothing. Returns (base, width) or None"""
@@ -790,6 +911,7 @@ for fa, fb in funcs:
                 if not tgt and tail_call(insl, j): tailcalls.add(ins.address); continue
                 if not tgt and (far := jump_bytes_far(insl, j)): jumps[ins.address] = far; continue
                 if not tgt: tgt = jump_offsets(insl, j, copy_first=True, far_base=True)   # the index copied before the check (check_before_copy) or the base set far back, only where every other form failed
+                if not tgt: tgt = jump_masked_pred(insl, j)   # the check on a masked copy made in the block, the index masked in the block that branches to it
                 assert tgt, f'jump table {ins.address:x}'
                 tabjumps[ins.address] = tgt; continue
             jumps[ins.address] = (base, width)
@@ -849,12 +971,13 @@ for a in sorted(kinds):
 
 def scratch_dead(off):
     """x9–x17 carry nothing at off: from off on, every one of them is written before it is read, up to a bl (a call clobbers them all; DRAGON QUEST VII Reimagined's gate sits on the
-    mov x0, x19 before one). Only straight-line code is followed: a branch, a blr or a ret before the bl answers no"""
+    mov x0, x19 before one) or a ret (none of them carries a result under AAPCS64; Pikmin 4's gate sits on the ldp x29, x30 of an epilogue). Only straight-line code is followed: a branch
+    or a blr before the bl or ret answers no"""
     written = set()
     for a in range(off, min(off + 4 * 16, TEXT_END), 4):
         ins = dis(struct.unpack_from('<I', IMG, a)[0], a)
-        if ins.mnemonic == 'bl': return True
-        if ins.mnemonic in ('b', 'br', 'blr', 'ret', 'cbz', 'cbnz', 'tbz', 'tbnz') or ins.mnemonic.startswith('b.'): return False
+        if ins.mnemonic in ('bl', 'ret'): return True
+        if ins.mnemonic in ('b', 'br', 'blr', 'cbz', 'cbnz', 'tbz', 'tbnz') or ins.mnemonic.startswith('b.'): return False
         rd, wr = regset(ins)
         if any(9 <= (num(r) or -1) <= 17 and num(r) not in written for r in rd): return False
         written |= {num(r) for r in wr}
@@ -864,24 +987,23 @@ obs = list(PATCHES['OBS'].get(BUILD_ID, []))
 for off, oid, ow, why in obs:
     w = struct.unpack_from('<I', IMG, off)[0]
     assert f'{w:08x}' == ow, f'observation gate original instruction mismatch {off:#x}: {w:08x}'
-    # Function entries or the instruction after a bl / blr: the gate stub may modify x9–x17, which carry no live values there under AAPCS64.
-    # Elsewhere, accept only sites where none of these registers are read before the next call (scratch_dead).
-    prev = struct.unpack_from('<I', IMG, off - 4)[0] if off >= 4 else 0
-    after_call = prev >> 26 == 0x25 or prev & 0xfffffc1f == 0xd63f0000
+    # Function entries, or the instruction right after a bl, only: dm_gate writes back only x0–x8 / x30, and host C code may modify x9–x17; at entry these carry no values under AAPCS64 (arguments are only in x0–x7 / x8),
+    # and right after a call returns the callee was free to clobber them anyway (x16 / x17 are the veneer registers). Elsewhere, where the code ahead reads none of them before its next bl
+    after_bl = off >= 4 and struct.unpack_from('<I', IMG, off - 4)[0] >> 26 == 0x25
     explicit_safe = off in PATCHES['OBS_SAFE'].get(BUILD_ID, set())
     assert not explicit_safe or validate is not None, f'OBS_SAFE site {off:#x} has no matching build validator'
-    assert off in set(starts) or after_call or scratch_dead(off) or explicit_safe, f'observation gate neither at a function entry, after a bl / blr nor before a call with x9–x17 unread {off:#x}'
+    assert off in set(starts) or after_bl or scratch_dead(off) or explicit_safe, f'observation gate neither at a function entry, after a bl / blr nor before a call with x9–x17 unread {off:#x}'
     assert off < TEXT_END and off not in kinds and not any(lo <= off < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'observation gate conflicts with a rewrite site {off:#x}'
     put_branch(off, site_obs(off, oid, w)); stat('obs')
 
-# ---- Frame step in whole vsyncs (the mains whose patch file has FRAME_STEP: The Legend of Zelda: Tears of the Kingdom 1.4.3, Breath of the Wild 1.9.0, Hyrule Warriors: Age of Calamity 1.3.0
-# and Paper Mario: The Thousand-Year Door 1.0.1; host only) ----
+# ---- Frame step in whole vsyncs (the mains whose patch file has FRAME_STEP: The Legend of Zelda: Tears of the Kingdom 1.4.3, Breath of the Wild 1.9.0, Hyrule Warriors: Age of Calamity 1.3.0,
+# Paper Mario: The Thousand-Year Door 1.0.1 and ASTRAL CHAIN 1.0.1; host only) ----
 # The games step their game time by a whole number of vsyncs (1/60 s) per frame that their own interval logic picks. With the stubs the host picks it (hle_nvn.c fstep_tick,
 # nvn_fstep.h): the step is the number of vsyncs the host keeps the frame on screen (1 = 60 fps, 2 = 30 when 60 does not hold), plus one while the game is behind real time after
 # a late frame, so motion is even and game time = real time. The steps stay values the games' own logic uses (1 to 3). Age of Calamity's updates are not held by the presents:
 # its stubs run them at the cap, and the host only paces its presents (its patches.py).
 # State page = the page after the key page (zero in the file, read-write in both loaders): +0 float target fps written by the loader (fps_target, DM_FPS_TARGET; 0 = every stub
-# runs the original instructions), +4 TOTK movie flag, +8 double lead (TOTK), +0x10 float render scale (TOTK, BotW), +0x18 double game seconds (TOTK),
+# runs the original instructions), +4 30 fps movie/cinematic flag, +8 double lead (TOTK), +0x10 float render scale (TOTK, BotW), +0x18 double game seconds (TOTK),
 # +0x20 u32 step in vsyncs (host; 0 = not decided yet), +0x24 u32 a step the game fixes itself (BotW's VFR override; 0 = none), +0x28 u32 AoC's vsyncs per update, marked by
 # its first stub (0 = off), +0x30 u64 vsyncs stepped (the stubs; logged by the host to check the game's speed). Stub bodies assembled with clang
 # A build's stubs are FRAME_STEP[build ID](ctx) in its patches.py: ctx.here() / ctx.emit(word) assemble into the patch area, ctx.site(offset, original bytes) asserts a site and that it is
@@ -891,7 +1013,11 @@ FS_STATE_OFF = 0
 RENDER_SCALE = 0   # 1 = the build has a render-scale stub (state +0x10): the fixups table says so (RENDER_SCALE), and the iOS launcher offers the setting (dm/games/settings.tsv)
 if BUILD_ID in FRAME_STEP and NAME == 'main':
     FS_STATE_OFF = KEY_PAGE_OFF + 0x4000
-    assert not FAR and FS_STATE_OFF % 0x1000 == 0 and FS_STATE_OFF + 0x40 <= PATCH_OFF and not any(IMG[FS_STATE_OFF:]), 'frame step state page'
+    if FAR:
+        # The loader supplies zero-filled BSS/key pages for a front patch area.
+        # Reserve the frame state after the key page there too; stubs reach it by ADRP.
+        IMAGE_SIZE = FS_STATE_OFF + 0x4000
+    assert FS_STATE_OFF % 0x1000 == 0 and (FAR or FS_STATE_OFF + 0x40 <= PATCH_OFF) and not any(IMG[FS_STATE_OFF:]), 'frame step state page'
     def fs_site(off, orig):
         ob = bytes.fromhex(orig)
         assert IMG[off:off + len(ob)] == ob, f'frame step original bytes mismatch {off:#x}: {bytes(IMG[off:off + len(ob)]).hex()}'
@@ -912,11 +1038,21 @@ if FS_STATE_OFF:   # the build's stubs (FRAME_STEP of its patches.py)
 # A loop counts as a spin wait only when it provably cannot leave by itself. From its head T, every pass along the region R (the paths from T back to T, within SPIN_WIN bytes
 # after T) runs only loads, register and flag arithmetic, direct branches and barriers: no store, call, SVC, system register or event wait; and no register or flag that is
 # live at T is written in R (no counter, cursor or delay). One exception: an exclusive add of a constant (ld(a)xr; add/sub #k; st(l)xr; cbnz) that every path back to T
-# undoes on the same address (a worker that registers with a job, sees it finished and backs out). Such a pass leaves memory and registers as it found them, so only another
-# thread can end the loop, and a pause there changes only timing. R is copied into the patch area; the original back-edges jump to the copy (no pause on the first pass, so a
+# undoes on the same address (a worker that registers with a job, sees it finished and backs out). Three more let a poll that takes a spin lock to look at the state it waits
+# for count too (spin_lock, spin_store): a lock taken (an exclusive test-and-set retried until its store succeeds) and released (an exclusive compare-and-clear, or a store-release
+# of zero) on the same address on every path back to T; a test loop on a word (load, compare with a constant, branch back to the load) inside R; and stores whose value and
+# address registers R never writes, at most SPIN_STORES of them and only beside a load (see below). Every loop the search took without these still counts as before, the
+# same region over the same back-edges or a wider one over more. Breath of the Wild's job queue (main+0xef62dc) is such a poll: the first item of some jobs is for the
+# thread of core 0, and the others wait until it is taken, taking and releasing the queue's lock on every pass; polled at full speed by two workers, the lock went back and
+# forth between their cores, and the main thread, whose item it was, lost nearly every exclusive store to them (CPU frames of 30-200 ms with three cores spinning there).
+# Such a pass leaves memory and registers as it found them (a pass with stores, from its last state change on), so only another thread can end the loop, and a pause
+# there changes only timing. R is copied into the patch area; the original back-edges jump to the copy (no pause on the first pass, so a
 # single retry costs nothing), the copy's back-edges go through a spin gate, which the host takes as a yield with the yield back-off (hle_thread.c dm_spin_wait), and exits
 # from the copy go back to the original code. The gate keeps every register and the flags (entry.S)
-SPIN_PATHS, SPIN_STEPS = 256, 4096   # complete paths back to T; search steps (R itself lies within SPIN_WIN bytes)
+SPIN_PATHS, SPIN_STEPS, SPIN_STORES = 256, 4096, 4   # complete paths back to T; search steps (R itself lies within SPIN_WIN bytes)
+# Stores in a region: each writes a fixed value to a fixed address, so the words they write can hold only their first values or the stored ones, and the registers at T are the
+# same on every pass: with at most SPIN_STORES of them a loop can change its own state only a few hundred passes at most (each a cycle of a few instructions), then its passes
+# repeat, and only another thread ends it. The gate polls on for its first 2 ms, so a loop that ends by itself never sleeps there
 SPIN_LSE = ('ldadd', 'ldclr', 'ldeor', 'ldset', 'ldsmax', 'ldsmin', 'ldumax', 'ldumin')
 SPIN_BAD = {'bl', 'blr', 'br', 'ret', 'eret', 'svc', 'hvc', 'smc', 'brk', 'hlt', 'udf', 'mrs', 'msr', 'sys', 'sysl', 'wfe', 'wfi', 'sev', 'sevl', 'clrex', 'dc', 'ic', 'at',
             'tlbi', 'drps', 'dcps1', 'dcps2', 'dcps3', 'blraa', 'blrab', 'blraaz', 'blrabz', 'braa', 'brab', 'braaz', 'brabz', 'retaa', 'retab', 'eretaa', 'eretab'}
@@ -968,6 +1104,42 @@ def spin_rmw(a):
     if r(l[1], 1) != r(l[0], 0) or r(l[2], 1) != r(l[1], 0) or r(l[3], 0) != r(l[2], 0) or l[3].operands[1].imm != a: return None
     k = l[1].operands[2].imm * (1 if l[1].mnemonic == 'add' else -1)
     return spin_norm(l[0].reg_name(base.base)), k, {spin_norm(r(l[0], 0)), spin_norm(r(l[1], 0)), spin_norm(r(l[2], 0))} - {None}, l
+def spin_lock(a):
+    """An exclusive spin lock sequence or a test loop entered at a → (kind, xN, its instructions, how many of them come before a, how many from a on, registers read, registers written)
+    'acq'  ld(a)xr wA,[xN]; cbz wA,+16; clrex; b <the load>; st(l)xr wS,wK,[xN]; cbnz wS,<the load>    test-and-set, retried until the store succeeds (wK not zero)
+    'rel'  clrex; ld(a)xr wA,[xN]; cmp wA,#k; b.ne <the clrex>; st(l)xr wS,wzr,[xN]; cbnz wS,<the load>  compare-and-clear, entered at the load; or stlr wzr,[xN]
+    'tst'  ldr|ldrb|ldrh wA,[xN{,#imm}]; cmp wA,#k; b.eq|b.ne <the load>                                 a test loop that only another thread ends"""
+    l = [spin_ins(a + 4 * i) for i in range(6)]
+    if l[0] is None: return None
+    r = lambda x, i: x.reg_name(x.operands[i].reg)
+    plain = lambda x, i: x.operands[i].type == ARM64_OP_MEM and not x.operands[i].mem.index and not x.operands[i].mem.disp
+    m0 = l[0].mnemonic
+    if m0 in ('ldxr', 'ldaxr') and None not in l and r(l[0], 0).startswith('w') and plain(l[0], 1):
+        base = l[0].operands[1].mem.base; bn = spin_norm(l[0].reg_name(base))
+        if (l[1].mnemonic == 'cbz' and r(l[1], 0) == r(l[0], 0) and l[1].operands[1].imm == a + 16 and l[2].mnemonic == 'clrex' and l[3].mnemonic == 'b' and l[3].operands[0].imm == a
+                and l[4].mnemonic in ('stxr', 'stlxr') and plain(l[4], 2) and l[4].operands[2].mem.base == base and r(l[4], 1) not in ('wzr', 'xzr')
+                and l[5].mnemonic == 'cbnz' and r(l[5], 0) == r(l[4], 0) and l[5].operands[1].imm == a):
+            return ('acq', bn, l, 0, 6, {bn, spin_norm(r(l[4], 1))}, {spin_norm(r(l[0], 0)), spin_norm(r(l[4], 0))})
+        p = spin_ins(a - 4)
+        if (p is not None and p.mnemonic == 'clrex' and l[1].mnemonic == 'cmp' and r(l[1], 0) == r(l[0], 0) and l[1].operands[1].type == ARM64_OP_IMM
+                and l[2].mnemonic == 'b.ne' and l[2].operands[0].imm == a - 4 and l[3].mnemonic in ('stxr', 'stlxr') and r(l[3], 1) == 'wzr'
+                and plain(l[3], 2) and l[3].operands[2].mem.base == base and l[4].mnemonic == 'cbnz' and r(l[4], 0) == r(l[3], 0) and l[4].operands[1].imm == a):
+            return ('rel', bn, [p] + l[:5], 1, 5, {bn}, {spin_norm(r(l[0], 0)), spin_norm(r(l[3], 0)), 'nzcv'})
+    if m0 == 'stlr' and len(l[0].operands) == 2 and r(l[0], 0) in ('wzr', 'xzr') and plain(l[0], 1):
+        bn = spin_norm(l[0].reg_name(l[0].operands[1].mem.base)); return ('rel', bn, l[:1], 0, 1, {bn}, set())
+    if (m0 in ('ldr', 'ldrb', 'ldrh') and None not in l[:3] and len(l[0].operands) == 2 and r(l[0], 0).startswith('w') and l[0].operands[1].type == ARM64_OP_MEM
+            and not l[0].operands[1].mem.index and not l[0].writeback and l[1].mnemonic == 'cmp' and r(l[1], 0) == r(l[0], 0) and l[1].operands[1].type == ARM64_OP_IMM
+            and l[2].mnemonic in ('b.eq', 'b.ne') and l[2].operands[0].imm == a):
+        bn = spin_norm(l[0].reg_name(l[0].operands[1].mem.base)); return ('tst', bn, l[:3], 0, 3, {bn}, {spin_norm(r(l[0], 0)), 'nzcv'})
+    return None
+def spin_store(ins):
+    """str / strb / strh / stur / sturb / sturh of a w register or zr to [xN{,#imm}] (no writeback, no register offset) → (value register or None for zr, base register), or None"""
+    if ins is None or ins.mnemonic not in ('str', 'strb', 'strh', 'stur', 'sturb', 'sturh') or ins.writeback or len(ins.operands) != 2: return None
+    v, o = ins.operands
+    if v.type != ARM64_OP_REG or o.type != ARM64_OP_MEM or o.mem.index: return None
+    vn = ins.reg_name(v.reg)
+    if not (vn.startswith('w') or vn in ('xzr',)): return None
+    return (spin_norm(vn), spin_norm(ins.reg_name(o.mem.base)))
 def spin_rebranch(ins, pc, tgt):
     """the direct branch ins re-encoded at pc with target tgt"""
     w = struct.unpack('<I', ins.bytes)[0]; off = tgt - pc
@@ -993,14 +1165,24 @@ def spin_quick(T, hi):
         if 0x14 <= t <= 0x17: succ = (a + (((w & 0x3FFFFFF) ^ 0x2000000) - 0x2000000) * 4,)
         elif t == 0x54 or t & 0x7E == 0x34: succ = (a + ((((w >> 5) & 0x7FFFF) ^ 0x40000) - 0x40000) * 4, a + 4)
         elif t & 0x7E == 0x36: succ = (a + ((((w >> 5) & 0x3FFF) ^ 0x2000) - 0x2000) * 4, a + 4)
-        elif any(w & m == v for m, v in SPIN_STOP): continue
+        elif any(w & m == v for m, v in SPIN_STOP) and not (w & 0xBFC00000 in (0xB9000000, 0x39000000, 0x79000000) or w & 0xBFE00C00 in (0xB8000000, 0x38000000, 0x78000000)): continue   # str / strb / strh (immediate, unscaled) may store the same on every pass
         else: succ = (a + 4,)
         if T in succ: return True
         todo.extend(succ)
     return False
 class SpinNo(Exception): pass
 def spin_region(T, bes):
-    """the spin wait region with head T (bes: the backward branches to T found by the scan) → dict, or None"""
+    """the spin wait region with head T (bes: the backward branches to T found by the scan) → dict, or None. A store whose value or address a pass changes is no part of a region:
+    the paths through it are dropped and the region is found again without them (a poll that takes its item once the wait is over stores the new cursor there). When the paths
+    through stores bring in a register that a pass changes, the region is looked for once more with every store ending its path, as before stores could be part of one"""
+    ban = set()
+    for _ in range(8):
+        g = spin_region1(T, bes, ban, True)
+        if not isinstance(g, set): break
+        ban |= g
+    old = spin_region1(T, bes, set(), False)   # the region without stores, which the search took before: the wider one only when it covers its back-edges
+    return g if isinstance(g, dict) and (not old or old['valid'] <= g['valid']) else old
+def spin_region1(T, bes, ban, stores):
     hi = max(bes)
     if any(s < hi + 4 and T < e for s, e in DATA_BLOCKS) or not spin_quick(T, hi): return None
     nodes, back, bad, inner = {}, set(), set(), set()
@@ -1008,9 +1190,16 @@ def spin_region(T, bes):
     while todo:
         a = todo.pop()
         if a in nodes or a in bad: continue
+        if a in ban: bad.add(a); continue
         rmw = spin_rmw(a) if a + 12 <= hi and struct.unpack_from('<I', IMG, a)[0] & 0x3FE00000 == 0x08400000 else None   # ldxr / ldaxr
+        lk = None if rmw else spin_lock(a)
+        if lk and lk[0] == 'tst' and a == T: lk = None   # the region's own test loop
         if rmw:
             n = {'kind': 'rmw', 'base': rmw[0], 'k': rmw[1], 'ins': rmw[3], 'uses': {rmw[0]}, 'defs': rmw[2], 'succ': [a + 16]}
+        elif lk:
+            n = {'kind': lk[0], 'base': lk[1], 'k': {'acq': 1, 'rel': -1, 'tst': 0}[lk[0]], 'ins': lk[2], 'pre': lk[3], 'uses': lk[5], 'defs': lk[6], 'succ': [a + 4 * lk[4]]}
+        elif stores and spin_store(spin_ins(a)):
+            x = spin_ins(a); st = spin_store(x); n = {'kind': 'stc', 'st': st, 'ins': [x], 'uses': {st[1]} | ({st[0]} - {None}), 'defs': set(), 'succ': [a + 4]}
         else:
             x = spin_ins(a); k = spin_kind(x)
             if k is None: bad.add(a); continue
@@ -1019,9 +1208,11 @@ def spin_region(T, bes):
                 succ = [t] if x.mnemonic == 'b' else [t, a + 4]
             else: succ = [a + 4]
             n = {'kind': k, 'ins': [x], 'succ': succ}
-        if any(a + 4 * i in spin_touched for i in range(len(n['ins']))): bad.add(a); continue
+        pre = n.get('pre', 0)
+        if any(a + 4 * (i - pre) in spin_touched for i in range(len(n['ins']))): bad.add(a); continue
         nodes[a] = n
         if n['kind'] == 'rmw': inner |= {a + 4, a + 8, a + 12}
+        if n['kind'] in ('acq', 'rel', 'tst'): inner |= {a + 4 * (i - pre) for i in range(len(n['ins']))} - {a}
         for s in n['succ']:
             if s == T: back.add(a)
             elif T < s <= hi: todo.append(s)
@@ -1042,8 +1233,9 @@ def spin_region(T, bes):
         cnt[1] += 1
         if cnt[1] > SPIN_STEPS: raise SpinNo
         n = nodes[a]
-        if n['kind'] == 'rmw':
-            key = (n['base'], ver.get(n['base'], 0)); delta = dict(delta); delta[key] = delta.get(key, 0) + n['k']
+        if n['kind'] in ('rmw', 'acq', 'rel'):   # exclusive adds and lock / unlock pairs, each kind on its own
+            key = (n['kind'] != 'rmw', n['base'], ver.get(n['base'], 0)); delta = dict(delta); delta[key] = delta.get(key, 0) + n['k']
+            if n['kind'] != 'rmw' and not 0 <= delta[key] <= 1: raise SpinNo   # a release before its acquire or a second acquire: not a lock this pass takes once
         if n['defs']: ver = dict(ver); ver.update({r: ver.get(r, 0) + 1 for r in n['defs']})
         for s in n['succ']:
             if s == T:
@@ -1069,7 +1261,12 @@ def spin_region(T, bes):
                 elif s in R: out |= live[s]
             new = n['uses'] | (out - n['defs'])
             if new != live[a]: live[a] = new; more = True
-    if live[T] & set().union(*(nodes[a]['defs'] for a in R)): return None
+    defs = set().union(*(nodes[a]['defs'] for a in R))
+    if any(nodes[a]['kind'] == 'stc' for a in R) and not any(nodes[a]['kind'] in ('rmw', 'acq', 'rel', 'tst') or nodes[a]['ins'][0].mnemonic.startswith('ld') for a in R): return None   # stores and nothing polled
+    vary = {a for a in R if nodes[a]['kind'] == 'stc' and nodes[a]['uses'] & defs}   # a store's value and address must come from registers no pass writes
+    if vary: return vary
+    if sum(nodes[a]['kind'] == 'stc' for a in R) > SPIN_STORES: return None
+    if live[T] & defs: return None
     return {'T': T, 'R': sorted(R), 'nodes': nodes, 'valid': valid}
 def spin_emit(g):
     T, R, nodes, valid = g['T'], g['R'], g['nodes'], g['valid']
@@ -1079,6 +1276,12 @@ def spin_emit(g):
         if n['kind'] == 'rmw':
             for y in n['ins'][:3]: emit(struct.unpack('<I', y.bytes)[0])
             fixes.append((len(patch), n['ins'][3], a)); emit(0)         # retry: the copy's exclusive load
+        elif n['kind'] in ('acq', 'rel'):   # copied as they are: their branches stay inside the sequence
+            cpy[a] = here() + 4 * n['pre']
+            for y in n['ins']: emit(struct.unpack('<I', y.bytes)[0])
+        elif n['kind'] == 'tst':   # its branch back goes to the original loop, which passes its own spin gate when it is a spin wait itself
+            for y in n['ins'][:2]: emit(struct.unpack('<I', y.bytes)[0])
+            fixes.append((len(patch), n['ins'][2], ('orig', a))); emit(0)
         elif n['kind'] == 'pc':
             rd, tgt = num(spin_norm(x.reg_name(x.operands[0].reg))), x.operands[1].imm
             emit(ADRP(rd, here(), tgt))
@@ -1086,7 +1289,7 @@ def spin_emit(g):
         elif n['kind'] == 'br': fixes.append((len(patch), x, None)); emit(0)
         else: emit(struct.unpack('<I', x.bytes)[0])
         if not (n['kind'] == 'br' and x.mnemonic == 'b'):
-            ft = a + 4 * len(n['ins'])
+            ft = a + 4 * (len(n['ins']) - n.get('pre', 0))
             if not (i + 1 < len(R) and R[i + 1] == ft): fixes.append((len(patch), None, ft)); emit(0)   # the next instruction is not the next one copied
     pause = here()
     emit(STP_PRE(29, 30, 31, -16)); emit_gate_call(); emit(BLR(30)); ret = here(); emit(LDP_POST(29, 30, 31, 16))
@@ -1097,6 +1300,7 @@ def spin_emit(g):
     for idx, x, info in fixes:
         pc = PATCH_OFF + idx
         if x is None: w = B(pc, cpy.get(info, info))
+        elif isinstance(info, tuple): w = spin_rebranch(x, pc, out(info[1]))
         elif info is not None: w = spin_rebranch(x, pc, cpy[info])
         else:
             t, cond = x.operands[-1].imm, x.mnemonic != 'b'
