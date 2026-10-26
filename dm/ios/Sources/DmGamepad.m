@@ -30,7 +30,7 @@
 #include "../../host/touchpad_geometry.h"
 
 enum { B_A = 0, B_B, B_X, B_Y, B_LS, B_RS, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_LEFT, B_UP, B_RIGHT, B_DOWN, B_N };
-enum { C_NONE = 0, C_STICK, C_DPAD, C_FACE, C_BTN, C_SWAP, C_GAME, C_LOOK, C_BOTW_MAP, C_SHIELD, C_MENU };   // which control a touch holds; C_GAME uses a finger slot, C_LOOK is relative camera input
+enum { C_NONE = 0, C_STICK, C_DPAD, C_FACE, C_BTN, C_SWAP, C_GAME, C_LOOK, C_BOTW_MAP, C_SHIELD, C_MENU, C_MENU_EXTRA };   // which control a touch holds; C_GAME uses a finger slot, C_LOOK is relative camera input
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t g_touch_btn, g_pad_btn, g_shake_btn;
@@ -226,8 +226,9 @@ void front_botw_touch_menu_changed(void) {
     CAShapeLayer *_swap; CATextLayer *_swapLabel; BOOL _swapHeld; CFTimeInterval _swapT0;
     UITapGestureRecognizer *_leftStickDoubleTap;
     CGRect _botwMapRect; BOOL _botwMapValid, _botwMapTapConsumed, _botwMapInvalidAfterTap;
-    BOOL _botwMenuMode, _botwMenuPointerActive;
+    BOOL _botwMenuMode, _botwMenuPointerActive, _botwMapGestureSuppressed;
     UITouch *_botwMenuTouch; CGPoint _botwMenuLast, _botwMenuLastNorm;
+    UITouch *_botwMapPinchTouch; CGFloat _botwMapPinchStart;
     UIImpactFeedbackGenerator *_touchFeedback;       // one short feedback per touch-control press edge
     unsigned _hapticSticks;
     BOOL _stickShown;                              // the left stick was held at the last refresh
@@ -739,11 +740,31 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         if (_botwMenuMode) {
             // The host owns menu hit testing and gestures. Keep only one primary
             // pointer and never let extra touches fall through to gameplay.
-            if (!_botwMenuTouch) {
+            if (_botwMapGestureSuppressed) {
+                // A pinch remains one gesture until every finger lifts. Do not
+                // let a replacement finger become a new pointer mid-gesture.
+                [_owner setObject:@(C_MENU_EXTRA) forKey:t];
+            } else if (!_botwMenuTouch) {
                 CGPoint p = [t locationInView:self];
                 _botwMenuPointerActive = YES; _botwMenuTouch = t; _botwMenuLast = p;
                 [_owner setObject:@(C_MENU) forKey:t];
                 [self sendBotwMenuPointer:DM_BOTW_MENU_BEGIN point:p];
+            } else if (dm_botw_touch_map_active() && !_botwMapPinchTouch && !_botwMapGestureSuppressed) {
+                // A second finger on the live map pinches: its spread drives
+                // the native right-stick zoom, and the primary finger stops
+                // panning until it lifts.
+                _botwMapPinchTouch = t;
+                [_owner setObject:@(C_MENU_EXTRA) forKey:t];
+                _botwMapGestureSuppressed = YES;
+                CGPoint a = [_botwMenuTouch locationInView:self], b = [t locationInView:self];
+                _botwMapPinchStart = fmax(1.0, dist(a, b));
+                if (_botwMenuPointerActive) {
+                    [self sendBotwMenuPointer:DM_BOTW_MENU_CANCEL point:_botwMenuLast];
+                    _botwMenuPointerActive = NO;
+                }
+                dm_botw_touch_menu_pinch(1.0f);
+            } else {
+                [_owner setObject:@(C_MENU_EXTRA) forKey:t];
             }
             continue;
         }
@@ -802,8 +823,16 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     BOOL game = NO;
     for (UITouch *t in ts) {
         uint64_t v = [_owner objectForKey:t].unsignedLongLongValue; int c = (int)(v & 0xff); CGPoint p = [t locationInView:self];
-        if (c == C_MENU && _botwMenuPointerActive && t == _botwMenuTouch) {
-            _botwMenuLast = p; [self sendBotwMenuPointer:DM_BOTW_MENU_MOVE point:p];
+        if (c == C_MENU && t == _botwMenuTouch) {
+            _botwMenuLast = p;
+            if (_botwMapGestureSuppressed && _botwMapPinchTouch) {
+                CGPoint a = [_botwMenuTouch locationInView:self], b = [_botwMapPinchTouch locationInView:self];
+                dm_botw_touch_menu_pinch((float)(dist(a, b) / _botwMapPinchStart));
+            } else if (_botwMenuPointerActive && !_botwMapGestureSuppressed) [self sendBotwMenuPointer:DM_BOTW_MENU_MOVE point:p];
+        }
+        else if (t == _botwMapPinchTouch && _botwMenuTouch) {
+            CGPoint a = [_botwMenuTouch locationInView:self], b = [t locationInView:self];
+            dm_botw_touch_menu_pinch((float)(dist(a, b) / _botwMapPinchStart));
         }
         else if (c == C_FACE) [_faceOf setObject:@([self faceAt:p]) forKey:t];
         else if (c == C_SHIELD) { _shieldNow = p; [self setNeedsLayout]; }
@@ -822,7 +851,12 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     BOOL swap = NO, game = NO;
     for (UITouch *t in ts) {
         uint64_t v = [_owner objectForKey:t].unsignedLongLongValue;
+        if (t == _botwMapPinchTouch) {
+            dm_botw_touch_menu_pinch(0.0f);
+            _botwMapPinchTouch = nil; _botwMapPinchStart = 0;
+        }
         if ((v & 0xff) == C_MENU && t == _botwMenuTouch) {
+            if (_botwMapPinchTouch) { dm_botw_touch_menu_pinch(0.0f); _botwMapPinchTouch = nil; _botwMapPinchStart = 0; }
             if (_botwMenuPointerActive) {
                 CGPoint p = [t locationInView:self]; _botwMenuLast = p;
                 [self sendBotwMenuPointer:ended ? DM_BOTW_MENU_END : DM_BOTW_MENU_CANCEL point:p];
@@ -856,6 +890,12 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
             }
         }
     }
+    BOOL menuTouchRemains = NO;
+    for (UITouch *touch in _owner) {
+        int owner = (int)([_owner objectForKey:touch].unsignedLongLongValue & 0xff);
+        if (owner == C_MENU || owner == C_MENU_EXTRA) { menuTouchRemains = YES; break; }
+    }
+    if (!menuTouchRemains) _botwMapGestureSuppressed = NO;
     if (game) [self pushGame];
     [self recompute];
     if (swap) [self nextLayout];
@@ -865,6 +905,8 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
 - (void)reset {
     [self cancelBotwMenuPointer];
     _botwMenuTouch = nil;
+    _botwMapGestureSuppressed = NO;
+    if (_botwMapPinchTouch) { dm_botw_touch_menu_pinch(0.0f); _botwMapPinchTouch = nil; _botwMapPinchStart = 0; }
     if (botwTouchHudSupported()) { dm_botw_touch_actions_reset(); dm_botw_touch_sprint_request(0); }
     if (botwTouchHudSupported()) dm_input_cancel_virtual_latch(DM_BTN_LS | DM_BTN_RS | DM_BTN_MINUS);
     [self cancelLook]; [_owner removeAllObjects]; [_faceOf removeAllObjects]; _stick[0] = _stick[1] = nil;

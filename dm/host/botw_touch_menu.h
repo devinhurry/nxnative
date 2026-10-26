@@ -4,7 +4,7 @@
 
 enum { DM_BOTW_MENU_MAX_SLOTS = 20, DM_BOTW_MENU_MAX_CATEGORIES = 8,
        DM_BOTW_MENU_MAX_POPUP_ROWS = 8,
-       DM_BOTW_MENU_MAX_FOOTER_ACTIONS = 4,
+       DM_BOTW_MENU_MAX_FOOTER_ACTIONS = 6,
        DM_BOTW_MENU_MAX_GENERIC_TARGETS = 128 };
 
 enum {
@@ -18,9 +18,21 @@ enum {
 // the validated selector hook is installed; controller/off-mode bypasses it.
 int dm_botw_touch_menu_active(void);
 
+// Diagnostic for DM_CTL ("panes <hex root> [max depth]"): log the live pane tree
+// below a native layout root with names, flags, alpha and normalized geometry,
+// so a bar or button that the host does not route yet can be identified by the
+// game's own names instead of guessed from the extracted layouts.
+void dm_botw_touch_menu_dump_tree(const char *arg);
+
 // Pointer coordinates are normalized against the logical 1280x720 canvas.
 // The host owns hit testing, gesture recognition and native menu actions.
 void dm_botw_touch_menu_pointer(int phase, float x, float y);
+
+// True while the BOTW map surface is the live touch owner. A two-finger
+// pinch there drives the map's native right-stick zoom (ratio 1 = no change,
+// 0 ends the pinch).
+int dm_botw_touch_map_active(void);
+void dm_botw_touch_menu_pinch(float ratio);
 
 // Snapshot consumed by the native hit-test and navigation queue. Rectangles
 // and cursor coordinates use normalized logical-canvas coordinates (0..1,
@@ -43,11 +55,19 @@ typedef struct {
     uint64_t generic_key;
     uintptr_t generic_screen;
     uintptr_t generic_root;
+    uintptr_t prompt_owner_screen;
+    uintptr_t prompt_owner_root;
+    uint64_t prompt_owner_frame;
+    int prompt_owner_group;
+    int prompt_owner_valid;
+    uintptr_t map_pane;
+    uintptr_t map_root;
     int generic_group;
     int generic_mode;
     int generic_count;
     dm_botw_touch_menu_target generic_targets[DM_BOTW_MENU_MAX_GENERIC_TARGETS];
     int inventory_visible;
+    int map_visible;
     int popup_visible;
     int cursor_valid;
     int clip_valid;
@@ -61,6 +81,7 @@ typedef struct {
     int footer_action_count;
     float cursor[2];
     float clip[4];
+    float map[4];
     float slots[DM_BOTW_MENU_MAX_SLOTS][4];
     uintptr_t slot_panes[DM_BOTW_MENU_MAX_SLOTS];
     float popup_rows[DM_BOTW_MENU_MAX_POPUP_ROWS][4];

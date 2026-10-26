@@ -165,6 +165,15 @@ def validate_main(ctx):
         0xa9be7bfd, 0xa9014ff4, 0x910003fd, 0xb9763808,
         0x2a0103f4, 0xaa0003f3, 0x3100051f, 0x54000220,
     ), 'BOTW native inventory navigation/update entry changed; revalidate zero-delta category refresh'
+    assert tuple(word(o) for o in range(0xd6f034, 0xd6f054, 4)) == (
+        0xd101c3ff, 0x6d0123e9, 0xa9027bfd, 0xa90367fa,
+        0xa9045ff8, 0xa90557f6, 0xa9064ff4, 0x910083fd,
+    ), 'BOTW shared list-widget update entry changed; revalidate passive OBS38 receiver and x0 ABI'
+    assert tuple(word(o) for o in range(0xd68b80, 0xd68b90, 4)) == (
+        0xf0007b88, 0x912ce108, 0xaa0003f3, 0xa882fc08,
+    ), 'BOTW list-widget constructor/vtable initialization changed; revalidate class identity'
+    assert struct.unpack_from('<Q', ctx.image, 0x1cdbb78)[0] == 0xd6f034, (
+        'BOTW shared list-widget vtable slot +0x40 changed; revalidate OBS38 receiver class')
 
 VALIDATE = {'cd57b23fa4bbad65803d9788c01821ee': validate_main}
 
@@ -180,6 +189,7 @@ OBS = {
     (0xd5801c, 32, 'fd400be8', 'shared normalized stick getter: inject one frame of relative input after native filtering and before return'),
     (0xccfd5c, 36, '0a080008', 'PlayerActor native Dash decision: filter only the id-12 input result before the native speed and movement-state guards'),
     (0xf57ba0, 37, 'd10143ff', 'BoxCursorControl update entry: x0 is the native manager; observe focused/requested item before native validation and focus callbacks'),
+    (0xd6f034, 38, 'd101c3ff', 'native list-widget update entry: x0 is the shared list widget; cache receiver metadata only'),
   ],
 }
 
