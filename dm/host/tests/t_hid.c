@@ -34,6 +34,7 @@ int dm_botw_touch_menu_apply(uint64_t *buttons, int32_t axes[4], uint64_t frame)
     return 0;
 }
 void dm_botw_touch_menu_pointer(int phase, float x, float y) { (void)phase; (void)x; (void)y; }
+void dm_botw_touch_menu_dump_tree(const char *arg) { (void)arg; }
 
 static uint64_t buttons_of(uint32_t id, uint32_t style) { NpadState s; fill(&s, id, style); return s.attributes ? s.buttons & 0xffff : 0; }
 static int32_t lx_of(uint32_t id) { NpadState s; fill(&s, id, STYLE_FULLKEY); return s.lx; }

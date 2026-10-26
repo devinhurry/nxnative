@@ -101,6 +101,7 @@ static uint64_t g_botw_cancel_complete;
 static uint64_t g_botw_cancel_requested;
 static int g_botw_sprint_requested;
 static BOOL g_botw_touch_menu_active;
+static BOOL g_botw_touch_map_active;
 typedef struct { int phase; float x, y; } menu_pointer_event;
 static menu_pointer_event g_menu_pointer_events[64];
 static int g_menu_pointer_count;
@@ -108,6 +109,8 @@ static int g_menu_pointer_count;
 int dm_look_enabled(void) { return g_look_enabled; }
 int dm_botw_touch_hud_available(void) { return g_botw_touchhud_available; }
 int dm_botw_touch_menu_active(void) { return g_botw_touch_menu_active; }
+int dm_botw_touch_map_active(void) { return g_botw_touch_map_active; }
+void dm_botw_touch_menu_pinch(float ratio) { (void)ratio; }
 void dm_botw_touch_menu_pointer(int phase, float x, float y) {
     if (g_menu_pointer_count < (int)(sizeof g_menu_pointer_events / sizeof g_menu_pointer_events[0]))
         g_menu_pointer_events[g_menu_pointer_count++] = (menu_pointer_event){phase,x,y};
@@ -510,6 +513,22 @@ static void test_botw_inventory_pointer(DmGamepad *view) {
     CHECK(g_touch_sets == touch_sets && g_look_count == look_events && g_buttons == buttons &&
           g_lx == lx && g_ly == ly && g_rx == rx && g_ry == ry,
           "inventory pointer gestures do not leak into game touch, look, buttons, or sticks");
+
+    g_menu_pointer_count = 0; g_botw_touch_map_active = YES;
+    primary = touch(422,195); secondary = touch(600,180);
+    began(view, primary); began(view, secondary);
+    CHECK(g_menu_pointer_count == 2 && g_menu_pointer_events[1].phase == DM_BOTW_MENU_CANCEL,
+          "map pinch cancels its primary pointer before zooming");
+    ended(view, primary,422,195);
+    FakeTouch *replacement = touch(500,250); began(view, replacement);
+    ended(view, replacement,500,250); ended(view, secondary,600,180);
+    CHECK(g_menu_pointer_count == 2,
+          "replacement fingers cannot start or end a map pointer while pinch fingers remain");
+    replacement = touch(500,250); began(view, replacement);
+    CHECK(g_menu_pointer_count == 3 && g_menu_pointer_events[2].phase == DM_BOTW_MENU_BEGIN,
+          "map pointer ownership resumes after every pinch finger lifts");
+    ended(view, replacement,500,250);
+    g_botw_touch_map_active = NO;
 
     g_menu_pointer_count = 0;
     CGRect oldBounds = view.bounds;
