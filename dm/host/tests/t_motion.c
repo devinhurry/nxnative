@@ -47,6 +47,7 @@ void dm_haptics_init(void (*sink)(dm_haptic_state), int enabled) { (void)sink; (
 void dm_haptics_route(int player, int available) { (void)player; (void)available; }
 void dm_haptics_clear(int player) { (void)player; }
 uint64_t dm_haptics_epoch(int player) { (void)player; return 0; }
+int dm_haptics_enabled(void) { return 0; }
 uint32_t dm_haptics_available(void) { return 0; }
 void dm_haptics_suspend(unsigned reason, int suspended) { (void)reason; (void)suspended; }
 void dm_haptics_send(const dm_vibration_update *updates, int count) { (void)updates; (void)count; }

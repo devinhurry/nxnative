@@ -215,19 +215,36 @@ HLE_FORCE("_ZN2nn3nfp29StartNicknameAndOwnerSettingsEPNS0_12DeviceHandleEPbPNS0_
 // ---------- vi: vsync event ----------
 // The game passes a SystemEventType; after binding, a host thread fires it at 60 Hz (DM_VSYNC_HZ can change it). While the display link presents, the event follows its ticks, as a
 // Switch's follows its display: Super Mario Galaxy 2 runs the Wii's VI retrace (and with it each emulated frame) on this event, and on a clock of the host's own the frames drifted
-// against the screen's vsyncs, two in some display-link ticks and none in others (iPhone: about one tick in seven, a stutter the frame-rate counter showed as 50 to 60)
+// against the screen's vsyncs, two in some display-link ticks and none in others (iPhone: about one tick in seven, a stutter the frame-rate counter showed as 50 to 60).
+// One thread per binding lifetime: repeated requests must not double its rate.
+// A destroyed binding retires its worker even if another service reuses the same
+// guest storage and handle number before the next tick (MacNativeGames dab728a).
 void dm_host_helper_qos(qos_class_t q);   // hle_thread.c
+typedef struct vsync_event { void *ev; uint64_t binding; struct vsync_event *next; } vsync_event_t;
+static pthread_mutex_t g_vs_mu = PTHREAD_MUTEX_INITIALIZER;
+static vsync_event_t *g_vs_events;
+static int vsync_tick(vsync_event_t *v) {   // 0: the event is gone and this thread has left the table
+    if (hle_signal_system_event_binding(v->binding)) return 1;
+    pthread_mutex_lock(&g_vs_mu);
+    vsync_event_t **p = &g_vs_events; while (*p && *p != v) p = &(*p)->next;
+    if (*p) *p = v->next;
+    pthread_mutex_unlock(&g_vs_mu);
+    LOG("vi: vsync event %p destroyed by the game, its thread ends", v->ev);
+    return 0;
+}
 __attribute__((weak)) int mtl_link_wait_vsync(uint64_t *seen, uint64_t timeout_ns) { (void)seen; (void)timeout_ns; return 0; }   // nvn_mtl.m
-static void *vsync_thread(void *ev) {
+static void *vsync_thread(void *arg) {
+    vsync_event_t *v = arg;
     dm_host_helper_qos(QOS_CLASS_USER_INTERACTIVE);   // the game paces frames on this event
     const char *e = getenv("DM_VSYNC_HZ"); double hz = e ? atof(e) : 60.0; if (hz <= 0) hz = 60.0;
     uint64_t period = (uint64_t)(1e9 / hz), next = now_ns() + period, seen = 0;
     for (;;) {
-        if (!e && mtl_link_wait_vsync(&seen, 2 * period)) { hle_signal_system_event(ev); next = now_ns() + period; continue; }
+        if (!e && mtl_link_wait_vsync(&seen, 2 * period)) { if (!vsync_tick(v)) break; next = now_ns() + period; continue; }
         uint64_t t = now_ns(); if (next > t) { struct timespec ts = {(time_t)((next - t) / 1000000000ull), (long)((next - t) % 1000000000ull)}; nanosleep(&ts, NULL); }
-        hle_signal_system_event(ev); next += period; if (now_ns() > next + 4 * period) next = now_ns() + period;   // do not try to catch up when far behind
+        if (!vsync_tick(v)) break;
+        next += period; if (now_ns() > next + 4 * period) next = now_ns() + period;   // do not try to catch up when far behind
     }
-    return NULL;
+    free(v); return NULL;
 }
 // Image memory needed for an indirect layer (an applet's picture handed to the game to draw, such as the inline keyboard): on hardware it asks the vi service. Computed as linear RGBA8, 4 KB aligned (Super Mario 3D World + Bowser's Fury's inline keyboard asks for 1280x720)
 HLE_FORCE("_ZN2nn2vi33GetIndirectImageMemoryRequirementEPmS1_ii", "indirect layer image memory: RGBA8 linear, 4 KB aligned", Result, h_vi_IndirectReq, size_t *size, size_t *align, int w, int h) {
@@ -235,8 +252,16 @@ HLE_FORCE("_ZN2nn2vi33GetIndirectImageMemoryRequirementEPmS1_ii", "indirect laye
 }
 HLE_FORCE("_ZN2nn2vi20GetDisplayVsyncEventEPNS_2os15SystemEventTypeEPNS0_7DisplayE", "vsync event: a host thread signals it at 60 Hz", Result, h_vi_VsyncEvent, void *ev, void *disp) {
     (void)disp; hle_bind_system_event(ev, 1);
-    pthread_t th; if (pthread_create(&th, NULL, vsync_thread, ev)) die("cannot start the vsync thread"); pthread_detach(th);
-    LOG("vi::GetDisplayVsyncEvent: %p signalled by the host at 60 Hz", ev); return RES_OK;
+    uint64_t binding = hle_system_event_binding(ev);
+    pthread_mutex_lock(&g_vs_mu);
+    int running = 0; for (vsync_event_t *v = g_vs_events; v; v = v->next) running |= v->binding == binding;
+    if (!running) {
+        vsync_event_t *v = calloc(1, sizeof *v); if (!v) die("cannot allocate a vsync event");
+        v->ev = ev; v->binding = binding; v->next = g_vs_events; g_vs_events = v;
+        pthread_t th; if (pthread_create(&th, NULL, vsync_thread, v)) die("cannot start the vsync thread"); pthread_detach(th);
+    }
+    pthread_mutex_unlock(&g_vs_mu);
+    LOG("vi::GetDisplayVsyncEvent: %p signalled by the host at 60 Hz%s", ev, running ? " (its thread already runs)" : ""); return RES_OK;
 }
 
 // ---------- diag ----------

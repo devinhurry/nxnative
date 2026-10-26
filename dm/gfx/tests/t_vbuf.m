@@ -42,9 +42,20 @@ int main(void) { @autoreleasepool {
     memset(mem, 0, size); mem[0] = 11; mem[1] = 22; mem[2] = 33; mem[3] = 99;
     mtl_pool_add(mem, size);
     id<MTLBuffer> out = [g_dev newBufferWithLength:16 * 8 options:MTLResourceStorageModeShared]; res_add(out);
-    state_reset(); S.vbuf[0].address = (uint64_t)mem; S.vbuf[14].address = (uint64_t)(mem + 1); S.vbuf[15].address = (uint64_t)(mem + 2);
+    state_reset();
+    // Exercise the compact record through the production dispatcher before the
+    // existing shader reads each stream. Its public state remains a full range.
+    struct { op_hdr h; p_bind_vbuf1 b; } bindings[4] = {
+        {{OP_BIND_VBUF1,24},{0,4,(uint64_t)mem}},
+        {{OP_BIND_VBUF1,24},{14,4,(uint64_t)(mem+1)}},
+        {{OP_BIND_VBUF1,24},{15,4,(uint64_t)(mem+2)}},
+        {{OP_END,8},{0}}
+    };
     uint64_t other, off; void *mb; mtl_gpu_addr((uint64_t)(mem + 3), 1, &mb, &off, &other);
-    mtl_sub_begin(); id<MTL4RenderCommandEncoder> en = encoder(ps);
+    mtl_sub_begin(); mtl_exec((const uint8_t *)bindings);
+    EXPECT("compact vertex replay restores first full range",1,S.vbuf[0].address==(uint64_t)mem&&S.vbuf[0].size==4);
+    EXPECT("compact vertex replay restores high stream range",1,S.vbuf[15].address==(uint64_t)(mem+2)&&S.vbuf[15].size==4);
+    id<MTL4RenderCommandEncoder> en = encoder(ps);
     bind_vbufs(en); capture(en, out, 0);
     uint64_t resolves = g_vbuf_resolve, sets = g_vbuf_set;
     for (int i = 0; i < 1000; i++) bind_vbufs(en);

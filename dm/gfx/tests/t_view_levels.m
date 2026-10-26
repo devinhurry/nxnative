@@ -18,7 +18,7 @@ static void view_case(int tid, unsigned level, unsigned count, unsigned expected
     serial_put(t.serial, base);
     view_t v = {.set_levels=1, .base_level=level, .nlevels=count};
     mtl_reg_tex(tid, &t, &v);
-    pthread_mutex_lock(&g_rmu);
+    os_unfair_lock_lock(&g_rmu);
     id<MTLTexture> view = tex_by_id(tid);
     CHECK((view != nil) == (expected != 0), "invalid start is empty; valid start creates view");
     if (expected) {
@@ -27,7 +27,7 @@ static void view_case(int tid, unsigned level, unsigned count, unsigned expected
         CHECK(view.arrayLength == layers, "array layers preserved");
         CHECK(tex_by_id(tid) == view, "cached view preserves range");
     }
-    pthread_mutex_unlock(&g_rmu);
+    os_unfair_lock_unlock(&g_rmu);
 }
 int main(void) { @autoreleasepool {
     mtl_init();

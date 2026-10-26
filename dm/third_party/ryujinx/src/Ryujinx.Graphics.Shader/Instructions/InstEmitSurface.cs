@@ -19,6 +19,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
             EmitSuatom(
                 context,
                 op.Dim,
+                op.Clamp,
                 op.Op,
                 op.Size,
                 0,
@@ -38,6 +39,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
             EmitSuatom(
                 context,
                 op.Dim,
+                op.Clamp,
                 op.Op,
                 op.Size,
                 op.TidB,
@@ -57,6 +59,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
             EmitSuatom(
                 context,
                 op.Dim,
+                op.Clamp,
                 op.Op,
                 op.Size,
                 0,
@@ -66,7 +69,8 @@ namespace Ryujinx.Graphics.Shader.Instructions
                 op.Dest,
                 op.Ba,
                 isBindless: true,
-                compareAndSwap: false);
+                compareAndSwap: false,
+                hasPredicateResult: op.DestPred != RegisterConsts.PredicateTrueIndex);
         }
 
         public static void SuatomCasB(EmitterContext context)
@@ -76,6 +80,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
             EmitSuatom(
                 context,
                 op.Dim,
+                op.Clamp,
                 0,
                 op.Size,
                 0,
@@ -95,6 +100,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
             EmitSuatom(
                 context,
                 op.Dim,
+                op.Clamp,
                 0,
                 op.Size,
                 op.TidB,
@@ -139,14 +145,14 @@ namespace Ryujinx.Graphics.Shader.Instructions
         {
             InstSuredB op = context.GetOp<InstSuredB>();
 
-            EmitSured(context, op.Dim, op.Op, op.Size, 0, op.SrcA, op.Dest, op.SrcC, op.Ba, isBindless: true);
+            EmitSured(context, op.Dim, op.Clamp, op.Op, op.Size, 0, op.SrcA, op.Dest, op.SrcC, op.Ba, isBindless: true);
         }
 
         public static void Sured(EmitterContext context)
         {
             InstSured op = context.GetOp<InstSured>();
 
-            EmitSured(context, op.Dim, op.Op, op.Size, op.TidB, op.SrcA, op.Dest, 0, op.Ba, isBindless: false);
+            EmitSured(context, op.Dim, op.Clamp, op.Op, op.Size, op.TidB, op.SrcA, op.Dest, 0, op.Ba, isBindless: false);
         }
 
         public static void SustDB(EmitterContext context)
@@ -180,6 +186,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
         private static void EmitSuatom(
             EmitterContext context,
             SuDim dimensions,
+            Clamp clamp,
             SuatomOp atomicOp,
             SuatomSize size,
             int imm,
@@ -189,8 +196,18 @@ namespace Ryujinx.Graphics.Shader.Instructions
             int dest,
             bool byteAddress,
             bool isBindless,
-            bool compareAndSwap)
+            bool compareAndSwap,
+            bool hasPredicateResult = false)
         {
+            // Preserve source width before descriptor-sized formats are resolved.
+            // Other backends retain their existing surface-instruction handling.
+            bool msl23 = context.TranslatorContext.Options.Flags.HasFlag(TranslationFlags.Msl23ImageAtomics);
+            if (msl23 &&
+                size is not (SuatomSize.U32 or SuatomSize.S32 or SuatomSize.Sd32))
+            {
+                throw new NotSupportedException("MSL 2.3 image atomics require a 32-bit integer source size.");
+            }
+
             SamplerType type = ConvertSamplerType(dimensions);
 
             if (type == SamplerType.None)
@@ -259,7 +276,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
 
             // TODO: FP and 64-bit formats.
             TextureFormat format = size is SuatomSize.Sd32 or SuatomSize.Sd64
-                ? (isBindless ? TextureFormat.Unknown : ShaderProperties.GetTextureFormatAtomic(context.TranslatorContext.GpuAccessor, imm))
+                ? (isBindless ? TextureFormat.Unknown : ShaderProperties.GetTextureFormatAtomic(context.TranslatorContext.GpuAccessor, imm, strict: msl23))
                 : GetTextureFormat(size);
 
             if (compareAndSwap)
@@ -271,7 +288,15 @@ namespace Ryujinx.Graphics.Shader.Instructions
 
             Operand[] sources = sourcesList.ToArray();
 
-            TextureFlags flags = compareAndSwap ? TextureFlags.CAS : GetAtomicOpFlags(atomicOp);
+            TextureFlags flags = (compareAndSwap ? TextureFlags.CAS : GetAtomicOpFlags(atomicOp)) | (TextureFlags)((int)clamp << 20);
+            if (msl23)
+            {
+                flags |= TextureFlags.AtomicMsl23;
+            }
+            if (dest == RegisterConsts.RegisterZeroIndex && !compareAndSwap && !hasPredicateResult)
+            {
+                flags |= TextureFlags.AtomicDiscardResult;
+            }
 
             if (isBindless)
             {
@@ -463,6 +488,7 @@ namespace Ryujinx.Graphics.Shader.Instructions
         private static void EmitSured(
             EmitterContext context,
             SuDim dimensions,
+            Clamp clamp,
             RedOp atomicOp,
             SuatomSize size,
             int imm,
@@ -472,6 +498,15 @@ namespace Ryujinx.Graphics.Shader.Instructions
             bool byteAddress,
             bool isBindless)
         {
+            // Preserve source width before descriptor-sized formats are resolved.
+            // Other backends retain their existing surface-instruction handling.
+            bool msl23 = context.TranslatorContext.Options.Flags.HasFlag(TranslationFlags.Msl23ImageAtomics);
+            if (msl23 &&
+                size is not (SuatomSize.U32 or SuatomSize.S32 or SuatomSize.Sd32))
+            {
+                throw new NotSupportedException("MSL 2.3 image atomics require a 32-bit integer source size.");
+            }
+
             SamplerType type = ConvertSamplerType(dimensions);
 
             if (type == SamplerType.None)
@@ -538,14 +573,19 @@ namespace Ryujinx.Graphics.Shader.Instructions
 
             // TODO: FP and 64-bit formats.
             TextureFormat format = size is SuatomSize.Sd32 or SuatomSize.Sd64
-                ? (isBindless ? TextureFormat.Unknown : ShaderProperties.GetTextureFormatAtomic(context.TranslatorContext.GpuAccessor, imm))
+                ? (isBindless ? TextureFormat.Unknown : ShaderProperties.GetTextureFormatAtomic(context.TranslatorContext.GpuAccessor, imm, strict: msl23))
                 : GetTextureFormat(size);
 
             sourcesList.Add(Rb());
 
             Operand[] sources = sourcesList.ToArray();
 
-            TextureFlags flags = GetAtomicOpFlags((SuatomOp)atomicOp);
+            TextureFlags flags = GetAtomicOpFlags((SuatomOp)atomicOp) |
+                (TextureFlags)((int)clamp << 20) | TextureFlags.AtomicDiscardResult;
+            if (msl23)
+            {
+                flags |= TextureFlags.AtomicMsl23;
+            }
 
             if (isBindless)
             {

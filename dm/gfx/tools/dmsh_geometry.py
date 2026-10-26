@@ -15,6 +15,66 @@ HELPERS = {'vertex_output': 0, 'geometry_vb_output': 1,
            'vb_input': 1}
 
 
+def output_layout(code, input_topology):
+    """Geometry output bounds in the translator's fixed-input compute ABI."""
+    if len(code) < 20 or input_topology not in range(5):
+        raise ValueError('invalid geometry header or input topology')
+    w2, w3, w4 = struct.unpack_from('<3I', code, 8)
+    vertices, invocations, topology = w4 & 4095, w2 >> 24, w3 >> 24 & 15
+    # ShaderDefinitions overrides a passthrough GS's raw SPH bound with the
+    # non-adjacent input vertex count. Match that override for every topology;
+    # raw bounds can be 1 even when a triangle kernel writes three vertices and
+    # six index words per invocation (including restart padding).
+    if struct.unpack_from('<I', code)[0] & (1 << 24):
+        vertices = (1, 2, 2, 3, 3)[input_topology]
+        topology = (1, 6, 6, 7, 7)[input_topology]
+    if topology not in (1, 6, 7) or not vertices or not invocations:
+        raise ValueError('invalid geometry output declaration')
+    return {'vertices': vertices, 'invocations': invocations, 'output': topology,
+            'index_stride': vertices * 2}
+
+
+def reader(src):
+    """Preserve viewport-zero culling in the generated raster vertex reader.
+
+    ResourceReservations stores ViewportMask as one word, but the passthrough
+    generator treats it as scalar while IoMap declares int[1]. SPIRV-Cross then
+    emits this invalid array copy for builtin 5253 (ViewportMaskNV). Metal has
+    no viewport-mask output. Replay binds viewport zero only, so its bit is the
+    visibility decision: a zero moves the vertex beyond the X clip plane, which
+    still culls when depth clamping is enabled. The mask must agree across a
+    primitive, as for portable NV viewport-mask output; broadcasting to other
+    viewports is not implemented.
+    Unknown expressions are rejected rather than losing their culling effect.
+    """
+    builtin = 'gl_BuiltIn_5253'
+    if builtin not in src:
+        return src
+    store = re.compile(r'\bspvArrayCopyFromStackToStack\(\s*' + builtin
+                       + r'\s*,\s*as_type<int>\((\w+)\)\.elements\s*\);')
+    lowered, n = store.subn(r'dm_gs_viewport_mask = as_type<uint>(\1);', src)
+    if not n or builtin in lowered or 'dm_gs_viewport_mask' in src:
+        raise ValueError('geometry reader: unsupported viewport-mask expression')
+    output = re.search(r'struct main0_out\s*\{(.*?)\};', lowered, re.S)
+    position = re.search(r'\bfloat4 (\w+) \[\[position(?:, invariant)?\]\];', output[1]) if output else None
+    entry = re.search(r'\bvertex\s+main0_out\s+main0\s*\([^{}]*\)\s*\{', lowered)
+    if not position or not entry:
+        raise ValueError('geometry reader: missing vertex position or entry')
+    begin, depth, end = entry.end(), 1, entry.end()
+    while depth and end < len(lowered):
+        depth += (lowered[end] == '{') - (lowered[end] == '}')
+        end += 1
+    if depth:
+        raise ValueError('geometry reader: unterminated vertex entry')
+    body = lowered[begin:end - 1]
+    if body.count('dm_gs_viewport_mask') != n or 'return out;' not in body:
+        raise ValueError('geometry reader: viewport mask outside the vertex entry')
+    body = body.replace('return out;',
+                        '{ if ((dm_gs_viewport_mask & 1u) == 0u) '
+                        f'out.{position[1]} = float4(2.0, 0.0, 0.0, 1.0); return out; }}')
+    return lowered[:begin] + '\n    uint dm_gs_viewport_mask = 1u;' + body + lowered[end - 1:]
+
+
 def capture(src):
     """Append a rasterizer-discard vertex entry to the unmodified-depth source."""
     m = re.search(r'\bvertex main0_out main0\((.*?)\)\s*\{', src, re.S)
@@ -80,7 +140,8 @@ def capture(src):
 
 def flatten_sets(path):
     """Give auxiliary sets their own binding ranges in the ordinary set-0 ABI."""
-    data = open(path, 'rb').read()
+    with open(path, 'rb') as f:
+        data = f.read()
     w = list(struct.unpack('<%dI' % (len(data) // 4), data))
     sets, bindings = {}, {}
     i = 5
@@ -98,7 +159,8 @@ def flatten_sets(path):
                 raise ValueError('unknown geometry auxiliary descriptor set')
             w[bindings[ident]] += 10000 if s == 1 else 11000
             w[at] = 0
-    open(path, 'wb').write(struct.pack('<%dI' % len(w), *w))
+    with open(path, 'wb') as f:
+        f.write(struct.pack('<%dI' % len(w), *w))
 
 
 def topology_pointer(src):
@@ -122,3 +184,20 @@ def topology_pointer(src):
     if 'trb_data.read' in src:
         raise ValueError('unconverted geometry topology read')
     return src
+
+
+def capture_input(src):
+    """Keep the full Maxwell capture map readable by optimized Metal kernels.
+
+    Copying all 128 contiguous generic components can make Metal's optimized
+    AIR fail AGX pipeline compilation. Volatile capture reads retain each scalar
+    load without changing the captured values or disabling kernel optimization.
+    Ordinary geometry kernels which do not read captured input stay unchanged.
+    """
+    if 'vertex_output' not in src:
+        return src
+    lowered, n = re.subn(r'\bdevice (\w+)\* vertex_output\b',
+                         r'device volatile \1* vertex_output', src)
+    if n != 1:
+        raise ValueError('unknown geometry capture-input declaration')
+    return lowered

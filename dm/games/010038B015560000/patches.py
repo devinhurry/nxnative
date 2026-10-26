@@ -3,7 +3,7 @@
 CUTS = {
   # FINAL FANTASY TACTICS - The Ivalice Chronicles 1.4.0 (v393216) main: the job system wakes one worker of a pool through the pool's single auto-clear event. A job goes into worker k's
   # own queue (main+0x154c0), and if k's state reads asleep the caller signals the event (main+0x12554, from the per-worker dispatch loops main+0x14000 / main+0x14350 / main+0x17670,
-  # the single-job submits main+0x14640 / main+0x14790 / main+0x14dc0 and the shutdown main+0x13df0). The kernel wakes the waiter that slept first, which is k only while the workers sleep in index order; the woken worker runs only its own queue
+  # the single-job submits main+0x14640 / main+0x14790 / main+0x14dc0 and the shutdown main+0x13df0). The SDK event wakes one condition waiter, by priority then FIFO (matching the host and Horizon); it cannot target k's queue. The woken worker runs only its own queue
   # (worker loop main+0x15ce0) and sleeps again, so with two workers in one pool (threads 0x1006 / 0x1007, later pinned to core 2) the signal went to the wrong one: the main thread waited
   # forever on a dispatch at boot in 4 of 6 Mac runs, and in a run that got through, a job sat in worker 0's queue for 12 s. The wait wrapper (main+0x12500, {event, pending}) already
   # signals the event once more when it takes a nonzero pending word after waking, and nothing in main sets it: the signal now sets it first, so a worker woken in another's place

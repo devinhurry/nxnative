@@ -57,7 +57,7 @@ The tables below are what to check by hand afterwards.
 | What | Where to look | Mario |
 |---|---|---|
 | Shaders | Every container that embeds NVN shader binaries, not just the obvious archive. Scan all of RomFS and `main` (see [04](04-graphics.md)) | `Shader/*.bfsha` (BNSH), `Lib/agl/*.sarc` + `Shader/Secred.sarc` (agl BAHS `sharcb`), `Effect/*.esetb` (BNSH), `Layout/*.blarc` (BNSH), and two BNSH inside `main` |
-| Heap budget | A heap-definition file, if the engine has one | `System/HeapSize/*.HeapDef.byml`: per-subsystem heaps in KB, and a 1.75 GB `VirtualAddressMemory` mapped on demand into the alias region (drives the address-space partition, [03](03-bringup.md)) |
+| Heap budget | A heap-definition file, if the engine has one | `System/HeapSize/*.HeapDef.byml`: per-subsystem heaps in KB, and a 1.75 GB `VirtualAddressMemory` mapped on demand into the alias region (drives the address-space partition, [memory.md](../reference/memory.md#partitioning-the-guest-block-between-alias-region-stacks-and-heap)) |
 | Resource sizes | Resource size table | `System/Resource/ResourceSizeTable.*.rsizetable` (RESTBL, CRC32 of the path → decompressed size) |
 | Fonts | Font archives and use of the system shared font | `Font/*.bfarc`; the shared font goes through `nn::fontll::ScalableFontEngineHelper::Decode` (BFTTF) |
 | Languages | Per-language archives | `Mals/<Region><lang>.sarc`, `Voice/Resource/<Region><lang>` |

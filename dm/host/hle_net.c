@@ -1,12 +1,23 @@
 // Networking (out of scope: online play/friends/store/cloud saves): all hooked up as "network unavailable", the game takes the offline branch.
 // Cuts: nifm reports no network; socket only hooks up Initialize (returns success, creates no session), the rest of socket/ssl/friends are hooked up as failures when they come into use.
 #include "hle.h"
+#include <stdatomic.h>
 
 HLE_FORCE("_ZN2nn6socket10InitializeERKNS0_6ConfigE", "connects to the bsd socket service; offline, creates no session (cut)", Result, h_socket_Initialize, const void *cfg) { (void)cfg; return RES_OK; }
 HLE_FORCE("_ZN2nn4nifm10InitializeEv", "connects to the nifm network management service; offline (cut)", Result, h_nifm_Initialize, void) { return RES_OK; }
-HLE_FORCE("_ZN2nn4nifm20SubmitNetworkRequestEv", "offline: the network request is not submitted", void, h_nifm_Submit, void) {}
-HLE_FORCE("_ZN2nn4nifm20CancelNetworkRequestEv", "offline: no request to cancel", void, h_nifm_Cancel, void) {}
-HLE_FORCE("_ZN2nn4nifm22IsNetworkRequestOnHoldEv", "offline: the request is not on hold", int, h_nifm_OnHold, void) { return 0; }
+// The request is asynchronous on Horizon: SubmitNetworkRequest only hands it to the nifm service, and IsNetworkRequestOnHold stays true until the service has evaluated it, so a request
+// never settles within microseconds of its submission. Pikmin 4 (Unreal Engine 4.26, main+0x203f3b0) relies on that: it starts its BCAT thread, whose Run (main+0x203f510) sets its status
+// to 2, submits, waits while on hold and sets 6 (done, offline), and only then stores status 1 itself; answered at once, a thread that ran first finished before that store, the 1 stayed,
+// and the boot state machine (main+0x1f2f764, state 7) waited for the status forever at the black loading screen (about 1 boot in 6, 3 in 4 with four at once). The request now stays
+// on hold for NIFM_HOLD_NS after it is submitted, then settles as unavailable
+enum { NIFM_HOLD_NS = 50000000 };
+static _Atomic uint64_t g_nifm_submit;   // when the pending request was submitted (now_ns), 0 = none
+HLE_FORCE("_ZN2nn4nifm20SubmitNetworkRequestEv", "offline: the request is on hold for 50 ms, then settles as unavailable", void, h_nifm_Submit, void) { atomic_store(&g_nifm_submit, now_ns() | 1); }
+HLE_FORCE("_ZN2nn4nifm20CancelNetworkRequestEv", "offline: drops the pending request", void, h_nifm_Cancel, void) { atomic_store(&g_nifm_submit, 0); }
+HLE_FORCE("_ZN2nn4nifm22IsNetworkRequestOnHoldEv", "offline: on hold until 50 ms after the submission", int, h_nifm_OnHold, void) {
+    uint64_t t = atomic_load(&g_nifm_submit);
+    return t && now_ns() - t < NIFM_HOLD_NS;
+}
 HLE_FORCE("_ZN2nn4nifm18IsNetworkAvailableEv", "offline: the network is always unavailable", int, h_nifm_Available, void) { return 0; }
 HLE_FORCE("_ZN2nn4nifm31HandleNetworkRequestErrorResultEv", "offline: reports failure, shows no system network screen", Result, h_nifm_HandleErr, void) { return RES_FAIL; }
 HLE_FORCE("_ZN2nn4nifm26GetCurrentPrimaryIpAddressEPNS_6socket6InAddrE", "offline: no IP", Result, h_nifm_GetIp, uint32_t *a) { if (a) *a = 0; return RES_FAIL; }
