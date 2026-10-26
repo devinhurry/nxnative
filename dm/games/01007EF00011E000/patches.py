@@ -169,11 +169,34 @@ def validate_main(ctx):
         0xd101c3ff, 0x6d0123e9, 0xa9027bfd, 0xa90367fa,
         0xa9045ff8, 0xa90557f6, 0xa9064ff4, 0x910083fd,
     ), 'BOTW shared list-widget update entry changed; revalidate passive OBS38 receiver and x0 ABI'
-    assert tuple(word(o) for o in range(0xd68b80, 0xd68b90, 4)) == (
-        0xf0007b88, 0x912ce108, 0xaa0003f3, 0xa882fc08,
-    ), 'BOTW list-widget constructor/vtable initialization changed; revalidate class identity'
-    assert struct.unpack_from('<Q', ctx.image, 0x1cdbb78)[0] == 0xd6f034, (
-        'BOTW shared list-widget vtable slot +0x40 changed; revalidate OBS38 receiver class')
+    assert tuple(word(o) for o in range(0xd6d710, 0xd6d728, 4)) == (
+        0xb9829808, 0x34000808, 0xf941500a, 0x8b080d4b,
+        0xf9414808, 0xb9428809,
+    ), 'BOTW read-only list-entry index resolver changed; revalidate OBS38 model query'
+    assert tuple(word(o) for o in range(0xd6fe80, 0xd6fe98, 4)) == (
+        0x37f80221, 0xf941480a, 0xaa0003e8, 0xb40001ca,
+        0xb9828909, 0x34000189,
+    ), 'BOTW read-only list descriptor resolver changed; revalidate OBS38 round-trip query'
+    assert tuple(word(o) for o in range(0xd6c870, 0xd6c888, 4)) == (
+        0xa9be7bfd, 0xa9014ff4, 0x910003fd, 0xaa0003f3,
+        0x3100043f, 0x540000e1,
+    ), 'BOTW native list selection entry changed; revalidate screen-owned row selection'
+    assert tuple(word(o) for o in range(0xd6c244, 0xd6c25c, 4)) == (
+        0xd10103ff, 0xa9017bfd, 0xf90013f5, 0xa9034ff4,
+        0x910043fd, 0xb942a808,
+    ), 'BOTW native list page setter changed; revalidate category taps and list scrolling'
+    assert tuple(word(o) for o in range(0xd8caac, 0xd8cac0, 4)) == (
+        0xbd400020, 0xbd088000, 0xbd400420, 0xbd088400, 0xd65f03c0,
+    ), 'BOTW current map origin setter changed; revalidate direct touch dragging'
+    assert tuple(word(o) for o in range(0xd7a938, 0xd7a94c, 4)) == (
+        0xbd400020, 0xbd004000, 0xbd400420, 0xbd004400, 0xd65f03c0,
+    ), 'BOTW target map origin setter changed; revalidate direct touch dragging'
+    assert tuple(struct.unpack_from('<Q', ctx.image, 0x1cdb958 + off)[0] for off in (0, 8, 0x20, 0x40)) == (
+        0xf5466c, 0xd66bb0, 0xd6f034, 0xd66bd4,
+    ), 'BOTW inventory list-widget vtable address point changed; revalidate OBS38 receiver class'
+    assert tuple(struct.unpack_from('<Q', ctx.image, 0x1cdbb58 + off)[0] for off in (0, 8, 0x20, 0x40)) == (
+        0xf5466c, 0xd71710, 0xd6f034, 0xd66bd4,
+    ), 'BOTW Quest list-widget vtable address point changed; revalidate OBS38 receiver class'
 
 VALIDATE = {'cd57b23fa4bbad65803d9788c01821ee': validate_main}
 

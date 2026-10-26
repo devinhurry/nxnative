@@ -987,9 +987,10 @@ obs = list(PATCHES['OBS'].get(BUILD_ID, []))
 for off, oid, ow, why in obs:
     w = struct.unpack_from('<I', IMG, off)[0]
     assert f'{w:08x}' == ow, f'observation gate original instruction mismatch {off:#x}: {w:08x}'
-    # Function entries, or the instruction right after a bl, only: dm_gate writes back only x0–x8 / x30, and host C code may modify x9–x17; at entry these carry no values under AAPCS64 (arguments are only in x0–x7 / x8),
+    # Function entries, or the instruction right after a bl / blr, only: dm_gate writes back only x0–x8 / x30, and host C code may modify x9–x17; at entry these carry no values under AAPCS64 (arguments are only in x0–x7 / x8),
     # and right after a call returns the callee was free to clobber them anyway (x16 / x17 are the veneer registers). Elsewhere, where the code ahead reads none of them before its next bl
-    after_bl = off >= 4 and struct.unpack_from('<I', IMG, off - 4)[0] >> 26 == 0x25
+    previous = struct.unpack_from('<I', IMG, off - 4)[0] if off >= 4 else 0
+    after_bl = previous >> 26 == 0x25 or previous & 0xfffffc1f == 0xd63f0000
     explicit_safe = off in PATCHES['OBS_SAFE'].get(BUILD_ID, set())
     assert not explicit_safe or validate is not None, f'OBS_SAFE site {off:#x} has no matching build validator'
     assert off in set(starts) or after_bl or scratch_dead(off) or explicit_safe, f'observation gate neither at a function entry, after a bl / blr nor before a call with x9–x17 unread {off:#x}'

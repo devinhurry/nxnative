@@ -186,8 +186,9 @@ To enroll a cut for any game's own module:
 
 - **Symptom:** `observation gate neither at a function entry nor after a bl`; `observation gate neither at a function entry, after a bl nor before a call` on an epilogue.
 - **Cause:** the host may change x9–x17 in a gate, so a gate sat only where they carry nothing (a function entry, after a `bl`).
-- **Fix:** a site is also accepted when the straight-line code from it to the next `bl` reads none of x9–x17 before writing it (`scratch_dead`); it is tried only after the other two rules fail. `ret` ends the code ahead as a `bl` does: under AAPCS64 none of x9–x17 carries a result, so the straight-line scan (`scratch_dead`) accepts a `ret` too.
+- **Fix:** both `bl` and `blr` establish a safe post-call site under AAPCS64; indirect calls must not be mistaken for plain branches. A site is also accepted when the straight-line code from it to the next `bl` reads none of x9–x17 before writing it (`scratch_dead`); it is tried only after the other two rules fail. `ret` ends the code ahead as a `bl` does: under AAPCS64 none of x9–x17 carries a result, so the straight-line scan (`scratch_dead`) accepts a `ret` too.
 - **Found on:** [DRAGON QUEST VII Reimagined](../../dm/games/0100A9D01C446000/README.md): the gate on `mov x0, x19` at `main+0x32758e4`, after a cut `bl` and an `adrp`. [Pikmin 4](../../dm/games/0100B7C00933A000/README.md): the gate on `ldp x29, x30, [sp, #0x10]` right after the cut allocator constructor call, `main+0x353f78c`; the rule checks the image after the cuts, so the `bl` before it is a `nop` by then (the `ret` case).
+- **Also found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md): `main+0xd44a2c`, immediately after `blr x8`, was rejected because the post-call classifier recognized only the immediate `bl` opcode. The generic classifier now recognizes `blr` too; other branches remain rejected.
 - **Note:** the gate table takes the original instruction as a word value (`aa1303e0`), the cut table as bytes (`e00313aa`).
 
 ### Build-validated interior observation gates

@@ -101,6 +101,8 @@ static uint64_t g_botw_cancel_complete;
 static uint64_t g_botw_cancel_requested;
 static int g_botw_sprint_requested;
 static BOOL g_botw_touch_menu_active;
+static BOOL g_botw_touch_menu_presented;
+static BOOL g_botw_gameplay_ready = YES;
 static BOOL g_botw_touch_map_active;
 typedef struct { int phase; float x, y; } menu_pointer_event;
 static menu_pointer_event g_menu_pointer_events[64];
@@ -109,6 +111,10 @@ static int g_menu_pointer_count;
 int dm_look_enabled(void) { return g_look_enabled; }
 int dm_botw_touch_hud_available(void) { return g_botw_touchhud_available; }
 int dm_botw_touch_menu_active(void) { return g_botw_touch_menu_active; }
+int dm_botw_touch_menu_visible(void) { return g_botw_touch_menu_active || g_botw_touch_menu_presented; }
+int dm_botw_touch_controls_visible(void) {
+    return !g_botw_touchhud_available || (g_botw_gameplay_ready && !dm_botw_touch_menu_visible());
+}
 int dm_botw_touch_map_active(void) { return g_botw_touch_map_active; }
 void dm_botw_touch_menu_pinch(float ratio) { (void)ratio; }
 void dm_botw_touch_menu_pointer(int phase, float x, float y) {
@@ -553,7 +559,23 @@ static void test_botw_inventory_pointer(DmGamepad *view) {
           "controller connection cancels an active inventory pointer instead of leaking it");
     CHECK([view dm_testControlsHidden], "controller connection keeps the normal controller-mode overlay hidden");
     g_botw_touch_menu_active = NO;
+    g_botw_touch_menu_presented = YES;
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+    CHECK([view dm_testControlsHidden], "tab-slide animation keeps gameplay artwork hidden without clickable targets");
+    CHECK(![view dm_testL3GestureEnabled], "tab-slide animation keeps gameplay gestures disabled");
+    g_botw_touch_menu_presented = NO;
+    [view refreshBotwTouchMenuMode];
+    CHECK(![view dm_testControlsHidden], "closing the native menu restores gameplay artwork");
+    g_botw_gameplay_ready = NO;
+    [view refreshBotwTouchMenuMode];
+    CHECK([view dm_testControlsHidden] && ![view dm_testL3GestureEnabled],
+          "boot and loading keep gameplay artwork and gestures hidden without a menu");
+    g_menu_pointer_count = 0;
+    primary = touch(422,195); began(view, primary); ended(view, primary, 422, 195);
+    CHECK(g_menu_pointer_count == 2, "loading touches remain on the menu path instead of combat controls");
+    g_botw_gameplay_ready = YES;
+    [view refreshBotwTouchMenuMode];
+    CHECK(![view dm_testControlsHidden], "only confirmed gameplay restores the controls");
     g_botw_touchhud_available = NO;
 }
 

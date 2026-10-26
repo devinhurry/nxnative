@@ -32,6 +32,46 @@ def stamp_nvn(lib, g):
 
 
 class MacLauncherTests(unittest.TestCase):
+    def test_quick_runtime_uses_matched_artifacts_and_preserves_save(self):
+        from unittest.mock import Mock
+        spec = importlib.util.spec_from_file_location('build_quick', REPO / 'scripts/build_ipa_from_nsp.py')
+        builder = importlib.util.module_from_spec(spec); spec.loader.exec_module(builder)
+        g = game_profile('01007EF00011E000')
+        with tempfile.TemporaryDirectory(prefix='Quick runtime ') as t:
+            root = Path(t) / f'{g.id}_build'; root.mkdir()
+            _, romfs, patched, msl = self.make_layout(root, g)
+            host = root / 'prepared host'; host.write_bytes(b'prepared host'); host.chmod(0o755)
+            (patched / 'build_src.sha256').write_text('prepared source')
+            for mod in g.words('modules'):
+                for suffix in ('patched.bin', 'fixups.tsv', 'gates.tsv'):
+                    (patched / f'{mod}.{suffix}').write_bytes(b'prepared module')
+            # Prepared bundles can share unchanged modules through symlinks.
+            shared = root / 'shared module'; shared.write_bytes(b'prepared module')
+            linked = patched / f'{g.words("modules")[-1]}.patched.bin'
+            linked.unlink(); linked.symlink_to(shared)
+            # The prepared host may use an older chain than the working tree.
+            old_chain = 'previous-chain'; lib = msl / f'b-{old_chain}'; lib.mkdir()
+            (lib / 'test_b.metallib').write_bytes(b'prepared shaders'); stamp_nvn(lib, g)
+            builder.write_mac_runtime(root, host, patched,
+                                      dict(DM_ROMFS=romfs, DM_MSL_DIR=msl, DM_NVN_SHMAP=g.table('shader_map.tsv'),
+                                           DM_SAVE='/old/test/save', DM_TEMP='/old/test/temp'), g, 'nvn', old_chain)
+            args = run_mac.parser().parse_args(['--game', str(root.parent), '--quick', '--touch-preview', '--windowed'])
+            plan = run_mac.resolve(args, {}, REPO)
+            rewrite, make, execute = Mock(), Mock(), Mock()
+            execute.side_effect = lambda *_: self.assertEqual(Path.cwd(), (root/'run').resolve())
+            with redirect_stdout(io.StringIO()):
+                run_mac.launch(plan, args, {'DM_SAVE': str(root/'my save'), 'DM_NVN_SHMAP': '/wrong/map'}, REPO,
+                               rewrite_call=rewrite, make_call=make, exec_call=execute, builder=Mock())
+            rewrite.assert_not_called(); make.assert_not_called()
+            path, argv, env = execute.call_args.args
+            self.assertEqual(path, str(host.resolve())); self.assertEqual(argv[1], str(patched.resolve()))
+            self.assertEqual(env['DM_SAVE'], str(root/'my save'))
+            self.assertEqual(env['DM_NVN_SHMAP'], str(g.table('shader_map.tsv')))
+            self.assertEqual(env['DM_TOUCH_PREVIEW'], '1'); self.assertEqual(env['DM_FULLSCREEN'], '0')
+            host.write_bytes(b'new unrelated host')
+            with self.assertRaisesRegex(run_mac.LaunchError, 'prepared runtime changed'):
+                run_mac.resolve(args, {}, REPO)
+
     def test_touch_preview_is_explicitly_botw_only(self):
         args = SimpleNamespace(game='010015100B514000', build=None, version=None, patched=None,
                                exefs=None, romfs=None, msl=None, touch_preview=True)
