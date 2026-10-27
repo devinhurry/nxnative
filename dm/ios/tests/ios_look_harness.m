@@ -116,7 +116,11 @@ int dm_botw_touch_controls_visible(void) {
     return !g_botw_touchhud_available || (g_botw_gameplay_ready && !dm_botw_touch_menu_visible());
 }
 int dm_botw_touch_map_active(void) { return g_botw_touch_map_active; }
-void dm_botw_touch_menu_pinch(float ratio) { (void)ratio; }
+static float g_pinch_ratios[64];
+static int g_pinch_count;
+void dm_botw_touch_menu_pinch(float ratio) {
+    if (g_pinch_count < 64) g_pinch_ratios[g_pinch_count++] = ratio;
+}
 void dm_botw_touch_menu_pointer(int phase, float x, float y) {
     if (g_menu_pointer_count < (int)(sizeof g_menu_pointer_events / sizeof g_menu_pointer_events[0]))
         g_menu_pointer_events[g_menu_pointer_count++] = (menu_pointer_event){phase,x,y};
@@ -520,12 +524,19 @@ static void test_botw_inventory_pointer(DmGamepad *view) {
           g_lx == lx && g_ly == ly && g_rx == rx && g_ry == ry,
           "inventory pointer gestures do not leak into game touch, look, buttons, or sticks");
 
-    g_menu_pointer_count = 0; g_botw_touch_map_active = YES;
+    g_menu_pointer_count = 0; g_botw_touch_map_active = YES; g_pinch_count = 0;
     primary = touch(422,195); secondary = touch(600,180);
     began(view, primary); began(view, secondary);
     CHECK(g_menu_pointer_count == 2 && g_menu_pointer_events[1].phase == DM_BOTW_MENU_CANCEL,
           "map pinch cancels its primary pointer before zooming");
+    moved(view, secondary, 640,180);
+    CHECK(g_pinch_count == 2 && g_pinch_ratios[0] == 1 && g_pinch_ratios[1] > 1.2f,
+          "two-finger spread sends the live map scale ratio");
+    moved(view, secondary, 550,180);
+    CHECK(g_pinch_ratios[g_pinch_count-1] < .8f,
+          "two-finger contraction sends the reverse map scale ratio");
     ended(view, primary,422,195);
+    CHECK(g_pinch_ratios[g_pinch_count-1] == 0, "lifting either pinch finger releases map zoom");
     FakeTouch *replacement = touch(500,250); began(view, replacement);
     ended(view, replacement,500,250); ended(view, secondary,600,180);
     CHECK(g_menu_pointer_count == 2,
@@ -566,6 +577,9 @@ static void test_botw_inventory_pointer(DmGamepad *view) {
     g_botw_touch_menu_presented = NO;
     [view refreshBotwTouchMenuMode];
     CHECK(![view dm_testControlsHidden], "closing the native menu restores gameplay artwork");
+    CHECK([view dm_testZLArtworkHidden] && [view dm_testL3ArtworkHidden] &&
+          [view dm_testR3ArtworkHidden] && [view dm_testDpadArtworkHidden],
+          "menu exit restores BOTW child-layer layout instead of the ordinary gamepad");
     g_botw_gameplay_ready = NO;
     [view refreshBotwTouchMenuMode];
     CHECK([view dm_testControlsHidden] && ![view dm_testL3GestureEnabled],
@@ -576,6 +590,9 @@ static void test_botw_inventory_pointer(DmGamepad *view) {
     g_botw_gameplay_ready = YES;
     [view refreshBotwTouchMenuMode];
     CHECK(![view dm_testControlsHidden], "only confirmed gameplay restores the controls");
+    CHECK([view dm_testZLArtworkHidden] && [view dm_testL3ArtworkHidden] &&
+          [view dm_testR3ArtworkHidden] && [view dm_testL3GestureEnabled],
+          "loading exit restores shield stick and double-tap L3 without ordinary ZL/L3/R3");
     g_botw_touchhud_available = NO;
 }
 

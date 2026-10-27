@@ -387,8 +387,8 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
         if (dm_touchpad_rounded_rect_contains(r,DM_TP_MAP_BADGE_RADIUS*u,p.x,p.y)) return 10;
         return -1; // the old + hit region is replaced while the live-map badge exists
     }
-    if (_active) return -1; // the BOTW + control uses the rounded-rectangle badge hit above
     if (!(_mapValid || _mapTapConsumed) && fabsf(p.x - minusX) <= (DM_TP_PILL_W * u * .5f + 8 * u) && fabsf(p.y - pillY) <= (DM_TP_PILL_H * u * .5f + 8 * u)) return 11;
+    if (_active) return -1; // only the old + region is replaced; Pro HUD still needs the visible − button
     if (fabsf(p.x - plusX) <= (DM_TP_PILL_W * u * .5f + 8 * u) && fabsf(p.y - pillY) <= (DM_TP_PILL_H * u * .5f + 8 * u)) return 10;
     return -1;
 }
@@ -567,7 +567,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
 }
 - (void)drawCircle:(NSPoint)c radius:(float)r fill:(float)alpha label:(NSString *)label {
     NSRect rect = NSMakeRect(c.x-r, c.y-r, 2*r, 2*r);
-    [[NSColor colorWithWhite:1 alpha:alpha] setFill]; [[NSColor colorWithWhite:1 alpha:.44] setStroke];
+    [[NSColor colorWithWhite:alpha >= .45 ? .35 : .18 alpha:.40] setFill]; [[NSColor colorWithWhite:.15 alpha:.40] setStroke];
     NSBezierPath *path = [NSBezierPath bezierPathWithOvalInRect:rect]; path.lineWidth = 1.5; [path fill]; [path stroke];
     if (label.length) {
         NSDictionary *a = @{NSFontAttributeName:[NSFont systemFontOfSize:11 weight:NSFontWeightMedium], NSForegroundColorAttributeName:[NSColor colorWithWhite:1 alpha:.75]};
@@ -602,16 +602,16 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
         if (_active && keys[i].bit == 6) {
             NSPoint center=preview_from_top(c.x,c.y,h); float radius=keys[i].r*u;
             NSRect button=NSMakeRect(center.x-radius,center.y-radius,2*radius,2*radius);
-            [[NSColor colorWithRed:.10 green:.12 blue:.12 alpha:.86] setFill];
-            [[NSColor colorWithRed:.94 green:.88 blue:.70 alpha:.98] setStroke];
+            [[NSColor colorWithWhite:.18 alpha:.40] setFill];
+            [[NSColor colorWithWhite:.15 alpha:.40] setStroke];
             NSBezierPath *outline=[NSBezierPath bezierPathWithOvalInRect:button]; outline.lineWidth=2*u; [outline fill]; [outline stroke];
             if (_runeIconValid) {
                 NSRect imageRect=NSMakeRect(center.x-.68*radius,center.y-.68*radius,1.36*radius,1.36*radius);
                 [_runeIcon drawInRect:imageRect fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
                 float br=.29f*radius; NSPoint badge=NSMakePoint(center.x+.63f*radius,center.y+.63f*radius);
                 NSRect badgeRect=NSMakeRect(badge.x-br,badge.y-br,2*br,2*br);
-                [[NSColor colorWithRed:.10 green:.12 blue:.12 alpha:.94] setFill];
-                [[NSColor colorWithRed:.94 green:.88 blue:.70 alpha:.98] setStroke];
+                [[NSColor colorWithWhite:.18 alpha:.40] setFill];
+                [[NSColor colorWithWhite:.15 alpha:.40] setStroke];
                 NSBezierPath *badgePath=[NSBezierPath bezierPathWithOvalInRect:badgeRect]; badgePath.lineWidth=1.15*u; [badgePath fill]; [badgePath stroke];
                 NSDictionary *badgeAttrs=@{NSFontAttributeName:[NSFont systemFontOfSize:7.5*u weight:NSFontWeightSemibold],NSForegroundColorAttributeName:[NSColor colorWithRed:.94 green:.88 blue:.70 alpha:1]};
                 NSSize badgeLabel=[keys[i].name sizeWithAttributes:badgeAttrs];
@@ -623,7 +623,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
         } else [self drawCircle:preview_from_top(c.x,c.y,h) radius:keys[i].r*u fill:(_held & (1ull<<keys[i].bit))?.48:.15 label:keys[i].name];
         if (_active && dm_botw_touch_actions_available() && (keys[i].bit == 9 || keys[i].bit == 7) && _owner == PREVIEW_BUTTON && _button == keys[i].bit) {
             NSPoint boundary=preview_from_top(c.x,c.y,h);
-            [[NSColor colorWithRed:.94 green:.88 blue:.70 alpha:.85] setStroke];
+            [[NSColor colorWithWhite:.15 alpha:.40] setStroke];
             NSBezierPath *ring=[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(boundary.x-DM_TP_CANCEL_RADIUS*u,boundary.y-DM_TP_CANCEL_RADIUS*u,2*DM_TP_CANCEL_RADIUS*u,2*DM_TP_CANCEL_RADIUS*u)];
             ring.lineWidth=1.5*u; [ring stroke];
             NSDictionary *cueAttrs=@{NSFontAttributeName:[NSFont systemFontOfSize:9*u weight:NSFontWeightMedium],NSForegroundColorAttributeName:[NSColor colorWithRed:.94 green:.88 blue:.70 alpha:.9]};
@@ -648,14 +648,14 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
         if (b==10 && _active) {
             dm_touchpad_point badge=[self mapBadgeCenter]; NSPoint c=preview_from_top(badge.x,badge.y,h);
             NSRect r=NSMakeRect(c.x-DM_TP_MAP_BADGE_WIDTH*u*.5f,c.y-DM_TP_MAP_BADGE_HEIGHT*u*.5f,DM_TP_MAP_BADGE_WIDTH*u,DM_TP_MAP_BADGE_HEIGHT*u);
-            [[NSColor whiteColor] setFill]; [[NSColor colorWithRed:.10 green:.12 blue:.12 alpha:.98] setStroke];
+            [[NSColor colorWithWhite:.18 alpha:.40] setFill]; [[NSColor colorWithWhite:.15 alpha:.40] setStroke];
             NSBezierPath *p=[NSBezierPath bezierPathWithRoundedRect:r xRadius:DM_TP_MAP_BADGE_RADIUS*u yRadius:DM_TP_MAP_BADGE_RADIUS*u]; p.lineWidth=1.5*u; [p fill]; [p stroke];
-            NSDictionary *a=@{NSFontAttributeName:[NSFont systemFontOfSize:15*u weight:NSFontWeightSemibold],NSForegroundColorAttributeName:[NSColor colorWithRed:.10 green:.12 blue:.12 alpha:1]};
+            NSDictionary *a=@{NSFontAttributeName:[NSFont systemFontOfSize:15*u weight:NSFontWeightSemibold],NSForegroundColorAttributeName:[NSColor colorWithWhite:1 alpha:.75]};
             NSSize s=[@"+" sizeWithAttributes:a]; [@"+" drawAtPoint:NSMakePoint(c.x-s.width/2,c.y-s.height/2) withAttributes:a]; continue;
         }
         float x=w*.5f+(b==10?1:-1)*DM_TP_PILL_DX*u;
         NSRect r=NSMakeRect(x-DM_TP_PILL_W*u*.5f,h-py-DM_TP_PILL_H*u*.5f,DM_TP_PILL_W*u,DM_TP_PILL_H*u);
-        [[NSColor colorWithWhite:1 alpha:(_held&(1ull<<b))?.48:.15] setFill]; [[NSColor colorWithWhite:1 alpha:.44] setStroke];
+        [[NSColor colorWithWhite:(_held&(1ull<<b))?.35:.18 alpha:.40] setFill]; [[NSColor colorWithWhite:.15 alpha:.40] setStroke];
         NSBezierPath *p=[NSBezierPath bezierPathWithRoundedRect:r xRadius:7 yRadius:7]; [p fill]; [p stroke];
         NSString *name=b==10?@"+":@"−"; NSDictionary *a=@{NSFontAttributeName:[NSFont systemFontOfSize:11],NSForegroundColorAttributeName:[NSColor colorWithWhite:1 alpha:.75]};
         NSSize s=[name sizeWithAttributes:a]; [name drawAtPoint:NSMakePoint(x-s.width/2,h-py-s.height/2) withAttributes:a];
