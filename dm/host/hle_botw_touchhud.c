@@ -13,7 +13,8 @@
 enum { BOTW_TOUCH_PANE_NAME = 0xb8, BOTW_TOUCH_PARENT = 0x18, BOTW_TOUCH_FLAGS = 0x58,
        BOTW_TOUCH_POSITION = 0x30, BOTW_TOUCH_SCALE = 0x48, BOTW_TOUCH_SIZE = 0x50,
        BOTW_TOUCH_MATRIX = 0x70, BOTW_TOUCH_DIRTY = 0x10 };
-enum { BOTW_TOUCH_MAP_RIGHT_INSET = 24, BOTW_TOUCH_MAP_TOP = 340 };
+// Reserve space for the outboard circular +, its gap and the screen-edge margin.
+enum { BOTW_TOUCH_MAP_RIGHT_INSET = 84, BOTW_TOUCH_MAP_TOP = 340 };
 static const char BOTW_BUILD[] = "cd57b23fa4bbad65803d9788c01821ee";
 static pthread_mutex_t g_touchhud_mu = PTHREAD_MUTEX_INITIALIZER;
 static struct {

@@ -27,13 +27,68 @@ directions; the Mac map backend zoomed in/out through the same host pinch API.
 Whole-window dialogue taps, inventory preview rotation/category arrows/recipe
 Close, map sensor/stamps and Game Over retry also passed on the Mac. The
 merged graphics runtime uses the matching 1.9.0 shader package. BOTW touch
-artwork overrides the ordinary pad style: no button shadows, 15% gray at 35%
-opacity and a 12% gray outline. The user-supplied sword fills half Y's diameter;
+artwork overrides the ordinary pad style: no button shadows, 26% gray at 20%
+opacity and a 25% gray outline, with 20% thicker strokes. The user-supplied sword fills half Y's diameter;
 its Y label sits in a 20% gray, gold-outlined badge on the upper-right edge.
 Mac preview and UIKit rendering passed; controller/non-BOTW UIKit checks
 restore the ordinary artwork. `touch_y.png` is packaged beside the profile
-tables. Other shop layouts, populated album, physical-controller and iPhone checks
+tables. ZL shows a shield and four directional arrows without an idle background;
+holding reveals an unfilled ring and dragging moves a direction arrow just outside its
+perimeter while the center stays at touch-down. Mac and UIKit share the vector
+paths from [zelda-hyrule-ui](https://chaos-xxl.github.io/zelda-hyrule-ui/#/docs).
+`inventory-touch-20261025/run23/ios-shield/` records the rendered idle/drag states
+and passing input/release checks. The movement stick now rests 10 frontend points
+up/right of its ordinary home. Its idle artwork is a white circle with four inner
+arrows at alpha 0.15; dragging reveals an unfilled gray ring and an arrow just outside it.
+Crossing into sprint stacks a second outward-facing arrow; walking restores one.
+Crossing either way through the existing 120% sprint threshold emits one touch
+haptic, without repeated pulses while staying on one side or an extra release
+pulse. BOTW camera dragging is silent; camera double-tap retains R3 and one pulse.
+The map/environment cluster moves 60 native layout units left, reserving space
+for + with an 8-point gap. Both +/- show plain white glyphs, with no background,
+border or decoration; their touch areas remain unchanged. The L rune badge shares
+Y's opaque gray fill and gold outline.
+`inventory-touch-20261025/run26/ios-style/` records the plain +/- glyphs,
+outside direction arrows, sprint double arrows and current outline colors;
+the UIKit harness passed with zero failures in 31 look sessions.
+`inventory-touch-20261025/run24/ios-final/` records zero UIKit failures, including
+controller/non-BOTW restoration and haptic call counts. Mac gameplay confirmed
+the artwork, map spacing, Plus and return to gameplay. Physical vibration has
+not been checked. Other shop layouts, populated album, physical-controller and iPhone checks
 remain open; see the tracker for evidence and scope.
+
+BOTW button borders lie entirely outside their unchanged background paths, with
+their inner edge adjacent to the fill. UIKit uses a separate exterior band for
+round buttons, R/ZR teardrops and L/Y badges; Mac preview offsets each circle's
+stroke center by half its line width. Ordinary gamepad strokes and touch targets
+stay unchanged. `inventory-touch-20261025/run25/ios-border/` has zero failures,
+including non-overlap, full border width, badge touch and mode restoration checks.
+
+Resolved: horizontal swipes did nothing in the shop's Sell grid. Its native
+`ShopBtnList20_00` screen registers `Pa_Page_4x5_*` slots independently of the
+pause inventory, so generic slot taps worked while inventory-only paging was
+never reached. The live grid's `N_Cut_00` and category arrows now feed the same
+R-stick page action as the pause inventory. Geometry stays scoped to the focused
+native owner; stale/hidden grids and quantity dialogs cannot page the background.
+`inventory-touch-20261025/run26/` records left/right swipes between the two
+Materials pages, a page-arrow tap, direct Ironshroom selection and a blocked
+background swipe during quantity selection. Native regression checks passed;
+the matching Mac host is registered for quick launch.
+
+Resolved: first-acquisition item cards had no touch target. `MessageGet_00`
+uses a direct `N_Sp_00/W_Base_00` card and a numbered `Pa_ABtn_*`
+continuation part (`Pa_ABtn_08` in the supplied Eightfold Blade case), while
+the dialogue recognizer accepted only the name-window background and
+`Pa_ABtn_00`. Both now use the shared Message continuation path, so the whole
+rendered card and its arrow send native A. Nested stat chips and private
+capture sources cannot enlarge the card's touch region; existing native owner,
+input-group, visibility and freshness checks remain in effect.
+`inventory-touch-20261025/run27/` reproduces the failure with a disposable copy
+of `save-before-shirin-and-new-pick`. The user verified the rebuilt Mac version:
+a card-body tap at `(0.629, 0.543)` emitted A at frame 4019, closed the card and
+restored gameplay by frame 4034. Native checks cover the body, numbered arrow,
+outside taps, hidden/stale ownership and the previous dialogue cases. The three
+source-save files remain unchanged; physical iPhone acceptance is separate.
 
 | Setting | Where | Why |
 |---|---|---|

@@ -132,14 +132,14 @@ int main(void) {
     scaled_matrix(cut, 1, 510, -240); calculate_entry(cut); calculated_matrix(cut);
     assert(map_region_valid && fabsf(map_region[2] - 166.0f / 1280.0f) < .001f);
     assert(fabsf(map_region[1] - 20.0f / 720.0f) < .001f);
-    expect_translation(cut, 533, 257);
+    expect_translation(cut, 473, 257);
     scaled_matrix(cut_sibling, 1, 510, -240); calculate_entry(cut_sibling); calculated_matrix(cut_sibling);
-    expect_translation(cut_sibling, 533, 257);
+    expect_translation(cut_sibling, 473, 257);
     matrix_translation(status, 392, -182); calculate_entry(status); calculated_matrix(status);
-    expect_translation(status, 415, 315);
+    expect_translation(status, 355, 315);
     assert(fabsf((315.0f - 257.0f) - 58.0f) < .001f); // gauges retain their native offset from the map
-    assert(415.0f + 280.0f * .5f < 640.0f); // linked gauge content fits; Pa_Sensor's extra width is padding
-    assert(fabsf((533.0f + 166.0f * .5f) - 616.0f) < .001f);
+    assert(355.0f + 280.0f * .5f < 640.0f); // linked gauge content fits; Pa_Sensor's extra width is padding
+    assert(fabsf((473.0f + 166.0f * .5f) - 556.0f) < .001f);
     int map_events_before_tap = map_region_events;
     dm_botw_touch_hud_map_tapped();
     assert(!map_region_valid && map_region_events == map_events_before_tap + 1);
@@ -157,7 +157,7 @@ int main(void) {
     scaled_matrix(cut, 1, 510, -240); calculate_entry(cut); calculated_matrix(cut);
     assert(map_region_valid && map_region_events == map_events_before_tap + 2);
     assert(fabsf(map_region[1] - 20.0f / 720.0f) < .001f);
-    expect_translation(cut, 533, 257);
+    expect_translation(cut, 473, 257);
 
     // Reestablish a live collapsed hit region, then hide AppMap's RootPane.
     // A child traversal is skipped under a hidden root, so its own Calculate

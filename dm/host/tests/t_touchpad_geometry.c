@@ -126,6 +126,8 @@ static void test_botw_new_touch_geometry(void) {
         float w = i ? 1680.0f : 844.0f, h = i ? 800.0f : 390.0f;
         float u = dm_touchpad_u(h);
         dm_touchpad_point stick = dm_touchpad_stick_home(w,h,42,0,42,21);
+        dm_touchpad_point moved_stick = dm_touchpad_botw_stick_home(w,h,42,0,42,21);
+        nearf(moved_stick.x,stick.x+10,.001f); nearf(moved_stick.y,stick.y-10,.001f);
         dm_touchpad_point shield = dm_touchpad_shield_stick_home(w,h,42,0,42,21);
         dm_touchpad_point rune = dm_touchpad_rune_button(w,h,42,0,42,21);
         float rune_dist = hypotf(rune.x-stick.x, rune.y-stick.y);
@@ -143,8 +145,8 @@ static void test_botw_new_touch_geometry(void) {
         dm_touchpad_rect map = {0.1f,0.2f,0.4f,0.3f};
         float badge_w=DM_TP_MAP_BADGE_WIDTH*u,badge_h=DM_TP_MAP_BADGE_HEIGHT*u;
         dm_touchpad_point badge = dm_touchpad_map_badge(40,20,1280,720,map,badge_w,badge_h);
-        nearf(badge.x,40+0.5f*1280-badge_w*0.52f,0.01f);
-        nearf(badge.y,20+0.2f*720+badge_h*0.52f,0.01f);
+        nearf(badge.x-badge_w*.5f-(40+.5f*1280),8,.01f);
+        nearf(badge.y,20+0.2f*720+badge_h*.5f,0.01f);
         dm_touchpad_rect badge_rect=dm_touchpad_map_badge_rect(badge.x,badge.y,u);
         assert(dm_touchpad_rounded_rect_contains(badge_rect,DM_TP_MAP_BADGE_RADIUS*u,badge.x,badge.y));
         assert(!dm_touchpad_rounded_rect_contains(badge_rect,DM_TP_MAP_BADGE_RADIUS*u,badge_rect.x,badge_rect.y));
