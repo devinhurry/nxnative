@@ -27,6 +27,7 @@
 #include "../../host/botw_rune_icon.h"
 #include "../../host/botw_touch_actions.h"
 #include "../../host/botw_touch_menu.h"
+#include "../../host/botw_touch_style.h"
 #include "../../host/touchpad_geometry.h"
 
 enum { B_A = 0, B_B, B_X, B_Y, B_LS, B_RS, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_LEFT, B_UP, B_RIGHT, B_DOWN, B_N };
@@ -220,6 +221,7 @@ void front_botw_touch_menu_changed(void) {
     NSMapTable<UITouch *, NSNumber *> *_faceOf;    // which keys each touch on the diamond currently holds
     CAShapeLayer *_key[B_N]; CATextLayer *_label[B_N];   // one layer per key
     CALayer *_runeIconLayer; CAShapeLayer *_runeBadge; CATextLayer *_runeBadgeLabel;
+    CALayer *_yIconLayer; CAShapeLayer *_yBadge;
     uint64_t _runeIconGeneration; BOOL _runeIconValid;
     CAShapeLayer *_ring, *_knob, *_shieldRing, *_shieldKnob, *_cancelRing; // the left stick and BOTW controls
     CATextLayer *_shieldLabel, *_cancelCue;
@@ -270,8 +272,9 @@ static BOOL botwTouchHudSupported(void) { return dm_botw_touch_hud_available(); 
             // each colour carries its own low opacity instead of lowering the whole view's alpha (that would add an off-screen pass for the full-screen layer)
             k_idle = [UIColor colorWithWhite:1 alpha:0.14]; k_on = [UIColor colorWithWhite:1 alpha:0.45]; k_line = [UIColor colorWithWhite:1 alpha:0.38];
             k_ringFill = [UIColor colorWithWhite:1 alpha:0.06]; k_text = [UIColor colorWithWhite:1 alpha:0.6]; k_textOn = [UIColor colorWithWhite:0 alpha:0.7];
-            k_botwIdle = [UIColor colorWithWhite:.18 alpha:.40]; k_botwLine = [UIColor colorWithWhite:.15 alpha:.40];
-            k_botwOn = [UIColor colorWithWhite:.35 alpha:.40];
+            k_botwIdle = [UIColor colorWithWhite:DM_BOTW_BUTTON_GRAY alpha:DM_BOTW_BUTTON_ALPHA];
+            k_botwLine = [UIColor colorWithWhite:DM_BOTW_STROKE_GRAY alpha:DM_BOTW_STROKE_ALPHA];
+            k_botwOn = [UIColor colorWithWhite:.35 alpha:DM_BOTW_BUTTON_ALPHA];
         });
         _controls = [CALayer layer]; [self.layer addSublayer:_controls];
         _ring = shape(_controls); _ring.fillColor = k_ringFill.CGColor;
@@ -288,6 +291,11 @@ static BOOL botwTouchHudSupported(void) { return dm_botw_touch_hud_available(); 
             _key[b] = shape(_controls);
             if (names[b]) _label[b] = label(_key[b], names[b]);   // the D-pad arms carry no label
         }
+        _yIconLayer = [CALayer layer]; _yIconLayer.contentsGravity = kCAGravityResizeAspect;
+        _yIconLayer.hidden = YES; [_key[B_Y] addSublayer:_yIconLayer];
+        _yBadge = shape(_key[B_Y]); _yBadge.hidden = YES;
+        // Keep the existing Y label above the badge, with the same input owner.
+        [_label[B_Y] removeFromSuperlayer]; [_key[B_Y] addSublayer:_label[B_Y]];
         _runeIconLayer = [CALayer layer];
         _runeIconLayer.contentsGravity = kCAGravityResizeAspect;
         _runeIconLayer.contentsScale = UIScreen.mainScreen.scale;
@@ -976,6 +984,16 @@ static CGImageRef botwRuneImage(const dm_botw_rune_icon_state *snapshot) {
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     _controls.frame = self.layer.bounds;
     for (int b = B_A; b <= B_Y; b++) { CGPoint c = [self facePos:b]; setPath(_key[b], circlePath(c, self.faceR)); placeLabel(_label[b], c, 20 * u); }
+    BOOL botw = [self botwTouchControlsActive];
+    _yIconLayer.hidden = _yBadge.hidden = !botw;
+    if (botw) {
+        if (!_yIconLayer.contents) _yIconLayer.contents = (__bridge id)[UIImage imageWithContentsOfFile:dm_botw_touch_y_icon_path()].CGImage;
+        CGPoint c = [self facePos:B_Y]; CGFloat r = self.faceR;
+        _yIconLayer.frame = CGRectMake(c.x-r*.5, c.y-r*.5, r, r); // half the button diameter
+        CGPoint badge = CGPointMake(c.x+r*M_SQRT1_2, c.y-r*M_SQRT1_2);
+        setPath(_yBadge, circlePath(badge, r*.30)); _yBadge.lineWidth = 1.15*u;
+        placeLabel(_label[B_Y], badge, 9*u);
+    }
     for (int i = 0; i < (int)(sizeof k_btns / sizeof *k_btns); i++) { int b = k_btns[i];
         if (b == B_L && [self botwTouchControlsActive]) {
             CGPoint c=[self runeButtonCenter]; CGFloat r=K_L_R*u;
@@ -1115,6 +1133,10 @@ static CGImageRef botwRuneImage(const dm_botw_rune_icon_state *snapshot) {
 - (void)dm_testBotwTouchActionChanged { [self botwTouchActionChanged]; }
 - (void)dm_testPulseBotwL3 { [self pulseBotwTouchButton:B_LS]; }
 - (BOOL)dm_testControlsHidden { return _controls.hidden; }
+- (CAShapeLayer *)dm_testButtonLayer:(int)b { return _key[b]; }
+- (CALayer *)dm_testYIconLayer { return _yIconLayer; }
+- (CAShapeLayer *)dm_testYBadge { return _yBadge; }
+- (CATextLayer *)dm_testYLabel { return _label[B_Y]; }
 - (BOOL)dm_testSwapHidden { return _swap.hidden; }
 - (BOOL)dm_testInSwap:(CGPoint)p { return [self inSwap:p]; }
 - (void)dm_testNextLayout { [self nextLayout]; }
@@ -1127,6 +1149,7 @@ static CGImageRef botwRuneImage(const dm_botw_rune_icon_state *snapshot) {
     UIColor *pressed = botw ? k_botwOn : k_on;
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     for (int b = 0; b < B_N; b++) { BOOL on = (all >> b) & 1;
+        _key[b].shadowOpacity = botw ? 0 : .2;
         BOOL zeldaBadge = botw && (b == B_L || b == B_PLUS);
         if (zeldaBadge) {
             UIColor *cream = [UIColor colorWithRed:.94 green:.88 blue:.70 alpha:.98];
@@ -1143,6 +1166,13 @@ static CGImageRef botwRuneImage(const dm_botw_rune_icon_state *snapshot) {
             _label[b].foregroundColor = (on ? k_textOn : k_text).CGColor;
         }
     }
+    _yIconLayer.hidden = _yBadge.hidden = !botw;
+    _yBadge.shadowOpacity = 0;
+    _yBadge.fillColor = [UIColor colorWithWhite:.20 alpha:1].CGColor;
+    _yBadge.strokeColor = [UIColor colorWithRed:.94 green:.88 blue:.70 alpha:1].CGColor;
+    if (botw) _label[B_Y].foregroundColor = [UIColor colorWithRed:.94 green:.88 blue:.70 alpha:1].CGColor;
+    CAShapeLayer *shapes[] = {_ring, _knob, _shieldRing, _shieldKnob, _runeBadge, _cancelRing};
+    for (int i = 0; i < sizeof shapes / sizeof *shapes; i++) shapes[i].shadowOpacity = botw ? 0 : .2;
     _swap.fillColor = (_swapHeld ? k_on : k_idle).CGColor; _swapLabel.foregroundColor = (_swapHeld ? k_textOn : k_text).CGColor;
     CGPoint h = [self stickCentre:0], o = [self knobOffset:0];
     if (!CGPointEqualToPoint(h, _ringAt)) { _ringAt = h; setPath(_ring, circlePath(h, [self stickR:0])); }

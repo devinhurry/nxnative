@@ -57,6 +57,8 @@ cat > "$APP/Info.plist" <<'PLIST'
 PLIST
 
 make -s -C "$HOST" GAME="$PROFILE" game_profile
+mkdir -p "$APP/dm"
+cp "$ROOT/dm/games/$PROFILE/touch_y.png" "$APP/dm/"
 xcrun --sdk iphonesimulator clang \
   -target arm64-apple-ios26.0-simulator -isysroot "$SDK" -fobjc-arc -fblocks -O1 -g -DDM_TEST_HOOKS \
   -I"$HOST" -I"$HOST/gen/$PROFILE" -I"$ROOT/dm/games/$PROFILE" \
@@ -95,5 +97,6 @@ if [[ ! -f "$DATA/Documents/result.txt" ]]; then
 fi
 cp "$DATA/Documents/result.txt" "$WORK/run.log"
 cp "$DATA/Documents/details.log" "$WORK/details.log"
+cp "$DATA/Documents/botw-buttons.png" "$WORK/botw-buttons.png"
 cat "$WORK/run.log"
 grep -F 'UIKit handler regression: 0 failures;' "$WORK/run.log"

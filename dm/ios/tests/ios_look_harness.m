@@ -36,6 +36,10 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
 - (BOOL)dm_testDpadArtworkHidden;
 - (BOOL)dm_testZLArtworkHidden;
 - (BOOL)dm_testControlsHidden;
+- (CAShapeLayer *)dm_testButtonLayer:(int)button;
+- (CALayer *)dm_testYIconLayer;
+- (CAShapeLayer *)dm_testYBadge;
+- (CATextLayer *)dm_testYLabel;
 - (BOOL)dm_testSwapHidden;
 - (BOOL)dm_testInSwap:(CGPoint)point;
 - (void)dm_testNextLayout;
@@ -252,6 +256,47 @@ static void test_dpad_art_visibility(DmGamepad *view) {
           "a connected physical controller hides the touch overlay and keeps the D-pad artwork hidden");
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
     g_botw_touchhud_available = NO;
+}
+
+static BOOL gray_matches(CGColorRef color, CGFloat gray, CGFloat alpha) {
+    CGFloat actual = 0, opacity = 0;
+    return color && [[UIColor colorWithCGColor:color] getWhite:&actual alpha:&opacity] &&
+        fabs(actual-gray) < .001 && fabs(opacity-alpha) < .001;
+}
+static void test_botw_button_artwork(DmGamepad *view) {
+    g_botw_touchhud_available = YES;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view setNeedsLayout]; [view layoutIfNeeded];
+    CAShapeLayer *y = [view dm_testButtonLayer:3];
+    CALayer *icon = [view dm_testYIconLayer]; CAShapeLayer *badge = [view dm_testYBadge];
+    CGRect button = CGPathGetBoundingBox(y.path), circle = CGPathGetBoundingBox(badge.path);
+    CHECK(gray_matches(y.fillColor,.15,.35) && gray_matches(y.strokeColor,.12,.40) && y.shadowOpacity == 0,
+          "BOTW overrides the button fill, outline and shadow without changing ordinary defaults");
+    CHECK(!icon.hidden && icon.contents && fabs(icon.frame.size.width-button.size.width*.5)<.01 &&
+          fabs(icon.frame.size.height-button.size.height*.5)<.01,
+          "BOTW Y uses the supplied image at half the button diameter");
+    CGPoint center=CGPointMake(CGRectGetMidX(button),CGRectGetMidY(button));
+    CGPoint badgeCenter=CGPointMake(CGRectGetMidX(circle),CGRectGetMidY(circle));
+    CHECK(gray_matches(badge.fillColor,.20,1) && badgeCenter.x>center.x && badgeCenter.y<center.y &&
+          fabs(hypot(badgeCenter.x-center.x,badgeCenter.y-center.y)-button.size.width*.5)<.01 &&
+          fabs(CGRectGetMidX([view dm_testYLabel].frame)-badgeCenter.x)<.01,
+          "Y label sits in a gray badge centered on the upper-right circle edge");
+    FakeTouch *t=touch(badgeCenter.x,badgeCenter.y); began(view,t);
+    CHECK((g_buttons & DM_BTN_Y) && !(g_buttons & DM_BTN_X), "the overlapping Y badge still presses Y");
+    ended(view,t,badgeCenter.x,badgeCenter.y);
+    UIGraphicsImageRenderer *renderer=[[UIGraphicsImageRenderer alloc] initWithSize:view.bounds.size];
+    UIImage *preview=[renderer imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
+        [[UIColor colorWithWhite:.55 alpha:1] setFill]; UIRectFill(view.bounds);
+        [view.layer renderInContext:ctx.CGContext];
+    }];
+    [UIImagePNGRepresentation(preview) writeToFile:[NSHomeDirectory() stringByAppendingPathComponent:@"Documents/botw-buttons.png"] atomically:YES];
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES]; [view setNeedsLayout]; [view layoutIfNeeded];
+    CHECK([view dm_testControlsHidden] && icon.hidden && badge.hidden && y.shadowOpacity == .2f &&
+          gray_matches(y.fillColor,1,.14), "controller mode hides BOTW art and restores ordinary button defaults");
+    g_botw_touchhud_available=NO;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view setNeedsLayout]; [view layoutIfNeeded];
+    CHECK(icon.hidden && badge.hidden && y.shadowOpacity == .2f && gray_matches(y.fillColor,1,.14) &&
+          fabs(CGRectGetMidX([view dm_testYLabel].frame)-[view facePos:3].x)<.01,
+          "other games keep their centered Y label, white fill and original shadow");
 }
 
 static void test_botw_virtual_buttons(DmGamepad *view) {
@@ -813,6 +858,7 @@ static void test_motion_orientation(void) {
 
 static void run_tests(DmGamepad *view) {
     test_dpad_art_visibility(view);
+    test_botw_button_artwork(view);
     test_botw_virtual_buttons(view);
     test_botw_inventory_pointer(view);
     test_motion_orientation();

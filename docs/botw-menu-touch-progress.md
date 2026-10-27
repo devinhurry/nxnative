@@ -15,7 +15,7 @@ This is the active progress tracker. Update it after each verified feature or ne
 
 ## Coverage
 
-Mac evidence below uses the current menu implementation with an existing matching graphics runtime/cache. Runtime validation of the complete upstream merge remains a separate item.
+Mac menu coverage includes the complete merged graphics host with shaders from the matching 1.9.0 package. Physical iPhone and controller-connection acceptance remain separate from the Mac and UIKit checks.
 
 | Surface | Status | Evidence or remaining work |
 | --- | --- | --- |
@@ -23,7 +23,8 @@ Mac evidence below uses the current menu implementation with an existing matchin
 | Inventory direct item selection | Mac verified | Distant slots update native selection and item details directly. |
 | Inventory action popup and cancellation | Mac verified | Uses the active popup's native targets and confirm/back actions. |
 | Inventory category touch cells | Mac verified | Native 32x32 glyph targets expand to the surrounding category cells (58x58 in the tested layout), using live spacing and transforms. Neighbor cells do not overlap and the item-list clip bounds the lower edge. Off-icon upper/right Shield and lower/right Food taps passed through the Mac mouse path. |
-| Inventory categories, Sort and Hold hints | Partial Mac regression | Bow/shield/material categories and popups passed. Food category and its Eat/Cancel popup now pass. Tapping Y Sort visibly reorders the weapon inventory and displays the native sorted message. X Hold opens holding mode. Inline Add changes the native count from 0/5 to 1/5; Stop holding returns the item. Inline Return-to-game closes inventory and restores gameplay controls. |
+| Inventory categories, Sort and Hold hints | Mac verified | All available categories, including armor, food and key items, select directly. Equip, Eat, item details and popup cancellation passed. Y Sort visibly reorders weapons; X Hold, inline Add (0/5 to 1/5), Stop holding and Return-to-game passed. |
+| Inventory category carousel, model rotation and recipe Close | Mac verified | Both visible carousel arrows switch categories. Dragging the native Rotate region turns the preview model and release stops rotation. The recipe's Close label returns to the item list. |
 | System menu entries | Mac verified | Options opens directly; the load sequence also passed. |
 | Map taps and stamp popup | Mac verified | Correct pointer position; both the B icon and Back text dismiss the stamp popup. |
 | Map/Runes header hints | Mac verified | L/R hints use their final rendered positions. R opens the empty album; its Back text returns to gameplay without a cursor selection. AppHome prompts are published from live guide/header panes even when BoxCursor updates stop. |
@@ -37,21 +38,22 @@ Mac evidence below uses the current menu implementation with an existing matchin
 | Options arrows and ON/OFF | Mac verified | Right arrow: Normal to Fast; left: Fast to Normal; OFF/ON labels choose the corresponding value. |
 | Options list swipe | Mac verified | Swipes use the complete native row bounds, including blank padding between text and values. An upward swipe reaches Voice Language; a downward swipe restores the first rows. Taps retain their narrower native targets. Scrolling occurs on release, without continuous finger-following animation. |
 | Options horizontal value gestures | Mac verified | Right swipe changes camera sensitivity Normal to Fast; reverse swipe restores Normal, with one native adjustment each. Missing directions never become Confirm. |
-| Dialogue continuation arrow | Mac verified | Beedle greeting, sale cancellation and receipts advance through the visible arrow. Hidden/covered arrows still fail closed. |
-| Dialogue choices | Mac verified | Direct buy/sell/Good-bye, quantity confirmation and cancellation choices work with Beedle. Other NPC-specific layouts remain unverified. |
+| Whole dialogue window and continuation arrow | Mac verified | Beedle greeting advances from blank left padding, and the farewell advances from its text. With choices visible, a background tap does not confirm; direct Good-bye still works. Native background bounds also remain available while text types. Hidden/covered windows fail closed. |
+| Dialogue choices | Mac verified | Direct buy/sell/Good-bye, quantity confirmation and cancellation choices work with Beedle. Domidak/Prissen's two-option conversation also selects its requested branch directly and advances across speaker changes. Other conditional NPC layouts remain unverified. |
 | Shops, buy/sell and quantity | Beedle Mac verified | Direct purchase rows use the shared native list setter with the independently validated shop receiver class. Numeric Message fields expose their live number and +/- controls even when the registered hit pane is offscreen. Quantity increment/decrement, All-of-them, cancellation, actual sale and two-item purchase passed. Other shop layouts remain unverified. |
 | Album/photo operations | Deferred by user | Thumbnail selection, viewing, paging, delete confirmation and Back. |
 | Ability Controls list and details | Mac verified | Direct final-row selection, native previous arrow, forward vertical swipe and Cancel back to the list. Cursorless pages resolve one live native owner and reject hidden, stale, ambiguous or input-disabled owners. |
 | Save selection list swipe | Mac verified | Swiping upward reveals the bottom save, swiping downward restores the top. Shares native focus-and-scroll with Options; a swipe never confirms a load. Tapping after a swipe still opens the selected save's confirmation. |
 | iPhone gameplay layout after menus/loading | UIKit verified; physical iPhone pending | Reapply child-layer visibility whenever menu mode changes. Restore the BOTW shield stick and hidden ZL/L3/R3, rather than merely showing the ordinary gamepad's parent layer. |
 | System confirmations, save/load and DLC Back | Mac verified | Save Cancel, native Save into the disposable copy, Return to Title Cancel/Confirm and Continue from that new save passed. DLC opens and Back returns to System; the external eShop action was not invoked. Options Y Restore and Cancel passed; covered arrows cannot activate through its dialog. Rare dialog variants remain unverified. |
-| Complete merged runtime and iPhone regression | Pending | Match upstream graphics caches; verify controller connection, menu exit, gesture cancellation and multitouch. |
+| Game Over and retry | Mac verified | On the disposable save, native bomb damage reaches Game Over. Direct Quit opens its confirmation, Cancel returns to the retry list, and Continue reloads gameplay. Controls stay hidden through defeat/loading and return with the gameplay HUD. |
+| Complete merged Mac graphics runtime | Mac verified | Correct-package shaders restore the title, loading, menus and gameplay. The wrong-package build is rejected before translation; see the shader reference linked below. |
+| Physical iPhone/controller transitions | Pending hardware acceptance | UIKit checks cover mode transitions, gesture cancellation and pinch in both directions. No physical iPhone or connected-controller gameplay test was performed. |
 
 ## Next work
 
-1. Check additional NPC/shop layouts and remaining dialog variants through the shared native menu path. Category touch cells, inline holding, help-page paging/Cancel and accessible System confirmations have passed.
-2. Album/photo work remains deferred at the user's request. The user-provided `save-yizhan` slot was copied to external scratch; Beedle dialogue and shop flows passed, and all three original files retain their checksums after native Save/Load tests on the copy.
-3. Validate the complete merged graphics runtime and physical iPhone/controller transitions. Current Mac evidence uses matching pre-merge graphics with the current touch implementation; it does not establish those remaining checks.
+1. Album/photo work remains deferred at the user's request. Horse registration/naming and specialized vendors need their corresponding game state; these conditional layouts are not claimed as runtime verified.
+2. Physical iPhone/controller transitions require hardware acceptance. The user-provided `save-yizhan` slot is copied to external scratch for tests; the original is preserved.
 
 ## Evidence
 
@@ -106,7 +108,7 @@ Coverage includes disabled categories, stale observations, canceled/replaced req
 
 `python3 scripts/run_mac.py --game /path/to/game-folder --quick --touch-preview --windowed`
 
-The local BOTW build's `run/mac-runtime.json` is registered to the tested category/holding/shop/help runtime plus fade-aware visibility, save-list swiping and corrected pinch zoom, with its matching pre-merge graphics snapshot. Quick launch preserves `DM_SAVE`, checks the recorded files, and does not rebuild subsequent source changes. A successful Mac-only build records a new matched runtime automatically. See [Development](development.md) for the general launcher options.
+The local BOTW build's `run/mac-runtime.json` now points to `dmhost-botw-touch-style-07b0ea547435`, the complete merged host with whole-dialogue touch and the requested button artwork, plus its matching rebuilt 1.9.0 shaders and modules. Normal pipeline preparation and the recorded quick-runtime checks passed. Quick launch preserves `DM_SAVE`, checks the recorded files, and does not rebuild subsequent source changes. A successful Mac-only build records a new matched runtime automatically. See [Development](development.md) for the general launcher options.
 
 The Mac host was rebuilt after the touch-color change (background gray 0.18, perimeter gray 0.15, both alpha 0.40). The quick manifest now points to that rebuilt host, and the running Mac preview visibly shows the dark translucent controls (`run18/run-gray.log`). Editing source alone does not update a recorded quick runtime.
 
@@ -182,3 +184,21 @@ External evidence: `01007EF00011E000-work/inventory-touch-20261025/run17/`.
 - Save-list rows are native `Pa_File_*` parts under `N_FileSelect_00/N_SlideArea_00`. The existing Options focus-and-scroll path now accepts that verified hierarchy too. In `run-final.log`, upward and reverse swipes select the bottom and top rows without A. The actual six-save list scrolls to reveal the old save and back; a subsequent tap opens the newest slot's load confirmation and Start reaches gameplay. Focused checks cover both directions, no load confirmation from a swipe, and rejection of a similarly named part outside the list.
 
 No IPA was packaged or installed for this change. Rebuild the IPA before physical iPhone acceptance.
+
+## Remaining reachable menus and matched Mac runtime (2026-10-27)
+
+External evidence: `01007EF00011E000-work/inventory-touch-20261025/run19/` and `run20/`.
+
+- Run19 closes the inventory regression: every available category, Equip/Eat/details, both category carousel arrows, model rotation by dragging, and the recipe Close prompt passed. `run-complete.log`, `preview-rotated.png`, `recipe-prompts.txt` and `rotate-geometry.txt` retain the observations. Rotation stops on release and uses only the native preview's live Rotate guide.
+- Run19 map checks cover the complete Sheikah Sensor text target, OFF/Shrine choices, creating/selecting/deleting a stamp, rune slots, shrine Travel/Cancel and Cancel. Long footer text is bounded by neighboring glyph edges. Map taps follow the native model point after recentering; live map ownership survives cursorless header/prompt updates. `unit-map-final.log` passed; `ios-final/details.log` reports zero failures in 27 look sessions.
+- Run20 found and resolved the black Mac title/scene: [Shader package records match profile keys](reference/shaders.md#shader-package-records-match-profile-keys). The full correct-package build produced 19,592 successful shaders for chain `07b0ea547435`, plus matching `c1_full.tsv` and `cb_extent.tsv`. Normal startup prepared all 15,767 pipeline pairs without failure. `shader-guard-complete-arm64.log`, `wrong-package-rejected.txt`, `final-startup-prebuild.log` and `final-runtime.log` retain the build and gameplay evidence.
+- Dialogue taps use the rendered `W_Base_00` / `W_SysBase_00` background under the live Message owner, together with its optional continuation arrow. Text reveal still goes through the native A handler. A focused choice blocks continuation, and late background observations cannot clear the choice's targets. `unit-dialogue-choice-final.log` passes hidden-parent, stale-owner, outside-window, controller-off and choice-publication checks.
+- Actual Beedle tests tapped blank left padding to reach the choices, tapped the background without confirming a choice, selected Good-bye directly, then tapped the farewell text to return to gameplay. `dialogue-whole-before.png`, `dialogue-background-advanced-choices.png` and `dialogue-text-exit-gameplay.png` record this. Domidak/Prissen's conversation also passed continuation across speakers and direct branch selection. Tasseren's stable introduction, service choices and no-horse registration response passed whole-window touch; `stable-no-horse.png` establishes why the registration detail/naming pages remain unavailable.
+- `gameover-before.png`, `gameover-quit-confirm.png` and `gameover-continue-gameplay.png` record Quit, its Cancel and Continue/reload on the disposable save. Native GameOver/Fade ownership hides controls until the gameplay HUD returns.
+- All game runs use external disposable saves. The last source-save checksum verification remains `run16/save-verification.txt`; the original `~/Desktop/save-yizhan` path is no longer present at final review, so it was not rechecked or modified.
+
+## BOTW button artwork override (2026-10-27)
+
+The ordinary pad colors and shadows stay unchanged. The existing active BOTW touch predicate selects the override; menu/loading and physical-controller modes hide the artwork. Buttons use gray 0.15 at alpha 0.35, outlines use gray 0.12 at alpha 0.40, and their shadows are disabled. The user-supplied transparent sword PNG occupies 50% of Y's diameter. A gray 0.20 circle with a light-gold outline carries the Y label, centered on the main circle's upper-right edge so it overlaps the button by about half. Its touch still belongs to Y.
+
+`run21/ios-style/details.log` reports zero failures, including exact colors, image loading/size, badge hit routing and restoration of ordinary defaults in controller and non-BOTW modes. `botw-buttons.png` is the rendered UIKit preview. Mac and iOS packaging include the optional profile artwork; Mac touch preview uses the same color constants and PNG. No physical iPhone build was installed.

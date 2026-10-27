@@ -758,6 +758,11 @@ static int native_hit_pane_tier(const char *name) {
     return !strcmp(name, "B_Btn_00") || !strcmp(name, "B_Area_00") ? 2 : 0;
 }
 
+static int native_message_body(uint8_t *pane, const char *name) {
+    return (!strcmp(name, "W_Base_00") && ancestor_named(pane, "N_NameBase_00")) ||
+           (!strcmp(name, "W_SysBase_00") && ancestor_named(pane, "N_SystemBase_00"));
+}
+
 static generic_hit_t *generic_geometry_cache(int kind) {
     return kind == 1 ? g_generic_texts : kind == 2 ? g_generic_alt_hits : g_generic_hits;
 }
@@ -1543,8 +1548,9 @@ static void observe_native_pane(uint8_t *pane, int after_matrix) {
         ((!strcmp(name, "P_ArrowL_00") || !strcmp(name, "P_ArrowR_00")) &&
          (ancestor_named(pane, "Pa_ArrowU_00") || ancestor_named(pane, "Pa_ArrowD_00"))))
         generic_hit_observe(pane, after_matrix);
-    if ((!strcmp(name, "P_ArrowS_00") || !strcmp(name, "P_ArrowS_01")) &&
-        ancestor_named(pane, "Pa_ABtn_00")) {
+    if (native_message_body(pane, name) ||
+        ((!strcmp(name, "P_ArrowS_00") || !strcmp(name, "P_ArrowS_01")) &&
+         ancestor_named(pane, "Pa_ABtn_00"))) {
         generic_hit_observe(pane, after_matrix);
         uintptr_t manager = atomic_load_explicit(&g_validated_box_cursor_manager, memory_order_acquire);
         dm_botw_touch_menu_view message = {0};
@@ -1553,7 +1559,10 @@ static void observe_native_pane(uint8_t *pane, int after_matrix) {
         } else {
             uintptr_t root = (uintptr_t)ancestor_named(pane, "RootPane");
             pthread_mutex_lock(&g_menu_mu);
+            // A late backdrop callback may follow native choice publication.
+            // It may invalidate the continuation target, never those choice rows.
             int owned = root && root == g_message_published_root && g_view_valid &&
+                !g_view.generic_count && g_view.prompt_owner_valid &&
                 g_view.generic_root == root && g_view.generic_screen == g_message_published_screen;
             pthread_mutex_unlock(&g_menu_mu);
             if (owned) dm_botw_touch_menu_observe(NULL);
@@ -3476,35 +3485,41 @@ static int selector_generic_entry_live(uintptr_t manager, uintptr_t screen, uint
 }
 
 // Dialogue pages can own input without a BoxCursor row. Accept their
-// rendered A arrow only when its root is the shown, input-enabled Message
-// screen registered in this controller's current group. A choice/modal with
-// a focused cursor continues through the ordinary registered-entry path.
+// rendered dialogue window and A arrow only when their root is the shown,
+// input-enabled Message screen in this controller's current group. The whole
+// window accepts A, including while text is typing; the native handler decides
+// whether to reveal text or advance. A focused choice keeps its own targets.
 static int selector_message_prompt_view(uintptr_t manager, uint64_t frame,
                                         dm_botw_touch_menu_view *view) {
     if (!view || !manager || !dm_botw_touch_hud_active() ||
         strcmp(DM_GAME_ID, "01007EF00011E000") || strcmp(dm_main_build(), BOTW_BUILD) ||
         !selector_range(manager, 0x58) || selector_read_ptr(manager, 0x48)) return 0;
     generic_hit_t hits[DM_BOTW_MENU_MAX_GENERIC_TARGETS];
-    int count = generic_hit_snapshot(hits, frame), arrows = 0;
+    int count = generic_hit_snapshot(hits, frame), regions = 0;
     uintptr_t root = 0, part = 0;
     float rect[4] = {0};
     for (int i = 0; i < count; i++) {
         char name[17];
-        if (!hits[i].usable || !selector_pane_name(hits[i].pane, name) ||
-            (strcmp(name, "P_ArrowS_00") && strcmp(name, "P_ArrowS_01"))) continue;
-        uintptr_t candidate = selector_ancestor_named(hits[i].pane, "Pa_ABtn_00");
-        if (!candidate) continue;
-        if (arrows && (root != hits[i].root || part != candidate)) return 0;
-        if (!arrows++) memcpy(rect, hits[i].rect, sizeof rect);
+        if (!hits[i].usable || !selector_pane_name(hits[i].pane, name)) continue;
+        uintptr_t visible_root = 0;
+        if (!selector_pane_visible_alpha(hits[i].pane, &visible_root) ||
+            visible_root != hits[i].root) continue;
+        int body = native_message_body((uint8_t *)hits[i].pane, name);
+        uintptr_t candidate = (!strcmp(name, "P_ArrowS_00") || !strcmp(name, "P_ArrowS_01")) ?
+            selector_ancestor_named(hits[i].pane, "Pa_ABtn_00") : 0;
+        if (!body && !candidate) continue;
+        if (regions && (root != hits[i].root || (candidate && part && part != candidate))) return 0;
+        if (!regions++) memcpy(rect, hits[i].rect, sizeof rect);
         else {
             float right = fmaxf(rect[0] + rect[2], hits[i].rect[0] + hits[i].rect[2]);
             float bottom = fmaxf(rect[1] + rect[3], hits[i].rect[1] + hits[i].rect[3]);
             rect[0] = fminf(rect[0], hits[i].rect[0]); rect[1] = fminf(rect[1], hits[i].rect[1]);
             rect[2] = right - rect[0]; rect[3] = bottom - rect[1];
         }
-        root = hits[i].root; part = candidate;
+        root = hits[i].root;
+        if (candidate) part = candidate;
     }
-    if (!arrows || !root || !rect_intersects_canvas(rect)) return 0;
+    if (!regions || !root || !rect_intersects_canvas(rect)) return 0;
     module_t *main = NULL;
     for (int i = 0; i < g_nmod; i++)
         if (!strcmp(g_mod[i].name, "main") && g_mod[i].loaded) { main = &g_mod[i]; break; }

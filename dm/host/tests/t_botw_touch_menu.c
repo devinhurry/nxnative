@@ -1074,6 +1074,30 @@ static void test_message_advance_owner(void) {
     calls = mock_group_calls + mock_shown_calls;
     assert(!selector_message_prompt_view((uintptr_t)selector.manager, 7000, &message));
     assert(mock_group_calls + mock_shown_calls == calls);
+    // The native window itself accepts taps, even while the continuation
+    // arrow is hidden during text reveal. Choice rows still retain ownership.
+    uint8_t *body_parent = fake_pane(83, "N_NameBase_00", 80, 800, 160, 0, -240);
+    uint8_t *body = fake_pane(84, "W_Base_00", 83, 800, 160, 0, -240);
+    generic_hit_observe(body, 1);
+    assert(selector_message_prompt_view((uintptr_t)selector.manager, 7000, &message));
+    dm_botw_touch_menu_test_publish(&message);
+    tap(.21f, .75f); // blank left padding of the window, far from its arrow
+    assert(sample(7000) == DM_BTN_A && !sample(7001));
+    tap(.1f, .75f);
+    assert(!sample(7001)); // the scene outside the window is not a continuation target
+    put_ptr(selector.manager + 0x48, (uintptr_t)selector.entry);
+    assert(!selector_message_prompt_view((uintptr_t)selector.manager, 7000, &message));
+    dm_botw_touch_menu_view choice = message;
+    choice.footer_action_count = 0;
+    choice.generic_count = 1;
+    dm_botw_touch_menu_test_publish(&choice);
+    observe_native_pane(body, 1);
+    assert(g_view_valid && g_view.generic_count == 1); // a late backdrop callback must retain choice targets
+    put_ptr(selector.manager + 0x48, 0);
+    body_parent[0x59] = 0;
+    assert(!selector_message_prompt_view((uintptr_t)selector.manager, 7000, &message));
+    body_parent[0x59] = 255; body[0x58] = 0;
+    assert(!selector_message_prompt_view((uintptr_t)selector.manager, 7000, &message));
     dm_botw_touch_menu_reset();
 }
 

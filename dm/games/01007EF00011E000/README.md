@@ -8,7 +8,7 @@ Resolved: rewriting the UI-camera observation at `main+0xd44a2c` after
 `blr x8` was rejected by the generic post-call classifier. See
 [Observation gates where x9-x17 are dead](../../../docs/reference/rewriter.md#observation-gates-where-x9x17-are-dead).
 The real `main`, `subsdk0` and `sdk` rewrite and cache-freshness check passed
-on 2026-10-27; subsequent shader and host stages were not rerun for this fix.
+on 2026-10-27; the subsequent full Mac shader/host build reaches gameplay.
 
 BOTW touch-menu coverage and remaining runtime validation are tracked in
 [Menu touch progress](../../../docs/botw-menu-touch-progress.md). The current
@@ -24,7 +24,15 @@ new save passed on the Mac using a disposable copy of the user's save.
 Save-list swipes share Options' native focus-and-scroll path. UIKit checks
 cover restoration of the custom layout after loading/menus and both pinch
 directions; the Mac map backend zoomed in/out through the same host pinch API.
-Other shop layouts, populated album, physical-controller and iPhone checks
+Whole-window dialogue taps, inventory preview rotation/category arrows/recipe
+Close, map sensor/stamps and Game Over retry also passed on the Mac. The
+merged graphics runtime uses the matching 1.9.0 shader package. BOTW touch
+artwork overrides the ordinary pad style: no button shadows, 15% gray at 35%
+opacity and a 12% gray outline. The user-supplied sword fills half Y's diameter;
+its Y label sits in a 20% gray, gold-outlined badge on the upper-right edge.
+Mac preview and UIKit rendering passed; controller/non-BOTW UIKit checks
+restore the ordinary artwork. `touch_y.png` is packaged beside the profile
+tables. Other shop layouts, populated album, physical-controller and iPhone checks
 remain open; see the tracker for evidence and scope.
 
 | Setting | Where | Why |
@@ -205,6 +213,8 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 - The frame step under load: `DM_TEST_PRESENT_LAG=1,12` (12 ms added to every frame: 30 fps at 1.000 of real time).
 
 ## Found on this game
+
+- **Resolved: black Mac title and scene after the shader-chain update.** A manual shader build mixed an older package with the newer profile. Package records are now identity-checked before translation; [Shader package records match profile keys](../../../docs/reference/shaders.md#shader-package-records-match-profile-keys).
 
 General host changes first needed here; each applies to every game:
 
