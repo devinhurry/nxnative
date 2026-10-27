@@ -109,6 +109,8 @@ int main(void) {
     set_pane_parent(capture, cut); set_pane_parent(cut_sibling, map_inout);
     map_root[BOTW_TOUCH_FLAGS] = map_inout[BOTW_TOUCH_FLAGS] = cut[BOTW_TOUCH_FLAGS] =
         capture[BOTW_TOUCH_FLAGS] = cut_sibling[BOTW_TOUCH_FLAGS] = 1;
+    map_root[BOTW_TOUCH_FLAGS+1] = map_inout[BOTW_TOUCH_FLAGS+1] = cut[BOTW_TOUCH_FLAGS+1] =
+        capture[BOTW_TOUCH_FLAGS+1] = cut_sibling[BOTW_TOUCH_FLAGS+1] = 255;
     pane_size(cut, 166, 166); pane_size(capture, 192, 192); pane_size(cut_sibling, 210, 328);
     scaled_matrix(cut, 1, 510, -240); scaled_matrix(cut_sibling, 1, 510, -240);
     calculate_entry(cut); calculated_matrix(cut);
@@ -158,6 +160,19 @@ int main(void) {
     assert(map_region_valid && map_region_events == map_events_before_tap + 2);
     assert(fabsf(map_region[1] - 20.0f / 720.0f) < .001f);
     expect_translation(cut, 473, 257);
+
+    // Shrines hide N_InOut_00 with alpha zero while its visible bit stays set.
+    map_inout[BOTW_TOUCH_FLAGS+1] = 0;
+    calculate_entry(map_inout);
+    assert(!map_region_valid && atomic_load(&g_touchhud_map_collapsed));
+    matrix_translation(status,392,-182); calculate_entry(status); calculated_matrix(status);
+    expect_translation(status,355,315); // environment HUD retains its touch-mode position
+    map_inout[BOTW_TOUCH_FLAGS+1] = 255;
+    calculate_entry(cut);
+    scaled_matrix(cut_sibling,1,510,-240); calculate_entry(cut_sibling); calculated_matrix(cut_sibling);
+    matrix_translation(status,392,-182); calculate_entry(status); calculated_matrix(status);
+    scaled_matrix(cut,1,510,-240); calculate_entry(cut); calculated_matrix(cut);
+    assert(map_region_valid);
 
     // Reestablish a live collapsed hit region, then hide AppMap's RootPane.
     // A child traversal is skipped under a hidden root, so its own Calculate

@@ -75,7 +75,7 @@ typedef struct {
     int generic_group;
     int generic_mode;
     int generic_count;
-    uintptr_t quest_category_widget;
+    uintptr_t list_category_widget;
     dm_botw_touch_menu_target generic_targets[DM_BOTW_MENU_MAX_GENERIC_TARGETS];
     int inventory_visible;
     int carousel_valid; // A live generic item grid with the native horizontal pager.

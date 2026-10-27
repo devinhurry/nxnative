@@ -147,7 +147,7 @@ $(B)/t_aspect: t_aspect.c ../hle_aspect.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	clang -O1 -Wall -I.. $(GINC) -o $@ t_aspect.c
 $(B)/t_look: t_look.c ../hle_look.c ../front.h ../hle.h ../dm.h ../dm_input.h $(GAME_H) | $(B)
 	clang -O1 -Wall -Werror -Wno-unused-function -DDM_TEST_HOOKS -I.. $(GINC) -o $@ t_look.c
-$(B)/t_botw_touchhud: t_botw_touchhud.c ../hle_botw_touchhud.c ../front.h ../hle.h ../dm.h $(GAME_H) | $(B)
+$(B)/t_botw_touchhud: t_botw_touchhud.c ../hle_botw_touchhud.c ../touchpad_geometry.h ../dm_input.h ../front.h ../hle.h ../dm.h $(GAME_H) | $(B)
 	clang -O1 -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_botw_touchhud.c -lpthread -lm
 .PHONY: botw_touch_actions
 botw_touch_actions: $(B)/t_botw_touch_actions

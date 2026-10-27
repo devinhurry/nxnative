@@ -64,6 +64,20 @@ static void test_stick_shaping(void) {
 
     dm_touchpad_stick_axis(r * 0.1f, 0, r, 1, &x, &y);
     assert(x == DM_STICK_MAX && y == 0); // legacy full-tilt right-stick mode
+
+    const float heights[] = {390, 430, 431, 540, 1080};
+    for (unsigned i=0;i<sizeof heights/sizeof *heights;i++) {
+        float radius=dm_touchpad_botw_stick_radius(heights[i]);
+        nearf(radius,heights[i]>430 ? 70 : 77*heights[i]/430,.001f);
+        dm_touchpad_stick_axis_with_deadzone(radius*.06f,0,radius,0,DM_TP_BOTW_STICK_DEAD,&x,&y);
+        assert(!x && !y);
+        dm_touchpad_stick_axis_with_deadzone(radius*.08f,0,radius,0,DM_TP_BOTW_STICK_DEAD,&x,&y);
+        assert(x>0 && !y); // BOTW starts before the ordinary pad's ten-percent deadzone
+        dm_touchpad_stick_axis_with_deadzone(radius*.8f,0,radius,0,DM_TP_BOTW_STICK_DEAD,&x,&y);
+        assert(x == DM_STICK_MAX && !y);
+        dm_touchpad_stick_axis(radius*.08f,0,radius,0,&x,&y);
+        assert(!x && !y); // shared default stays unchanged
+    }
 }
 
 static void test_safe_insets_and_resize(void) {
@@ -116,6 +130,10 @@ static void test_botw_right_cluster_and_camera_tap(void) {
         assert(dm_touchpad_look_double_tap(10000000.08,10000000.28,100,100,101,102,u));
         assert(!dm_touchpad_look_double_tap(10000000.08,10000000.48,100,100,101,102,u));
         assert(!dm_touchpad_look_double_tap(10000000.08,10000000.28,100,100,100+49*u,102,u));
+        assert(dm_touchpad_stick_double_tap_gap(.19));
+        assert(dm_touchpad_stick_double_tap_gap(.20));
+        assert(!dm_touchpad_stick_double_tap_gap(.21));
+        assert(!dm_touchpad_stick_double_tap_gap(-.01));
         dragged |= dm_touchpad_look_dragged(400,200,400,200,slop);
         assert(dragged);
     }
@@ -142,14 +160,15 @@ static void test_botw_new_touch_geometry(void) {
         assert(!dm_touchpad_sprint_requested(stick_r * 1.21f, 0.0f));
         assert(!dm_touchpad_cancel_outside(60,50,50,50,DM_TP_CANCEL_RADIUS));
         assert(dm_touchpad_cancel_outside(50+DM_TP_CANCEL_RADIUS+1,50,50,50,DM_TP_CANCEL_RADIUS));
-        dm_touchpad_rect map = {0.1f,0.2f,0.4f,0.3f};
-        float badge_w=DM_TP_MAP_BADGE_WIDTH*u,badge_h=DM_TP_MAP_BADGE_HEIGHT*u;
-        dm_touchpad_point badge = dm_touchpad_map_badge(40,20,1280,720,map,badge_w,badge_h);
-        nearf(badge.x-badge_w*.5f-(40+.5f*1280),8,.01f);
-        nearf(badge.y,20+0.2f*720+badge_h*.5f,0.01f);
-        dm_touchpad_rect badge_rect=dm_touchpad_map_badge_rect(badge.x,badge.y,u);
-        assert(dm_touchpad_rounded_rect_contains(badge_rect,DM_TP_MAP_BADGE_RADIUS*u,badge.x,badge.y));
-        assert(!dm_touchpad_rounded_rect_contains(badge_rect,DM_TP_MAP_BADGE_RADIUS*u,badge_rect.x,badge_rect.y));
+        float canvas_width = h * 16.0f / 9.0f;
+        dm_touchpad_rect plus = dm_touchpad_botw_menu_rect(40,20,canvas_width,h,0);
+        dm_touchpad_rect minus = dm_touchpad_botw_menu_rect(40,20,canvas_width,h,1);
+        nearf(plus.width,39*h/720,.01f); nearf(plus.height,plus.width,.01f);
+        nearf(plus.x-(40+1196*canvas_width/1280),8,.01f);
+        nearf(plus.y,20+20*h/720+4,.01f); // four frontend points below the minimap top
+        nearf(minus.x,plus.x,.001f); nearf(minus.y-plus.y-plus.height,8,.001f);
+        assert(dm_touchpad_rounded_rect_contains(plus,plus.width*.5f,plus.x+plus.width*.5f,plus.y+plus.height*.5f));
+        assert(!dm_touchpad_rounded_rect_contains(plus,plus.width*.5f,plus.x,plus.y));
     }
 }
 

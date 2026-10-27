@@ -13,6 +13,15 @@
 #define DM_BOTW_STICK_RING_WIDTH (1.5 * DM_BOTW_STROKE_WIDTH_SCALE)
 #define DM_BOTW_STICK_GRAPH_ALPHA .15
 
+// Menu glyphs sit over a translucent circular button fill.
+static inline CGPathRef dm_botw_menu_key_path(CGPoint center, CGFloat size, CGFloat circleSize, int plus) {
+    CGMutablePathRef path = CGPathCreateMutable();
+    CGFloat stroke = circleSize * .12;
+    CGPathAddRect(path, NULL, CGRectMake(center.x-size/2, center.y-stroke/2, size, stroke));
+    if (plus) CGPathAddRect(path, NULL, CGRectMake(center.x-stroke/2, center.y-size/2, stroke, size));
+    return path;
+}
+
 // Core Graphics centers strokes on the path. Keep only the outside half of a
 // double-width stroke so its inner edge meets the fill without covering it.
 static inline CGPathRef dm_botw_outer_border_path(CGPathRef fill, CGFloat width) {
