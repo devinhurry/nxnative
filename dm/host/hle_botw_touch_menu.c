@@ -763,10 +763,16 @@ static int native_message_body(uint8_t *pane, const char *name) {
     if (!window && !system) return 0;
     uint8_t *owner = *(uint8_t **)(pane + PANE_PARENT);
     char parent[17] = {0}; if (owner) pane_name(owner, parent);
+    uint8_t *tips = ancestor_named(pane, "Pa_Tips_00");
+    uint8_t *inout = owner ? *(uint8_t **)(owner + PANE_PARENT) : NULL;
+    // Action tutorials use their part's outer window, not its controller
+    // illustration backgrounds, as the continuation surface.
+    int tutorial = tips && !strcmp(parent, "N_InOut_01") &&
+        inout && *(uint8_t **)(inout + PANE_PARENT) == tips && !pane_private_capture_branch(pane);
     // MessageGet's card is a direct child of N_Sp_00. Its nested stat chips
     // and offscreen capture sources must not expand the continuation region.
     return (window &&
-            (ancestor_named(pane, "N_NameBase_00") ||
+            (ancestor_named(pane, "N_NameBase_00") || tutorial ||
              (!strcmp(parent, "N_Sp_00") && !pane_private_capture_branch(pane)))) ||
            (system && ancestor_named(pane, "N_SystemBase_00"));
 }
@@ -1562,7 +1568,10 @@ static void observe_native_pane(uint8_t *pane, int after_matrix) {
         return;
     }
     generic_back_prompt_observe(pane, after_matrix);
-    if (after_matrix && (!strncmp(name, "T_Guide_", 8) || !strncmp(name, "T_Icon_", 7)) &&
+    // Native prompts can finish opening without recalculating their matrix.
+    // The pre-matrix observer refreshes valid cached geometry as well, so
+    // recheck screen ownership there even when the transform is reused.
+    if ((!strncmp(name, "T_Guide_", 8) || !strncmp(name, "T_Icon_", 7)) &&
         ancestor_action_guide(pane)) {
         uintptr_t manager = atomic_load_explicit(&g_validated_box_cursor_manager, memory_order_acquire);
         dm_botw_touch_menu_view prompts = {0};
@@ -2313,7 +2322,7 @@ static int menu_view_has_visible_region(const dm_botw_touch_menu_view *view) {
         return view->map[2] > 0 && view->map[3] > 0 && rect_intersects_canvas(view->map);
     if (view->generic_mode) {
         if (view->back_valid && rect_intersects_canvas(view->back)) return 1;
-        for (int i = 0; view->quest_category_widget && i < view->category_count; i++)
+        for (int i = 0; view->list_category_widget && i < view->category_count; i++)
             if (rect_intersects_canvas(view->categories[i])) return 1;
         for (int i = 0; i < view->generic_count; i++)
             if (rect_intersects_canvas(view->generic_targets[i].rect)) return 1;
@@ -2930,7 +2939,7 @@ static int selector_pointer_screen_name(const char *name) {
         selector_name_prefix(name, "SystemWindow") || selector_name_prefix(name, "GameOver") ||
         selector_name_prefix(name, "ShopBtnList") || selector_name_prefix(name, "Message") ||
         !strcmp(name, "AppSystemWindow_00") || !strcmp(name, "OptionWindow_00") ||
-        !strcmp(name, "End_00") || !strcmp(name, "ControllerWindow_00") ||
+        !strcmp(name, "End_00") || !strcmp(name, "ControllerWindow_00") || !strcmp(name, "Skip_00") ||
         !strcmp(name, "PauseMenuRecipe_00") ||
         !strcmp(name, "DLCWindow_00") || !strcmp(name, "AmiiboWindow_00");
 }
@@ -3112,6 +3121,7 @@ static int selector_native_input_group(uintptr_t control, uintptr_t native_group
     uintptr_t groups = selector_read_ptr(context, 0xb18);
     if (!selector_range(groups, 0x15)) return 0;
     uint8_t mask = ((const uint8_t *)groups)[0x14];
+    if (!mask) return 0;
     int group = ((int (*)(uintptr_t))native_group_getter)(input);
     if (group < 0 || group >= 8 || !(mask & (1u << group))) return 0;
     if (out_group) *out_group = group;
@@ -3200,27 +3210,28 @@ static int selector_hit_under_part(const generic_hit_t *hits, int count, uintptr
 // The native list configuration names each category's pane. Unlike the
 // row cursor, this navigation widget has no selectable row entries: its
 // own page setter drives the screen's category-change callback.
-static uintptr_t selector_quest_category_descriptor(uintptr_t widget, int category) {
-    if (category < 0 || category >= 4 || !selector_range(widget, 0x314)) return 0;
+static uintptr_t selector_list_category_descriptor(uintptr_t widget, int category) {
+    if (category < 0 || category >= DM_BOTW_MENU_MAX_CATEGORIES || !selector_range(widget, 0x314)) return 0;
     uint32_t count = 0, limit = 0;
     memcpy(&count, (const void *)(widget + 0x288), 4);
     memcpy(&limit, (const void *)(widget + 0x2a8), 4);
     uintptr_t array = selector_read_ptr(widget, 0x290);
-    if (count != 4 || limit != 4 || !selector_range(array, 4 * sizeof(uintptr_t))) return 0;
+    if ((count != 4 && count != 7) || limit != count || (uint32_t)category >= count ||
+        !selector_range(array, count * sizeof(uintptr_t))) return 0;
     uintptr_t descriptor = selector_read_ptr(array, (size_t)category * sizeof(uintptr_t));
     if (!selector_range(descriptor, 0x38e) || selector_read_ptr(descriptor, 8) != widget) return 0;
     char path[64] = {0};
-    snprintf(path, sizeof path, "Pa_Quest_00/Pa_ChallengeCategory_%02d", category);
+    snprintf(path, sizeof path, count == 4 ? "Pa_Quest_00/Pa_ChallengeCategory_%02d" : "Pa_CategoryS_%02d", category);
     if (memcmp((const void *)(descriptor + 0x19c), path, strlen(path) + 1)) return 0;
     int32_t native_id = -1, pages = 0;
     memcpy(&native_id, (const void *)(descriptor + 0x2f0), 4);
     memcpy(&pages, (const void *)(descriptor + 0x2f4), 4);
-    if (native_id != category || pages != 1 ||
+    if (native_id != category || pages < 1 || (count == 4 && pages != 1) ||
         ((const uint8_t *)descriptor)[0x38c] || ((const uint8_t *)descriptor)[0x38d]) return 0;
     return descriptor;
 }
 
-static void selector_quest_categories_to_view(uintptr_t screen, uintptr_t root,
+static void selector_list_categories_to_view(uintptr_t screen, uintptr_t root,
                                              uint64_t frame, dm_botw_touch_menu_view *view) {
     module_t *main = NULL;
     for (int i = 0; i < g_nmod; i++)
@@ -3241,23 +3252,27 @@ static void selector_quest_categories_to_view(uintptr_t screen, uintptr_t root,
         if (!candidate || frame < observations[i].seen || frame - observations[i].seen > 2 ||
             !selector_list_widget_supported((uintptr_t)main->base, candidate, update) ||
             selector_read_ptr(candidate, 0x60) != screen) continue;
-        // Category zero always exists in this widget's configuration, even
-        // when another category is the currently selected page.
-        if (selector_quest_category_descriptor(candidate, 0)) { widget = candidate; matches++; }
+        // Shops disable weapon/shield categories, including category zero.
+        // Identify the widget by any available native category binding.
+        for (int category = 0; category < DM_BOTW_MENU_MAX_CATEGORIES; category++)
+            if (selector_list_category_descriptor(candidate, category)) {
+                widget = candidate; matches++; break;
+            }
     }
     if (matches != 1) return;
     generic_hit_t hits[DM_BOTW_MENU_MAX_GENERIC_TARGETS];
     int count = generic_hit_snapshot(hits, frame);
-    for (int category = 0; category < 4; category++) {
-        if (!selector_quest_category_descriptor(widget, category)) continue;
-        char expected[25] = {0};
-        snprintf(expected, sizeof expected, "Pa_ChallengeCategory_%02d", category);
+    for (int category = 0; category < DM_BOTW_MENU_MAX_CATEGORIES; category++) {
+        uintptr_t descriptor = selector_list_category_descriptor(widget, category);
+        if (!descriptor) continue;
+        const char *path = (const char *)(descriptor + 0x19c);
+        const char *slash = strrchr(path, '/'), *expected = slash ? slash + 1 : path;
         int found = -1, hit_matches = 0;
         for (int h = 0; h < count; h++) {
             uintptr_t part = selector_nearest_part(hits[h].pane);
             if (!hits[h].usable || hits[h].root != root ||
                 !selector_range(part + PANE_NAME, 24) ||
-                !selector_ancestor_named(part, "Pa_Quest_00")) continue;
+                (slash && !selector_ancestor_named(part, "Pa_Quest_00"))) continue;
             // Pane names have 24 bytes; the old 16-byte diagnostic copy
             // truncates the category suffix and cannot distinguish tabs.
             char name[25]; memcpy(name, (const void *)(part + PANE_NAME), 24); name[24] = 0;
@@ -3269,10 +3284,10 @@ static void selector_quest_categories_to_view(uintptr_t screen, uintptr_t root,
         view->category_panes[at] = hits[found].pane;
         memcpy(view->categories[at], hits[found].rect, sizeof view->categories[at]);
     }
-    if (view->category_count) view->quest_category_widget = widget;
+    if (view->category_count) view->list_category_widget = widget;
 }
 
-static int selector_quest_category_setter(uintptr_t *out) {
+static int selector_list_category_setter(uintptr_t *out) {
 #ifdef DM_TEST_HOOKS
     if (g_test_list_category_setter) { *out = g_test_list_category_setter; return 1; }
 #endif
@@ -3294,7 +3309,7 @@ static int selector_quest_category_setter(uintptr_t *out) {
 
 // Consume category touches on the guest UI thread, with no host lock held
 // during the same native page setter used by the original stick navigation.
-static int selector_apply_quest_category(uintptr_t screen, uint64_t frame) {
+static int selector_apply_list_category(uintptr_t screen, uint64_t frame) {
     uintptr_t setter = 0, widget = 0;
     int category = -1;
     uint64_t consumed = 0;
@@ -3305,7 +3320,7 @@ static int selector_apply_quest_category(uintptr_t screen, uint64_t frame) {
                 g_view.generic_screen == screen && g_target_screen == screen &&
                 g_target_root == g_view.generic_root && g_target_page_key == g_view.page_key &&
                 g_target_popup_key == g_view.popup_key) {
-                widget = g_view.quest_category_widget;
+                widget = g_view.list_category_widget;
                 category = g_target_index;
                 break;
             }
@@ -3314,11 +3329,11 @@ static int selector_apply_quest_category(uintptr_t screen, uint64_t frame) {
     }
     pthread_mutex_unlock(&g_menu_mu);
     if (!widget || atomic_load_explicit(&g_target_serial, memory_order_acquire) != consumed ||
-        !selector_quest_category_descriptor(widget, category) ||
-        !dm_botw_touch_hud_active() || !selector_quest_category_setter(&setter)) return 0;
+        !selector_list_category_descriptor(widget, category) ||
+        !dm_botw_touch_hud_active() || !selector_list_category_setter(&setter)) return 0;
     ((void (*)(uintptr_t, int32_t, int32_t))setter)(widget, 0, category);
     if (atomic_load_explicit(&g_trace, memory_order_acquire))
-        LOG("BOTW quest category selected widget=%p category=%d", (void *)widget, category);
+        LOG("BOTW list category selected widget=%p category=%d", (void *)widget, category);
     return 1;
 }
 
@@ -3328,7 +3343,7 @@ static int selector_quest_list_scroll(uintptr_t screen, uintptr_t entry, uintptr
     int32_t index = -1;
     uintptr_t descriptor = 0, setter = 0;
     uintptr_t widget = selector_list_widget_for_entry(screen, entry, frame, &index, &descriptor);
-    if (!widget || !selector_quest_category_setter(&setter)) return 0;
+    if (!widget || !selector_list_category_setter(&setter)) return 0;
     int32_t category = -1, page = -1;
     uint32_t count = 0;
     memcpy(&category, (const void *)(widget + 0x2e8), 4);
@@ -3894,10 +3909,10 @@ static void selector_publish_generic_view(uintptr_t manager, uintptr_t screen, i
             }
         }
     }
-    if (pause_screen && allow_pause_header && input_active && view.generic_root &&
+    if ((view.carousel_valid || (pause_screen && allow_pause_header)) && input_active && view.generic_root &&
         ((int (*)(uintptr_t))native_screen_shown)(screen) &&
         ((int (*)(uintptr_t))native_group_getter)(screen) == group)
-        selector_quest_categories_to_view(screen, view.generic_root, frame, &view);
+        selector_list_categories_to_view(screen, view.generic_root, frame, &view);
     dm_botw_touch_menu_observe(&view);
     selector_trace_state(manager, focused, screen, selector_read_ptr(screen, 0),
                          view.generic_root, group, input_active, 0, 0, &view, 1,
@@ -4098,7 +4113,22 @@ static int selector_cursorless_prompt_view(uintptr_t manager, uint64_t frame,
     }
     int group = -1;
     uintptr_t control = selector_read_ptr(manager, 0x20);
-    if (!selector_native_input_group(control, group_getter, &group)) return 0;
+    int input_active = selector_native_input_group(control, group_getter, &group);
+    uintptr_t skip_root = 0;
+    if (!input_active) {
+        pthread_mutex_lock(&g_generic_hits_mu);
+        for (int i = 0; i < 32; i++) {
+            generic_back_prompt_t *p = &g_generic_back_prompts[i];
+            if (p->button != DM_BTN_X || !p->text_valid || !p->icon_valid ||
+                frame < p->text_seen || frame - p->text_seen > 2 ||
+                frame < p->icon_seen || frame - p->icon_seen > 2 ||
+                !ancestor_named((uint8_t *)p->guide, "Pa_Skip_00")) continue;
+            if (skip_root && skip_root != p->root) { skip_root = 0; break; }
+            skip_root = p->root;
+        }
+        pthread_mutex_unlock(&g_generic_hits_mu);
+        if (!skip_root) return 0;
+    }
     uintptr_t registry = selector_read_ptr(selector_read_ptr(control, 0x80), 0x28);
     uint32_t count = 0;
     if (!selector_range(registry, 0x48)) return 0;
@@ -4111,30 +4141,41 @@ static int selector_cursorless_prompt_view(uintptr_t manager, uint64_t frame,
     for (uint32_t i = 0; i < count; i++) {
         if (((const uint8_t *)active)[i] & 0x80) continue;
         uintptr_t screen = selector_read_ptr(screens, i * sizeof(uintptr_t));
-        if (!selector_range(screen, 0x100) || !((int (*)(uintptr_t))shown)(screen) ||
-            ((int (*)(uintptr_t))group_getter)(screen) != group) continue;
+        if (!input_active && selector_read_ptr(selector_read_ptr(screen, 0x30), 0x18) != skip_root) continue;
+        if (!selector_range(screen, 0x100) || !((int (*)(uintptr_t))shown)(screen)) continue;
         uintptr_t state = selector_read_ptr(screen, 0x38);
         if (!selector_range(state, 0x39) || !(((const uint8_t *)state)[0x38] & 2)) continue;
         char name[64];
         if (!selector_screen_name(screen, name) || !selector_pointer_screen_name(name) ||
             selector_name_prefix(name, "AppMap") || !strcmp(name, "AppTool_00") ||
             !strcmp(name, "AppAlbum_00") || !strcmp(name, "AppSystemWindow_00")) continue;
+        // Cutscenes disable the menu input-group mask while Skip_00 still
+        // owns its visible X prompt. Its shown screen and live glyph establish
+        // that action independently; other menus retain their group checks.
+        int skip = !strcmp(name, "Skip_00");
+        if (!skip && (!input_active || ((int (*)(uintptr_t))group_getter)(screen) != group)) continue;
         uintptr_t root = selector_read_ptr(selector_read_ptr(screen, 0x30), 0x18), visible_root = 0;
         if (!root || selector_read_ptr(root, PANE_PARENT) ||
             !selector_pane_visible_alpha(root, &visible_root) || visible_root != root) continue;
         dm_botw_touch_menu_view candidate = {0};
         candidate.render_frame = frame;
         candidate.generic_mode = 1; candidate.generic_screen = screen; candidate.generic_root = root;
-        candidate.generic_group = group;
+        candidate.generic_group = skip ? -1 : group;
         candidate.page_key = candidate.generic_key = ((uint64_t)(screen >> 4) ^
-            ((uint64_t)root << 1) ^ ((uint64_t)(uint32_t)group << 48));
-        if (generic_back_prompt_snapshot(root, frame, candidate.back)) candidate.back_valid = 1;
-        generic_action_prompts_to_view(root, frame, &candidate);
-        selector_copy_native_prompts(frame, group, screen, root, &candidate);
-        selector_paging_prompts(root, frame, &candidate);
+            ((uint64_t)root << 1) ^ ((uint64_t)(uint32_t)candidate.generic_group << 48));
+        if (skip) {
+            float rect[4];
+            if (!generic_action_prompt_snapshot(root, frame, DM_BTN_X, rect)) continue;
+            menu_add_action(&candidate, DM_BTN_X, rect);
+        } else {
+            if (generic_back_prompt_snapshot(root, frame, candidate.back)) candidate.back_valid = 1;
+            generic_action_prompts_to_view(root, frame, &candidate);
+            selector_copy_native_prompts(frame, group, screen, root, &candidate);
+            selector_paging_prompts(root, frame, &candidate);
+        }
         if (!candidate.back_valid && !candidate.footer_action_count) continue;
         candidate.prompt_owner_valid = 1; candidate.prompt_owner_screen = screen;
-        candidate.prompt_owner_root = root; candidate.prompt_owner_group = group;
+        candidate.prompt_owner_root = root; candidate.prompt_owner_group = candidate.generic_group;
         candidate.prompt_owner_frame = frame;
         selected = candidate;
         if (++matches > 1) return 0;
@@ -4841,7 +4882,7 @@ void dm_botw_touch_menu_selector(const uint64_t *regs) {
         selector_publish_generic_view(manager, focus_screen, group, input_active,
                                       native_screen_shown, native_group_getter,
                                       pause_screen_class);
-        if (input_active && selector_apply_quest_category(focus_screen, frame)) return;
+        if (input_active && selector_apply_list_category(focus_screen, frame)) return;
         selector_diagnose_quest_list_mapping(manager, focus_screen, focus_entry,
                                              focus_pane, focus_root, group, input_active,
                                              native_screen_shown, native_group_getter, frame);
@@ -5625,7 +5666,7 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
             pthread_mutex_unlock(&g_menu_mu);
             return;
         }
-        int category_hit = !g_pointer_dragged && g_view.quest_category_widget
+        int category_hit = !g_pointer_dragged && g_view.list_category_widget
             ? hit_rects(x, y, g_view.categories, g_view.category_count) : -1;
         if (category_hit >= 0 && point_in_rect(g_pointer_start[0], g_pointer_start[1],
                                                g_view.categories[category_hit])) {

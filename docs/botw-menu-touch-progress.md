@@ -40,6 +40,9 @@ Mac menu coverage includes the complete merged graphics host with shaders from t
 | Options horizontal value gestures | Mac verified | Right swipe changes camera sensitivity Normal to Fast; reverse swipe restores Normal, with one native adjustment each. Missing directions never become Confirm. |
 | Whole dialogue window and continuation arrow | Mac verified | Beedle greeting advances from blank left padding, and the farewell advances from its text. With choices visible, a background tap does not confirm; direct Good-bye still works. Native background bounds also remain available while text types. Hidden/covered windows fail closed. |
 | First-acquisition item cards | User Mac verified | The supplied shrine/chest save reproduces Eightfold Blade acquisition. Clicking the card body now continues through the native A handler; the numbered continuation arrow is covered by the same path and native regression checks. Original save files are preserved. |
+| Shrine Skip and action tutorial body | Mac verified | Skip text emits native X during the entry cutscene. Blank padding in the action-tutorial window emits native A; nested controller illustrations do not enlarge its target. Both use native owner and visibility checks. |
+| Shop Sell categories | Beedle Mac verified | Native category bindings select Cooking, Armor and Materials directly, including the two-page Materials configuration. Disabled weapon tabs remain inert; no sale was made in this regression check. |
+| Movement-stick L3 double-tap timing | Shared geometry and UIKit verified; physical iPhone pending | Maximum release-to-next-down gap is 200 ms. Platform tap/distance recognition remains in place; 190 ms passes, 210/350 ms fail. Camera double taps and ordinary gamepad handling stay unchanged. |
 | Dialogue choices | Mac verified | Direct buy/sell/Good-bye, quantity confirmation and cancellation choices work with Beedle. Domidak/Prissen's two-option conversation also selects its requested branch directly and advances across speaker changes. Other conditional NPC layouts remain unverified. |
 | Shops, buy/sell and quantity | Beedle Mac verified | Direct purchase rows use the shared native list setter with the independently validated shop receiver class. Numeric Message fields expose their live number and +/- controls even when the registered hit pane is offscreen. Quantity increment/decrement, All-of-them, cancellation, actual sale and two-item purchase passed. Sell-grid left/right paging and page-arrow touch also passed; quantity dialogs block background paging. Other shop layouts remain unverified. |
 | Album/photo operations | Deferred by user | Thumbnail selection, viewing, paging, delete confirmation and Back. |
@@ -218,3 +221,58 @@ The same run closes the Sell-grid horizontal-paging regression; see the [game no
 
 External evidence: `01007EF00011E000-work/inventory-touch-20261025/run27/`.
 See the [game note](../dm/games/01007EF00011E000/README.md#what-it-needs) for the layout mismatch and shared continuation fix. `new-item-click-blocked.png`, `new-item-before.txt` and `new-item-pane-tree.txt` record the reproduction. The user walked to the chest and verified the rebuilt runtime; `mac-body.log` and `new-item-runtime-evidence.txt` record the card-body tap, native A and return to gameplay. `menu-unit.log` passes the added card/arrow and ownership checks alongside previous menu regressions. `source-save-verification.txt` confirms the three supplied save files are unchanged. No physical iPhone build was installed.
+
+The subsequent BOTW movement/ZL size and deadzone adjustment is recorded in the
+[game note](../dm/games/01007EF00011E000/README.md#what-it-needs).
+`run28/geometry.log` and `build.log` pass; `run28/ios-final/details.log` reports
+zero failures in 31 look sessions, including both sticks at 390/540-point
+viewport heights and unchanged controller/other-game defaults. The updated
+host is registered for Mac quick launch; the existing game process retains
+its previous executable until restarted. Physical iPhone feel remains untested.
+
+## Shrine prompts, Sell categories and L3 timing (2026-10-27)
+
+External evidence: `01007EF00011E000-work/inventory-touch-20261025/run29/`.
+See the [game note](../dm/games/01007EF00011E000/README.md#what-it-needs) for the
+native layouts, category bindings and Skip input ownership. `mac-shrine-fixed.log`,
+`tutorial-touch-evidence.txt` and `tutorial-body-before.png` / `tutorial-body-after.png`
+record the blank tutorial-body tap and native A. `mac-shop-fixed.log`,
+`sell-category-evidence.txt` and the `sell-*-touch.png` images record direct
+Cooking/Armor/Materials changes; `sell-disabled-category.png` records rejection.
+
+`mac-entry-ready.log`, `shrine-skip-evidence.txt` and `shrine-skip-after.png`
+record the real Mac pointer tap at `(0.911, 0.941)`, native X at frame 3145,
+Fade ownership during exit and gameplay restoration at frame 3201. Merely
+reaching loading was not counted as Skip acceptance. `menu-final.log` passes
+the menu regressions, including a prompt becoming shown without another
+matrix calculation, disabled ordinary input groups and closing-owner rejection.
+`ios/details.log` reports zero failures in 31 look sessions, including L3
+timing and existing controller/non-BOTW routing. `build-final-accepted.log`
+records the final Mac build. `source-save-verification.txt` confirms all six
+files in the two original slot-zero saves are unchanged. The verified host is
+registered for Mac quick launch; physical iPhone feel remains untested.
+
+## Fixed Plus anchor and shrine Minus (2026-10-27)
+
+Plus now has one position beside the minimap whether or not the minimap is
+visible. Its 39-unit circle sits 4 frontend points below the minimap clip top,
+with a 40%-opaque black fill and a centered white 19-unit cross. Cross thickness
+scales with the circle diameter at 12%. Native HUD relocation and both
+frontends share the anchor constants. Minus appears below Plus with an 8-point
+gap when the map is absent; ordinary gamepads keep their existing layout.
+
+See the [game note](../dm/games/01007EF00011E000/README.md#what-it-needs) for
+the shrine visibility cause. Alpha-zero map ancestors invalidate map hit
+ownership while preserving the environment HUD's existing placement. Completing
+a Slate interaction clears its consumed-tap guard when gameplay resumes.
+External evidence is in `inventory-touch-20261025/run30/`: `hud.log` covers the
+alpha-only hide and unchanged environment alignment; `geometry.log` covers
+size, top alignment and stacked spacing. `ios-final/details.log` reports zero
+failures in 31 look sessions, including fixed-position map transitions,
+shrines, and controller/non-BOTW restoration. `mac-shrine-hud.log` records the
+Mac cold shrine start, Minus opening the map, travel to the overworld, and Plus
+opening inventory. `shrine-final.png` shows the final build in the shrine.
+`mac-shrine-check.log` confirms the final build's cold shrine start, Minus
+opening the map and Back restoring both buttons in their fixed positions.
+The matching host is registered for quick launch. Physical iPhone acceptance
+remains separate.

@@ -382,15 +382,15 @@ static void test_quest_category_touch(void) {
     categories.generic_screen = (uintptr_t)selector.screen;
     categories.generic_key = categories.page_key = 902;
     categories.render_frame = 5000;
-    selector_quest_categories_to_view((uintptr_t)selector.screen, (uintptr_t)root, 5000, &categories);
-    assert(categories.quest_category_widget == (uintptr_t)widget && categories.category_count == 2);
+    selector_list_categories_to_view((uintptr_t)selector.screen, (uintptr_t)root, 5000, &categories);
+    assert(categories.list_category_widget == (uintptr_t)widget && categories.category_count == 2);
     assert(categories.category_ids[0] == 0 && categories.category_ids[1] == 3);
     assert(fabsf(categories.categories[1][2] - .025f) < .0001f); // native B_Hit, not overlapping part bounds
-    assert(!selector_quest_category_descriptor((uintptr_t)widget, -1));
-    assert(!selector_quest_category_descriptor((uintptr_t)widget, 1));
-    assert(!selector_quest_category_descriptor((uintptr_t)widget, 4));
+    assert(!selector_list_category_descriptor((uintptr_t)widget, -1));
+    assert(!selector_list_category_descriptor((uintptr_t)widget, 1));
+    assert(!selector_list_category_descriptor((uintptr_t)widget, 4));
     descriptors[3][0x19c + 34] = '0'; // wrong native pane binding cannot select a different tab
-    assert(!selector_quest_category_descriptor((uintptr_t)widget, 3));
+    assert(!selector_list_category_descriptor((uintptr_t)widget, 3));
     descriptors[3][0x19c + 34] = '3';
     g_test_list_category_setter = (uintptr_t)mock_category_set;
     dm_botw_touch_menu_test_publish(&categories);
@@ -400,23 +400,23 @@ static void test_quest_category_touch(void) {
     tap(x, y);
     assert(g_target_valid && g_target_category == 2);
     assert(sample(5000) == 0); // no A or simulated stick traversal
-    assert(selector_apply_quest_category((uintptr_t)selector.screen, 5000));
+    assert(selector_apply_list_category((uintptr_t)selector.screen, 5000));
     assert(mock_category_calls == 1 && mock_category_widget == (uintptr_t)widget &&
            mock_category_page == 0 && mock_category_id == 3);
     assert(sample(5001) == 0);
     tap(x, y);
     mock_touch_hud_active = 0;
-    assert(!selector_apply_quest_category((uintptr_t)selector.screen, 5000));
+    assert(!selector_apply_list_category((uintptr_t)selector.screen, 5000));
     assert(mock_category_calls == 1);
     mock_touch_hud_active = 1;
     tap(x, y);
     categories.page_key++;
     dm_botw_touch_menu_test_publish(&categories);
-    assert(!selector_apply_quest_category((uintptr_t)selector.screen, 5000));
+    assert(!selector_apply_list_category((uintptr_t)selector.screen, 5000));
     assert(mock_category_calls == 1);
-    categories.category_count = 0; categories.quest_category_widget = 0;
-    selector_quest_categories_to_view((uintptr_t)selector.screen, (uintptr_t)root, 5003, &categories);
-    assert(!categories.category_count && !categories.quest_category_widget);
+    categories.category_count = 0; categories.list_category_widget = 0;
+    selector_list_categories_to_view((uintptr_t)selector.screen, (uintptr_t)root, 5003, &categories);
+    assert(!categories.category_count && !categories.list_category_widget);
     // Vertical drags use the same native page setter on the row-owning
     // widget and never confirm a row or emit virtual directional input.
     uint8_t row_descriptor[0x50] = {0};
@@ -700,6 +700,107 @@ static void test_cursorless_help_prompts(void) {
         (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &help));
     assert(help.back_valid && help.prompt_owner_root == (uintptr_t)root);
     mock_guest_start = 0; mock_guest_size = 0;
+    dm_botw_touch_menu_reset();
+}
+
+static void test_shop_category_touch(void) {
+    dm_botw_touch_menu_reset(); init_selector_fixture();
+    current_guest_frame = 5200; dm_botw_touch_menu_test_set_render_frame(5200);
+    mock_guest_start = (uintptr_t)native_panes; mock_guest_size = sizeof native_panes;
+    uint8_t widget[0x400] = {0}, descriptors[7][0x398] = {{0}};
+    uintptr_t array[7], vtable[8] = {0}; uint32_t seven = 7;
+    g_test_list_widget_override = 1; g_test_list_widget_vtable = (uintptr_t)vtable;
+    g_test_list_widget_update = (uintptr_t)mock_category_set;
+    vtable[BOTW_LIST_WIDGET_VTABLE_SLOT / 8] = g_test_list_widget_update;
+    put_ptr(widget, (uintptr_t)vtable); put_ptr(widget + 0x60, (uintptr_t)selector.screen);
+    memcpy(widget + 0x288, &seven, 4); memcpy(widget + 0x2a8, &seven, 4);
+    put_ptr(widget + 0x290, (uintptr_t)array);
+    uint8_t *root = fake_pane(100,"RootPane",-1,1280,720,0,0);
+    fake_pane(101,"N_Cat_00",100,30,40,0,0);
+    for (int i=0;i<7;i++) {
+        array[i] = (uintptr_t)descriptors[i]; put_ptr(descriptors[i]+8,(uintptr_t)widget);
+        char name[25]; snprintf(name,sizeof name,"Pa_CategoryS_%02d",i);
+        strcpy((char *)descriptors[i]+0x19c,name);
+        int32_t pages = i==4 ? 2 : 1;
+        memcpy(descriptors[i]+0x2f0,&i,4); memcpy(descriptors[i]+0x2f4,&pages,4);
+        descriptors[i][0x38d] = i<3 || i==6;
+        fake_pane(102+i*2,name,101,190,126,-450+i*58,290);
+        uint8_t *hit = fake_pane(103+i*2,"B_Hit_00",102+i*2,32,32,-450+i*58,290);
+        generic_hit_observe(hit,1);
+    }
+    g_list_widget_observations[0] = (botw_list_widget_observation_t){(uintptr_t)widget,5200,38,38};
+    dm_botw_touch_menu_view categories = {0};
+    categories.generic_mode = categories.carousel_valid = 1;
+    categories.generic_root = (uintptr_t)root; categories.generic_screen = (uintptr_t)selector.screen;
+    categories.generic_key = categories.page_key = 903; categories.render_frame = 5200;
+    selector_list_categories_to_view((uintptr_t)selector.screen,(uintptr_t)root,5200,&categories);
+    assert(categories.list_category_widget == (uintptr_t)widget && categories.category_count == 3);
+    assert(categories.category_ids[0] == 3 && categories.category_ids[1] == 4 && categories.category_ids[2] == 5);
+    g_test_list_category_setter = (uintptr_t)mock_category_set;
+    dm_botw_touch_menu_test_publish(&categories); mock_category_calls = 0;
+    float x=categories.categories[2][0]+.0125f, y=categories.categories[2][1]+.0222f;
+    tap(x,y); assert(!sample(5200)); // category selection never confirms an item or walks the cursor
+    assert(selector_apply_list_category((uintptr_t)selector.screen,5200));
+    assert(mock_category_calls == 1 && mock_category_id == 5 && mock_category_page == 0);
+    tap(x,y); descriptors[5][0x38d] = 1;
+    assert(!selector_apply_list_category((uintptr_t)selector.screen,5200) && mock_category_calls == 1);
+    g_test_list_widget_override = 0; g_test_list_category_setter = 0;
+    mock_guest_start = 0; mock_guest_size = 0; dm_botw_touch_menu_reset();
+}
+
+static void test_cutscene_skip_prompt(void) {
+    dm_botw_touch_menu_reset(); init_selector_fixture();
+    mock_guest_start = (uintptr_t)native_panes; mock_guest_size = sizeof native_panes;
+    current_guest_frame = 9100; dm_botw_touch_menu_test_set_render_frame(9100);
+    dm_botw_touch_menu_test_set_generic_selector(1, (uintptr_t)mock_native_group,
+                                                (uintptr_t)mock_native_shown);
+    uint8_t mask[0x20] = {0}; // cutscenes disable ordinary UI input groups
+    put_ptr(selector.registry + 0xb18, (uintptr_t)mask);
+    put_ptr(selector.manager + 0x48, 0);
+    strcpy((char *)selector.screen + 0x200, "Skip_00");
+    selector.screen[0xfe] = 2;
+    uint8_t *root = fake_pane(80, "RootPane", -1, 1280, 720, 0, 0);
+    put_ptr(selector.screen + 0x30, (uintptr_t)selector.apphome_wrapper);
+    put_ptr(selector.apphome_wrapper + 0x18, (uintptr_t)root);
+    uint8_t *guide = fake_pane(81, "Pa_Skip_00", 80, 160, 40, 550, -318);
+    uint8_t *inout = fake_pane(84, "N_InOut_00", 81, 30, 40, 550, -318);
+    uint8_t *icon = fake_pane(82, "T_Icon_00", 84, 32, 32, 560, -318);
+    uint8_t *label = fake_pane(83, "T_Guide_00", 84, 80, 24, 540, -318);
+    link_child(guide,inout); link_child(inout, icon); link_child(inout, label);
+    uint16_t glyph = 0xe042; put_ptr(icon + 0xe0, (uintptr_t)&glyph);
+    generic_back_prompt_observe(icon, 1); generic_back_prompt_observe(label, 1);
+    dm_botw_touch_menu_view skip = {0};
+    unsigned calls = mock_group_calls;
+    assert(selector_cursorless_prompt_view((uintptr_t)selector.manager, 9100,
+        (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &skip));
+    assert(skip.footer_action_count == 1 && skip.footer_action_buttons[0] == DM_BTN_X &&
+           skip.generic_group == -1 && mock_group_calls == calls);
+    atomic_store_explicit(&g_validated_box_cursor_manager, (uintptr_t)selector.manager, memory_order_release);
+    selector.screen[0xfe] = 1;
+    observe_native_pane(icon, 1); observe_native_pane(label, 1);
+    assert(!dm_botw_touch_menu_active());
+    selector.screen[0xfe] = 2;
+    // The opening animation reuses the matrix once the screen becomes shown.
+    // Its pre-matrix callbacks must publish the now-actionable native X.
+    observe_native_pane(icon, 0); observe_native_pane(label, 0);
+    assert(dm_botw_touch_menu_active() && g_view.generic_screen == (uintptr_t)selector.screen &&
+           g_view.footer_action_count == 1 && g_view.footer_action_buttons[0] == DM_BTN_X);
+    dm_botw_touch_menu_test_publish(&skip);
+    tap(.87f, .94f); assert(sample(9100) == DM_BTN_X && !sample(9101));
+    tap(.5f, .5f); assert(!g_target_valid);
+    strcpy((char *)selector.screen + 0x200, "OptionWindow_00");
+    assert(!selector_cursorless_prompt_view((uintptr_t)selector.manager, 9100,
+        (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &skip));
+    strcpy((char *)selector.screen + 0x200, "Skip_00");
+    current_guest_frame = 9102; dm_botw_touch_menu_test_set_render_frame(9102);
+    skip.render_frame = skip.prompt_owner_frame = 9102;
+    dm_botw_touch_menu_test_publish(&skip); tap(.87f,.94f);
+    selector.screen[0xfe] = 3;
+    assert(!sample(9102)); // a closing Skip window cannot emit through the next scene
+    selector.screen[0xfe] = 2;
+    root[0x59] = 0;
+    assert(!selector_cursorless_prompt_view((uintptr_t)selector.manager, 9100,
+        (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &skip));
     dm_botw_touch_menu_reset();
 }
 
@@ -1251,6 +1352,24 @@ static void test_message_advance_owner(void) {
     tap(.1f,.5f); assert(!g_target_valid); // scene outside the card stays inert
     assert(!selector_message_prompt_view((uintptr_t)selector.manager,current_guest_frame+3,&message));
     card_parent[0x59] = 0; native_panes[81].bytes[0x59] = 0;
+    assert(!selector_message_prompt_view((uintptr_t)selector.manager,current_guest_frame,&message));
+    // MessageTips' visible panel has two InOut layers under Pa_Tips_00.
+    // Its illustration tiles must not become separate continuation surfaces.
+    dm_botw_touch_menu_reset();
+    strcpy((char *)selector.screen + 0x200, "MessageTips_00");
+    fake_pane(92, "Pa_Tips_00", 80, 30, 40, 0, 0);
+    fake_pane(93, "N_InOut_00", 92, 30, 40, 0, 0);
+    uint8_t *tips_inout = fake_pane(94, "N_InOut_01", 93, 30, 40, 0, 0);
+    uint8_t *tips_body = fake_pane(95, "W_Base_00", 94, 674, 355, 0, 30);
+    fake_pane(96, "Pa_Controller_00", 94, 100, 100, 0, 0);
+    uint8_t *tile = fake_pane(97, "W_Base_00", 96, 100, 100, 0, 0);
+    assert(native_message_body(tips_body,"W_Base_00") && !native_message_body(tile,"W_Base_00"));
+    observe_native_pane(tips_body,1);
+    dm_botw_touch_menu_test_snapshot(&message);
+    assert(message.footer_action_count == 1 && message.footer_action_buttons[0] == DM_BTN_A);
+    tap(.3f,.3f); assert(sample(current_guest_frame) == DM_BTN_A && !sample(current_guest_frame+1));
+    tap(.1f,.3f); assert(!g_target_valid);
+    tips_inout[0x59] = 0;
     assert(!selector_message_prompt_view((uintptr_t)selector.manager,current_guest_frame,&message));
     atomic_store(&g_validated_box_cursor_manager,0);
     dm_botw_touch_menu_reset();
@@ -3028,6 +3147,8 @@ int main(void) {
     test_inventory_category_touch_cells();
     test_shop_grid_paging();
     test_cursorless_help_prompts();
+    test_shop_category_touch();
+    test_cutscene_skip_prompt();
     test_inventory_preview_rotation();
     test_map_displacement_drag();
     puts("t_botw_touch_menu: native inventory/category/popup and current-screen generic targets, eligibility, delayed focus and inactive gates passed");

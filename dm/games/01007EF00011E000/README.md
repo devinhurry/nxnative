@@ -45,9 +45,22 @@ Crossing either way through the existing 120% sprint threshold emits one touch
 haptic, without repeated pulses while staying on one side or an extra release
 pulse. BOTW camera dragging is silent; camera double-tap retains R3 and one pulse.
 The map/environment cluster moves 60 native layout units left, reserving space
-for + with an 8-point gap. Both +/- show plain white glyphs, with no background,
-border or decoration; their touch areas remain unchanged. The L rune badge shares
+for + with an 8-point gap. Both +/- use a white cross over a 40%-opaque black
+circle, with no border. Plus has one fixed anchor beside the minimap; its circle
+sits 4 frontend points below the minimap top. The circle is 39 native layout
+units across, and its centered cross is 19 units long with thickness set to 12%
+of the circle diameter. Its position does not depend on minimap visibility,
+including a cold start inside a shrine. Without the minimap, Minus appears
+directly below Plus. Their shared Mac/UIKit geometry and glyph paths keep
+drawing and hit areas aligned. The L rune badge shares
 Y's opaque gray fill and gold outline.
+BOTW touch movement and ZL sticks use a 7% deadzone. Above 430 frontend
+points of viewport height, both outer rings have a fixed 140-point diameter;
+at or below 430, their previous size scaling remains. Full movement stays at
+80% of the radius, and movement-stick sprint stays at 120%. Controller and
+other-game defaults remain unchanged. `inventory-touch-20261025/run28/`
+records passing shared geometry checks, a Mac build and zero UIKit failures,
+including both sticks, short/tall canvases and ordinary-mode restoration.
 `inventory-touch-20261025/run26/ios-style/` records the plain +/- glyphs,
 outside direction arrows, sprint double arrows and current outline colors;
 the UIKit harness passed with zero failures in 31 look sessions.
@@ -89,6 +102,41 @@ a card-body tap at `(0.629, 0.543)` emitted A at frame 4019, closed the card and
 restored gameplay by frame 4034. Native checks cover the body, numbered arrow,
 outside taps, hidden/stale ownership and the previous dialogue cases. The three
 source-save files remain unchanged; physical iPhone acceptance is separate.
+
+Resolved: action-tutorial text and shrine Skip were not clickable. Tutorials
+use `Pa_Tips_00/N_InOut_00/N_InOut_01/W_Base_00` as their outer continuation
+window; its body now shares the native A path, excluding nested illustration
+and capture backgrounds. `Skip_00` has no BoxCursor selection and remains
+usable while cutscenes disable ordinary UI input groups. Its shown screen,
+visible root and live X glyph establish ownership independently of that mask.
+Prompt ownership is refreshed on pre-matrix callbacks too: the game can finish
+opening a prompt while reusing its transform. Closing/hidden/stale owners
+still cannot emit. Mac pointer checks continued the tutorial from blank body
+padding and emitted native X from the shrine's Skip text.
+
+Resolved: Sell category icons were not registered cursor rows. The observed
+shop navigation widget uses the same native category setter as quest tabs,
+with seven `Pa_CategoryS_*` descriptors rather than four quest descriptors.
+Touch now follows those native bindings, including disabled categories and
+the Materials page count. Mac checks selected Cooking, Armor and Materials
+directly; disabled weapon tabs remained inert and no item was sold.
+`inventory-touch-20261025/run29/` retains the runtime and native regression
+evidence for these menu fixes; both original source saves are unchanged.
+
+BOTW movement-stick L3 double taps now require at most 200 ms between the
+first release and the second touch-down, while retaining platform tap and
+distance recognition. Mac preview uses the same gap. Camera double taps,
+controller input and other games retain their existing handling. Shared
+geometry checks and the UIKit handler suite pass, including 190/210/350 ms
+cases and reset behavior; physical iPhone feel remains untested.
+
+Resolved: shrines hid Minus because AppMap's `N_InOut_00` sets alpha to zero
+while retaining its visible bit and collapsed viewport size. Map hit ownership
+now checks ancestor alpha as well, so a transparent minimap cannot suppress
+Minus. The completed Slate interaction also releases its consumed-map guard
+on menu exit when gameplay resumes without a minimap. Native HUD checks,
+UIKit mode/geometry checks and a Mac cold shrine start passed; the shrine's
+Minus opens the map. `inventory-touch-20261025/run30/` records this revision.
 
 | Setting | Where | Why |
 |---|---|---|

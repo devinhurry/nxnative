@@ -31,6 +31,7 @@ typedef struct { float x, y, width, height; } dm_touchpad_rect;
 #define DM_TP_LSWIPE (1.0f / 3.0f)
 #define DM_TP_FULL 0.8f
 #define DM_TP_DEAD 0.1f
+#define DM_TP_BOTW_STICK_DEAD 0.07f
 #define DM_TP_LOW_X 231.0f
 #define DM_TP_LOW_Y 64.0f
 #define DM_TP_DPAD_R 48.0f
@@ -45,15 +46,18 @@ typedef struct { float x, y, width, height; } dm_touchpad_rect;
 #define DM_TP_LOOK_TAP_MAX_SECONDS 0.35f
 #define DM_TP_LOOK_DOUBLE_TAP_INTERVAL 0.35f
 #define DM_TP_LOOK_DOUBLE_TAP_DISTANCE 48.0f
+#define DM_TP_STICK_DOUBLE_TAP_GAP 0.20
 #define DM_TP_SHOULDER_GAP 8.0f
 #define DM_TP_SHOULDER_HIT_SCALE 1.0f
 #define DM_TP_SHIELD_GAP 8.0f
 #define DM_TP_CANCEL_RADIUS 70.0f
 #define DM_TP_SPRINT_OVERSHOOT 1.2f
-#define DM_TP_MAP_BADGE_WIDTH 32.0f
-#define DM_TP_MAP_BADGE_HEIGHT 32.0f
-#define DM_TP_MAP_BADGE_RADIUS 16.0f
-#define DM_TP_MAP_BADGE_GAP 8.0f
+#define DM_TP_BOTW_MAP_RIGHT_INSET 84.0f
+#define DM_TP_BOTW_MAP_TOP 340.0f
+#define DM_TP_BOTW_MENU_SIZE 39.0f
+#define DM_TP_BOTW_MENU_GLYPH_SIZE 19.0f
+#define DM_TP_BOTW_MENU_Y_OFFSET 4.0f
+#define DM_TP_BOTW_MENU_GAP 8.0f
 
 static inline int dm_touchpad_sprint_requested(float displacement, float visible_radius) {
     return visible_radius > 0.0f && displacement > visible_radius * DM_TP_SPRINT_OVERSHOOT;
@@ -62,6 +66,11 @@ static inline int dm_touchpad_sprint_requested(float displacement, float visible
 static inline float dm_touchpad_u(float height) {
     float u = height / 430.0f;
     return u < 1.3f ? u : 1.3f;
+}
+
+// BOTW movement and shield sticks stop growing on taller landscape canvases.
+static inline float dm_touchpad_botw_stick_radius(float height) {
+    return height > 430.0f ? 70.0f : DM_TP_STICK_R * dm_touchpad_u(height);
 }
 
 // safe insets and result use top-left coordinates, as UIKit does. AppKit
@@ -107,6 +116,9 @@ static inline int dm_touchpad_look_dragged(float down_x, float down_y,
 }
 static inline int dm_touchpad_look_tap(float duration, int dragged) {
     return !dragged && duration >= 0.0f && duration <= DM_TP_LOOK_TAP_MAX_SECONDS;
+}
+static inline int dm_touchpad_stick_double_tap_gap(double gap) {
+    return gap >= 0.0 && gap <= DM_TP_STICK_DOUBLE_TAP_GAP;
 }
 static inline int dm_touchpad_look_double_tap(double first_time, double second_time,
                                                float first_x, float first_y,
@@ -157,11 +169,6 @@ static inline dm_touchpad_point dm_touchpad_rune_button(float width, float heigh
     return p;
 }
 
-static inline dm_touchpad_rect dm_touchpad_map_badge_rect(float cx, float cy, float u) {
-    float w = DM_TP_MAP_BADGE_WIDTH * u, h = DM_TP_MAP_BADGE_HEIGHT * u;
-    return (dm_touchpad_rect){cx - w * .5f, cy - h * .5f, w, h};
-}
-
 static inline int dm_touchpad_rounded_rect_contains(dm_touchpad_rect r, float radius, float x, float y) {
     float rr = fminf(radius, fminf(r.width, r.height) * .5f);
     float cx = fminf(fmaxf(x, r.x + rr), r.x + r.width - rr);
@@ -170,14 +177,15 @@ static inline int dm_touchpad_rounded_rect_contains(dm_touchpad_rect r, float ra
     return x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height && dx*dx + dy*dy <= rr*rr;
 }
 
-// The published map rectangle is normalized to the visible 16:9 UI canvas.
-// The circular + sits outside the upper-right edge, with a gap in frontend points.
-static inline dm_touchpad_point dm_touchpad_map_badge(float canvas_x, float canvas_y,
-                                                       float canvas_width, float canvas_height,
-                                                       dm_touchpad_rect map, float badge_width,
-                                                       float badge_height) {
-    return (dm_touchpad_point){canvas_x + (map.x + map.width) * canvas_width + badge_width * .5f + DM_TP_MAP_BADGE_GAP,
-                               canvas_y + map.y * canvas_height + badge_height * .5f};
+// One fixed + anchor beside the relocated minimap, including in shrines.
+// Size follows the aspect canvas; y-offset is in frontend points.
+static inline dm_touchpad_rect dm_touchpad_botw_menu_rect(float canvas_x, float canvas_y,
+                                                           float canvas_width, float canvas_height,
+                                                           int minus) {
+    float size = DM_TP_BOTW_MENU_SIZE * canvas_height / 720.0f;
+    return (dm_touchpad_rect){canvas_x + (1280.0f - DM_TP_BOTW_MAP_RIGHT_INSET) * canvas_width / 1280.0f + DM_TP_BOTW_MENU_GAP,
+        canvas_y + (360.0f - DM_TP_BOTW_MAP_TOP) * canvas_height / 720.0f + DM_TP_BOTW_MENU_Y_OFFSET +
+            (minus ? size + DM_TP_BOTW_MENU_GAP : 0), size, size};
 }
 
 static inline int dm_touchpad_cancel_outside(float x, float y, float cx, float cy, float radius) {
@@ -237,12 +245,17 @@ static inline uint64_t dm_touchpad_dpad_buttons(float x, float y, float center_x
     return bits;
 }
 
-static inline void dm_touchpad_stick_axis(float dx, float dy, float radius,
-                                         int full_tilt, int32_t *x, int32_t *y) {
-    float d = hypotf(dx, dy), dead = radius * DM_TP_DEAD;
+static inline void dm_touchpad_stick_axis_with_deadzone(float dx, float dy, float radius,
+                                         int full_tilt, float dead_ratio, int32_t *x, int32_t *y) {
+    float d = hypotf(dx, dy), dead = radius * dead_ratio;
     if (d <= (full_tilt ? 0.0f : dead) || radius <= 0.0f) { *x = *y = 0; return; }
     float magnitude = (full_tilt ? 1.0f : fminf((d - dead) / (radius * DM_TP_FULL - dead), 1.0f)) / d;
     *x = (int32_t)lrintf(dx * magnitude * DM_STICK_MAX);
     *y = (int32_t)lrintf(-dy * magnitude * DM_STICK_MAX);
+}
+
+static inline void dm_touchpad_stick_axis(float dx, float dy, float radius,
+                                         int full_tilt, int32_t *x, int32_t *y) {
+    dm_touchpad_stick_axis_with_deadzone(dx, dy, radius, full_tilt, DM_TP_DEAD, x, y);
 }
 

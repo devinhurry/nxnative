@@ -6,6 +6,7 @@
 #include "botw_rune_icon.h"
 #include "botw_touch_actions.h"
 #include "botw_touch_menu.h"
+#include "touchpad_geometry.h"
 #include <math.h>
 #include <stdatomic.h>
 #include <TargetConditionals.h>
@@ -13,8 +14,6 @@
 enum { BOTW_TOUCH_PANE_NAME = 0xb8, BOTW_TOUCH_PARENT = 0x18, BOTW_TOUCH_FLAGS = 0x58,
        BOTW_TOUCH_POSITION = 0x30, BOTW_TOUCH_SCALE = 0x48, BOTW_TOUCH_SIZE = 0x50,
        BOTW_TOUCH_MATRIX = 0x70, BOTW_TOUCH_DIRTY = 0x10 };
-// Reserve space for the outboard circular +, its gap and the screen-edge margin.
-enum { BOTW_TOUCH_MAP_RIGHT_INSET = 84, BOTW_TOUCH_MAP_TOP = 340 };
 static const char BOTW_BUILD[] = "cd57b23fa4bbad65803d9788c01821ee";
 static pthread_mutex_t g_touchhud_mu = PTHREAD_MUTEX_INITIALIZER;
 static struct {
@@ -230,6 +229,13 @@ static int map_cut_root(uint8_t *pane) {
            map_layout_root(root);
 }
 static int map_cut_visible(uint8_t *pane) { return visible_to_root(pane); }
+static int map_hit_visible(uint8_t *pane) {
+    for (uint8_t *p = pane; p; p = pane_parent(p)) {
+        if (!pane_visible(p) || !p[BOTW_TOUCH_FLAGS + 1]) return 0;
+        if (pane_named(p, "RootPane")) return 1;
+    }
+    return 0;
+}
 static int map_inout_root(uint8_t *pane) {
     uint8_t *root = pane_parent(pane);
     return pane_named(pane, "N_InOut_00") && map_layout_root(root) &&
@@ -473,8 +479,8 @@ static int touchhud_update_cluster_delta(void) {
     pthread_mutex_lock(&g_touchhud_mu);
     int valid = g_touchhud.cut_bounds_valid && g_touchhud.sibling_bounds_valid && g_touchhud.sensor_bounds_valid;
     if (valid) {
-        g_touchhud.map_dx = 640.0f - BOTW_TOUCH_MAP_RIGHT_INSET - g_touchhud.cut_right;
-        g_touchhud.map_dy = BOTW_TOUCH_MAP_TOP - g_touchhud.cut_top;
+        g_touchhud.map_dx = 640.0f - DM_TP_BOTW_MAP_RIGHT_INSET - g_touchhud.cut_right;
+        g_touchhud.map_dy = DM_TP_BOTW_MAP_TOP - g_touchhud.cut_top;
         g_touchhud.delta_valid = 1;
     }
     pthread_mutex_unlock(&g_touchhud_mu);
@@ -491,7 +497,7 @@ static void publish_map_rect(uint8_t *pane) {
     float left, bottom, right, top;
     if (!atomic_load_explicit(&g_touchhud_active, memory_order_acquire) ||
         !atomic_load_explicit(&g_touchhud_map_collapsed, memory_order_acquire) ||
-        !visible_to_root(pane) || !transform_bounds(pane, &left, &bottom, &right, &top)) {
+        !map_hit_visible(pane) || !transform_bounds(pane, &left, &bottom, &right, &top)) {
         invalidate_map_rect();
         return;
     }
@@ -535,6 +541,11 @@ static void botw_touchhud_pane(const uint64_t *regs) {
         invalidate_map_rect();
         return;
     }
+    // Shrines fade only the map. Its collapsed layout still anchors the
+    // visible environment HUD, while transparent map pixels cannot own taps.
+    if ((map_inout_root(pane) || (pane_named(pane,"RootPane") &&
+         (uintptr_t)pane == atomic_load(&g_touchhud_map_root))) && !map_hit_visible(pane))
+        invalidate_map_rect();
     if (map_cut_root(pane) || map_cut_sibling(pane) || map_ornament_root(pane)) {
         int moved = touchhud_delta_valid();
         if (atomic_load_explicit(&g_touchhud_active, memory_order_acquire) || moved)

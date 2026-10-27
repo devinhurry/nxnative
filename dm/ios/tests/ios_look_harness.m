@@ -51,6 +51,8 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
 - (BOOL)dm_testR3ArtworkHidden;
 - (BOOL)dm_testMinusArtworkHidden;
 - (BOOL)dm_testL3GestureEnabled;
+- (BOOL)dm_testL3ReceiveTouch:(UITouch *)touch;
+- (BOOL)dm_testL3MayBegin;
 - (BOOL)dm_testLeftStickOwnsPoint:(CGPoint)point;
 - (BOOL)dm_testSetBotwMapRectValid:(BOOL)valid x:(CGFloat)x y:(CGFloat)y width:(CGFloat)width height:(CGFloat)height;
 - (int)dm_testBtnAt:(CGPoint)point;
@@ -345,9 +347,9 @@ static void test_botw_button_artwork(DmGamepad *view) {
           !runeBadge.strokeColor && !badge.strokeColor && runeBadge.shadowOpacity==0,
           "the rune L badge shares Y's opaque gray fill, gold outline and shadow-free style");
     for (int b=10;b<=11;b++) {
-        CHECK(![view dm_testButtonLayer:b].fillColor && ![view dm_testButtonLayer:b].strokeColor &&
-              [view dm_testButtonBorder:b].hidden && gray_matches([view dm_testButtonLabel:b].foregroundColor,1,1),
-              "BOTW plus and minus show only a plain white glyph without a background or border");
+        CHECK(gray_matches([view dm_testButtonLayer:b].fillColor,1,1) && ![view dm_testButtonLayer:b].strokeColor &&
+              [view dm_testButtonBorder:b].hidden && [view dm_testButtonLabel:b].hidden,
+              "BOTW plus and minus use a white cross over the translucent circular fill without a border");
     }
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES]; [view setNeedsLayout]; [view layoutIfNeeded];
     CHECK([view dm_testControlsHidden] && icon.hidden && badge.hidden && y.shadowOpacity == .2f &&
@@ -447,23 +449,40 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
           "a second tap cannot issue another Minus edge before the collapsed map is republished");
     CHECK(![view dm_testSetBotwMapRectValid:NO x:0 y:0 width:0 height:0] && [view dm_testMinusArtworkHidden],
           "native map invalidation keeps the consumed Slate transition from restoring a stale Minus control");
+    CGPoint fixedPlus = [view dm_testMapBadgeCenter];
+    g_botw_touch_menu_presented = YES; [view refreshBotwTouchMenuMode];
+    g_botw_touch_menu_presented = NO; [view refreshBotwTouchMenuMode];
+    [view layoutIfNeeded];
+    CGRect noMapPlus = [view pillRect:10], noMapMinus = [view pillRect:11];
+    CHECK(![view dm_testMinusArtworkHidden] && ![view dm_testButtonLayer:10].hidden &&
+          [view dm_testBtnAt:CGPointMake(CGRectGetMidX(noMapMinus),CGRectGetMidY(noMapMinus))] == 11 &&
+          [view dm_testBtnAt:fixedPlus] == 10,
+          "returning to gameplay without a minimap restores both Plus and Minus, including in shrines");
+    CHECK(CGRectGetMidX(noMapMinus) == CGRectGetMidX(noMapPlus) &&
+          CGRectGetMinY(noMapMinus) > CGRectGetMaxY(noMapPlus),
+          "the standalone Minus sits below the fixed Plus");
     CHECK([view dm_testSetBotwMapRectValid:YES x:0.05 y:0.16 width:0.36 height:0.40] &&
           [view dm_testMinusArtworkHidden] && [view dm_testBotwMapOwnsPoint:mapPoint],
           "a fresh collapsed-map publication rearms map taps");
-    CGPoint badge = [view dm_testMapBadgeCenter]; CGRect oldPlus = [view pillRect:10];
+    CGPoint badge = [view dm_testMapBadgeCenter];
+    CGPoint oldPlus = CGPointMake(view.bounds.size.width*.5+DM_TP_PILL_DX*dm_touchpad_u(view.bounds.size.height),DM_TP_PILL_Y*dm_touchpad_u(view.bounds.size.height));
     CHECK([view dm_testBtnAt:badge] == 10 &&
-          [view dm_testBtnAt:CGPointMake(CGRectGetMidX(oldPlus),CGRectGetMidY(oldPlus))] < 0,
-          "the live-map + badge owns the relocated hit and removes the old + hit");
-    CGFloat mapBadgeU=dm_touchpad_u(view.bounds.size.height);
-    CGFloat badgeHalfW=DM_TP_MAP_BADGE_WIDTH*mapBadgeU*.5, badgeHalfH=DM_TP_MAP_BADGE_HEIGHT*mapBadgeU*.5;
+          [view dm_testBtnAt:oldPlus] < 0 && CGPointEqualToPoint(badge,fixedPlus),
+          "Plus keeps one position with or without the map, and removes the old centered hit");
+    CGFloat badgeHalfW=noMapPlus.size.width*.5, badgeHalfH=noMapPlus.size.height*.5;
     CHECK([view dm_testBtnAt:CGPointMake(badge.x+badgeHalfW-1,badge.y)]==10 &&
           [view dm_testBtnAt:CGPointMake(badge.x+badgeHalfW+1,badge.y)]<0 &&
           [view dm_testBtnAt:CGPointMake(badge.x+badgeHalfW-1,badge.y+badgeHalfH-1)]<0,
           "the plain + keeps its generous circular hit region and rejects the corner");
     [view layoutIfNeeded];
-    CHECK(![view dm_testButtonLayer:10].fillColor && ![view dm_testButtonLayer:10].strokeColor &&
+    CGRect plusGlyph = CGPathGetBoundingBox([view dm_testButtonLayer:10].path);
+    float menuCanvas[4]; dm_aspect_touch_rect(view.bounds.size.width,view.bounds.size.height,menuCanvas);
+    CHECK(fabs(plusGlyph.size.width-19*menuCanvas[3]/720)<.01 &&
+          fabs(plusGlyph.origin.y-(menuCanvas[1]+20*menuCanvas[3]/720+4+10*menuCanvas[3]/720))<.01,
+          "Plus has a centered 19-unit cross in its 39-unit circle below the minimap top");
+    CHECK(gray_matches([view dm_testButtonLayer:10].fillColor,1,1) && ![view dm_testButtonLayer:10].strokeColor &&
           [view dm_testButtonBorder:10].hidden,
-          "the relocated map plus also has no background or border");
+          "the relocated map plus cross is white and has no border");
 
     g_botw_touch_actions_available = YES;
     CHECK(![view dm_testShieldGraphLayer].hidden && [view dm_testShieldRingLayer].hidden &&
@@ -627,9 +646,66 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
     g_botw_touchhud_available = NO;
 }
 
+static void test_botw_l3_timing(DmGamepad *view) {
+    const double gaps[] = {.19, .21, .35};
+    for (int i=0;i<3;i++) {
+        [view reset]; g_botw_touchhud_available=YES;
+        [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+        CGPoint home=[view dm_testStickHome];
+        FakeTouch *first=touch(home.x,home.y); first.timeValue=10;
+        CHECK([view dm_testL3ReceiveTouch:first] && ![view dm_testL3MayBegin],
+              "one movement-stick tap cannot begin an L3 double tap");
+        began(view,first); endedAt(view,first,home.x,home.y,10.05);
+        FakeTouch *second=touch(home.x,home.y); second.timeValue=10.05+gaps[i];
+        CHECK([view dm_testL3ReceiveTouch:second] && [view dm_testL3MayBegin] == (i==0),
+              "L3 permits a 190ms gap but rejects 210ms and 350ms gaps");
+        began(view,second); endedAt(view,second,home.x,home.y,second.timeValue+.05);
+    }
+    [view reset];
+    CHECK(![view dm_testL3MayBegin], "reset clears the left-stick double-tap timing");
+    g_botw_touchhud_available=NO;
+}
+
+static void test_botw_stick_response(DmGamepad *view) {
+    CGRect saved=view.bounds;
+    const CGFloat heights[]={390,540};
+    for (int i=0;i<2;i++) {
+        [view reset]; g_botw_touchhud_available=YES;
+        view.bounds=CGRectMake(0,0,844,heights[i]);
+        [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view setNeedsLayout]; [view layoutIfNeeded];
+        CGFloat radius=dm_touchpad_botw_stick_radius(heights[i]);
+        CHECK(fabs(CGPathGetPathBoundingBox([view dm_testStickRingLayer].path).size.width-2*radius)<.01 &&
+              fabs(CGPathGetPathBoundingBox([view dm_testShieldRingLayer].path).size.width-2*radius)<.01,
+              "BOTW movement and ZL rings share the requested diameter on short and tall canvases");
+        for (int shield=0;shield<2;shield++) {
+            CGPoint home=shield ? [view dm_testShieldHome] : [view dm_testStickHome];
+            FakeTouch *t=touch(home.x,home.y); began(view,t);
+            moved(view,t,home.x+radius*.06,home.y);
+            CHECK(g_lx==0,"BOTW movement and ZL remain neutral inside seven percent");
+            moved(view,t,home.x+radius*.08,home.y);
+            CHECK(g_lx>0 && (!shield || (g_buttons&DM_BTN_ZL)),
+                  "both BOTW sticks respond before ten percent, preserving ZL while moving");
+            moved(view,t,home.x+radius*.8,home.y);
+            CHECK(g_lx==DM_STICK_MAX && !g_botw_sprint_requested,
+                  "eighty-percent travel remains full movement without requesting sprint");
+            ended(view,t,home.x+radius*.8,home.y);
+        }
+        [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES]; [view setNeedsLayout]; [view layoutIfNeeded];
+        CGFloat original=DM_TP_STICK_R*dm_touchpad_u(heights[i]);
+        CHECK(fabs(CGPathGetPathBoundingBox([view dm_testStickRingLayer].path).size.width-2*original)<.01,
+              "controller mode restores the ordinary stick geometry");
+        g_botw_touchhud_available=NO;
+        [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view setNeedsLayout]; [view layoutIfNeeded];
+        CGPoint home=[view dm_testStickHome]; FakeTouch *t=touch(home.x,home.y); began(view,t);
+        moved(view,t,home.x+original*.08,home.y);
+        CHECK(!g_lx,"other games retain their ten-percent deadzone"); ended(view,t,home.x,home.y);
+    }
+    [view reset]; view.bounds=saved; [view setNeedsLayout]; [view layoutIfNeeded];
+}
+
 static void test_botw_stick_feedback(DmGamepad *view) {
     [view reset]; g_botw_touchhud_available=YES;
-    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view layoutIfNeeded];
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view setNeedsLayout]; [view layoutIfNeeded];
     DmFeedbackSpy *feedback=[[DmFeedbackSpy alloc] initWithStyle:UIImpactFeedbackStyleLight];
     [view dm_testSetTouchFeedback:feedback];
     UIEdgeInsets insets=view.safeAreaInsets;
@@ -643,7 +719,7 @@ static void test_botw_stick_feedback(DmGamepad *view) {
           gray_matches(((CAShapeLayer *)graph.sublayers.firstObject).fillColor,1,.15),
           "idle left stick has only a white circle and four arrows at fifteen percent opacity");
     CGPoint start=CGPointMake(home.x+3,home.y+2);
-    CGFloat radius=DM_TP_STICK_R*dm_touchpad_u(view.bounds.size.height);
+    CGFloat radius=dm_touchpad_botw_stick_radius(view.bounds.size.height);
     FakeTouch *stick=touch(start.x,start.y); began(view,stick);
     NSUInteger grip=feedback.count;
     moved(view,stick,start.x+radius*1.1,start.y);
@@ -1009,6 +1085,8 @@ static void run_tests(DmGamepad *view) {
     test_dpad_art_visibility(view);
     test_botw_button_artwork(view);
     test_botw_virtual_buttons(view);
+    test_botw_l3_timing(view);
+    test_botw_stick_response(view);
     test_botw_stick_feedback(view);
     test_botw_inventory_pointer(view);
     test_motion_orientation();
