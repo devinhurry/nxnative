@@ -241,6 +241,7 @@ void front_botw_touch_menu_changed(void) {
 }
 
 static UIColor *k_idle, *k_on, *k_line, *k_ringFill, *k_text, *k_textOn;
+static UIColor *k_botwIdle, *k_botwOn, *k_botwLine;
 static CAShapeLayer *shape(CALayer *parent) {
     CAShapeLayer *l = [CAShapeLayer layer];
     l.fillColor = k_idle.CGColor; l.strokeColor = k_line.CGColor; l.lineWidth = 1.5;
@@ -269,6 +270,8 @@ static BOOL botwTouchHudSupported(void) { return dm_botw_touch_hud_available(); 
             // each colour carries its own low opacity instead of lowering the whole view's alpha (that would add an off-screen pass for the full-screen layer)
             k_idle = [UIColor colorWithWhite:1 alpha:0.14]; k_on = [UIColor colorWithWhite:1 alpha:0.45]; k_line = [UIColor colorWithWhite:1 alpha:0.38];
             k_ringFill = [UIColor colorWithWhite:1 alpha:0.06]; k_text = [UIColor colorWithWhite:1 alpha:0.6]; k_textOn = [UIColor colorWithWhite:0 alpha:0.7];
+            k_botwIdle = [UIColor colorWithWhite:.18 alpha:.40]; k_botwLine = [UIColor colorWithWhite:.15 alpha:.40];
+            k_botwOn = [UIColor colorWithWhite:.35 alpha:.40];
         });
         _controls = [CALayer layer]; [self.layer addSublayer:_controls];
         _ring = shape(_controls); _ring.fillColor = k_ringFill.CGColor;
@@ -467,7 +470,9 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     [self reset];
     if (botwTouchHudSupported()) dm_input_cancel_virtual_latch(0xffffull);
     _botwMenuMode = active;
-    _leftStickDoubleTap.enabled = !active && [self botwTouchControlsActive];
+    // Menu mode participates in every BOTW button's visibility predicate.
+    // Restore those child layers as well as the parent after loading/menus.
+    [self applyLayout];
     _controls.hidden = _padOff || _botwMenuMode;
     [self setNeedsLayout];
 }
@@ -1117,20 +1122,23 @@ static CGImageRef botwRuneImage(const dm_botw_rune_icon_state *snapshot) {
 - (void)safeAreaInsetsDidChange { [super safeAreaInsetsDidChange]; [self setNeedsLayout]; }
 - (void)refresh {   // pressed state → fill, sticks → knob position
     uint64_t all = _faceBits | _dpadBits | _btnBits;
+    BOOL botw = [self botwTouchControlsActive];
+    UIColor *idle = botw ? k_botwIdle : k_idle, *line = botw ? k_botwLine : k_line;
+    UIColor *pressed = botw ? k_botwOn : k_on;
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     for (int b = 0; b < B_N; b++) { BOOL on = (all >> b) & 1;
-        BOOL zeldaBadge = [self botwTouchControlsActive] && (b == B_L || b == B_PLUS);
+        BOOL zeldaBadge = botw && (b == B_L || b == B_PLUS);
         if (zeldaBadge) {
             UIColor *cream = [UIColor colorWithRed:.94 green:.88 blue:.70 alpha:.98];
             UIColor *dark = [UIColor colorWithRed:.10 green:.12 blue:.12 alpha:on ? .98 : .82];
             BOOL plus = b == B_PLUS;
-            _key[b].fillColor = (plus ? (on ? [UIColor colorWithWhite:.88 alpha:1] : UIColor.whiteColor) : (on ? cream : dark)).CGColor;
-            _key[b].strokeColor = (plus ? dark : cream).CGColor;
+            _key[b].fillColor = (on ? pressed : idle).CGColor;
+            _key[b].strokeColor = line.CGColor;
             _key[b].lineWidth = 2.0 * self.u;
-            _label[b].foregroundColor = plus ? dark.CGColor : (on ? dark.CGColor : cream.CGColor);
+            _label[b].foregroundColor = plus ? (on ? dark.CGColor : k_text.CGColor) : (on ? dark.CGColor : cream.CGColor);
         } else {
-            _key[b].fillColor = (on ? k_on : k_idle).CGColor;
-            _key[b].strokeColor = k_line.CGColor;
+            _key[b].fillColor = (on ? pressed : idle).CGColor;
+            _key[b].strokeColor = line.CGColor;
             _key[b].lineWidth = 1.5;
             _label[b].foregroundColor = (on ? k_textOn : k_text).CGColor;
         }
@@ -1138,7 +1146,17 @@ static CGImageRef botwRuneImage(const dm_botw_rune_icon_state *snapshot) {
     _swap.fillColor = (_swapHeld ? k_on : k_idle).CGColor; _swapLabel.foregroundColor = (_swapHeld ? k_textOn : k_text).CGColor;
     CGPoint h = [self stickCentre:0], o = [self knobOffset:0];
     if (!CGPointEqualToPoint(h, _ringAt)) { _ringAt = h; setPath(_ring, circlePath(h, [self stickR:0])); }
-    _knob.position = CGPointMake(h.x + o.x, h.y + o.y); _knob.fillColor = (_stick[0] ? k_on : k_idle).CGColor;
+    _knob.position = CGPointMake(h.x + o.x, h.y + o.y); _knob.fillColor = (_stick[0] ? pressed : idle).CGColor;
+    _ring.fillColor = (botw ? idle : k_ringFill).CGColor;
+    _ring.strokeColor = _knob.strokeColor = line.CGColor;
+    ((CAShapeLayer *)_knob.sublayers.firstObject).strokeColor = line.CGColor;
+    _shieldRing.fillColor = (botw ? idle : k_ringFill).CGColor;
+    _shieldKnob.fillColor = (_shieldTouch ? pressed : idle).CGColor;
+    _shieldRing.strokeColor = _shieldKnob.strokeColor = line.CGColor;
+    if (botw) {
+        _runeBadge.fillColor = idle.CGColor; _runeBadge.strokeColor = line.CGColor;
+        _cancelRing.strokeColor = line.CGColor;
+    }
     [CATransaction commit];
 }
 

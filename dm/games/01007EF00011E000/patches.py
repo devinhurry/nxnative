@@ -197,6 +197,9 @@ def validate_main(ctx):
     assert tuple(struct.unpack_from('<Q', ctx.image, 0x1cdbb58 + off)[0] for off in (0, 8, 0x20, 0x40)) == (
         0xf5466c, 0xd71710, 0xd6f034, 0xd66bd4,
     ), 'BOTW Quest list-widget vtable address point changed; revalidate OBS38 receiver class'
+    assert tuple(struct.unpack_from('<Q', ctx.image, 0x1cfcf78 + off)[0] for off in (0, 8, 0x20, 0x40)) == (
+        0xf5466c, 0xe4a2e4, 0xd6f034, 0xd66bd4,
+    ), 'BOTW shop list-widget vtable address point changed; revalidate direct purchase-row selection'
 
 VALIDATE = {'cd57b23fa4bbad65803d9788c01821ee': validate_main}
 

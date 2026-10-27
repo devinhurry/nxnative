@@ -14,8 +14,18 @@ BOTW touch-menu coverage and remaining runtime validation are tracked in
 [Menu touch progress](../../../docs/botw-menu-touch-progress.md). The current
 Mac checks cover direct quest selection, category changes and paging, and
 Options adjustments and list swipes, stable control visibility during menu
-animations, and direct map dragging. NPC/shop, album, physical-controller and
-iPhone checks remain open; see the tracker for evidence and scope.
+animations, direct map dragging, and Beedle dialogue/buy/sell/quantity flows.
+The MainScreen root remains shown between dialogue pages; its native heart-HUD
+InOut layer establishes actual gameplay presentation across those gaps.
+Cursorless ability explanations use their live native Back and page arrows;
+the native Fade screen keeps controls hidden between menu exit and scene unload.
+Ability paging/Cancel, System Save/Cancel, Return to Title and reloading the
+new save passed on the Mac using a disposable copy of the user's save.
+Save-list swipes share Options' native focus-and-scroll path. UIKit checks
+cover restoration of the custom layout after loading/menus and both pinch
+directions; the Mac map backend zoomed in/out through the same host pinch API.
+Other shop layouts, populated album, physical-controller and iPhone checks
+remain open; see the tracker for evidence and scope.
 
 | Setting | Where | Why |
 |---|---|---|

@@ -203,6 +203,7 @@ static int mock_native_shown(uintptr_t screen) {
 static const char *mock_native_screen_name(uintptr_t screen) {
     if (screen == (uintptr_t)selector.screen) return (const char *)selector.screen + 0x200;
     if (screen == (uintptr_t)selector.map_screen) return (const char *)selector.map_screen + 0xa0;
+    if (screen == (uintptr_t)selector.apphome_screen) return "AppHome_00";
     return NULL;
 }
 static int mock_entry_eligible(uintptr_t entry, int group) {
@@ -565,6 +566,208 @@ static void test_option_arrow_touch(void) {
     put_ptr(selector.manager + 0x48, (uintptr_t)selector.entry2);
     selector_tick();
     assert(!sample(6003) && !g_target_valid);
+    // Save rows use the same native focus-and-scroll operation, under the
+    // actual FileSelect/SlideArea hierarchy, and never confirm a load.
+    current_guest_frame = 6004; dm_botw_touch_menu_test_set_render_frame(6004);
+    strcpy((char *)selector.screen + 0x200, "SystemWindow_01");
+    fake_pane(83, "N_FileSelect_00", 70, 800, 600, 0, 0);
+    uint8_t *slide = fake_pane(84, "N_SlideArea_00", 83, 800, 600, 0, 0);
+    strcpy((char *)row_part + PANE_NAME, "Pa_File_00");
+    strcpy((char *)native_panes[79].bytes + PANE_NAME, "Pa_File_01");
+    put_ptr(row_part + PANE_PARENT, (uintptr_t)slide);
+    put_ptr(native_panes[79].bytes + PANE_PARENT, (uintptr_t)slide);
+    put_ptr(selector.manager + 0x48, (uintptr_t)selector.entry);
+    put_ptr(selector.manager + 0x50, 0);
+    generic_hit_observe(hit, 1); generic_hit_observe(last_hit, 1); selector_tick();
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .5f, .5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, .5f, .2f);
+    selector_tick();
+    assert(g_target_valid && g_target_entry == (uintptr_t)selector.entry2 && !g_confirm_pending);
+    selector_tick();
+    assert(get_ptr(selector.manager + 0x50) == (uintptr_t)selector.entry2);
+    put_ptr(selector.manager + 0x48, (uintptr_t)selector.entry2); selector_tick();
+    assert(!sample(6004) && !g_target_valid);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .5f, .8f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, .5f, .99f);
+    selector_tick();
+    assert(g_target_valid && g_target_entry == (uintptr_t)selector.entry && !g_confirm_pending);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_CANCEL, 0, 0);
+    // A similarly named part outside the native list is not scrollable.
+    put_ptr(row_part + PANE_PARENT, (uintptr_t)root);
+    assert(!selector_scroll_row((uintptr_t)hit));
+    // Message quantity controls use an offscreen cursor anchor and a visible
+    // number. Their +/- arrows lie outside the number's narrow text bounds.
+    current_guest_frame = 6004; dm_botw_touch_menu_test_set_render_frame(6004);
+    strcpy((char *)selector.screen + 0x200, "Message_00");
+    strcpy((char *)row_part + PANE_NAME, "N_BtnNum_00");
+    put_ptr(selector.entry + 8, (uintptr_t)(selector.screen + 0x88));
+    put_ptr(selector.manager + 0x48, (uintptr_t)selector.entry);
+    put_ptr(selector.manager + 0x50, 0);
+    on[0x58] = off[0x58] = 0;
+    generic_text_observe(on, 0); generic_text_observe(off, 0);
+    left[0x58] = right[0x58] = 1;
+    link_child(part, left); link_child(part, right);
+    uint8_t *number = fake_pane(82, "T_Num_00", 72, 60, 30, 0, 0);
+    link_child(part, number);
+    float offscreen_x = 991; memcpy(hit + PANE_MATRIX + 0xc, &offscreen_x, 4);
+    observe_native_pane(hit, 1); observe_native_pane(number, 1);
+    selector_tick(); dm_botw_touch_menu_test_snapshot(&options);
+    assert(options.generic_count == 3 && options.generic_targets[0].rect[2] < .1f);
+    tap(options.generic_targets[2].rect[0] + options.generic_targets[2].rect[2] * .5f, .5f);
+    selector_tick(); axes[0] = axes[1] = 0; buttons = 0;
+    assert(sample_axes(6004, axes, &buttons) && axes[0] == DM_STICK_MAX && !buttons);
+    mock_guest_start = 0; mock_guest_size = 0;
+    dm_botw_touch_menu_reset();
+}
+
+static void test_cursorless_help_prompts(void) {
+    dm_botw_touch_menu_reset(); init_selector_fixture();
+    current_guest_frame = 9000; dm_botw_touch_menu_test_set_render_frame(9000);
+    dm_botw_touch_menu_test_set_generic_selector(1, (uintptr_t)mock_native_group,
+                                               (uintptr_t)mock_native_shown);
+    mock_guest_start = (uintptr_t)native_panes; mock_guest_size = sizeof native_panes;
+    uint8_t mask[0x20] = {0}; mask[0x14] = 1 << 2;
+    put_ptr(selector.registry + 0xb18, (uintptr_t)mask);
+    put_ptr(selector.manager + 0x48, 0);
+    strcpy((char *)selector.screen + 0x200, "ControllerWindow_00");
+    selector.screen[0xfd] = 0; selector.screen[0xfe] = 2;
+    uint8_t *root = fake_pane(80, "RootPane", -1, 1280, 720, 0, 0);
+    put_ptr(selector.screen + 0x30, (uintptr_t)selector.apphome_wrapper);
+    put_ptr(selector.apphome_wrapper + 0x18, (uintptr_t)root);
+    fake_pane(81, "Pa_GuideB_00", 80, 200, 40, 0, 0);
+    uint8_t *icon = fake_pane(82, "T_Icon_00", 81, 32, 32, 560, -318);
+    uint8_t *label = fake_pane(83, "T_Guide_00", 81, 120, 24, 540, -318);
+    uint16_t glyph = 0xe041; memcpy(icon + 0xf0, &glyph, 2);
+    put_ptr(icon + 0xe0, (uintptr_t)(icon + 0xf0));
+    generic_back_prompt_observe(icon, 1); generic_back_prompt_observe(label, 1);
+    fake_pane(84, "Pa_ArrowU_00", 80, 64, 36, 0, 280);
+    uint8_t *arrow = fake_pane(85, "P_ArrowL_00", 84, 64, 30, 0, 280);
+    uint8_t *page = fake_pane(86, "Pa_PageTips_00", 80, 720, 420, 0, 0);
+    generic_hit_observe(arrow, 1); generic_hit_observe(page, 1);
+    dm_botw_touch_menu_view help = {0};
+    assert(selector_cursorless_prompt_view((uintptr_t)selector.manager, 9000,
+        (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &help));
+    assert(help.back_valid && help.prompt_owner_screen == (uintptr_t)selector.screen);
+    unsigned calls = mock_group_calls;
+    mock_touch_hud_active = 0;
+    assert(!selector_cursorless_prompt_view((uintptr_t)selector.manager, 9000,
+        (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &help));
+    assert(mock_group_calls == calls); // controller mode makes no extra guest calls
+    mock_touch_hud_active = 1;
+    assert(help.generic_count == 0 && help.clip_valid && help.footer_action_count == 1);
+    assert(help.footer_action_buttons[0] == DM_BTN_UP);
+    dm_botw_touch_menu_test_publish(&help);
+    tap(.5f, .11f); assert(sample(9000) == DM_BTN_UP);
+    sample(9001);
+    help.render_frame = help.prompt_owner_frame = 9002;
+    dm_botw_touch_menu_test_publish(&help);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .5f, .4f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, .5f, .65f);
+    assert(sample(9002) == DM_BTN_UP); // same live arrow through a downward swipe
+    sample(9003);
+    help.render_frame = help.prompt_owner_frame = 9004;
+    dm_botw_touch_menu_test_publish(&help);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .5f, .65f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, .5f, .4f);
+    assert(sample(9004) == 0); // no down arrow on the last page
+    help.render_frame = help.prompt_owner_frame = 9005;
+    dm_botw_touch_menu_test_publish(&help);
+    tap(help.back[0] + help.back[2] * .5f, help.back[1] + help.back[3] * .5f);
+    selector.state[0x38] = 0;
+    assert(sample(9005) == 0); // native ownership lost before emission
+    selector.state[0x38] = 2; root[0x59] = 0;
+    assert(!selector_cursorless_prompt_view((uintptr_t)selector.manager, 9000,
+        (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &help));
+    root[0x59] = 255;
+    uint32_t two = 2; memcpy(selector.registry + 0x28, &two, 4);
+    selector.screen_list[1] = (uintptr_t)selector.map_screen;
+    strcpy((char *)selector.map_screen + 0xa0, "SystemWindow_00");
+    selector.map_screen[0xfd] = 0; selector.map_screen[0xfe] = 2;
+    put_ptr(selector.map_screen + 0x38, (uintptr_t)selector.map_state);
+    selector.map_state[0x38] = 2;
+    put_ptr(selector.map_screen + 0x30, (uintptr_t)selector.mapview);
+    put_ptr(selector.mapview + 0x18, (uintptr_t)root);
+    assert(!selector_cursorless_prompt_view((uintptr_t)selector.manager, 9000,
+        (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &help)); // ambiguous owners
+    uint32_t one = 1; memcpy(selector.registry + 0x28, &one, 4);
+    strcpy((char *)selector.screen + 0x200, "PauseMenuRecipe_00");
+    uint8_t *plain = native_panes[81].bytes;
+    strcpy((char *)plain + PANE_NAME, "N_Pos_02");
+    link_child(plain, icon); link_child(plain, label);
+    assert(ancestor_action_guide(icon) == plain && ancestor_action_guide(label) == plain);
+    generic_back_prompt_observe(icon, 1); generic_back_prompt_observe(label, 1);
+    assert(selector_cursorless_prompt_view((uintptr_t)selector.manager, 9000,
+        (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &help));
+    assert(help.back_valid && help.prompt_owner_root == (uintptr_t)root);
+    mock_guest_start = 0; mock_guest_size = 0;
+    dm_botw_touch_menu_reset();
+}
+
+static void test_inventory_category_touch_cells(void) {
+    dm_botw_touch_menu_view categories = {0};
+    categories.inventory_visible = 1; categories.category_count = 3;
+    categories.clip_valid = 1; set_rect(categories.clip, 0, .27f, 1, .6f);
+    for (int i = 0; i < 3; i++)
+        set_rect(categories.categories[i], .2f + .045f * i, .2f, .025f, .044444f);
+    inventory_category_touch_rects(&categories);
+    for (int i = 0; i < 3; i++) {
+        const float *r = categories.categories[i];
+        assert(r[2] > .044f && r[3] > .079f); // finger-sized surrounding cell
+        assert(r[1] < .2f && r[1] + r[3] <= categories.clip[1]);
+        if (i) assert(categories.categories[i - 1][0] + categories.categories[i - 1][2] <= r[0] + 1e-6f);
+    }
+    // Pointer menus such as quests keep their own native category geometry.
+    categories.inventory_visible = 0;
+    float before[sizeof categories.categories / sizeof(float)];
+    memcpy(before, categories.categories, sizeof before);
+    inventory_category_touch_rects(&categories);
+    assert(!memcmp(before, categories.categories, sizeof before));
+    // Publication must expand after loading the live item-list clip.
+    dm_botw_touch_menu_reset(); current_guest_frame = 7000;
+    g_native_view.frame = g_native_view.inventory_seen = g_native_view.clip_seen = 7000;
+    g_native_view.inventory_visible = g_native_view.clip_valid = 1;
+    set_rect(g_native_view.clip, 0, .24f, 1, .6f);
+    g_native_view.category_valid[0] = 1; g_native_view.category_seen[0] = 7000;
+    set_rect(g_native_view.categories[0], .2f, .2f, .025f, .044444f);
+    categories = snapshot_native_view_locked();
+    assert(categories.category_count == 1 && categories.categories[0][2] > .049f);
+    assert(categories.categories[0][1] + categories.categories[0][3] <= .240001f);
+    dm_botw_touch_menu_reset();
+}
+
+static void test_inline_holding_prompts(void) {
+    dm_botw_touch_menu_reset();
+    mock_guest_start = (uintptr_t)native_panes; mock_guest_size = sizeof native_panes;
+    current_guest_frame = 7000;
+    uint8_t *root = fake_pane(100, "RootPane", -1, 1280, 720, 0, 0);
+    uint8_t *part = fake_pane(101, "Pa_HaveNum_00", 100, 240, 240, 0, 0);
+    uint8_t *layer = fake_pane(102, "N_InOut_00", 101, 240, 240, 0, 0);
+    link_child(root, part); link_child(part, layer);
+    const uint16_t glyphs[] = {0xe040, 0xe042, 0xe041};
+    uint8_t *icons[3];
+    for (int i = 0; i < 3; i++) {
+        char name[17]; snprintf(name, sizeof name, "T_Icon_%02d", i);
+        icons[i] = fake_pane(103 + i * 2, name, 102, 32, 32, 64, 100 - i * 45);
+        memcpy(icons[i] + 0xf0, &glyphs[i], 2);
+        put_ptr(icons[i] + 0xe0, (uintptr_t)(icons[i] + 0xf0));
+        // Real Add and Stop labels have reversed suffixes relative to icons.
+        snprintf(name, sizeof name, "T_Guide_%02d", i < 2 ? 1 - i : i);
+        uint8_t *label = fake_pane(104 + i * 2, name, 102, 150, 24, 84, 100 - i * 45);
+        link_child(layer, icons[i]); link_child(layer, label);
+    }
+    for (int i = 103; i <= 108; i++) generic_back_prompt_observe(native_panes[i].bytes, 1);
+    g_native_view.footer_root = (uintptr_t)root; g_native_view.frame = 7000;
+    dm_botw_touch_menu_view holding = snapshot_native_view_locked();
+    assert(holding.footer_action_count == 3);
+    for (int i = 0; i < 3; i++) {
+        float rect[4];
+        assert(generic_action_prompt_snapshot((uintptr_t)root, 7000, guide_glyph_button(glyphs[i]), rect));
+        assert(rect[0] <= 840.0f / 1280.0f && rect[0] + rect[2] >= 840.0f / 1280.0f);
+        assert(rect[1] <= (260.0f + i * 45) / 720.0f && rect[1] + rect[3] >= (260.0f + i * 45) / 720.0f);
+    }
+    layer[0x59] = 0; // parent animation hides cached children without updating them
+    float rect[4];
+    assert(!generic_action_prompt_snapshot((uintptr_t)root, 7000, DM_BTN_A, rect));
     mock_guest_start = 0; mock_guest_size = 0;
     dm_botw_touch_menu_reset();
 }
@@ -592,6 +795,14 @@ static void test_menu_animation_visibility(void) {
         assert(dm_botw_touch_menu_visible());
     }
     // Hidden native screens restore gameplay controls immediately.
+    root[0x59] = 0;
+    selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
+    assert(dm_botw_touch_menu_visible() && !dm_botw_touch_controls_visible());
+    root[0x59] = 255;
+    root[0x58] = 0; selector.state[0x38] = 2;
+    selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
+    assert(dm_botw_touch_menu_visible()); // between dialogue lines, native screen still owns input
+    root[0x58] = 1; selector.state[0x38] = 0;
     selector.screen[0xfe] = 0;
     selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
     assert(!dm_botw_touch_menu_visible());
@@ -608,10 +819,40 @@ static void test_menu_animation_visibility(void) {
     assert(!dm_botw_touch_menu_visible());
     selector.active[0] = 0;
     strcpy((char *)selector.screen + 0x200, "MainScreen_00");
+    fake_pane(71, "N_All_00", 70, 0, 0, 0, 0);
+    fake_pane(72, "N_State_00", 71, 0, 0, 0, 0);
+    fake_pane(73, "Pa_HeartGauge_00", 72, 0, 0, 0, 0);
+    uint8_t *hud = fake_pane(74, "N_InOut_00", 73, 0, 0, 0, 0);
+    for (int i = 70; i < 74; i++) link_child(native_panes[i].bytes, native_panes[i + 1].bytes);
     selector.state[0x38] = 2;
     selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
     assert(!dm_botw_touch_menu_visible());
     assert(dm_botw_touch_controls_visible());
+    // Return-to-title unregisters the menu before MainScreen hides its HUD.
+    // The native Fade screen owns that gap without becoming a touch target.
+    uint8_t *fade = fake_pane(75, "RootPane", -1, 1280, 720, 0, 0);
+    strcpy((char *)selector.map_screen + 0xa0, "Fade_00");
+    put_ptr(selector.map_screen + 0x30, (uintptr_t)selector.map_owner);
+    put_ptr(selector.map_owner + 0x18, (uintptr_t)fade);
+    put_ptr(selector.map_screen + 0x38, (uintptr_t)selector.map_state);
+    selector.map_state[0x38] = 2;
+    selector.map_screen[0xfe] = 2;
+    selector.screen_list[1] = (uintptr_t)selector.map_screen;
+    uint32_t registry_count = 2;
+    memcpy(selector.registry + 0x28, &registry_count, sizeof registry_count);
+    assert(!selector_pointer_screen_name("Fade_00"));
+    selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
+    assert(g_presented_gameplay && dm_botw_touch_menu_visible());
+    assert(!dm_botw_touch_controls_visible());
+    selector.active[1] = 0x80;
+    selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
+    assert(!dm_botw_touch_menu_visible() && dm_botw_touch_controls_visible());
+    hud[0x59] = 0;
+    selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
+    assert(!dm_botw_touch_controls_visible()); // no menu registered between dialogue pages
+    hud[0x59] = 255;
+    selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
+    assert(dm_botw_touch_controls_visible()); // actual gameplay HUD returned
     root[0x58] = 0;
     selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
     assert(!dm_botw_touch_controls_visible()); // loading/cutscene hides the native gameplay HUD
@@ -619,6 +860,9 @@ static void test_menu_animation_visibility(void) {
     selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
     assert(!dm_botw_touch_controls_visible()); // visible artwork alone is not input permission
     selector.state[0x38] = 2;
+    strcpy((char *)selector.screen + 0x200, "Message3D_00");
+    selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
+    assert(!dm_botw_touch_menu_visible()); // ambient NPC speech does not own gameplay input
     strcpy((char *)selector.screen + 0x200, "AppMap_00");
     selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
     assert(!dm_botw_touch_menu_visible()); // retained child without its AppHome owner
@@ -632,7 +876,7 @@ static void test_menu_animation_visibility(void) {
     dm_botw_touch_menu_test_set_render_frame(8001);
     selector_refresh_presentation_pane(root);
     assert(g_presented_menu_frame == 8001 && dm_botw_touch_menu_visible());
-    root[0x58] = 0;
+    root[0x58] = 0; selector.state[0x38] = 0;
     selector_refresh_presentation_pane(root);
     assert(!dm_botw_touch_menu_visible()); // cursor update need not run after exit
     root[0x58] = 1;
@@ -652,6 +896,65 @@ static void mock_pan_current(uintptr_t model, const float *point) {
 }
 static void mock_pan_target(uintptr_t transform, const float *point) {
     memcpy((void *)(transform + 0x40), point, 8);
+}
+
+static void test_inventory_preview_rotation(void) {
+    dm_botw_touch_menu_reset(); init_inventory();
+    assert(guide_glyph_button(0xe057) == DM_BTN_RS && generic_action_button(DM_BTN_RS));
+    view.inventory_rotate_visible = 1;
+    current_guest_frame = 10000;
+    dm_botw_touch_menu_test_set_render_frame(10000); publish(10000);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .7f, .5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .8f, .5f);
+    int32_t axes[4] = {1,2,3,4}; uint64_t buttons = 0;
+    assert(sample_axes(10000, axes, &buttons) && axes[2] > 0 && !buttons);
+    assert(axes[0] == 1 && axes[1] == 2);
+    assert(sample_axes(10001, axes, &buttons) && !axes[2]);
+    // A stationary finger never continues spinning the character.
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .8f, .5f);
+    assert(!sample(10002));
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .72f, .5f);
+    assert(sample_axes(10003, axes, &buttons) && axes[2] < 0 && !buttons);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, .72f, .5f);
+    assert(sample_axes(10004, axes, &buttons) && !axes[2] && !buttons);
+    // Changing native mode invalidates an unconsumed drag without a slot tap.
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .7f, .5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .8f, .5f);
+    view.inventory_rotate_visible = 0; publish(10000);
+    assert(!sample(10005) && !g_target_valid);
+    view.inventory_rotate_visible = 1; publish(10000);
+    tap(view.back[0] + .01f, view.back[1] + .01f);
+    assert(sample(10006) == DM_BTN_B);
+    sample(10007);
+    view.inventory_rotate_visible = 0;
+    view.inventory_arrow_valid[1] = 1;
+    set_rect(view.inventory_arrows[1], .9f, .3f, .06f, .3f); publish(10000);
+    tap(.93f, .4f);
+    assert(sample_axes(10008, axes, &buttons) && axes[2] == DM_STICK_MAX && !buttons);
+    sample(10009);
+    view.inventory_arrow_valid[1] = 0; publish(10000);
+    tap(.93f, .4f);
+    assert(!sample(10010));
+    dm_botw_touch_menu_reset();
+    // Rotation is established by the live exclusive guide, not a host toggle.
+    uint8_t *root = fake_pane(90, "RootPane", -1, 1280, 720, 0, 0);
+    uint8_t *guide = fake_pane(91, "Pa_RotateGuide_00", 90, 100, 40, 0, 0);
+    g_native_view.frame = g_native_view.inventory_seen = g_native_view.rotate_seen = 10000;
+    g_native_view.inventory_visible = 1; g_native_view.rotate_guide = (uintptr_t)guide;
+    g_native_view.rotate_root = g_native_view.footer_root = (uintptr_t)root;
+    assert(snapshot_native_view_locked().inventory_rotate_visible);
+    root[0x59] = 0;
+    assert(!snapshot_native_view_locked().inventory_rotate_visible);
+    root[0x59] = 255; g_native_view.footer_root = 0;
+    assert(!snapshot_native_view_locked().inventory_rotate_visible);
+    g_native_view.root = (uintptr_t)root;
+    g_native_view.inventory_arrow_pane[1] = (uintptr_t)guide;
+    g_native_view.inventory_arrow_root[1] = (uintptr_t)root;
+    g_native_view.inventory_arrow_seen[1] = 10000;
+    assert(snapshot_native_view_locked().inventory_arrow_valid[1]);
+    guide[0x59] = 0;
+    assert(!snapshot_native_view_locked().inventory_arrow_valid[1]);
+    dm_botw_touch_menu_reset();
 }
 
 static void test_map_displacement_drag(void) {
@@ -791,8 +1094,8 @@ int main(void) {
     float back_hit[4];
     dm_botw_touch_menu_test_back_rect(back_text, back_icon, -INFINITY, INFINITY, back_hit);
     assert(fabsf(back_hit[0] - .40f) < 1e-6f && fabsf(back_hit[2] - .12f) < 1e-6f);
-    dm_botw_touch_menu_test_back_rect(back_text, back_icon, .35f, .62f, back_hit);
-    assert(fabsf(back_hit[0] - .415f) < 1e-6f && fabsf(back_hit[2] - .105f) < 1e-6f);
+    dm_botw_touch_menu_test_back_rect(back_text, back_icon, .415f, .51f, back_hit);
+    assert(fabsf(back_hit[0] - .415f) < 1e-6f && fabsf(back_hit[2] - .095f) < 1e-6f);
 
     // The generic Back target comes from the active modal's paired B icon
     // and label, keyed to their shared Pa_GuideB part and owner root.
@@ -813,8 +1116,8 @@ int main(void) {
     generic_back_prompt_observe(restore_label, 1);
     float options_back[4];
     assert(generic_back_prompt_snapshot((uintptr_t)options_root, 0, options_back));
-    assert(fabsf(options_back[0] - .8746f) < .002f);
-    assert(fabsf(options_back[2] - .0754f) < .002f); // neighboring Y prompt clamps the B target
+    assert(fabsf(options_back[0] - .8289f) < .002f);
+    assert(fabsf(options_back[2] - .1211f) < .002f); // the full label remains between neighboring glyphs
     float options_restore[4];
     assert(generic_action_prompt_snapshot((uintptr_t)options_root, 0, DM_BTN_Y, options_restore));
     assert(!generic_back_prompt_snapshot((uintptr_t)native_panes[40].bytes, 0, options_back));
@@ -1114,7 +1417,7 @@ int main(void) {
     assert(!generic_view.map_visible); // unrelated visible map cannot take over a focused modal
     assert(generic_view.generic_count == 2);
     assert(generic_view.back_valid); // only live, labeled native B prompt is inherited
-    assert(fabsf(generic_view.back[0] - .8746f) < .002f); // current focused root wins over footer cache
+    assert(fabsf(generic_view.back[0] - .8289f) < .002f); // current focused root wins over footer cache
     int restore_y_action = 0;
     for (int i = 0; i < generic_view.footer_action_count; i++)
         restore_y_action |= generic_view.footer_action_buttons[i] == DM_BTN_Y;
@@ -1246,14 +1549,27 @@ int main(void) {
     for (int i = 0; i < generic_view.footer_action_count; i++)
         apphome_y_action |= generic_view.footer_action_buttons[i] == DM_BTN_Y;
     assert(apphome_y_action); // the live AppHome guide exposes Y on the fullscreen map
+    // A guide's Calculate callback must retain the validated map owner.
+    // Publishing AppHome's prompt-only view here cancels held map gestures
+    // between Begin and End even though the map is still the active surface.
+    fake_pane(110, "Pa_GuideY_00", 72, 200, 40, 400, -320);
+    uint8_t *map_y_icon = fake_pane(111, "T_Icon_00", 110, 34, 34, 400, -320);
+    uint16_t map_y_glyph = 0xe043;
+    put_ptr(map_y_icon + 0xe0, (uintptr_t)&map_y_glyph);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .75f, .925f);
+    assert(g_pointer_down && g_map_prompt_down);
+    observe_native_pane(map_y_icon, 1);
+    dm_botw_touch_menu_test_snapshot(&generic_view);
+    assert(generic_view.map_visible && g_pointer_down && g_map_prompt_down);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_CANCEL, .75f, .925f);
     dm_botw_touch_menu_view empty_album = {0};
-    assert(selector_apphome_prompt_view((uintptr_t)selector.manager, guide_frame,
+    assert(selector_cursorless_prompt_view((uintptr_t)selector.manager, guide_frame,
         (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &empty_album));
     assert(empty_album.generic_mode && empty_album.back_valid && !empty_album.generic_count);
     assert(empty_album.generic_screen == (uintptr_t)selector.apphome_screen &&
            empty_album.prompt_owner_root == (uintptr_t)apphome_root);
     selector.apphome_state[0x38] = 0;
-    assert(!selector_apphome_prompt_view((uintptr_t)selector.manager, guide_frame,
+    assert(!selector_cursorless_prompt_view((uintptr_t)selector.manager, guide_frame,
         (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &empty_album));
     selector.apphome_state[0x38] = 2;
     // Empty pages stop BoxCursor ticks. The ordinary guide-pane publication
@@ -1358,11 +1674,18 @@ int main(void) {
     observe_native_pane(map_pane, 1);
     assert(sample(61) == 0); // mismatched projected cursor triggers one bounded same-point retry
     assert(mock_map_current_calls == 2 && mock_map_target_calls == 2);
+    // Native recentering changes the rendered position after point selection.
+    float recentered_x = 182.0f, recentered_translation = 152.0f;
+    memcpy(map_transform + 0x7c, &recentered_translation, 4);
+    memcpy(mock_map_cursor_pane + 0x7c, &recentered_x, 4);
     current_guest_frame = 62;
     dm_botw_touch_menu_test_set_render_frame(62);
     observe_native_pane(map_transform, 1);
     observe_native_pane(map_pane, 1);
-    assert(sample(62) == DM_BTN_A); // current, target and projected cursor acknowledge the tap
+    assert(sample(62) == DM_BTN_A); // same selected point acknowledges even after recentering
+    memcpy(map_transform + 0x7c, &mock_map_setter_matrix[2], 4);
+    recentered_x = 150.0f;
+    memcpy(mock_map_cursor_pane + 0x7c, &recentered_x, 4);
     assert(mock_map_current_calls == 2 && mock_map_target_calls == 2);
     dm_botw_touch_menu_test_set_map_setters(0, 0);
     dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, tap_x, tap_y);
@@ -2109,7 +2432,10 @@ int main(void) {
     dm_botw_touch_menu_pinch(1.2f);
     int32_t zoom_axes[4] = {11, 22, 33, 44};
     assert(sample_axes(74, zoom_axes, NULL) == 1);
-    assert(zoom_axes[0] == 11 && zoom_axes[1] == 22 && zoom_axes[2] == 33 && zoom_axes[3] > 0);
+    assert(zoom_axes[0] == 11 && zoom_axes[1] == 22 && zoom_axes[2] == 33 && zoom_axes[3] > 0x4000);
+    dm_botw_touch_menu_pinch(.8f);
+    memset(zoom_axes, 0, sizeof zoom_axes);
+    assert(sample_axes(74, zoom_axes, NULL) == 1 && zoom_axes[3] < -0x4000);
     dm_botw_touch_menu_pinch(0.0f);
     int32_t zoom_end[4] = {55, 66, 77, 88};
     assert(sample_axes(75, zoom_end, NULL) == 1);
@@ -2286,7 +2612,7 @@ int main(void) {
     assert(b_icon_x >= packed_back[0] && b_icon_x <= packed_back[0] + packed_back[2]);
     assert(b_label_x >= packed_back[0] && b_label_x <= packed_back[0] + packed_back[2]);
     assert(a_icon_x < packed_back[0] || a_icon_x > packed_back[0] + packed_back[2]);
-    assert(fabsf(packed_back[0] - .921875f) < .002f);
+    assert(fabsf(packed_back[0] - .872656f) < .002f);
     (void)packed_a;
 
     // Any native guide glyph may establish the current guide root by itself.
@@ -2473,6 +2799,7 @@ int main(void) {
 
     assert(selector_list_widget_vtable_rva_allowed(0x1cdb958));
     assert(selector_list_widget_vtable_rva_allowed(0x1cdbb58));
+    assert(selector_list_widget_vtable_rva_allowed(0x1cfcf78));
     assert(!selector_list_widget_vtable_rva_allowed(0x1cdbb38)); // ctor-associated table, not either live receiver address
     assert(!selector_list_widget_vtable_rva_allowed(0x1cdb960));
 
@@ -2507,6 +2834,10 @@ int main(void) {
     test_option_arrow_touch();
     test_message_advance_owner();
     test_menu_animation_visibility();
+    test_inline_holding_prompts();
+    test_inventory_category_touch_cells();
+    test_cursorless_help_prompts();
+    test_inventory_preview_rotation();
     test_map_displacement_drag();
     puts("t_botw_touch_menu: native inventory/category/popup and current-screen generic targets, eligibility, delayed focus and inactive gates passed");
     return 0;
