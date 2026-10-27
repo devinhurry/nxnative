@@ -315,6 +315,14 @@ Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_b
 - **Found on:** [Super Mario Bros. Wonder](../../dm/games/010015100B514000/README.md): 331 of 9,043 pairs failed; the opening course used none of them, later levels did (about 11,500 failed builds in one 11-minute session).
 - **Check:** check all pairs offline after a build (recipe in [05](../agents/05-debugging.md)).
 
+### Shader package records match profile keys
+
+- **Symptom:** a black title and scene despite successful pipeline compilation; shaders saved under the same key contain different code or bindings from a working build.
+- **Cause:** the builder trusted a profile's package filename and record index without checking the record's identity. Building a newer profile against an older extracted shader package translated unrelated records under the newer keys. A successful Metal compile cannot detect this mismatch.
+- **Fix:** before cache lookup or translation, `dmsh_build.py` hashes each record's own control section and code with the same length convention as `shader_split.py` and the host. A wrong index, malformed record or different key stops with `[RED]` and identifies the package, index, actual key and expected key. Use the package split from the profile's matching game version.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md): an older `-work/shader/pkg` was used with the 1.9.0 profile instead of `_build/shader/pkg`. `vs_gsys.bin#25` held `5f55a0d9498da3c3` instead of `e4b5b0967a3cd0b3`; `vs_main.bin#6` held `7994e9d085ac7e55` instead of `51deaed0b27374b9`.
+- **Check:** `dm/gfx/tests/test_dmsh_package.py` exercises a valid record, a wrong key and an out-of-range index.
+
 ### Single-stage programs paired with a cover
 
 - **Cause:** a game that builds one NVN program per GLSLC output and combines vertex and pixel programs per draw with `BindProgram` stage bits has its real pairs only at draw time, so the offline build cannot know which pixel shaders a vertex shader must feed.

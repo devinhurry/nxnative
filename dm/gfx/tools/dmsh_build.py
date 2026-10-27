@@ -64,6 +64,16 @@ def records(d):
     r = [m.start() for m in re.finditer(b'BTCDBTCD', d)]
     return [d[x:(r[k + 1] if k + 1 < len(r) else len(d))] for k, x in enumerate(r)]
 
+def record_key(rec):
+    """The package's own control/code identity, independent of the profile index."""
+    if len(rec) < 0x38: return None
+    ctl_size, code_size = struct.unpack_from('<2I', rec, 0x28)
+    if ctl_size < 0x24 or 0x38 + code_size + ctl_size > len(rec): return None
+    code = rec[0x38:0x38 + code_size]
+    ctl = rec[0x38 + code_size:0x38 + code_size + ctl_size]
+    own_size = struct.unpack_from('<I', ctl, 0x20)[0]
+    return hashlib.sha256(ctl[:own_size if 0x760 <= own_size < 0x880 else 0x880] + code).hexdigest()[:16]
+
 def clone(src, dst):   # APFS copy-on-write, else a plain copy; the clonefile call, not a cp: a fork of this large process costs about 6 ms
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     dmsh_mtlcache.clone(src, dst)
@@ -922,7 +932,11 @@ digests, rule_fps, cache_reasons, cache_hits = {}, {}, {}, set()
 def rec_of(key):   # → (package name, the shader's record)
     name, k = loc[key]
     if name not in packs: packs[name] = records(open(os.path.join(dm_dir, name), 'rb').read())
-    return name, packs[name][k]
+    rec = packs[name][k] if 0 <= k < len(packs[name]) else b''
+    actual = record_key(rec)
+    if actual != key:
+        sys.exit(f'[RED] shader package {dm_dir}/{name}#{k} holds {actual or "an invalid record"}, expected {key}: split the game version matching this profile before building shaders')
+    return name, rec
 recs = {}
 for key in keys: recs[key] = rec_of(key); digests[key] = shader_key(key, *recs[key])
 def plain_digest(k):   # a paired pixel shader's key, also when it is not built this time

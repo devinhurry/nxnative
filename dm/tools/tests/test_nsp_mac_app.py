@@ -100,6 +100,7 @@ class App(unittest.TestCase):
         (t / 'cache/cas').mkdir()   # the Metal compile cache: not for the app
         for n in ('shader_map.tsv', 'pso_manifest.tsv', 'c1_full.tsv', 'game.tsv'): (t / 'profile' / n).write_text(n)
         (t / 'profile/shader_pairs.tsv').write_text('vertex-key\tpixel-key\n'); (t / 'profile/pso_pairs.tsv').write_text('other-vertex\tother-pixel\n')
+        (t / 'profile/touch_y.png').write_bytes(b'touch artwork')
         (t / 'font/nintendo_ext.ttf').write_bytes(b'ttf')
         (t / 'aoc/1/x').write_bytes(b'dlc')
         (t / 'pso').mkdir(); (t / 'pso/applegpu_g14s.mtl4a').write_bytes(b'arch'); (t / 'pso/prebuilt.tsv').write_text('chain\t0123456789ab\n'); (t / 'pso/key.x').write_text('not for the app')
@@ -137,7 +138,8 @@ class App(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in (c / 'MacOS').iterdir()), ['dmhost', 'nxnative'])
         self.assertEqual(sorted(p.name for p in (c / 'Resources/dm').iterdir()),
                          ['c1_full.tsv', 'env.txt', 'font', 'main.cuts.tsv', 'main.fixups.tsv', 'main.gates.tsv', 'main.obs.tsv', 'main.patched.bin', 'pso_manifest.tsv', 'pso_pairs.tsv',
-                          'shader_map.tsv', 'shader_pairs.tsv'])   # the shader pairs: the pipeline prebuild's, without which hybrid draws have no stand-in
+                          'shader_map.tsv', 'shader_pairs.tsv', 'touch_y.png'])   # the shader pairs: the pipeline prebuild's, without which hybrid draws have no stand-in
+        self.assertEqual((c / 'Resources/dm/touch_y.png').read_bytes(), b'touch artwork')
         self.assertEqual([p.name for p in (c / 'Resources/msl').iterdir()], ['b-0123456789ab'])   # the libraries only, not the compile cache
         self.assertEqual(sorted(p.name for p in (c / 'Resources/msl/b-0123456789ab').iterdir()), ['inputs.tsv', 'k_b.json', 'k_b.metallib'])
         self.assertEqual((c / 'Resources/msl/b-0123456789ab/k_b.metallib').read_bytes(), b'lib')
