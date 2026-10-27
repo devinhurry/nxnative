@@ -4,7 +4,7 @@
 
 enum { DM_BOTW_MENU_MAX_SLOTS = 20, DM_BOTW_MENU_MAX_CATEGORIES = 8,
        DM_BOTW_MENU_MAX_POPUP_ROWS = 8,
-       DM_BOTW_MENU_MAX_FOOTER_ACTIONS = 6,
+       DM_BOTW_MENU_MAX_FOOTER_ACTIONS = 16, // six footer slots, eight inline actions and two header actions
        DM_BOTW_MENU_MAX_GENERIC_TARGETS = 128 };
 
 enum {
@@ -78,6 +78,7 @@ typedef struct {
     uintptr_t quest_category_widget;
     dm_botw_touch_menu_target generic_targets[DM_BOTW_MENU_MAX_GENERIC_TARGETS];
     int inventory_visible;
+    int carousel_valid; // A live generic item grid with the native horizontal pager.
     int inventory_rotate_visible; // Native exclusive character-preview mode.
     int inventory_arrow_valid[2];
     float inventory_arrows[2][4]; // Live previous/next carousel arrows.

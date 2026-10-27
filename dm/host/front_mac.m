@@ -238,6 +238,21 @@ static DmTouchPreviewView *g_preview_view;
 static float preview_distance(NSPoint a, NSPoint b) { return hypotf((float)(a.x - b.x), (float)(a.y - b.y)); }
 static NSPoint preview_from_top(float x, float y, float height) { return NSMakePoint(x, height - y); }
 static dm_touchpad_point preview_pad_point(float x, float y) { return (dm_touchpad_point){x, y}; }
+static void preview_fill_outlined_circle(NSRect background, CGFloat lineWidth) {
+    [[NSBezierPath bezierPathWithOvalInRect:background] fill];
+    NSBezierPath *border = [NSBezierPath bezierPathWithOvalInRect:
+        NSInsetRect(background, -lineWidth*.5, -lineWidth*.5)];
+    border.lineWidth = lineWidth; [border stroke];
+}
+static void preview_draw_botw_glyph(CGPathRef path, CGFloat height, NSColor *color) {
+    if (!path) return;
+    CGContextRef context = NSGraphicsContext.currentContext.CGContext;
+    CGContextSaveGState(context);
+    CGContextTranslateCTM(context, 0, height); CGContextScaleCTM(context, 1, -1);
+    CGContextSetFillColorWithColor(context, color.CGColor);
+    CGContextAddPath(context, path); CGContextFillPath(context);
+    CGContextRestoreGState(context); CGPathRelease(path);
+}
 static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot) {
     if (!snapshot || !snapshot->valid || snapshot->width != DM_BOTW_RUNE_ICON_SIDE ||
         snapshot->height != DM_BOTW_RUNE_ICON_SIDE || snapshot->stride != DM_BOTW_RUNE_ICON_STRIDE) return nil;
@@ -330,7 +345,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     }
 }
 - (void)botwRuneIconChanged { [self refreshBotwRuneIcon]; [self setNeedsDisplay:YES]; }
-- (dm_touchpad_point)stickHome { return dm_touchpad_stick_home(self.bounds.size.width, self.bounds.size.height, 0, 0, 0, 0); }
+- (dm_touchpad_point)stickHome { return _active ? dm_touchpad_botw_stick_home(self.bounds.size.width,self.bounds.size.height,0,0,0,0) : dm_touchpad_stick_home(self.bounds.size.width,self.bounds.size.height,0,0,0,0); }
 - (dm_touchpad_point)shieldHome { return dm_touchpad_shield_stick_home(self.bounds.size.width, self.bounds.size.height, 0, 0, 0, 0); }
 - (dm_touchpad_point)runeButton { return dm_touchpad_rune_button(self.bounds.size.width, self.bounds.size.height, 0, 0, 0, 0); }
 - (dm_touchpad_point)mapBadgeCenter {
@@ -388,7 +403,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
         if (dm_touchpad_rounded_rect_contains(r,DM_TP_MAP_BADGE_RADIUS*u,p.x,p.y)) return 10;
         return -1; // the old + hit region is replaced while the live-map badge exists
     }
-    if (!(_mapValid || _mapTapConsumed) && fabsf(p.x - minusX) <= (DM_TP_PILL_W * u * .5f + 8 * u) && fabsf(p.y - pillY) <= (DM_TP_PILL_H * u * .5f + 8 * u)) return 11;
+    if (!(_mapValid || _mapTapConsumed) && (_active ? hypotf(p.x-minusX,p.y-pillY) <= DM_TP_MAP_BADGE_RADIUS*u : fabsf(p.x-minusX) <= DM_TP_PILL_W*u*.5f+8*u && fabsf(p.y-pillY) <= DM_TP_PILL_H*u*.5f+8*u)) return 11;
     if (_active) return -1; // only the old + region is replaced; Pro HUD still needs the visible − button
     if (fabsf(p.x - plusX) <= (DM_TP_PILL_W * u * .5f + 8 * u) && fabsf(p.y - pillY) <= (DM_TP_PILL_H * u * .5f + 8 * u)) return 10;
     return -1;
@@ -570,21 +585,36 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     NSRect rect = NSMakeRect(c.x-r, c.y-r, 2*r, 2*r);
     [[NSColor colorWithWhite:alpha >= .45 ? .35 : DM_BOTW_BUTTON_GRAY alpha:DM_BOTW_BUTTON_ALPHA] setFill];
     [[NSColor colorWithWhite:DM_BOTW_STROKE_GRAY alpha:DM_BOTW_STROKE_ALPHA] setStroke];
-    NSBezierPath *path = [NSBezierPath bezierPathWithOvalInRect:rect]; path.lineWidth = 1.5; [path fill]; [path stroke];
+    preview_fill_outlined_circle(rect, 1.5*DM_BOTW_STROKE_WIDTH_SCALE);
     if (label.length) {
         NSDictionary *a = @{NSFontAttributeName:[NSFont systemFontOfSize:11 weight:NSFontWeightMedium], NSForegroundColorAttributeName:[NSColor colorWithWhite:1 alpha:.75]};
         NSSize s = [label sizeWithAttributes:a]; [label drawAtPoint:NSMakePoint(c.x-s.width/2,c.y-s.height/2) withAttributes:a];
     }
 }
+- (void)drawPlainKey:(NSString *)text center:(NSPoint)c {
+    NSDictionary *attrs=@{NSFontAttributeName:[NSFont systemFontOfSize:18*self.u weight:NSFontWeightMedium],
+        NSForegroundColorAttributeName:NSColor.whiteColor};
+    NSSize size=[text sizeWithAttributes:attrs];
+    [text drawAtPoint:NSMakePoint(c.x-size.width*.5,c.y-size.height*.5) withAttributes:attrs];
+}
 - (void)drawRect:(NSRect)dirtyRect {
     (void)dirtyRect; if (!_active || _menuMode) return;
     float h = self.bounds.size.height, w = self.bounds.size.width, u = self.u;
     dm_touchpad_point sh = _owner == PREVIEW_STICK ? preview_pad_point((float)_stickCenter.x,(float)_stickCenter.y) : [self stickHome]; NSPoint ring = preview_from_top(sh.x,sh.y,h);
-    [self drawCircle:ring radius:DM_TP_STICK_R*u fill:.08 label:@""];
-    float ox = fminf(fmaxf((float)(_last.x-_stickCenter.x),-DM_TP_STICK_R*u),DM_TP_STICK_R*u);
-    float oy = fminf(fmaxf((float)(_last.y-_stickCenter.y),-DM_TP_STICK_R*u),DM_TP_STICK_R*u);
-    NSPoint knob = _owner == PREVIEW_STICK ? preview_from_top((float)_stickCenter.x+ox,(float)_stickCenter.y+oy,h) : ring;
-    [self drawCircle:knob radius:DM_TP_KNOB_R*u fill:.28 label:@""];
+    NSColor *glyphColor=[NSColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:.8];
+    if (_owner==PREVIEW_STICK) {
+        CGFloat r=DM_TP_STICK_R*u;
+        [[NSColor colorWithWhite:DM_BOTW_STROKE_GRAY alpha:DM_BOTW_STROKE_ALPHA] setStroke];
+        NSBezierPath *outer=[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(ring.x-r,ring.y-r,2*r,2*r)];
+        outer.lineWidth=DM_BOTW_STICK_RING_WIDTH; [outer stroke];
+        int sprint=dm_touchpad_sprint_requested(hypotf(_last.x-sh.x,_last.y-sh.y),r);
+        preview_draw_botw_glyph(dm_botw_stick_direction_path(CGPointMake(sh.x,sh.y),CGPointMake(_last.x,_last.y),r,u,sprint),h,glyphColor);
+    }
+    NSColor *faint=[NSColor colorWithWhite:1 alpha:DM_BOTW_STICK_GRAPH_ALPHA]; [faint setStroke];
+    CGFloat kr=DM_TP_KNOB_R*u;
+    NSBezierPath *center=[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(ring.x-kr,ring.y-kr,2*kr,2*kr)];
+    center.lineWidth=1.5; [center stroke];
+    preview_draw_botw_glyph(dm_botw_four_arrows_path(CGPointMake(sh.x,sh.y),17*u,12*u),h,faint);
     dm_touchpad_point fc = [self faceCenter];
     for (int b=0;b<4;b++) {
         dm_touchpad_point q = dm_touchpad_face_button(w,h,0,0,0,0,b);
@@ -596,10 +626,9 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
             [_yIcon drawInRect:NSMakeRect(center.x-radius*.5,center.y-radius*.5,radius,radius)
                      fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
             NSPoint badge=NSMakePoint(center.x+radius*M_SQRT1_2,center.y+radius*M_SQRT1_2); float br=radius*.30;
-            NSBezierPath *outline=[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(badge.x-br,badge.y-br,2*br,2*br)];
             [[NSColor colorWithWhite:.20 alpha:1] setFill];
             [[NSColor colorWithRed:.94 green:.88 blue:.70 alpha:1] setStroke];
-            outline.lineWidth=1.15*u; [outline fill]; [outline stroke];
+            preview_fill_outlined_circle(NSMakeRect(badge.x-br,badge.y-br,2*br,2*br),1.15*u*DM_BOTW_STROKE_WIDTH_SCALE);
             NSDictionary *attrs=@{NSFontAttributeName:[NSFont systemFontOfSize:9*u weight:NSFontWeightSemibold],
                 NSForegroundColorAttributeName:[NSColor colorWithRed:.94 green:.88 blue:.70 alpha:1]};
             NSSize size=[@"Y" sizeWithAttributes:attrs];
@@ -621,16 +650,16 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
             NSRect button=NSMakeRect(center.x-radius,center.y-radius,2*radius,2*radius);
             [[NSColor colorWithWhite:DM_BOTW_BUTTON_GRAY alpha:DM_BOTW_BUTTON_ALPHA] setFill];
             [[NSColor colorWithWhite:DM_BOTW_STROKE_GRAY alpha:DM_BOTW_STROKE_ALPHA] setStroke];
-            NSBezierPath *outline=[NSBezierPath bezierPathWithOvalInRect:button]; outline.lineWidth=2*u; [outline fill]; [outline stroke];
+            preview_fill_outlined_circle(button,2*u*DM_BOTW_STROKE_WIDTH_SCALE);
             if (_runeIconValid) {
                 NSRect imageRect=NSMakeRect(center.x-.68*radius,center.y-.68*radius,1.36*radius,1.36*radius);
                 [_runeIcon drawInRect:imageRect fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
-                float br=.29f*radius; NSPoint badge=NSMakePoint(center.x+.63f*radius,center.y+.63f*radius);
+                float br=.30f*radius; NSPoint badge=NSMakePoint(center.x+M_SQRT1_2*radius,center.y+M_SQRT1_2*radius);
                 NSRect badgeRect=NSMakeRect(badge.x-br,badge.y-br,2*br,2*br);
-                [[NSColor colorWithWhite:DM_BOTW_BUTTON_GRAY alpha:DM_BOTW_BUTTON_ALPHA] setFill];
-                [[NSColor colorWithWhite:DM_BOTW_STROKE_GRAY alpha:DM_BOTW_STROKE_ALPHA] setStroke];
-                NSBezierPath *badgePath=[NSBezierPath bezierPathWithOvalInRect:badgeRect]; badgePath.lineWidth=1.15*u; [badgePath fill]; [badgePath stroke];
-                NSDictionary *badgeAttrs=@{NSFontAttributeName:[NSFont systemFontOfSize:7.5*u weight:NSFontWeightSemibold],NSForegroundColorAttributeName:[NSColor colorWithRed:.94 green:.88 blue:.70 alpha:1]};
+                [[NSColor colorWithWhite:.20 alpha:1] setFill];
+                [[NSColor colorWithRed:.94 green:.88 blue:.70 alpha:1] setStroke];
+                preview_fill_outlined_circle(badgeRect,1.15*u*DM_BOTW_STROKE_WIDTH_SCALE);
+                NSDictionary *badgeAttrs=@{NSFontAttributeName:[NSFont systemFontOfSize:9*u weight:NSFontWeightSemibold],NSForegroundColorAttributeName:[NSColor colorWithRed:.94 green:.88 blue:.70 alpha:1]};
                 NSSize badgeLabel=[keys[i].name sizeWithAttributes:badgeAttrs];
                 [keys[i].name drawAtPoint:NSMakePoint(badge.x-badgeLabel.width/2,badge.y-badgeLabel.height/2) withAttributes:badgeAttrs];
             } else {
@@ -652,25 +681,26 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
         dm_touchpad_point home=[self shieldHome];
         if (_owner==PREVIEW_SHIELD) home=preview_pad_point((float)_shieldOrigin.x,(float)_shieldOrigin.y);
         NSPoint c=preview_from_top(home.x,home.y,h);
-        [self drawCircle:c radius:DM_TP_STICK_R*u fill:.08 label:@"ZL"];
         if (_owner==PREVIEW_SHIELD) {
-            float dx=(float)(_last.x-_shieldOrigin.x),dy=(float)(_last.y-_shieldOrigin.y),d=hypotf(dx,dy),r=DM_TP_STICK_R*u;
-            if(d>r){dx*=r/d;dy*=r/d;}
-            [self drawCircle:preview_from_top((float)_shieldOrigin.x+dx,(float)_shieldOrigin.y+dy,h) radius:DM_TP_KNOB_R*u fill:.28 label:@""];
+            CGFloat r=DM_TP_STICK_R*u;
+            [[NSColor colorWithWhite:DM_BOTW_STROKE_GRAY alpha:DM_BOTW_STROKE_ALPHA] setStroke];
+            NSBezierPath *ring=[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(c.x-r,c.y-r,2*r,2*r)];
+            ring.lineWidth=DM_BOTW_STICK_RING_WIDTH; [ring stroke];
         }
+        CGPoint origin=CGPointMake(home.x,home.y);
+        preview_draw_botw_glyph(dm_botw_shield_graph_path(origin,u),h,glyphColor);
+        if (_owner==PREVIEW_SHIELD)
+            preview_draw_botw_glyph(dm_botw_stick_direction_path(origin,CGPointMake(_last.x,_last.y),DM_TP_STICK_R*u,u,0),h,glyphColor);
     }
     float py=DM_TP_PILL_Y*u;
     for (int b=10;b<=11;b++) {
         if (b==11 && (_mapValid || _mapTapConsumed)) continue;
         if (b==10 && _active) {
             dm_touchpad_point badge=[self mapBadgeCenter]; NSPoint c=preview_from_top(badge.x,badge.y,h);
-            NSRect r=NSMakeRect(c.x-DM_TP_MAP_BADGE_WIDTH*u*.5f,c.y-DM_TP_MAP_BADGE_HEIGHT*u*.5f,DM_TP_MAP_BADGE_WIDTH*u,DM_TP_MAP_BADGE_HEIGHT*u);
-            [[NSColor colorWithWhite:DM_BOTW_BUTTON_GRAY alpha:DM_BOTW_BUTTON_ALPHA] setFill]; [[NSColor colorWithWhite:DM_BOTW_STROKE_GRAY alpha:DM_BOTW_STROKE_ALPHA] setStroke];
-            NSBezierPath *p=[NSBezierPath bezierPathWithRoundedRect:r xRadius:DM_TP_MAP_BADGE_RADIUS*u yRadius:DM_TP_MAP_BADGE_RADIUS*u]; p.lineWidth=1.5*u; [p fill]; [p stroke];
-            NSDictionary *a=@{NSFontAttributeName:[NSFont systemFontOfSize:15*u weight:NSFontWeightSemibold],NSForegroundColorAttributeName:[NSColor colorWithWhite:1 alpha:.75]};
-            NSSize s=[@"+" sizeWithAttributes:a]; [@"+" drawAtPoint:NSMakePoint(c.x-s.width/2,c.y-s.height/2) withAttributes:a]; continue;
+            [self drawPlainKey:@"+" center:c]; continue;
         }
         float x=w*.5f+(b==10?1:-1)*DM_TP_PILL_DX*u;
+        if (_active) { [self drawPlainKey:b==10?@"+":@"−" center:preview_from_top(x,py,h)]; continue; }
         NSRect r=NSMakeRect(x-DM_TP_PILL_W*u*.5f,h-py-DM_TP_PILL_H*u*.5f,DM_TP_PILL_W*u,DM_TP_PILL_H*u);
         [[NSColor colorWithWhite:(_held&(1ull<<b))?.35:DM_BOTW_BUTTON_GRAY alpha:DM_BOTW_BUTTON_ALPHA] setFill]; [[NSColor colorWithWhite:DM_BOTW_STROKE_GRAY alpha:DM_BOTW_STROKE_ALPHA] setStroke];
         NSBezierPath *p=[NSBezierPath bezierPathWithRoundedRect:r xRadius:7 yRadius:7]; [p fill]; [p stroke];

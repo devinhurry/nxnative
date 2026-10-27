@@ -37,6 +37,10 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
 - (BOOL)dm_testZLArtworkHidden;
 - (BOOL)dm_testControlsHidden;
 - (CAShapeLayer *)dm_testButtonLayer:(int)button;
+- (CAShapeLayer *)dm_testButtonBorder:(int)button;
+- (CATextLayer *)dm_testButtonLabel:(int)button;
+- (CAShapeLayer *)dm_testYBadgeBorder;
+- (CAShapeLayer *)dm_testRuneBadgeBorder;
 - (CALayer *)dm_testYIconLayer;
 - (CAShapeLayer *)dm_testYBadge;
 - (CATextLayer *)dm_testYLabel;
@@ -53,6 +57,15 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
 - (BOOL)dm_testBotwMapOwnsPoint:(CGPoint)point;
 - (CGPoint)dm_testShieldHome;
 - (CGPoint)dm_testShieldRingCenter;
+- (CAShapeLayer *)dm_testShieldGraphLayer;
+- (CAShapeLayer *)dm_testShieldRingLayer;
+- (CAShapeLayer *)dm_testShieldDirectionLayer;
+- (CAShapeLayer *)dm_testStickGraphLayer;
+- (CAShapeLayer *)dm_testStickRingLayer;
+- (CAShapeLayer *)dm_testStickDirectionLayer;
+- (CAShapeLayer *)dm_testRuneBadgeLayer;
+- (void)dm_testSetTouchFeedback:(UIImpactFeedbackGenerator *)feedback;
+- (void)botwRuneIconChanged;
 - (CGPoint)dm_testStickHome;
 - (CGPoint)dm_testRuneButtonCenter;
 - (CGPoint)dm_testMapBadgeCenter;
@@ -241,8 +254,8 @@ static void test_dpad_art_visibility(DmGamepad *view) {
     [NSUserDefaults.standardUserDefaults setObject:@0 forKey:@"DmPadLayout"];
     g_botw_touchhud_available = YES;
     [view dm_testRefreshTouchHudMode];
-    CHECK([view dm_testIsFull] && ![view dm_testIsTap] && ![view dm_testLeftStickRingHidden],
-          "late BOTW capability activation moves a saved Tap layout into local 3D mode");
+    CHECK([view dm_testIsFull] && ![view dm_testIsTap] && [view dm_testLeftStickRingHidden] && ![view dm_testStickGraphLayer].hidden,
+          "late BOTW capability activation restores the local 3D center graph with its idle ring hidden");
     CHECK([[NSUserDefaults.standardUserDefaults objectForKey:@"DmPadLayout"] isEqual:@0],
           "late BOTW activation does not overwrite the shared layout preference");
     [view setFull:YES];
@@ -263,13 +276,29 @@ static BOOL gray_matches(CGColorRef color, CGFloat gray, CGFloat alpha) {
     return color && [[UIColor colorWithCGColor:color] getWhite:&actual alpha:&opacity] &&
         fabs(actual-gray) < .001 && fabs(opacity-alpha) < .001;
 }
+static void save_pad_preview(DmGamepad *view, NSString *name) {
+    UIGraphicsImageRenderer *renderer=[[UIGraphicsImageRenderer alloc] initWithSize:view.bounds.size];
+    UIImage *preview=[renderer imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
+        [[UIColor colorWithWhite:.55 alpha:1] setFill]; UIRectFill(view.bounds);
+        [view.layer renderInContext:ctx.CGContext];
+    }];
+    [UIImagePNGRepresentation(preview) writeToFile:[[NSHomeDirectory() stringByAppendingPathComponent:@"Documents"] stringByAppendingPathComponent:name] atomically:YES];
+}
+@interface DmFeedbackSpy : UIImpactFeedbackGenerator
+@property(nonatomic) NSUInteger count;
+@end
+@implementation DmFeedbackSpy
+- (void)prepare {}
+- (void)impactOccurredWithIntensity:(CGFloat)intensity { (void)intensity; self.count++; }
+@end
 static void test_botw_button_artwork(DmGamepad *view) {
     g_botw_touchhud_available = YES;
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view setNeedsLayout]; [view layoutIfNeeded];
     CAShapeLayer *y = [view dm_testButtonLayer:3];
     CALayer *icon = [view dm_testYIconLayer]; CAShapeLayer *badge = [view dm_testYBadge];
     CGRect button = CGPathGetBoundingBox(y.path), circle = CGPathGetBoundingBox(badge.path);
-    CHECK(gray_matches(y.fillColor,.15,.35) && gray_matches(y.strokeColor,.12,.40) && y.shadowOpacity == 0,
+    CHECK(gray_matches(y.fillColor,.26,.20) && !y.strokeColor &&
+          gray_matches([view dm_testButtonBorder:3].fillColor,.25,.40) && y.shadowOpacity == 0,
           "BOTW overrides the button fill, outline and shadow without changing ordinary defaults");
     CHECK(!icon.hidden && icon.contents && fabs(icon.frame.size.width-button.size.width*.5)<.01 &&
           fabs(icon.frame.size.height-button.size.height*.5)<.01,
@@ -280,23 +309,57 @@ static void test_botw_button_artwork(DmGamepad *view) {
           fabs(hypot(badgeCenter.x-center.x,badgeCenter.y-center.y)-button.size.width*.5)<.01 &&
           fabs(CGRectGetMidX([view dm_testYLabel].frame)-badgeCenter.x)<.01,
           "Y label sits in a gray badge centered on the upper-right circle edge");
+    int overlapping=0;
+    const int buttons[]={0,1,2,3,6,7,9};
+    for (unsigned i=0;i<sizeof buttons/sizeof *buttons;i++) {
+        CAShapeLayer *fill=[view dm_testButtonLayer:buttons[i]], *border=[view dm_testButtonBorder:buttons[i]];
+        CGRect bounds=CGPathGetPathBoundingBox(fill.path);
+        for (int x=0;x<37;x++) for (int y=0;y<37;y++) {
+            CGPoint p=CGPointMake(bounds.origin.x+(x+.37)*bounds.size.width/37,
+                                  bounds.origin.y+(y+.61)*bounds.size.height/37);
+            overlapping += CGPathContainsPoint(fill.path,NULL,p,NO) && CGPathContainsPoint(border.path,NULL,p,NO);
+        }
+        CHECK(!border.hidden && !fill.strokeColor && !CGPathIsEmpty(border.path),
+              "BOTW buttons use a separate exterior border with centered strokes disabled");
+    }
+    CHECK(overlapping==0,"exterior borders do not cover the background of round or teardrop buttons");
+    CAShapeLayer *a=[view dm_testButtonLayer:0], *aBorder=[view dm_testButtonBorder:0];
+    CGRect disk=CGPathGetPathBoundingBox(a.path);
+    CGFloat edge=CGRectGetMaxX(disk), cy=CGRectGetMidY(disk), width=a.lineWidth;
+    CHECK(!CGPathContainsPoint(aBorder.path,NULL,CGPointMake(edge-.1,cy),NO) &&
+          CGPathContainsPoint(aBorder.path,NULL,CGPointMake(edge+.1,cy),NO) &&
+          CGPathContainsPoint(aBorder.path,NULL,CGPointMake(edge+width-.1,cy),NO) &&
+          !CGPathContainsPoint(aBorder.path,NULL,CGPointMake(edge+width+.1,cy),NO),
+          "the exterior circle border starts directly at the fill edge and retains its full width");
     FakeTouch *t=touch(badgeCenter.x,badgeCenter.y); began(view,t);
     CHECK((g_buttons & DM_BTN_Y) && !(g_buttons & DM_BTN_X), "the overlapping Y badge still presses Y");
     ended(view,t,badgeCenter.x,badgeCenter.y);
-    UIGraphicsImageRenderer *renderer=[[UIGraphicsImageRenderer alloc] initWithSize:view.bounds.size];
-    UIImage *preview=[renderer imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
-        [[UIColor colorWithWhite:.55 alpha:1] setFill]; UIRectFill(view.bounds);
-        [view.layer renderInContext:ctx.CGContext];
-    }];
-    [UIImagePNGRepresentation(preview) writeToFile:[NSHomeDirectory() stringByAppendingPathComponent:@"Documents/botw-buttons.png"] atomically:YES];
+    save_pad_preview(view, @"botw-buttons.png");
+    g_botw_rune_icon_snapshot.valid=1; g_botw_rune_icon_snapshot.generation=1;
+    g_botw_rune_icon_snapshot.width=g_botw_rune_icon_snapshot.height=DM_BOTW_RUNE_ICON_SIDE;
+    g_botw_rune_icon_snapshot.stride=DM_BOTW_RUNE_ICON_STRIDE;
+    [view botwRuneIconChanged]; [view layoutIfNeeded];
+    CAShapeLayer *runeBadge=[view dm_testRuneBadgeLayer];
+    CHECK(!runeBadge.hidden && CGColorEqualToColor(runeBadge.fillColor,badge.fillColor) &&
+          CGColorEqualToColor([view dm_testRuneBadgeBorder].fillColor,[view dm_testYBadgeBorder].fillColor) &&
+          !runeBadge.strokeColor && !badge.strokeColor && runeBadge.shadowOpacity==0,
+          "the rune L badge shares Y's opaque gray fill, gold outline and shadow-free style");
+    for (int b=10;b<=11;b++) {
+        CHECK(![view dm_testButtonLayer:b].fillColor && ![view dm_testButtonLayer:b].strokeColor &&
+              [view dm_testButtonBorder:b].hidden && gray_matches([view dm_testButtonLabel:b].foregroundColor,1,1),
+              "BOTW plus and minus show only a plain white glyph without a background or border");
+    }
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES]; [view setNeedsLayout]; [view layoutIfNeeded];
     CHECK([view dm_testControlsHidden] && icon.hidden && badge.hidden && y.shadowOpacity == .2f &&
+          [view dm_testButtonBorder:3].hidden && gray_matches(y.strokeColor,1,.38) &&
           gray_matches(y.fillColor,1,.14), "controller mode hides BOTW art and restores ordinary button defaults");
     g_botw_touchhud_available=NO;
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view setNeedsLayout]; [view layoutIfNeeded];
     CHECK(icon.hidden && badge.hidden && y.shadowOpacity == .2f && gray_matches(y.fillColor,1,.14) &&
+          [view dm_testButtonBorder:3].hidden && gray_matches(y.strokeColor,1,.38) &&
           fabs(CGRectGetMidX([view dm_testYLabel].frame)-[view facePos:3].x)<.01,
           "other games keep their centered Y label, white fill and original shadow");
+    memset(&g_botw_rune_icon_snapshot,0,sizeof g_botw_rune_icon_snapshot);
 }
 
 static void test_botw_virtual_buttons(DmGamepad *view) {
@@ -360,8 +423,8 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
           "active BOTW mode accepts the live relocated-map clip as a hit region");
     CHECK([view dm_testMinusArtworkHidden], "valid visible map hides the standalone Minus artwork");
     CGRect minusRect = [view pillRect:11];
-    CHECK([view dm_testBtnAt:CGPointMake(CGRectGetMidX(minusRect), CGRectGetMidY(minusRect))] < 0,
-          "valid map mode removes the standalone Minus hit region");
+    CHECK([view dm_testBtnAt:CGPointMake(CGRectGetMidX(minusRect), CGRectGetMidY(minusRect))] != 11,
+          "valid map mode removes Minus ownership even if another visible control occupies its old position");
     g_input_sets = 0; g_input_history[0] = g_input_history[1] = 0;
     int touch_sets_before = g_touch_sets, look_begins_before = g_begin_count;
     CGPoint mapPoint = CGPointMake(view.bounds.size.width * 0.23, view.bounds.size.height * 0.36);
@@ -396,9 +459,16 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
     CHECK([view dm_testBtnAt:CGPointMake(badge.x+badgeHalfW-1,badge.y)]==10 &&
           [view dm_testBtnAt:CGPointMake(badge.x+badgeHalfW+1,badge.y)]<0 &&
           [view dm_testBtnAt:CGPointMake(badge.x+badgeHalfW-1,badge.y+badgeHalfH-1)]<0,
-          "the white rounded-rectangle + artwork and hit region share the same bounds and rounded corners");
+          "the plain + keeps its generous circular hit region and rejects the corner");
+    [view layoutIfNeeded];
+    CHECK(![view dm_testButtonLayer:10].fillColor && ![view dm_testButtonLayer:10].strokeColor &&
+          [view dm_testButtonBorder:10].hidden,
+          "the relocated map plus also has no background or border");
 
     g_botw_touch_actions_available = YES;
+    CHECK(![view dm_testShieldGraphLayer].hidden && [view dm_testShieldRingLayer].hidden &&
+          [view dm_testShieldDirectionLayer].hidden && ![view dm_testShieldGraphLayer].strokeColor,
+          "idle BOTW shield shows only its shield and four arrows, without a ring or outline");
     CGPoint shield = [view dm_testShieldHome]; FakeTouch *shieldTouch=touch(shield.x+30,shield.y+5); began(view,shieldTouch);
     [view layoutIfNeeded]; CGPoint floatingRing=[view dm_testShieldRingCenter];
     CHECK(fabs(floatingRing.x-shieldTouch.point.x)<0.01 && fabs(floatingRing.y-shieldTouch.point.y)<0.01,
@@ -408,12 +478,31 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
     moved(view,shieldTouch,shield.x+85,shield.y+5);
     CHECK((g_buttons & DM_BTN_ZL) && g_lx > 0,
           "shield-stick drag publishes ZL and the left-stick axis together");
+    [view layoutIfNeeded];
+    CGRect graph = CGPathGetPathBoundingBox([view dm_testShieldGraphLayer].path);
+    CGRect ring = CGPathGetPathBoundingBox([view dm_testShieldRingLayer].path);
+    CGRect direction = CGPathGetPathBoundingBox([view dm_testShieldDirectionLayer].path);
+    CHECK(fabs(CGRectGetMidX(graph)-floatingRing.x)<.01 && fabs(CGRectGetMidY(graph)-floatingRing.y)<.01 &&
+          ![view dm_testShieldRingLayer].hidden && ![view dm_testShieldRingLayer].fillColor,
+          "dragging keeps the center graph at touch-down and reveals only the outer ring stroke");
+    CHECK(![view dm_testShieldDirectionLayer].hidden &&
+          fabs(CGRectGetMinX(direction)-CGRectGetMaxX(ring)-[view dm_testShieldRingLayer].lineWidth*.5)<.1 &&
+          fabs(CGRectGetMidY(direction)-CGRectGetMidY(ring))<.1,
+          "the rightward direction arrow meets the outside of the ring even for a shorter drag");
+    save_pad_preview(view, @"botw-shield-drag.png");
+    moved(view,shieldTouch,shield.x+30,shield.y-85); [view layoutIfNeeded];
+    direction = CGPathGetPathBoundingBox([view dm_testShieldDirectionLayer].path);
+    CHECK(fabs(CGRectGetMaxY(direction)-CGRectGetMinY(ring)+[view dm_testShieldRingLayer].lineWidth*.5)<.1 &&
+          fabs(CGRectGetMidX(direction)-CGRectGetMidX(ring))<.1 && g_ly > 0,
+          "the outside arrow follows an upward drag while the native movement axis stays correct");
     ended(view,shieldTouch,shield.x+85,shield.y+5);
     [view layoutIfNeeded]; CGPoint restoredRing=[view dm_testShieldRingCenter];
     CHECK(!(g_buttons & DM_BTN_ZL) && g_lx == 0,
           "lifting the shield stick releases ZL and its axis");
     CHECK(fabs(restoredRing.x-shield.x)<0.01 && fabs(restoredRing.y-shield.y)<0.01,
           "lifting the shield stick restores the ring to its idle home");
+    CHECK([view dm_testShieldRingLayer].hidden && [view dm_testShieldDirectionLayer].hidden,
+          "release hides the shield ring and moving arrow again");
 
     CGPoint stickHome=[view dm_testStickHome], shieldHome=[view dm_testShieldHome];
     FakeTouch *ordinaryStick=touch(stickHome.x,stickHome.y), *shieldConcurrent=touch(shieldHome.x+25,shieldHome.y);
@@ -536,6 +625,66 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
     CHECK(![view dm_testL3GestureEnabled], "Tap layout disables L3 double-tap");
     CHECK(![view dm_testLeftStickOwnsPoint:stick], "Tap layout disables BOTW double-tap recognition");
     g_botw_touchhud_available = NO;
+}
+
+static void test_botw_stick_feedback(DmGamepad *view) {
+    [view reset]; g_botw_touchhud_available=YES;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view layoutIfNeeded];
+    DmFeedbackSpy *feedback=[[DmFeedbackSpy alloc] initWithStyle:UIImpactFeedbackStyleLight];
+    [view dm_testSetTouchFeedback:feedback];
+    UIEdgeInsets insets=view.safeAreaInsets;
+    dm_touchpad_point original=dm_touchpad_stick_home(view.bounds.size.width,view.bounds.size.height,
+        insets.left,insets.top,insets.right,insets.bottom);
+    CGPoint home=[view dm_testStickHome];
+    CHECK(fabs(home.x-original.x-10)<.01 && fabs(home.y-original.y+10)<.01,
+          "BOTW alone shifts the default movement-stick home ten points up and right");
+    CAShapeLayer *graph=[view dm_testStickGraphLayer], *ring=[view dm_testStickRingLayer];
+    CHECK(ring.hidden && !graph.fillColor && gray_matches(graph.strokeColor,1,.15) &&
+          gray_matches(((CAShapeLayer *)graph.sublayers.firstObject).fillColor,1,.15),
+          "idle left stick has only a white circle and four arrows at fifteen percent opacity");
+    CGPoint start=CGPointMake(home.x+3,home.y+2);
+    CGFloat radius=DM_TP_STICK_R*dm_touchpad_u(view.bounds.size.height);
+    FakeTouch *stick=touch(start.x,start.y); began(view,stick);
+    NSUInteger grip=feedback.count;
+    moved(view,stick,start.x+radius*1.1,start.y);
+    CHECK(feedback.count==grip,"moving inside the sprint threshold does not pulse repeatedly");
+    CGRect walkDirection=CGPathGetPathBoundingBox([view dm_testStickDirectionLayer].path);
+    moved(view,stick,start.x+radius*1.21,start.y);
+    CHECK(feedback.count==grip+1 && g_botw_sprint_requested,"crossing outward pulses once and requests sprint");
+    CGRect direction=CGPathGetPathBoundingBox([view dm_testStickDirectionLayer].path);
+    CHECK(!ring.hidden && !ring.fillColor && ![view dm_testStickDirectionLayer].hidden &&
+          fabs(graph.position.x-start.x)<.01 && fabs(graph.position.y-start.y)<.01 &&
+          fabs(CGRectGetMinX(direction)-start.x-radius-ring.lineWidth*.5)<.1 &&
+          fabs(direction.size.width-walkDirection.size.width-10*dm_touchpad_u(view.bounds.size.height))<.1,
+          "sprint keeps the center at touch-down and stacks two arrows outside the ring");
+    save_pad_preview(view,@"botw-left-drag.png");
+    moved(view,stick,start.x+radius*1.3,start.y);
+    CHECK(feedback.count==grip+1,"remaining outside the sprint threshold does not pulse repeatedly");
+    moved(view,stick,start.x+radius*1.1,start.y);
+    CHECK(feedback.count==grip+2 && !g_botw_sprint_requested,"crossing inward pulses once and clears sprint");
+    direction=CGPathGetPathBoundingBox([view dm_testStickDirectionLayer].path);
+    CHECK(fabs(direction.size.width-walkDirection.size.width)<.1,
+          "returning to walking restores a single direction arrow");
+    moved(view,stick,start.x+radius*1.21,start.y);
+    NSUInteger beforeRelease=feedback.count; ended(view,stick,start.x+radius*1.21,start.y);
+    CHECK(feedback.count==beforeRelease && ring.hidden && [view dm_testStickDirectionLayer].hidden,
+          "release restores the idle graph without an extra threshold haptic");
+
+    g_look_enabled=YES; reset_look(); feedback.count=0;
+    CGPoint camera=CGPointMake(view.bounds.size.width*.82,view.bounds.size.height*.38);
+    FakeTouch *drag=touch(camera.x,camera.y); beganAt(view,drag,5.0);
+    moved(view,drag,camera.x+40,camera.y); endedAt(view,drag,camera.x+40,camera.y,5.1);
+    CHECK(feedback.count==0,"BOTW camera dragging produces no touch haptic");
+    g_input_sets=0;
+    FakeTouch *first=touch(camera.x,camera.y); beganAt(view,first,6.0); endedAt(view,first,camera.x,camera.y,6.08);
+    FakeTouch *second=touch(camera.x,camera.y); beganAt(view,second,6.20); endedAt(view,second,camera.x,camera.y,6.28);
+    BOOL r3=NO; for (int i=0;i<g_input_sets;i++) r3|=(g_input_history[i]&DM_BTN_RS)!=0;
+    CHECK(feedback.count==1 && r3,"camera double tap still emits R3 with one haptic");
+    [view reset]; g_botw_touchhud_available=NO;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view layoutIfNeeded]; feedback.count=0;
+    FakeTouch *ordinary=touch(camera.x,camera.y); beganAt(view,ordinary,7.0); endedAt(view,ordinary,camera.x,camera.y,7.08);
+    CHECK(feedback.count==1,"other games keep their original right-stick grip haptic");
+    [view dm_testSetTouchFeedback:nil]; [view reset];
 }
 
 static void test_botw_inventory_pointer(DmGamepad *view) {
@@ -860,6 +1009,7 @@ static void run_tests(DmGamepad *view) {
     test_dpad_art_visibility(view);
     test_botw_button_artwork(view);
     test_botw_virtual_buttons(view);
+    test_botw_stick_feedback(view);
     test_botw_inventory_pointer(view);
     test_motion_orientation();
     test_look_drag(view);

@@ -759,8 +759,28 @@ static int native_hit_pane_tier(const char *name) {
 }
 
 static int native_message_body(uint8_t *pane, const char *name) {
-    return (!strcmp(name, "W_Base_00") && ancestor_named(pane, "N_NameBase_00")) ||
-           (!strcmp(name, "W_SysBase_00") && ancestor_named(pane, "N_SystemBase_00"));
+    int window = !strcmp(name, "W_Base_00"), system = !strcmp(name, "W_SysBase_00");
+    if (!window && !system) return 0;
+    uint8_t *owner = *(uint8_t **)(pane + PANE_PARENT);
+    char parent[17] = {0}; if (owner) pane_name(owner, parent);
+    // MessageGet's card is a direct child of N_Sp_00. Its nested stat chips
+    // and offscreen capture sources must not expand the continuation region.
+    return (window &&
+            (ancestor_named(pane, "N_NameBase_00") ||
+             (!strcmp(parent, "N_Sp_00") && !pane_private_capture_branch(pane)))) ||
+           (system && ancestor_named(pane, "N_SystemBase_00"));
+}
+
+// Continuation arrows share a native part, whose instance suffix varies
+// between dialogue and item-acquisition screens (Pa_ABtn_00 / Pa_ABtn_08).
+static uint8_t *native_message_arrow_part(uint8_t *pane, const char *name) {
+    if (strcmp(name, "P_ArrowS_00") && strcmp(name, "P_ArrowS_01")) return NULL;
+    for (int depth = 0; pane && depth < PANE_PATH_DEPTH; depth++, pane = *(uint8_t **)(pane + PANE_PARENT)) {
+        char part[17]; pane_name(pane, part);
+        if (!strncmp(part, "Pa_ABtn_", 8)) return pane;
+        if (!strcmp(part, "RootPane")) break;
+    }
+    return NULL;
 }
 
 static generic_hit_t *generic_geometry_cache(int kind) {
@@ -1046,17 +1066,38 @@ static int generic_back_prompt_snapshot(uintptr_t root, uint64_t frame, float ou
     return generic_action_prompt_snapshot(root, frame, DM_BTN_B, out);
 }
 
+// A live prompt can arrive through both the footer observer and shared guide
+// cache. Merge overlapping observations of the same action, preserving a
+// wider text target. Separate uses of A (inline Add versus Select) stay apart.
+static void menu_add_action(dm_botw_touch_menu_view *view, uint64_t button, const float rect[4]) {
+    if (!generic_action_button(button) || !rect_intersects_canvas(rect)) return;
+    float merged[4]; memcpy(merged, rect, sizeof merged);
+    for (int i = 0; i < view->footer_action_count;) {
+        float *old = view->footer_actions[i];
+        if (view->footer_action_buttons[i] != button || rect_clip_area(old, merged) <= 0) { i++; continue; }
+        float right = fmaxf(old[0]+old[2], merged[0]+merged[2]);
+        float bottom = fmaxf(old[1]+old[3], merged[1]+merged[3]);
+        merged[0] = fminf(old[0],merged[0]); merged[1] = fminf(old[1],merged[1]);
+        merged[2] = right-merged[0]; merged[3] = bottom-merged[1];
+        int last = --view->footer_action_count;
+        view->footer_action_buttons[i] = view->footer_action_buttons[last];
+        memcpy(old, view->footer_actions[last], sizeof merged);
+        i = 0;
+    }
+    if (view->footer_action_count >= DM_BOTW_MENU_MAX_FOOTER_ACTIONS) return;
+    int at = view->footer_action_count++;
+    view->footer_action_buttons[at] = button;
+    memcpy(view->footer_actions[at], merged, sizeof merged);
+}
+
 static void generic_action_prompts_to_view(uintptr_t root, uint64_t frame,
                                            dm_botw_touch_menu_view *view) {
     const uint64_t buttons[] = {DM_BTN_A, DM_BTN_X, DM_BTN_Y, DM_BTN_L, DM_BTN_R,
                                 DM_BTN_ZL, DM_BTN_ZR};
-    for (size_t i = 0; i < sizeof buttons / sizeof buttons[0] &&
-         view->footer_action_count < DM_BOTW_MENU_MAX_FOOTER_ACTIONS; i++) {
+    for (size_t i = 0; i < sizeof buttons / sizeof buttons[0]; i++) {
         float rect[4];
         if (!generic_action_prompt_snapshot(root, frame, buttons[i], rect)) continue;
-        int at = view->footer_action_count++;
-        view->footer_action_buttons[at] = buttons[i];
-        memcpy(view->footer_actions[at], rect, sizeof rect);
+        menu_add_action(view, buttons[i], rect);
     }
 }
 
@@ -1181,23 +1222,15 @@ static dm_botw_touch_menu_view snapshot_native_view_locked(void) {
         if (is_back) {
             view.back_valid = 1;
             memcpy(view.back, hit, sizeof view.back);
-        } else if (view.footer_action_count < DM_BOTW_MENU_MAX_FOOTER_ACTIONS) {
-            int at = view.footer_action_count++;
-            view.footer_action_buttons[at] = button;
-            memcpy(view.footer_actions[at], hit, sizeof view.footer_actions[at]);
-        }
+        } else menu_add_action(&view, button, hit);
     }
     // Inline action rows share this native root but have their own geometry.
     // B remains a second action target alongside the bottom Back prompt.
     if (g_native_view.footer_root) {
         generic_action_prompts_to_view(g_native_view.footer_root, frame, &view);
         float back[4];
-        if (view.footer_action_count < DM_BOTW_MENU_MAX_FOOTER_ACTIONS &&
-            generic_back_prompt_snapshot(g_native_view.footer_root, frame, back)) {
-            int at = view.footer_action_count++;
-            view.footer_action_buttons[at] = DM_BTN_B;
-            memcpy(view.footer_actions[at], back, sizeof back);
-        }
+        if (generic_back_prompt_snapshot(g_native_view.footer_root, frame, back))
+            menu_add_action(&view, DM_BTN_B, back);
     }
     // PauseMenuInfo's top bar shares the footer's native root. Pair each
     // currently enabled ZL/ZR glyph with its matching live label; disabled
@@ -1213,8 +1246,7 @@ static dm_botw_touch_menu_view snapshot_native_view_locked(void) {
             int side_matches = i == 0 ? (button == DM_BTN_L || button == DM_BTN_ZL) :
                                         (button == DM_BTN_R || button == DM_BTN_ZR);
             if (!side_matches || !rect_intersects_canvas(g_native_view.header_icons[i]) ||
-                !rect_intersects_canvas(g_native_view.header_texts[i]) ||
-                view.footer_action_count >= DM_BOTW_MENU_MAX_FOOTER_ACTIONS) continue;
+                !rect_intersects_canvas(g_native_view.header_texts[i])) continue;
             const float *icon = g_native_view.header_icons[i];
             const float *text = g_native_view.header_texts[i];
             float hit[4];
@@ -1233,9 +1265,7 @@ static dm_botw_touch_menu_view snapshot_native_view_locked(void) {
                     i, (unsigned long long)button, icon[0], icon[1], icon[2], icon[3],
                     text[0], text[1], text[2], text[3], hit[0], hit[1], hit[2], hit[3]);
             }
-            int at = view.footer_action_count++;
-            view.footer_action_buttons[at] = button;
-            memcpy(view.footer_actions[at], hit, sizeof hit);
+            menu_add_action(&view, button, hit);
         }
     }
     view.clip_valid = g_native_view.clip_valid && frame >= g_native_view.clip_seen &&
@@ -1545,12 +1575,13 @@ static void observe_native_pane(uint8_t *pane, int after_matrix) {
     else if (hit_tier == 2) generic_alt_hit_observe(pane, after_matrix);
     if (!strncmp(name, "T_Btn", 5) || !strcmp(name, "T_Num_00")) generic_text_observe(pane, after_matrix);
     if (!strcmp(name, "Pa_PageTips_00") ||
+        !strcmp(name, "N_Cut_00") ||
+        ((!strcmp(name, "Pa_ArrowL_00") || !strcmp(name, "Pa_ArrowR_00")) &&
+         ancestor_named(pane, "N_Cat_01")) ||
         ((!strcmp(name, "P_ArrowL_00") || !strcmp(name, "P_ArrowR_00")) &&
          (ancestor_named(pane, "Pa_ArrowU_00") || ancestor_named(pane, "Pa_ArrowD_00"))))
         generic_hit_observe(pane, after_matrix);
-    if (native_message_body(pane, name) ||
-        ((!strcmp(name, "P_ArrowS_00") || !strcmp(name, "P_ArrowS_01")) &&
-         ancestor_named(pane, "Pa_ABtn_00"))) {
+    if (native_message_body(pane, name) || native_message_arrow_part(pane, name)) {
         generic_hit_observe(pane, after_matrix);
         uintptr_t manager = atomic_load_explicit(&g_validated_box_cursor_manager, memory_order_acquire);
         dm_botw_touch_menu_view message = {0};
@@ -2901,7 +2932,7 @@ static int selector_pointer_screen_name(const char *name) {
         !strcmp(name, "AppSystemWindow_00") || !strcmp(name, "OptionWindow_00") ||
         !strcmp(name, "End_00") || !strcmp(name, "ControllerWindow_00") ||
         !strcmp(name, "PauseMenuRecipe_00") ||
-        !strcmp(name, "DLCWindow_00");
+        !strcmp(name, "DLCWindow_00") || !strcmp(name, "AmiiboWindow_00");
 }
 
 // MainScreen keeps its empty root shown during conversations. The heart HUD's
@@ -3505,8 +3536,7 @@ static int selector_message_prompt_view(uintptr_t manager, uint64_t frame,
         if (!selector_pane_visible_alpha(hits[i].pane, &visible_root) ||
             visible_root != hits[i].root) continue;
         int body = native_message_body((uint8_t *)hits[i].pane, name);
-        uintptr_t candidate = (!strcmp(name, "P_ArrowS_00") || !strcmp(name, "P_ArrowS_01")) ?
-            selector_ancestor_named(hits[i].pane, "Pa_ABtn_00") : 0;
+        uintptr_t candidate = (uintptr_t)native_message_arrow_part((uint8_t *)hits[i].pane, name);
         if (!body && !candidate) continue;
         if (regions && (root != hits[i].root || (candidate && part && part != candidate))) return 0;
         if (!regions++) memcpy(rect, hits[i].rect, sizeof rect);
@@ -3727,6 +3757,47 @@ static int selector_focus_list_scroll(uintptr_t manager, uintptr_t screen, uintp
     return live;
 }
 
+// Shop grids use the same native R-stick pager as the pause inventory, but
+// register their slots in BoxCursor instead of PauseMenu's porch adapter.
+// Derive the swipe surface and arrows from that live grid's own layout.
+static void selector_grid_carousel_to_view(dm_botw_touch_menu_view *view, uint64_t frame) {
+    uintptr_t cut = 0;
+    for (int i = 0; i < view->generic_count; i++) {
+        uintptr_t pane = view->generic_targets[i].pane;
+        for (int depth = 0; pane && depth < PANE_PATH_DEPTH; depth++) {
+            char name[17];
+            if (!selector_pane_name(pane, name) || !strcmp(name, "RootPane")) break;
+            if (!strncmp(name, "Pa_Page_4x5_", 12)) {
+                uintptr_t owner = selector_ancestor_named(pane, "N_Cut_00");
+                if (!owner || (cut && cut != owner)) return;
+                cut = owner;
+                break;
+            }
+            pane = selector_pane_parent(pane);
+        }
+    }
+    if (!cut) return;
+    generic_hit_t hits[DM_BOTW_MENU_MAX_GENERIC_TARGETS];
+    int count = generic_hit_snapshot(hits, frame);
+    for (int i = 0; i < count; i++) {
+        const generic_hit_t *hit = &hits[i];
+        if (!hit->usable || hit->root != view->generic_root ||
+            !pane_chain_visible((uint8_t *)hit->pane) ||
+            !pane_chain_alpha_visible((uint8_t *)hit->pane)) continue;
+        if (hit->pane == cut) {
+            view->carousel_valid = view->clip_valid = 1;
+            memcpy(view->clip, hit->rect, sizeof view->clip);
+        }
+        char name[17];
+        if (!selector_pane_name(hit->pane, name) ||
+            (strcmp(name, "Pa_ArrowL_00") && strcmp(name, "Pa_ArrowR_00")) ||
+            !selector_ancestor_named(hit->pane, "N_Cat_01")) continue;
+        int side = !strcmp(name, "Pa_ArrowR_00");
+        view->inventory_arrow_valid[side] = 1;
+        memcpy(view->inventory_arrows[side], hit->rect, sizeof view->inventory_arrows[side]);
+    }
+}
+
 static void selector_publish_generic_view(uintptr_t manager, uintptr_t screen, int group,
                                           int input_active, uintptr_t native_screen_shown,
                                           uintptr_t native_group_getter,
@@ -3752,6 +3823,7 @@ static void selector_publish_generic_view(uintptr_t manager, uintptr_t screen, i
                                         native_group_getter, &view) > 0))
         view.generic_count = 0;
     selector_value_adjusters_to_view(&view);
+    selector_grid_carousel_to_view(&view, frame);
     // The map is a separate full-screen native surface with its own stick
     // controls; keep its freshness through the generic publication, which
     // otherwise replaces the whole view.
@@ -3797,11 +3869,7 @@ static void selector_publish_generic_view(uintptr_t manager, uintptr_t screen, i
         if (inherit_bar) {
             for (int i = 0; i < native.footer_action_count; i++) {
                 uint64_t button = native.footer_action_buttons[i];
-                if (!generic_action_button(button) ||
-                    view.footer_action_count >= DM_BOTW_MENU_MAX_FOOTER_ACTIONS) continue;
-                int at = view.footer_action_count++;
-                view.footer_action_buttons[at] = button;
-                memcpy(view.footer_actions[at], native.footer_actions[i], sizeof view.footer_actions[at]);
+                menu_add_action(&view, button, native.footer_actions[i]);
             }
         }
         if (!strcmp(screen_name, "AppTool_00") || !strcmp(screen_name, "AppAlbum_00")) {
@@ -3977,15 +4045,7 @@ static int selector_copy_native_prompts(uint64_t frame, int group,
     }
     for (int i = 0; i < native.footer_action_count; i++) {
         uint64_t button = native.footer_action_buttons[i];
-        if (!generic_action_button(button) ||
-            view->footer_action_count >= DM_BOTW_MENU_MAX_FOOTER_ACTIONS) continue;
-        int seen = 0;
-        for (int j = 0; j < view->footer_action_count; j++)
-            if (view->footer_action_buttons[j] == button) seen = 1;
-        if (seen) continue;
-        int at = view->footer_action_count++;
-        view->footer_action_buttons[at] = button;
-        memcpy(view->footer_actions[at], native.footer_actions[i], sizeof view->footer_actions[at]);
+        menu_add_action(view, button, native.footer_actions[i]);
     }
     return 1;
 }
@@ -4011,11 +4071,7 @@ static void selector_paging_prompts(uintptr_t root, uint64_t frame,
                 match = i; matches++;
             }
         }
-        if (matches == 1 && view->footer_action_count < DM_BOTW_MENU_MAX_FOOTER_ACTIONS) {
-            int at = view->footer_action_count++;
-            view->footer_action_buttons[at] = side ? DM_BTN_DOWN : DM_BTN_UP;
-            memcpy(view->footer_actions[at], hits[match].rect, sizeof view->footer_actions[at]);
-        }
+        if (matches == 1) menu_add_action(view, side ? DM_BTN_DOWN : DM_BTN_UP, hits[match].rect);
     }
 }
 
@@ -5500,6 +5556,30 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
     double end_dx = (double)(x - g_pointer_start[0]) * 1280.0;
     double end_dy = (double)(y - g_pointer_start[1]) * 720.0;
     if (end_dx * end_dx + end_dy * end_dy >= 64.0) g_pointer_dragged = 1;
+    int carousel = !g_view.popup_visible && (g_view.carousel_valid ||
+        (!g_view.generic_mode && g_view.inventory_visible));
+    int page_direction = 0;
+    if (carousel && g_pointer_dragged && g_view.clip_valid &&
+        point_in_rect(g_pointer_start[0], g_pointer_start[1], g_view.clip) &&
+        point_in_rect(x, y, g_view.clip) && fabs(end_dx) >= 40.0 && fabs(end_dx) >= 1.5 * fabs(end_dy)) {
+        page_direction = end_dx < 0 ? 1 : -1;
+        if (g_view.generic_mode && !g_view.inventory_arrow_valid[page_direction > 0]) page_direction = 0;
+    } else if (carousel && !g_pointer_dragged) {
+        for (int side = 0; side < 2; side++)
+            if (g_view.inventory_arrow_valid[side] && point_in_rect(x, y, g_view.inventory_arrows[side]) &&
+                point_in_rect(g_pointer_start[0], g_pointer_start[1], g_view.inventory_arrows[side]))
+                page_direction = side ? 1 : -1;
+    }
+    if (page_direction) {
+        g_target_valid = 1; g_target_index = -2; g_target_popup = 0;
+        g_target_generic = g_view.generic_mode;
+        g_target_axis = page_direction * DM_STICK_MAX;
+        g_target_page_key = g_view.page_key; g_target_popup_key = g_view.popup_key;
+        g_target_screen = g_view.generic_screen; g_target_root = g_view.generic_root;
+        g_confirm_pending = 0; g_pointer_dragged = 0;
+        pthread_mutex_unlock(&g_menu_mu);
+        return;
+    }
     if (g_view.generic_mode) {
         if (g_pointer_dragged && g_view.prompt_owner_valid && !g_view.generic_count &&
             g_view.clip_valid && point_in_rect(g_pointer_start[0], g_pointer_start[1], g_view.clip) &&
@@ -5648,19 +5728,6 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
         pthread_mutex_unlock(&g_menu_mu);
         return;
     }
-    if (!g_view.popup_visible && g_pointer_dragged && g_view.clip_valid &&
-        point_in_rect(g_pointer_start[0], g_pointer_start[1], g_view.clip) &&
-        point_in_rect(x, y, g_view.clip) && fabs(end_dx) >= 40.0 && fabs(end_dx) >= 1.5 * fabs(end_dy)) {
-        // The native inventory's category row is navigated by R-stick; a
-        // horizontal swipe advances exactly one native category/tab edge.
-        g_target_valid = 1; g_target_index = -2; g_target_popup = 0;
-        g_target_axis = end_dx < 0 ? DM_STICK_MAX : -DM_STICK_MAX;
-        g_confirm_pending = 0;
-        g_target_page_key = g_view.page_key; g_target_popup_key = g_view.popup_key;
-        g_pointer_dragged = 0;
-        pthread_mutex_unlock(&g_menu_mu);
-        return;
-    }
     if (g_view.popup_visible) {
         target = hit_rects(x, y, g_view.popup_rows, g_view.popup_count);
         if (target >= 0 && g_view.popup_row_panes[target]) {
@@ -5682,16 +5749,6 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
             g_target_page_key = g_view.page_key; g_target_popup_key = g_view.popup_key;
             g_confirm_pending = 0;
         }
-    } else if (!g_pointer_dragged &&
-               ((g_view.inventory_arrow_valid[0] && point_in_rect(x, y, g_view.inventory_arrows[0]) &&
-                 point_in_rect(g_pointer_start[0], g_pointer_start[1], g_view.inventory_arrows[0])) ||
-                (g_view.inventory_arrow_valid[1] && point_in_rect(x, y, g_view.inventory_arrows[1]) &&
-                 point_in_rect(g_pointer_start[0], g_pointer_start[1], g_view.inventory_arrows[1])))) {
-        g_target_valid = 1; g_target_index = -2; g_target_popup = 0;
-        g_target_axis = g_view.inventory_arrow_valid[1] && point_in_rect(x, y, g_view.inventory_arrows[1])
-            ? DM_STICK_MAX : -DM_STICK_MAX;
-        g_target_page_key = g_view.page_key; g_target_popup_key = g_view.popup_key;
-        g_confirm_pending = 0;
     } else if ((target = hit_rects(x, y, g_view.categories, g_view.category_count)) >= 0 &&
                g_view.category_panes[target]) {
         g_target_valid = 1; g_target_popup = 0; g_target_index = g_view.category_ids[target];
@@ -5877,6 +5934,8 @@ int dm_botw_touch_menu_apply(uint64_t *buttons, int32_t axes[4], uint64_t frame)
                            g_target_popup_key != g_view.popup_key))
         menu_clear_queue_locked();
     if (g_target_valid && g_target_index == -5 && !g_view.inventory_rotate_visible)
+        menu_clear_queue_locked();
+    if (g_target_valid && g_target_index == -2 && g_view.generic_mode && !g_view.carousel_valid)
         menu_clear_queue_locked();
     if (g_target_valid && g_target_prompt_owner_root && !menu_prompt_owner_live_locked(frame))
         menu_clear_queue_locked();

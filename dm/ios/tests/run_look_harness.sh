@@ -98,5 +98,7 @@ fi
 cp "$DATA/Documents/result.txt" "$WORK/run.log"
 cp "$DATA/Documents/details.log" "$WORK/details.log"
 cp "$DATA/Documents/botw-buttons.png" "$WORK/botw-buttons.png"
+cp "$DATA/Documents/botw-shield-drag.png" "$WORK/botw-shield-drag.png"
+cp "$DATA/Documents/botw-left-drag.png" "$WORK/botw-left-drag.png"
 cat "$WORK/run.log"
 grep -F 'UIKit handler regression: 0 failures;' "$WORK/run.log"
