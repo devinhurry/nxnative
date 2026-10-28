@@ -58,7 +58,7 @@ PLIST
 
 make -s -C "$HOST" GAME="$PROFILE" game_profile
 mkdir -p "$APP/dm"
-cp "$ROOT/dm/games/$PROFILE/touch_y.png" "$APP/dm/"
+cp "$ROOT/dm/games/$PROFILE"/touch_*.png "$APP/dm/"
 xcrun --sdk iphonesimulator clang \
   -target arm64-apple-ios26.0-simulator -isysroot "$SDK" -fobjc-arc -fblocks -O1 -g -DDM_TEST_HOOKS \
   -I"$HOST" -I"$HOST/gen/$PROFILE" -I"$ROOT/dm/games/$PROFILE" \

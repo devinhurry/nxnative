@@ -1,7 +1,9 @@
 #include "../touchpad_geometry.h"
+#include "../botw_stick_settings.h"
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
+#include <string.h>
 
 static void nearf(float actual, float expected, float tolerance) {
     assert(fabsf(actual - expected) <= tolerance);
@@ -180,7 +182,52 @@ static void test_botw_new_touch_geometry(void) {
     }
 }
 
+static void test_configurable_stick(void) {
+    const char *keys[] = {"DM_BOTW_MOVE_DEADZONE", "DM_BOTW_MOVE_CURVE", "DM_BOTW_MOVE_FULL", "DM_BOTW_MOVE_SIZE"};
+    for (int i=0;i<4;i++) unsetenv(keys[i]);
+    dm_touchpad_stick_response response;
+    assert(!dm_botw_stick_settings_read(&response));
+    nearf(response.deadzone,.07f,1e-6f); nearf(response.curve,.7f,1e-6f);
+    nearf(response.full,.8f,1e-6f); nearf(response.size,1,1e-6f);
+    setenv(keys[0],"0.15",1); setenv(keys[1],"1.00",1);
+    setenv(keys[2],"0.60",1); setenv(keys[3],"1.25",1);
+    assert(!dm_botw_stick_settings_read(&response));
+    float radius=70*response.size;
+    int32_t x,y;
+    dm_touchpad_stick_axis_with_response(radius*.15f,0,radius,response,&x,&y);
+    assert(!x && !y);
+    dm_touchpad_stick_axis_with_response(radius*.375f,0,radius,response,&x,&y);
+    nearf(x,DM_STICK_MAX*.5f,1); assert(!y);
+    dm_touchpad_stick_axis_with_response(radius*.6f,0,radius,response,&x,&y);
+    assert(x==DM_STICK_MAX && !y);
+    dm_touchpad_stick_axis_with_response(-radius*.3f,radius*.4f,radius,response,&x,&y);
+    assert(x<0 && y<0); nearf((float)x/y,.75f,.001f);
+    for (int i=0;i<4;i++) unsetenv(keys[i]);
+    const char *bad[] = {"nan","inf","-inf","invalid","","1.0junk"};
+    for (int i=0;i<4;i++) for (unsigned j=0;j<sizeof bad/sizeof *bad;j++) {
+        setenv(keys[i],bad[j],1);
+        assert(!strcmp(dm_botw_stick_settings_read(&response),keys[i]));
+        unsetenv(keys[i]);
+    }
+    const char *low[] = {"-0.01","0.29","0.34","0.59"}, *high[] = {"0.31","2.01","1.01","1.51"};
+    for (int i=0;i<4;i++) {
+        setenv(keys[i],low[i],1); assert(!strcmp(dm_botw_stick_settings_read(&response),keys[i]));
+        setenv(keys[i],high[i],1); assert(!strcmp(dm_botw_stick_settings_read(&response),keys[i]));
+        unsetenv(keys[i]);
+    }
+    for (int dead=0;dead<2;dead++) for (int curve=0;curve<2;curve++) for (int full=0;full<2;full++) {
+        response=(dm_touchpad_stick_response){dead?.3f:0,curve?2:.3f,full?1:.35f,1};
+        int32_t previous=0;
+        for (int i=0;i<=200;i++) {
+            dm_touchpad_stick_axis_with_response(i,0,100,response,&x,&y);
+            assert(x>=previous && x<=DM_STICK_MAX && !y); previous=x;
+        }
+        assert(previous==DM_STICK_MAX);
+    }
+}
+
 int main(void) {
+    test_configurable_stick();
     test_directional_ownership();
     test_stick_shaping();
     test_safe_insets_and_resize();

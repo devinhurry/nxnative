@@ -3,6 +3,7 @@
 // dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. All settings share one screen, grouped by section. Choices that differ from the game's default are kept
 // in UserDefaults; Reset to tested defaults forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once, as an app without launcher.json does
 import SwiftUI
+import Charts
 import UIKit
 import os
 
@@ -24,7 +25,7 @@ private struct SettingRow: View {
         Binding(get: { Double(m.values[s.env] ?? s.def) ?? s.max ?? 1 },
                 set: { m.values[s.env] = String(format: "%.2f", $0) })
     }
-    private var percentage: String { "\(Int((rangeValue.wrappedValue * 100).rounded())) %" }
+    private var displayedValue: String { s.formattedValue(m.values[s.env] ?? s.def) }
 
     private var settingLabel: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -48,11 +49,12 @@ private struct SettingRow: View {
                     HStack {
                         settingLabel
                         Spacer()
-                        Text(percentage).monospacedDigit().foregroundStyle(.secondary)
+                        Text(displayedValue).monospacedDigit().foregroundStyle(.secondary)
                     }
                     Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
                         .accessibilityLabel(s.label)
-                        .accessibilityValue(percentage)
+                        .accessibilityValue(displayedValue)
+                        .accessibilityIdentifier(s.env)
                 }
             default:
                 Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
@@ -61,6 +63,56 @@ private struct SettingRow: View {
             }
         }
         .disabled(locked)
+    }
+}
+
+private struct TouchStickPreview: View {
+    let response: TouchStickResponse
+    @State private var travel = 0.2
+
+    private var readout: String {
+        "Drag \(Int((travel * 100).rounded()))% → Stick \(Int((response.strength(at: travel) * 100).rounded()))%"
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(readout).monospacedDigit().font(.callout)
+            Chart {
+                RuleMark(x: .value("Deadzone", response.deadzone * 100))
+                    .foregroundStyle(.secondary).lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                RuleMark(x: .value("Full movement", response.full * 100))
+                    .foregroundStyle(.secondary).lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                ForEach(0...100, id: \.self) { i in
+                    LineMark(x: .value("Finger travel", Double(i)), y: .value("Stick strength", response.strength(at: Double(i) / 100) * 100))
+                        .foregroundStyle(Color.accentColor)
+                }
+                PointMark(x: .value("Finger travel", travel * 100), y: .value("Stick strength", response.strength(at: travel) * 100))
+                    .foregroundStyle(Color.white).symbolSize(45)
+            }
+            .chartXScale(domain: 0...100).chartYScale(domain: 0...100)
+            .chartXAxis { AxisMarks(values: [0, 25, 50, 75, 100]) }
+            .chartYAxis { AxisMarks(values: [0, 50, 100]) }
+            .chartXAxisLabel("Finger travel (%)")
+            .chartYAxisLabel("Stick strength (%)")
+            .chartOverlay { proxy in
+                GeometryReader { geometry in
+                    Rectangle().fill(.clear).contentShape(Rectangle())
+                        .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { event in
+                            guard let frame = proxy.plotFrame,
+                                  let x: Double = proxy.value(atX: event.location.x - geometry[frame].minX) else { return }
+                            travel = min(max(x / 100, 0), 1)
+                        })
+                }
+            }
+            .frame(height: 150)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Left-stick response preview")
+            .accessibilityValue(readout)
+            .accessibilityAdjustableAction { direction in
+                travel = min(max(travel + (direction == .increment ? 0.05 : -0.05), 0), 1)
+            }
+            Text("Drag across the chart to preview. Applies to BOTW touch movement. Saved when you tap Play.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -89,7 +141,14 @@ private struct LauncherView: View {
                 List {
                     ForEach(m.sections, id: \.self) { section in
                         Section(section) {
+                            if section == TouchStickResponse.section, let response = m.touchStickResponse {
+                                TouchStickPreview(response: response)
+                            }
                             ForEach(m.settings.filter { $0.sectionTitle == section }) { SettingRow(s: $0, m: m) }
+                            if section == TouchStickResponse.section {
+                                Button("Restore left-stick defaults") { m.reset(keys: TouchStickResponse.keys) }
+                                    .disabled(!m.touchStickChanged)
+                            }
                         }
                     }
                     Section {

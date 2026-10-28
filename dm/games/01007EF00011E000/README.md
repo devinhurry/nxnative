@@ -42,15 +42,25 @@ directions; the Mac map backend zoomed in/out through the same host pinch API.
 Whole-window dialogue taps, inventory preview rotation/category arrows/recipe
 Close, map sensor/stamps and Game Over retry also passed on the Mac. The
 merged graphics runtime uses the matching 1.9.0 shader package. BOTW touch
-artwork overrides the ordinary pad style: no button shadows, 26% gray at 20%
-opacity and a 25% gray outline, with 20% thicker strokes. The user-supplied sword fills half Y's diameter;
-its Y label sits in a 20% gray, gold-outlined badge on the upper-right edge.
+artwork overrides the ordinary pad style: no button shadows, 30% gray at 20%
+opacity and a 47% gray outline, with 20% thicker strokes. A/B/X/Y/R/ZR are
+round and use the six supplied 240-pixel icons at half the button diameter.
+Every action label sits in a 20% gray, gold-outlined badge on the upper-right
+edge, half overlapping the main circle. The outer half of each badge presses
+the same button; face-button sliding remains available.
 Mac preview and UIKit rendering passed; controller/non-BOTW UIKit checks
-restore the ordinary artwork. `touch_y.png` is packaged beside the profile
+restore the ordinary artwork. The six `touch_*.png` assets are packaged beside the profile
 tables. ZL shows a shield and four directional arrows without an idle background;
 holding reveals an unfilled ring and dragging moves a direction arrow just outside its
 perimeter while the center stays at touch-down. Mac and UIKit share the vector
 paths from [zelda-hyrule-ui](https://chaos-xxl.github.io/zelda-hyrule-ui/#/docs).
+BOTW's D-pad direction is captured at touch-down and held until release;
+sliding face-button touches keep their original switching behavior. A movement
+stick gesture that leaves its configured deadzone resets the L3 tap sequence,
+even if it returns to its origin. Holds and release-only movement cannot seed
+a double tap. `inventory-touch-20261025/run36-goddess-buttons/ios/` verifies
+these paths, all six round icon buttons, palette values and ordinary-mode
+restoration with zero UIKit failures. Mac packaging tests cover all six assets.
 `inventory-touch-20261025/run23/ios-shield/` records the rendered idle/drag states
 and passing input/release checks. The movement stick now rests 10 frontend points
 up/right of its ordinary home. Its idle artwork is a white circle with four inner
@@ -62,15 +72,15 @@ The map/environment cluster moves 60 native layout units left, reserving space
 for + with an 8-point gap. Both +/- use a white cross over a 40%-opaque black
 circle, with no border. Plus has one fixed anchor beside the minimap; its circle
 sits 4 frontend points below the minimap top. The circle is 39 native layout
-units across, and its centered cross is 19 units long with thickness set to 12%
+units across, and its centered cross is 19 units long with thickness set to 11%
 of the circle diameter. Its position does not depend on minimap visibility,
 including a cold start inside a shrine. Without the minimap, Minus appears
 directly below Plus. Their shared Mac/UIKit geometry and glyph paths keep
 drawing and hit areas aligned. The L rune badge shares
 Y's opaque gray fill and gold outline.
-BOTW touch movement and ZL sticks use a 7% deadzone. Above 430 frontend
+By default, BOTW touch movement and ZL sticks use a 7% deadzone. Above 430 frontend
 points of viewport height, both outer rings have a fixed 140-point diameter;
-at or below 430, their previous size scaling remains. Full movement stays at
+at or below 430, their previous size scaling remains. Full movement defaults to
 80% of the radius. Movement uses a continuous radial 0.7-power curve after
 the deadzone: 20% radius produces about 30% stick output instead of 18%, and
 40% produces about 57% instead of 45%. This raises short-drag output without
@@ -85,6 +95,34 @@ native input/cancel checks pass, UIKit reports zero failures in 31 look
 sessions, and the rewritten modules have no Dash observation. The matching
 Mac preview reaches gameplay and is registered for quick launch; physical
 iPhone movement feel remains for user acceptance.
+The iOS launcher now offers [Touch left stick](../../../docs/settings.md#touch-left-stick)
+before Play: movement deadzone (0–30%), curve exponent (0.30–2.00), full-travel
+point (35–100%) and whole-stick size (60–150%). Choices save on Play; the live
+curve previews their output, and Restore left-stick defaults resets only this
+group. `DM_BOTW_MOVE_DEADZONE`, `DM_BOTW_MOVE_CURVE`, `DM_BOTW_MOVE_FULL` and
+`DM_BOTW_MOVE_SIZE` also configure Mac touch preview. Parameters are read when
+the gamepad is constructed, after the iOS launcher applies them. The movement
+radius controls its artwork, hit region and axis scaling together; ZL keeps
+its own unscaled radius and linear response. Native geometry/settings tests
+and the UIKit harness in `inventory-touch-20261025/run34/` verify defaults,
+custom values, restore behavior and controller/ordinary-mode isolation;
+physical iPhone comfort remains for user acceptance.
+The production launcher is also compiled separately for simulator UI checks:
+`run34/ui-custom-curve.png` records an interactive custom curve, and
+`run34/ui-reset-applied.png` records restored stick defaults with the unrelated
+30 fps choice preserved after Play. `run34/launcher-identity.txt` verifies the
+installed preview executable matches the compiled one.
+On iPhone, a three-finger double tap while automatic controls are hidden
+reveals the original full virtual gamepad for the current menu visit. It
+routes buttons and the native UI right stick directly, cancelling pending
+menu pointers first. The three-finger chord cannot activate a menu item;
+ordinary three-finger combat and revealed-pad combinations remain available.
+Leaving menus, connecting a controller or resetting input ends the override;
+no preference is stored. It also works without a native HUD/menu target and
+keeps the 2D/3D switch hidden. The UIKit harness in
+`inventory-touch-20261025/run34/ios-fallback/` checks configuration, scope,
+chord ownership, raw controls and expiry. Physical three-finger recognition
+remains for on-device acceptance.
 `inventory-touch-20261025/run26/ios-style/` records the plain +/- glyphs,
 outside direction arrows, the historical sprint double arrows and outline colors;
 the UIKit harness passed with zero failures in 31 look sessions.
@@ -111,6 +149,33 @@ native owner; stale/hidden grids and quantity dialogs cannot page the background
 Materials pages, a page-arrow tap, direct Ironshroom selection and a blocked
 background swipe during quantity selection. Native regression checks passed;
 the matching Mac host is registered for quick launch.
+
+Resolved: Impa's map explanation ignored both dialogue-body and continuation
+arrow taps. `Message_00`, `AppHome_00` and `AppMap_00` remain shown and
+input-enabled in the same native group; later map callbacks replaced the
+eligible dialogue view with the background map. Selector ticks, map panes,
+guides and ordinary native-menu publications now share the same owner choice:
+an eligible dialogue precedes the map, followed by other cursorless prompts.
+Each adapter retains its native owner, group, visibility and freshness checks;
+focused choices and quantity buttons keep their registered-entry path.
+`inventory-touch-20261025/run35-impa/` records reproduction from a disposable
+copy of `Before-impa-dialogue`, the failing/passing native regression and the
+rebuilt Mac acceptance. A single blank-padding tap at `(0.300, 0.829)` emitted
+A at frame 25267, closed the map and continued Impa's next dialogue. All three
+original save files remain unchanged. Physical iPhone acceptance is pending.
+
+Resolved: goddess dialogue accepted only the continuation arrow. Its
+`MessageSp_00` layout has no ordinary name-window background; the rendered
+speech plate is `N_VoiceA_00/N_TextOut_01/P_Sh_01`. That visible plate now
+feeds the shared Message continuation path, without accepting private capture
+sources or confirming a focused choice through its text. A disposable copy of
+`Goddess-dialogue` reproduces the failure and verifies a text-body tap advances,
+followed by direct Heart Container and Yes selection. Evidence and native
+regression checks are in `inventory-touch-20261025/run36-goddess-buttons/`.
+The grant-power speech, reward-card text and farewell also advance by touch,
+returning to gameplay with five hearts. The three original save files remain
+unchanged. Open: gameplay controls briefly appear during the reward transition,
+after the native Message screen closes but before the next prompt opens.
 
 Resolved: first-acquisition item cards had no touch target. `MessageGet_00`
 uses a direct `N_Sp_00/W_Base_00` card and a numbered `Pa_ABtn_*`

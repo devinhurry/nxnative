@@ -254,6 +254,8 @@ static int selector_map_view_for_manager(uintptr_t manager, uint64_t frame,
                                          dm_botw_touch_menu_view *view,
                                          uintptr_t *candidate_pane,
                                          uintptr_t *candidate_root);
+static int selector_unfocused_view_for_manager(uintptr_t manager, uint64_t frame,
+                                               dm_botw_touch_menu_view *view);
 static void selector_list_widget_observe(const uint64_t *regs);
 static int selector_list_widget_vtable_matches(uintptr_t main_base, uintptr_t vtable,
                                                uintptr_t update);
@@ -760,9 +762,14 @@ static int native_hit_pane_tier(const char *name) {
 
 static int native_message_body(uint8_t *pane, const char *name) {
     int window = !strcmp(name, "W_Base_00"), system = !strcmp(name, "W_SysBase_00");
-    if (!window && !system) return 0;
+    int speech = !strcmp(name, "P_Sh_01");
+    if (!window && !system && !speech) return 0;
     uint8_t *owner = *(uint8_t **)(pane + PANE_PARENT);
     char parent[17] = {0}; if (owner) pane_name(owner, parent);
+    // MessageSp has no name window. Its visible text capture and shadow are
+    // rendered under N_VoiceA_00; the private capture source stays inert.
+    if (speech) return !strcmp(parent, "N_TextOut_01") &&
+        ancestor_named(owner, "N_VoiceA_00") && !pane_private_capture_branch(pane);
     uint8_t *tips = ancestor_named(pane, "Pa_Tips_00");
     uint8_t *inout = owner ? *(uint8_t **)(owner + PANE_PARENT) : NULL;
     // Action tutorials use their part's outer window, not its controller
@@ -1408,9 +1415,8 @@ static void observe_map_transform(uint8_t *pane, int after_matrix) {
 
 static void publish_native_menu_view(dm_botw_touch_menu_view *view, uint64_t frame) {
     uintptr_t manager = atomic_load_explicit(&g_validated_box_cursor_manager, memory_order_acquire);
-    if (manager && !selector_read_ptr(manager, 0x48) &&
-        !selector_map_view_for_manager(manager, frame, view, NULL, NULL))
-        selector_cursorless_prompt_view(manager, frame, 0, 0, view);
+    if (manager && !selector_read_ptr(manager, 0x48))
+        selector_unfocused_view_for_manager(manager, frame, view);
     dm_botw_touch_menu_observe(view);
 }
 
@@ -1575,8 +1581,7 @@ static void observe_native_pane(uint8_t *pane, int after_matrix) {
         ancestor_action_guide(pane)) {
         uintptr_t manager = atomic_load_explicit(&g_validated_box_cursor_manager, memory_order_acquire);
         dm_botw_touch_menu_view prompts = {0};
-        if (manager && (selector_map_view_for_manager(manager, dm_guest_frame(), &prompts, NULL, NULL) ||
-                        selector_cursorless_prompt_view(manager, dm_guest_frame(), 0, 0, &prompts)))
+        if (manager && selector_unfocused_view_for_manager(manager, dm_guest_frame(), &prompts))
             dm_botw_touch_menu_observe(&prompts);
     }
     int hit_tier = native_hit_pane_tier(name);
@@ -1641,7 +1646,7 @@ static void observe_native_pane(uint8_t *pane, int after_matrix) {
         pthread_mutex_unlock(&g_native_view_mu);
         uintptr_t manager = atomic_load_explicit(&g_validated_box_cursor_manager, memory_order_acquire);
         if (dm_botw_touch_hud_active() &&
-            selector_map_view_for_manager(manager, frame, &view, NULL, NULL))
+            selector_unfocused_view_for_manager(manager, frame, &view))
             dm_botw_touch_menu_observe(&view);
         else
             selector_clear_map_view_if_owned((uintptr_t)pane, root, frame);
@@ -3914,22 +3919,14 @@ static void selector_publish_generic_view(uintptr_t manager, uintptr_t screen, i
     }
     pthread_mutex_unlock(&g_native_view_mu);
     (void)native_screen_shown; (void)native_group_getter;
-    // The same owner validator serves selector ticks and Pane observers; a
-    // live Pa_Map pane alone never makes the public touch view active.
-    int map_view_applied = selector_map_view_for_manager(manager, frame, &view, NULL, NULL);
-    if (!map_view_applied && !focused &&
-        selector_cursorless_prompt_view(manager, frame, native_screen_shown, native_group_getter, &view)) {
-        dm_botw_touch_menu_observe(&view);
-        return;
-    }
-    if (!map_view_applied && !focused && selector_message_prompt_view(manager, frame, &view)) {
+    if (!focused && selector_unfocused_view_for_manager(manager, frame, &view)) {
         dm_botw_touch_menu_observe(&view);
         return;
     }
     int pause_screen = !strcmp(screen_name, "PauseMenu_00");
     // Back is optional on native menus. Prefer prompts in the focused root;
     // only PauseMenu has the proven separate PauseMenuInfo footer fallback.
-    if (!map_view_applied && view.generic_mode && view.generic_root) {
+    if (view.generic_mode && view.generic_root) {
         if (generic_back_prompt_snapshot(view.generic_root, frame, view.back))
             view.back_valid = 1;
         generic_action_prompts_to_view(view.generic_root, frame, &view);
@@ -4625,6 +4622,18 @@ static int selector_map_view_for_manager(uintptr_t manager, uint64_t frame,
     }
     *view = map_view;
     return 1;
+}
+
+// Dialogue can stay above a shown map in the same native input group (Impa's
+// map explanation). Use one priority order for selector and pane callbacks,
+// so later background layout updates cannot replace its continuation target.
+// Each adapter still proves its shown, input-enabled native owner; focused
+// choices retain their separate registered-entry path.
+static int selector_unfocused_view_for_manager(uintptr_t manager, uint64_t frame,
+                                               dm_botw_touch_menu_view *view) {
+    return selector_message_prompt_view(manager, frame, view) ||
+        selector_map_view_for_manager(manager, frame, view, NULL, NULL) ||
+        selector_cursorless_prompt_view(manager, frame, 0, 0, view);
 }
 
 static void selector_clear_map_view_if_owned(uintptr_t candidate_pane,

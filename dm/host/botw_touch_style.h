@@ -5,9 +5,9 @@
 #include <math.h>
 #include <stdlib.h>
 
-#define DM_BOTW_BUTTON_GRAY .26
+#define DM_BOTW_BUTTON_GRAY .30
 #define DM_BOTW_BUTTON_ALPHA .20
-#define DM_BOTW_STROKE_GRAY .25
+#define DM_BOTW_STROKE_GRAY .47
 #define DM_BOTW_STROKE_ALPHA .40
 #define DM_BOTW_STROKE_WIDTH_SCALE 1.2
 #define DM_BOTW_STICK_RING_WIDTH (1.5 * DM_BOTW_STROKE_WIDTH_SCALE)
@@ -16,10 +16,22 @@
 // Menu glyphs sit over a translucent circular button fill.
 static inline CGPathRef dm_botw_menu_key_path(CGPoint center, CGFloat size, CGFloat circleSize, int plus) {
     CGMutablePathRef path = CGPathCreateMutable();
-    CGFloat stroke = circleSize * .12;
+    CGFloat stroke = circleSize * .11;
     CGPathAddRect(path, NULL, CGRectMake(center.x-size/2, center.y-stroke/2, size, stroke));
     if (plus) CGPathAddRect(path, NULL, CGRectMake(center.x-stroke/2, center.y-size/2, stroke, size));
     return path;
+}
+
+// Top-left coordinates: the badge's center sits on the button's upper-right edge.
+static inline CGRect dm_botw_button_badge_rect(CGPoint center, CGFloat radius) {
+    CGFloat r = radius * .30;
+    return CGRectMake(center.x + radius*M_SQRT1_2-r, center.y-radius*M_SQRT1_2-r, 2*r, 2*r);
+}
+
+static inline int dm_botw_button_badge_contains(CGPoint point, CGPoint center, CGFloat radius) {
+    CGRect badge = dm_botw_button_badge_rect(center, radius);
+    CGFloat dx = point.x-CGRectGetMidX(badge), dy = point.y-CGRectGetMidY(badge);
+    return dx*dx + dy*dy <= badge.size.width*badge.size.width*.25;
 }
 
 // Core Graphics centers strokes on the path. Keep only the outside half of a
@@ -33,11 +45,14 @@ static inline CGPathRef dm_botw_outer_border_path(CGPathRef fill, CGFloat width)
     return border;
 }
 
-static inline NSString *dm_botw_touch_y_icon_path(void) {
+static inline NSString *dm_botw_touch_button_icon_path(int button) {
+    static NSString *const files[] = {@"touch_a.png", @"touch_b.png", @"touch_x.png", @"touch_y.png",
+        nil, nil, nil, @"touch_r.png", nil, @"touch_zr.png"};
+    if (button < 0 || button >= sizeof files / sizeof *files || !files[button]) return nil;
     const char *map = getenv("DM_NVN_SHMAP");
     NSString *folder = map && *map ? [[NSString stringWithUTF8String:map] stringByDeletingLastPathComponent] :
         [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"dm"];
-    return [folder stringByAppendingPathComponent:@"touch_y.png"];
+    return [folder stringByAppendingPathComponent:files[button]];
 }
 
 // Arrow and shield paths adapted from https://github.com/chaos-xxl/zelda-hyrule-ui.

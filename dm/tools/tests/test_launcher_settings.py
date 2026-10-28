@@ -44,9 +44,25 @@ class LauncherSettingsTests(unittest.TestCase):
         self.assertEqual(botw['DM_PSO_MTL4']['default'], '1')   # pso_mtl4 on
         self.assertEqual((wonder['DM_PRESENT_SNAP']['default'], wonder['DM_PSO_MTL4']['default']), ('0', '0'))
         self.assertEqual((botw['DM_PSO_PREBUILD']['default'], botw['DM_NVN_ENC_THREAD']['default'], botw['DM_METAL_HUD']['default']), ('1', '1', '0'))   # the host's iOS defaults
-        self.assertEqual(list(dict.fromkeys(s['section'] for s in botw.values())), ['Game', 'Controls', 'Performance'])
+        self.assertEqual(list(dict.fromkeys(s['section'] for s in botw.values())), ['Game', 'Controls', 'Touch left stick', 'Performance'])
         self.assertNotIn('DM_FPS_HOLD', wonder)   # no frame step, as the Frame rate row
         self.assertIn('first start', botw['DM_PSO_PREBUILD']['note'])   # it runs once in the prepare step, before the first frame
+
+    def test_touch_stick_settings_are_botw_only(self):
+        botw = build(BOTW, 'nvn')
+        expected = {
+            'DM_BOTW_MOVE_DEADZONE': ('0.07', 0, .3, .01), 'DM_BOTW_MOVE_CURVE': ('0.7', .3, 2, .05),
+            'DM_BOTW_MOVE_FULL': ('0.8', .35, 1, .01), 'DM_BOTW_MOVE_SIZE': ('1.0', .6, 1.5, .05),
+        }
+        for key, bounds in expected.items():
+            self.assertEqual(tuple(botw[key][k] for k in ('default', 'min', 'max', 'step')), bounds)
+            self.assertEqual(botw[key]['section'], 'Touch left stick')
+        self.assertEqual(botw['DM_BOTW_MOVE_CURVE']['format'], 'number')
+        for gid, api in [(WONDER, 'nvn'), ('0100F2C0115B6000', 'nvn'), ('0100535012974000', 'vulkan'), ('010014E00DB56000', 'gl')]:
+            with self.subTest(gid=gid):
+                other = build(gid, api)
+                self.assertTrue(set(expected).isdisjoint(other))
+                self.assertNotIn('Touch left stick', [s['section'] for s in other.values()])
 
     def test_hold_frames_takes_on_and_off(self):   # the host reads DM_FPS_HOLD as on / off (hle_nvn.c), not 1 / 0
         s = build(BOTW, 'nvn')['DM_FPS_HOLD']
@@ -57,7 +73,8 @@ class LauncherSettingsTests(unittest.TestCase):
     def test_table_format_is_strict(self):
         good = 'DM_X\ttoggle\t-\t0\talways\tGame\tX\n'
         for bad, why in [('DM_X\ttoggle\t-\t0\talways\tX\n', 'columns'), ('DM_X\ttoggle\t-\t0\talways\tsecret\tX\n', 'section'),
-                         ('DM_X\ttoggle\ton\t0\talways\tGame\tX\n', 'toggle values'), ('DM_X\ttoggle\t-\t2\talways\tGame\tX\n', 'defaults to 0 or 1')]:
+                         ('DM_X\ttoggle\ton\t0\talways\tGame\tX\n', 'toggle values'), ('DM_X\ttoggle\t-\t2\talways\tGame\tX\n', 'defaults to 0 or 1'),
+                         ('DM_X\trange\t0:1:0.1\t0\talways\tGame\tX\t\tunknown\n', 'range format')]:
             with self.subTest(why=why), tempfile.TemporaryDirectory() as tmp:
                 (Path(tmp) / 'settings.tsv').write_text('# header\n' + good + bad, encoding='utf-8')
                 with patch.object(settings, 'HERE', Path(tmp)), \

@@ -254,15 +254,26 @@ static inline void dm_touchpad_stick_axis(float dx, float dy, float radius,
     dm_touchpad_stick_axis_with_deadzone(dx, dy, radius, full_tilt, DM_TP_DEAD, x, y);
 }
 
-// BOTW touch movement: retain the radial deadzone and full-travel endpoint,
-// but give short drags more output with a continuous 0.7-power response.
+typedef struct { float deadzone, curve, full, size; } dm_touchpad_stick_response;
+
+static inline dm_touchpad_stick_response dm_touchpad_botw_move_defaults(void) {
+    return (dm_touchpad_stick_response){DM_TP_BOTW_STICK_DEAD, .7f, DM_TP_FULL, 1};
+}
+
+static inline void dm_touchpad_stick_axis_with_response(float dx, float dy, float radius,
+                dm_touchpad_stick_response response, int32_t *x, int32_t *y) {
+    float distance = hypotf(dx, dy), dead = radius * response.deadzone;
+    if (radius <= 0 || distance <= dead || response.full <= response.deadzone) {
+        *x = *y = 0; return;
+    }
+    float travel = fminf((distance - dead) / (radius * response.full - dead), 1.0f);
+    float magnitude = powf(travel, response.curve) * DM_STICK_MAX / distance;
+    *x = (int32_t)lrintf(dx * magnitude);
+    *y = (int32_t)lrintf(-dy * magnitude);
+}
+
 static inline void dm_touchpad_botw_move_axis(float dx, float dy, float radius,
                                              int32_t *x, int32_t *y) {
-    dm_touchpad_stick_axis_with_deadzone(dx, dy, radius, 0, DM_TP_BOTW_STICK_DEAD, x, y);
-    float magnitude = hypotf((float)*x, (float)*y) / DM_STICK_MAX;
-    if (magnitude <= 0.0f || magnitude >= 1.0f) return;
-    float gain = powf(magnitude, -0.3f);
-    *x = (int32_t)lrintf(*x * gain);
-    *y = (int32_t)lrintf(*y * gain);
+    dm_touchpad_stick_axis_with_response(dx, dy, radius, dm_touchpad_botw_move_defaults(), x, y);
 }
 

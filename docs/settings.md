@@ -1,10 +1,11 @@
 # Settings
 
-The screen before the game starts shows the settings the game supports. Tap **Play** to start; the app remembers your choices for the next start. All settings are on one scrollable screen, under **Game**, **Controls** and **Performance**. Tap a menu or move a slider there; no settings page needs opening. **Upscaling** is in **Game**, beside **Console mode**.
+The screen before the game starts shows the settings the game supports. Tap **Play** to start; the app remembers your choices for the next start. All settings are on one scrollable screen, under **Game**, **Controls** and **Performance**; BOTW also has **Touch left stick**. Tap a menu or move a slider there; no settings page needs opening. **Upscaling** is in **Game**, beside **Console mode**.
 
 - [Tested defaults](#tested-defaults)
 - [Game](#game): [Frame rate](#frame-rate), [Render scale](#render-scale), [Console mode](#console-mode), [Upscaling](#upscaling), [Game language](#game-language), [Frame-rate counter](#frame-rate-counter)
 - [Controls](#controls): [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength)
+- [Touch left stick](#touch-left-stick): BOTW movement deadzone, response curve, full movement and size
 - [Performance](#performance): [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
 - [Settings in a file](#settings-in-a-file)
 
@@ -68,6 +69,25 @@ The game's vibration, on the phone or on a connected controller.
 ### Rumble strength
 
 How strong the game's vibration is, from 0 to 300 %.
+
+## Touch left stick
+
+Breath of the Wild has a **Touch left stick** section on the screen before **Play**. It changes only the touch movement stick. ZL, physical controllers and other games keep their existing behavior.
+
+| Setting | Default | Range | Effect |
+|---|---|---|---|
+| Deadzone | 7% | 0–30% | Small drags within this fraction of the radius produce no movement. |
+| Response curve | 0.70 | 0.30–2.00 | Below 1 makes short drags stronger; 1 is linear; above 1 makes them gentler. |
+| Full movement at | 80% | 35–100% | How far to drag, as a fraction of the radius, to reach maximum stick strength. |
+| Stick size | 100% | 60–150% | Scales the whole stick: its center artwork, outer ring and drag range. |
+
+The curve updates as you adjust the sliders. Drag across it to see the stick strength at each finger distance. **Restore left-stick defaults** resets just these four settings and leaves frame rate, graphics and other choices alone. Tap **Play** to save your choices for the next start. A value fixed by an env file stays fixed, including when restoring defaults.
+
+Size at 100% keeps the existing dimensions: a 140-point outer diameter when the viewport is taller than 430 points, with the existing scaling on shorter screens. These settings do not add an overshoot sprint gesture; B keeps its ordinary action.
+
+On the Mac, touch preview uses the same parameters through `DM_BOTW_MOVE_DEADZONE`, `DM_BOTW_MOVE_CURVE`, `DM_BOTW_MOVE_FULL` and `DM_BOTW_MOVE_SIZE` in `env.txt` or the launch environment. Fractions are written as decimals: for example, `DM_BOTW_MOVE_DEADZONE=0.07` means 7%. The Mac has no pre-game settings page.
+
+If a BOTW menu does not respond to direct touch on iPhone, **double-tap with three fingers** to reveal the original full virtual gamepad for that menu visit. It sends ordinary buttons and UI right-stick input. Leaving menus restores the normal touch layout; a controller connection or input reset also ends the temporary override. It is not saved. The gesture is reserved while automatic controls are hidden, so ordinary three-finger combat combinations keep working.
 
 ## Performance
 
