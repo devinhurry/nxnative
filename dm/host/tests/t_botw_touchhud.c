@@ -14,10 +14,13 @@ static void (*test_gates[OBS_MAX])(const uint64_t *);
 static int map_region_valid;
 static int map_region_events;
 static int actions_reset_count;
+static int aspect_pane_calls;
 static float map_region[4];
 int gate_obs_present(int id) { return id == OBS_BOTW_TOUCH_PANE || id == OBS_BOTW_TOUCH_MATRIX; }
 void gate_obs_read_set(int id, void (*fn)(const uint64_t *)) { assert(id > 0 && id < OBS_MAX); test_gates[id] = fn; }
 void front_botw_touch_hud_mode_changed(void) {}
+int dm_aspect_native(void) { return 1; }
+void dm_aspect_ui_pane(uint8_t *pane) { if (pane) aspect_pane_calls++; }
 void front_botw_rune_icon_changed(void) {}
 void dm_botw_touch_actions_reset(void) { actions_reset_count++; }
 void dm_botw_touch_menu_pane(const uint64_t *regs, int after_matrix) { (void)regs; (void)after_matrix; }
@@ -315,6 +318,14 @@ int main(void) {
     other[BOTW_TOUCH_FLAGS] = 0;
     calculate_entry(other);
     assert(other[BOTW_TOUCH_FLAGS] == 0);
+
+    // The shared pane hook still services widescreen backgrounds without an
+    // installed touch HUD (ordinary Mac/controller mode).
+    dm_botw_touchhud_test_clear();
+    int calls = aspect_pane_calls;
+    calculate_entry(other);
+    assert(aspect_pane_calls == calls + 1);
+    assert(!dm_botw_touch_hud_available() && !dm_botw_touch_hud_active());
 
     puts("t_botw_touchhud: build gate, pane ancestry, transient transforms, map bounds, environment alignment, expanded-state fallback, and inactive restoration passed");
 }

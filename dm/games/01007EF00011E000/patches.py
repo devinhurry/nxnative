@@ -134,6 +134,13 @@ def validate_main(ctx):
     assert tuple(word(o) for o in range(0xd5801c, 0xd58030, 4)) == (
         0xfd400be8, 0xf94017f3, 0xa941fbfd, 0x9100c3ff, 0xd65f03c0,
     ), 'BOTW shared getter epilogue changed; recheck OBS32 scratch-register liveness'
+    # Pane::Draw saves this in x21 and invokes DrawSelf at vtable +0xb0.
+    # The begin gate precedes that call with x9-x17 dead; the end gate follows it.
+    assert tuple(word(o) for o in range(0x27d50, 0x27d8c, 4)) == (
+        0x3941700a, 0xaa0203f3, 0xaa0103f4, 0x39416809, 0xaa0003f5,
+        0x3620014a, 0x34000129, 0xf94002a8, 0xaa1503e0, 0xaa1403e1,
+        0xaa1303e2, 0xf9405908, 0xd63f0100, 0x394162a8, 0x39416aa9,
+    ), 'BOTW Pane::DrawSelf scope changed; revalidate OBS39/40 and x21 pane owner'
     assert tuple(word(o) for o in range(0x276a0, 0x276d8, 4)) == (
         0xd10243ff, 0xfd0023e8, 0xf9002ff9, 0xa904fbfd, 0xa9065ff8, 0xa90757f6,
         0xa9084ff4, 0x910123fd, 0x39416008, 0xaa0003f3, 0x12000109, 0x3940744a,
@@ -225,6 +232,8 @@ OBS = {
   'cd57b23fa4bbad65803d9788c01821ee': [
     (0x276a0, 34, 'd10243ff', 'Pane::Calculate entry: locate N_MainAll_00 and mark its global matrix dirty on touch HUD changes'),
     (0x27ae4, 35, '52800036', 'Pane::Calculate after global matrix composition and before child recursion: offset N_MainAll_00 translation'),
+    (0x27d7c, 39, 'f9405908', 'Pane::Draw before virtual DrawSelf: x21 owns the native background pane'),
+    (0x27d84, 40, '394162a8', 'Pane::Draw after virtual DrawSelf: end the native background draw scope'),
     (0xeb4468, 29, 'a9be7bfd', 'projection update: apply the display aspect to the main camera before checking dirty flags'),
     (0xd44a2c, 30, 'a94a2269', 'UI 3D camera update: x19 owns the source lens at +0xa0 and projection at +0xa8; apply aspect before copying lens parameters'),
     (0xe1a628, 31, 'f960de68', 'MainScreen3D update: correct its copied projection before rebuilding the world-label view'),
@@ -239,6 +248,9 @@ OBS = {
 # OBS_SAFE sites are interior instructions whose scratch-register liveness is established below:
 # 0xe1a628 follows MainScreen3D's successful camera check and the profile verifies x9-x17 stay unread
 # through the world-view setup until the next call; the getter / pane sites have their own proofs.
-OBS_SAFE = {'cd57b23fa4bbad65803d9788c01821ee': {0xd5801c, 0x27ae4, 0xe1a628}}
+# 0x27d7c reaches the validated C++ DrawSelf virtual call with only x0-x2
+# as arguments; x8 retains its target and x9-x17 are caller-clobbered. The
+# general straight-line checker deliberately refuses unknown indirect calls.
+OBS_SAFE = {'cd57b23fa4bbad65803d9788c01821ee': {0xd5801c, 0x27ae4, 0xe1a628, 0x27d7c}}
 # Whether a general rule could replace these patches (dm/tools/docs_patches.py lists it in docs/agents/game-patches.md)
 GENERALIZE = "No for the hook sites: sead::GameFrameworkNx's interval controller and ksys::VFR in this build; Tears of the Kingdom shares sead but not this code. The frame-step state page they use is general"

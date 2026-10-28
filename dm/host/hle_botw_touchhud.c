@@ -519,6 +519,8 @@ static void publish_map_rect(uint8_t *pane) {
 }
 
 static void botw_touchhud_pane(const uint64_t *regs) {
+    dm_aspect_ui_pane((uint8_t *)(uintptr_t)regs[0]);
+    if (!dm_botw_touch_hud_available()) return;
     dm_botw_touch_menu_pane(regs, 0);
     uint8_t *pane = (uint8_t *)(uintptr_t)regs[0];
     if (!pane) return;
@@ -593,6 +595,7 @@ static void botw_touchhud_pane(const uint64_t *regs) {
 }
 
 static void botw_touchhud_matrix(const uint64_t *regs) {
+    if (!dm_botw_touch_hud_available()) return;
     dm_botw_touch_menu_pane(regs, 1);
     uint8_t *pane = (uint8_t *)(uintptr_t)regs[19];
     if (!pane) return;
@@ -662,11 +665,12 @@ static void botw_touchhud_matrix(const uint64_t *regs) {
 }
 
 void dm_botw_touch_hud_install(void) {
+    int touch = 1;
 #if !TARGET_OS_IPHONE && !defined(DM_TEST_HOOKS)
     const char *preview = getenv("DM_TOUCH_PREVIEW");
-    if (!preview || strcmp(preview, "1")) return; // Mac installation is opt-in through run_mac.py --touch-preview.
-#else
+    touch = preview && !strcmp(preview, "1");
 #endif
+    if (!touch && !dm_aspect_native()) return;
     if (strcmp(DM_GAME_ID, "01007EF00011E000")) return;
     if (strcmp(dm_main_build(), BOTW_BUILD)) {
         LOG("BOTW touch HUD: disabled for main build %s (requires %s)", dm_main_build(), BOTW_BUILD);
@@ -677,9 +681,10 @@ void dm_botw_touch_hud_install(void) {
         die("[RED] BOTW touch HUD: pane calculation gates missing; rewrite main with the current patches.py");
     gate_obs_read_set(OBS_BOTW_TOUCH_PANE, botw_touchhud_pane);
     gate_obs_read_set(OBS_BOTW_TOUCH_MATRIX, botw_touchhud_matrix);
-    atomic_store_explicit(&g_touchhud_available, 1, memory_order_release);
-    front_botw_touch_hud_mode_changed();
-    LOG("BOTW touch HUD: MainShortCut pane probes installed for build %s", BOTW_BUILD);
+    atomic_store_explicit(&g_touchhud_available, touch, memory_order_release);
+    if (touch) front_botw_touch_hud_mode_changed();
+    LOG("BOTW UI: pane probes installed for build %s (touch HUD %s; native aspect %s)",
+        BOTW_BUILD, touch ? "enabled" : "disabled", dm_aspect_native() ? "enabled" : "disabled");
 }
 
 #ifdef DM_TEST_HOOKS

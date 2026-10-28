@@ -6,7 +6,8 @@ This is the active progress tracker. Update it after each verified feature or ne
 
 ## Scope and acceptance rules
 
-- BOTW touch mode only. Physical controllers and other games retain their existing behavior.
+- Menu touch changes are BOTW touch mode only. Physical controllers and other games retain their existing input behavior.
+- BOTW widescreen backgrounds are a separate rendering feature for both touch and controller modes. Foreground content and touch targets stay centered at 16:9; other games retain their existing rendering.
 - Complete menu touch interaction; preserve the existing movement, combat and rune controls.
 - Use the game's live controls, geometry, list state and native selection entry points. A distant item must select directly, without walking through intermediate items with direction inputs.
 - Both the icon and text of a button hint should respond. Movement and zoom hints map to gestures.
@@ -15,11 +16,13 @@ This is the active progress tracker. Update it after each verified feature or ne
 
 ## Coverage
 
-Mac menu coverage includes the complete merged graphics host with shaders from the matching 1.9.0 package. Physical iPhone and controller-connection acceptance remain separate from the Mac and UIKit checks.
+Mac milestones refer to their recorded runtime evidence. The latest 2026-10-28 runtime uses the retained `371ad45` graphics base with current menu/background changes and matching chain `07b0ea547435`; the newly merged host compiles, but its complete shader chain remains unvalidated. Physical iPhone and controller-connection acceptance remain separate from the Mac and UIKit checks.
 
 | Surface | Status | Evidence or remaining work |
 | --- | --- | --- |
+| Widescreen UI backgrounds | Mac touch-preview and ordinary input layouts verified; physical iPhone/controller connection pending | Inventory/system background bars and the map background fill widescreen displays. Touch preview passed at 21:10; ordinary mode passed at 21:10 and a resized 16:7 window, with the original gameplay HUD. Menu content keeps its original proportions and direct touch positions; offscreen panels retain their foreground crop. See the game's Rendering note for the build/runtime boundary. |
 | Title, Continue and load confirmation | Mac verified | Touch can enter gameplay without a fallback confirmation key. |
+| Title widescreen background | Mac correction verified; physical iPhone pending | The right-anchored menu gradient now reaches the display edge without a light vertical strip, while logo/menu placement stays centered. Visible title artwork and its light/blur layers use the same proportional cover transform, while their capture sources stay native. UI projection snapshots refresh per draw so artwork and opacity remain current. Arrow and horse title artwork passed at 21:10; Continue/load flow, inventory and map were checked again. The prepared runtime uses an isolated RomFS directory so a concurrent image-based build cannot remove its resources. `widescreen-title-20261029/` records the regression and correction. |
 | Inventory direct item selection | Mac verified | Distant slots update native selection and item details directly. |
 | Inventory action popup and cancellation | Mac verified | Uses the active popup's native targets and confirm/back actions. |
 | Inventory category touch cells | Mac verified | Native 32x32 glyph targets expand to the surrounding category cells (58x58 in the tested layout), using live spacing and transforms. Neighbor cells do not overlap and the item-list clip bounds the lower edge. Off-icon upper/right Shield and lower/right Food taps passed through the Mac mouse path. |

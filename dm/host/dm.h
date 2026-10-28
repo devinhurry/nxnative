@@ -103,7 +103,8 @@ enum { OBS_MOVIE_RING_LINK = 19, OBS_MOVIE_RING_UNLINK = 20,   // legacy Metroid
        OBS_BOTW_TOUCH_PANE = 34, OBS_BOTW_TOUCH_MATRIX = 35, // BOTW 1.9.0 MainShortCut equipment subtree (hle_botw_touchhud.c)
        OBS_BOTW_MENU_SELECT = 37,                          // BOTW 1.9.0 native box-cursor update before requested-entry consumption
        OBS_BOTW_LIST_WIDGET_UPDATE = 38,                    // BOTW 1.9.0 native list-widget update (passive receiver observation)
-       OBS_MAX = 39 };
+       OBS_BOTW_UI_DRAW = 39, OBS_BOTW_UI_DRAW_END = 40, // native Pane::DrawSelf scope for full-bleed backgrounds
+       OBS_MAX = 41 };
 // SDK observers carry parameters in bits 8 and above and may update saved registers.
 void gate_obs_set(int id, void (*fn)(uint64_t *regs, int param));
 // BOTW observers keep the register-preserving contract; explicit result filters below change only x0.
