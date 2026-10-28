@@ -155,6 +155,18 @@ def validate_main(ctx):
     assert tuple(word(o) for o in range(0xf57ba0, 0xf57bb8, 4)) == (
         0xd10143ff, 0xa9027bfd, 0xa90357f6, 0xa9044ff4, 0x910083fd, 0xf9401008,
     ), 'BOTW native BoxCursorControl update entry changed; revalidate requested-entry hook and x0 manager'
+    # A new save skips Title and may not update a cursor until after gameplay
+    # begins. Observe the completed constructor too. Its base constructor
+    # preserves x0, all manager fields are initialized, and the remaining
+    # epilogue reads no x9-x17 before ret.
+    assert tuple(word(o) for o in range(0xf54678, 0xf54694, 4)) == (
+        0x90006dc8, 0x91126108, 0xf900101f, 0x91002009, 0xa9002408, 0xa9017c09, 0xd65f03c0,
+    ), 'BOTW cursor base constructor changed; revalidate preserved x0 at construction observer'
+    assert tuple(word(o) for o in range(0xf579d8, 0xf57a14, 4)) == (
+        0xa9be7bfd, 0xf9000bf3, 0x910003fd, 0xaa0003f3, 0x97fff324,
+        0xb0006da8, 0x9137e108, 0xf9002e7f, 0xa902fe7f, 0xf9000268,
+        0xa903fe7f, 0xa904fe7f, 0xf9400bf3, 0xa8c27bfd, 0xd65f03c0,
+    ), 'BOTW cursor constructor changed; revalidate initialized manager and epilogue scratch liveness'
     assert tuple(word(o) for o in range(0xe39c08, 0xe39c20, 4)) == (
         0xa9bd7bfd, 0xf9000bf5, 0xa9024ff4, 0x910003fd, 0xaa0003f4, 0x9105e000,
     ), 'BOTW inventory transition-flag setter changed; revalidate native category request staging'
@@ -215,6 +227,7 @@ OBS = {
     (0xd5801c, 32, 'fd400be8', 'shared normalized stick getter: inject one frame of relative input after native filtering and before return'),
     (0xccfd5c, 36, '0a080008', 'PlayerActor native Dash decision: filter only the id-12 input result before the native speed and movement-state guards'),
     (0xf57ba0, 37, 'd10143ff', 'BoxCursorControl update entry: x0 is the native manager; observe focused/requested item before native validation and focus callbacks'),
+    (0xf57a08, 37, 'f9400bf3', 'BoxCursorControl constructor exit: x0 is the initialized manager, including first boot without a Title cursor update'),
     (0xd6f034, 38, 'd101c3ff', 'native list-widget update entry: x0 is the shared list widget; cache receiver metadata only'),
   ],
 }

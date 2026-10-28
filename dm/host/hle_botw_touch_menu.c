@@ -3619,11 +3619,29 @@ static int selector_message_prompt_view(uintptr_t manager, uint64_t frame,
     return 1;
 }
 
+// The native arrow parts are pad-cursor sized: Pa_ArrowL_00 and Pa_ArrowR_00 are
+// 25 by 56 canvas units beside the value box, so a thumb adjusts a count only
+// when it lands dead on the drawn arrow and nothing else responds. Give each
+// arrow the room it has visually - the strip outwards from the value box, one
+// row pitch tall - without reaching the box's middle (a tap there still means
+// confirm) and without touching the rows below.
+static void adjuster_touch_rect(float rect[4], const float box[4], int side) {
+    const float outward = .032f, vertical = .008f;
+    if (side > 0) rect[2] += outward;
+    else { rect[0] -= outward; rect[2] += outward; }
+    float middle = box[0] + box[2] * .5f;
+    if (side > 0 && rect[0] < middle) { rect[2] -= middle - rect[0]; rect[0] = middle; }
+    else if (side <= 0 && rect[0] + rect[2] > middle) rect[2] = middle - rect[0];
+    rect[1] -= vertical;
+    rect[3] += vertical * 2;
+}
+
 // Value controls expose native left/right arrow parts and ON/OFF labels.
 // Options rows and Message quantity fields share these controls. Keep the
 // registered entry identity and adjust after focus instead of confirming it.
-static void selector_value_adjusters_to_view(dm_botw_touch_menu_view *view) {
-    int rows = view->generic_count;
+// Returns the number of live numeric (T_Num_00) fields it found.
+static int selector_value_adjusters_to_view(dm_botw_touch_menu_view *view) {
+    int rows = view->generic_count, numeric_rows = 0;
     generic_hit_t texts[DM_BOTW_MENU_MAX_GENERIC_TARGETS];
     int text_count = generic_text_snapshot(texts, view->render_frame);
     for (int i = 0; i < rows; i++) {
@@ -3634,6 +3652,7 @@ static void selector_value_adjusters_to_view(dm_botw_touch_menu_view *view) {
         int numeric = part && pane_find_unique((uint8_t *)part, "T_Num_00", NULL, &number) == 1 &&
             pane_chain_visible((uint8_t *)number) && pane_chain_alpha_visible((uint8_t *)number);
         if (!row_part && !numeric) continue;
+        if (numeric) numeric_rows++;
         if (row_part) {
             float row_x, row_y;
             memcpy(&row_x, row_part + PANE_MATRIX + 0xc, 4);
@@ -3686,6 +3705,7 @@ static void selector_value_adjusters_to_view(dm_botw_touch_menu_view *view) {
                 if (matches != 1) pane = 0;
             } else pane = 0;
             if (!pane || !rect_intersects_canvas(rect)) continue;
+            adjuster_touch_rect(rect, row.rect, side);
             dm_botw_touch_menu_target *target = &view->generic_targets[view->generic_count++];
             *target = row;
             target->pane = pane;
@@ -3693,6 +3713,29 @@ static void selector_value_adjusters_to_view(dm_botw_touch_menu_view *view) {
             memcpy(target->rect, rect, sizeof target->rect);
         }
     }
+    return numeric_rows;
+}
+
+// A quantity dialogue (Sell/Buy a chosen number) has no confirm row: the
+// number field's own controls are the arrows, and the native handler takes A
+// to accept the count. The button guide never shows an A row to tap, so a
+// number the player dialled in could not be confirmed by touch at all.
+// Publish the dialogue window itself as that A, the way a cursor-less prompt
+// window accepts A, so a tap outside the arrows confirms the count.
+static void selector_number_confirm_to_view(dm_botw_touch_menu_view *view, int numeric_rows) {
+    if (!numeric_rows || !view->generic_mode || !view->generic_root) return;
+    char name[64];
+    if (!selector_screen_name(view->generic_screen, name) || strncmp(name, "Message", 7) ||
+        !strncmp(name, "MessageDialog", 13)) return;
+    uintptr_t window = 0;
+    int found = pane_find_unique((uint8_t *)view->generic_root, "W_SysBase_00", NULL, &window);
+    if (found != 1) found = pane_find_unique((uint8_t *)view->generic_root, "W_Base_00", NULL, &window);
+    if (found != 1) return;
+    float x, y, rect[4];
+    memcpy(&x, (const void *)(window + PANE_MATRIX + 0xc), 4);
+    memcpy(&y, (const void *)(window + PANE_MATRIX + 0x1c), 4);
+    native_rect_from_pane((uint8_t *)window, x, y, rect);
+    menu_add_action(view, DM_BTN_A, rect);
 }
 
 static uintptr_t selector_scroll_row(uintptr_t pane) {
@@ -3837,7 +3880,8 @@ static void selector_publish_generic_view(uintptr_t manager, uintptr_t screen, i
           selector_find_generic_targets(manager, screen, group, view.generic_root, native_screen_shown,
                                         native_group_getter, &view) > 0))
         view.generic_count = 0;
-    selector_value_adjusters_to_view(&view);
+    int numeric_rows = selector_value_adjusters_to_view(&view);
+    selector_number_confirm_to_view(&view, numeric_rows);
     selector_grid_carousel_to_view(&view, frame);
     // The map is a separate full-screen native surface with its own stick
     // controls; keep its freshness through the generic publication, which
@@ -4814,7 +4858,8 @@ void dm_botw_touch_menu_selector(const uint64_t *regs) {
         }
         return;
     }
-    // Retain only the passively validated controller object. This stores no
+    // Constructor-exit and update observations retain the same passively
+    // validated object, including a fresh save that never opens Title. This stores no
     // screen state and calls no guest helper; map queries still require a
     // live active BOTW touch HUD and revalidate the object on the UI thread.
     atomic_store_explicit(&g_validated_box_cursor_manager, manager, memory_order_release);
@@ -5754,12 +5799,22 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
                 }
             }
         }
-        if (atomic_load_explicit(&g_trace, memory_order_acquire) && !g_pointer_dragged)
+        if (atomic_load_explicit(&g_trace, memory_order_acquire) && !g_pointer_dragged) {
             LOG("BOTW menu tap frame=%llu point=(%.3f,%.3f) targets=%d back=%d:(%.3f,%.3f,%.3f,%.3f) footers=%d root=%p screen=%p",
                 (unsigned long long)frame, x, y, g_view.generic_count, g_view.back_valid,
                 g_view.back[0], g_view.back[1], g_view.back[2], g_view.back[3],
                 g_view.footer_action_count, (void *)g_view.generic_root,
                 (void *)g_view.generic_screen);
+            if (atomic_load_explicit(&g_trace, memory_order_acquire) >= 2)
+                for (int i = 0; i < g_view.generic_count; i++) {
+                    char tname[17] = {0};
+                    if (g_view.generic_targets[i].pane) pane_name((uint8_t *)g_view.generic_targets[i].pane, tname);
+                    LOG("BOTW menu target %d adj=%d pane=%s rect=(%.3f,%.3f,%.3f,%.3f)", i,
+                        g_view.generic_targets[i].adjustment, tname, g_view.generic_targets[i].rect[0],
+                        g_view.generic_targets[i].rect[1], g_view.generic_targets[i].rect[2],
+                        g_view.generic_targets[i].rect[3]);
+                }
+        }
         g_pointer_dragged = 0;
         pthread_mutex_unlock(&g_menu_mu);
         return;
