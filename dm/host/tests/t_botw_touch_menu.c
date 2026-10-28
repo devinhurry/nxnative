@@ -1059,6 +1059,21 @@ static void test_menu_animation_visibility(void) {
     selector.active[1] = 0x80;
     selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
     assert(!dm_botw_touch_menu_visible() && dm_botw_touch_controls_visible());
+    // Corner notifications can enter, remain and leave over the gameplay HUD
+    // without becoming a menu. Full tutorials and dialogues still own input.
+    selector.active[1] = 0;
+    const char *messages[] = {"MessageTipsRunTime_00", "MessageTipsPauseMenu_00", "MessageTips_00", "MessageDialog_00"};
+    for (unsigned i = 0; i < sizeof messages / sizeof *messages; i++) {
+        strcpy((char *)selector.map_screen + 0xa0, messages[i]);
+        assert(selector_pointer_screen_name(messages[i]) == (i >= 2));
+        for (int mode = 1; mode <= 3; mode++) {
+            selector.map_screen[0xfe] = mode;
+            selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
+            assert(dm_botw_touch_menu_visible() == (i >= 2));
+            assert(dm_botw_touch_controls_visible() == (i < 2));
+        }
+    }
+    selector.active[1] = 0x80;
     hud[0x59] = 0;
     selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
     assert(!dm_botw_touch_controls_visible()); // no menu registered between dialogue pages
@@ -1348,6 +1363,13 @@ static void test_message_advance_owner(void) {
     uint8_t *body_parent = fake_pane(83, "N_NameBase_00", 80, 800, 160, 0, -240);
     uint8_t *body = fake_pane(84, "W_Base_00", 83, 800, 160, 0, -240);
     generic_hit_observe(body, 1);
+    assert(selector_message_prompt_view((uintptr_t)selector.manager, 7000, &message));
+    const char *corner_tips[] = {"MessageTipsRunTime_00", "MessageTipsPauseMenu_00"};
+    for (unsigned i = 0; i < sizeof corner_tips / sizeof *corner_tips; i++) {
+        strcpy((char *)selector.screen + 0x200, corner_tips[i]);
+        assert(!selector_message_prompt_view((uintptr_t)selector.manager, 7000, &message));
+    }
+    strcpy((char *)selector.screen + 0x200, "Message_00");
     assert(selector_message_prompt_view((uintptr_t)selector.manager, 7000, &message));
     dm_botw_touch_menu_test_publish(&message);
     tap(.21f, .75f); // blank left padding of the window, far from its arrow
@@ -2331,10 +2353,16 @@ int main(void) {
     dm_botw_touch_menu_test_snapshot(&generic_view);
     assert(generic_view.generic_count == 2 && !generic_view.back_valid);
     assert(dm_botw_touch_menu_active());
+    const char *inventory_modals[] = {"MessageDialog_00", "PauseMenuMantan_00"};
+    for (unsigned i = 0; i < sizeof inventory_modals / sizeof *inventory_modals; i++) {
+        strcpy((char *)selector.screen + 0x200, inventory_modals[i]);
+        selector_tick();
+        dm_botw_touch_menu_test_snapshot(&generic_view);
+        assert(generic_view.generic_count == 2 && !generic_view.back_valid);
+    }
+    assert(!selector_pointer_screen_name("PauseMenuBG_00"));
+    assert(!selector_pointer_screen_name("PauseMenuInfo_00"));
     strcpy((char *)selector.screen + 0x200, "MessageDialog_00");
-    selector_tick();
-    dm_botw_touch_menu_test_snapshot(&generic_view);
-    assert(generic_view.generic_count == 2 && !generic_view.back_valid);
 
     // A focused MessageDialog root wins over the underlying menu's rows.
     put_ptr(selector.owner2 + 0x60, (uintptr_t)background_cursor);
@@ -2343,6 +2371,17 @@ int main(void) {
     assert(generic_view.generic_count == 1);
     assert(generic_view.generic_targets[0].pane == (uintptr_t)background_hit);
     put_ptr(selector.owner2 + 0x60, (uintptr_t)cursor_two);
+
+    // A live action hint on a non-modal corner tip must not create a generic
+    // menu either: visibility and focused-prompt routing share the classifier.
+    const char *corner_tips[] = {"MessageTipsRunTime_00", "MessageTipsPauseMenu_00"};
+    for (unsigned i = 0; i < sizeof corner_tips / sizeof *corner_tips; i++) {
+        strcpy((char *)selector.screen + 0x200, corner_tips[i]);
+        selector_tick();
+        dm_botw_touch_menu_test_snapshot(&generic_view);
+        assert(!generic_view.generic_count && !generic_view.footer_action_count && !generic_view.back_valid);
+        assert(!dm_botw_touch_menu_active());
+    }
 
     generic_restore_icon[0x59] = generic_restore_label[0x59] = 0;
     observe_native_pane(generic_restore_icon, 1);
