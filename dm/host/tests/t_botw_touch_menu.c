@@ -38,7 +38,8 @@ static void mock_list_widget_set(uintptr_t widget, uint32_t index) {
     put_ptr((void *)(mock_list_setter_screen + 0xe0), mock_list_setter_entry);
 }
 
-module_t g_mod[MAX_MOD];
+static module_t test_modules[8];
+module_t *g_mod = test_modules;
 int g_nmod;
 static uint64_t current_guest_frame;
 static int mock_touch_hud_active = 1;
@@ -50,7 +51,7 @@ static int mock_gate_present[OBS_MAX];
 static void (*mock_gate_callbacks[OBS_MAX])(const uint64_t *regs);
 
 int gate_obs_present(int id) { return id > 0 && id < OBS_MAX && mock_gate_present[id]; }
-void gate_obs_set(int id, void (*fn)(const uint64_t *regs)) {
+void gate_obs_read_set(int id, void (*fn)(const uint64_t *regs)) {
     if (id > 0 && id < OBS_MAX) mock_gate_callbacks[id] = fn;
 }
 int dm_guest_as_contains(uintptr_t address) {

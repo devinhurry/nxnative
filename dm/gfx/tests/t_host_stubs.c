@@ -25,3 +25,4 @@ __attribute__((weak)) void dm_botw_rune_icon_mask_guide(uint8_t *rgba, uint32_t 
     (void)rgba; (void)width; (void)height; (void)stride; (void)crop; (void)exclusion;
     (void)image_x; (void)image_y; (void)image_width; (void)image_height;
 }
+__attribute__((weak)) void dm_vi_layer_crop(int c[4]) { c[0] = c[1] = c[2] = c[3] = 0; }   // no vi layer crop (hle_vi.c), read by hle_nvn's present

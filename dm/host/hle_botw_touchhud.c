@@ -675,8 +675,8 @@ void dm_botw_touch_hud_install(void) {
     for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main")) g_touchhud_main = &g_mod[i];
     if (!g_touchhud_main || !gate_obs_present(OBS_BOTW_TOUCH_PANE) || !gate_obs_present(OBS_BOTW_TOUCH_MATRIX))
         die("[RED] BOTW touch HUD: pane calculation gates missing; rewrite main with the current patches.py");
-    gate_obs_set(OBS_BOTW_TOUCH_PANE, botw_touchhud_pane);
-    gate_obs_set(OBS_BOTW_TOUCH_MATRIX, botw_touchhud_matrix);
+    gate_obs_read_set(OBS_BOTW_TOUCH_PANE, botw_touchhud_pane);
+    gate_obs_read_set(OBS_BOTW_TOUCH_MATRIX, botw_touchhud_matrix);
     atomic_store_explicit(&g_touchhud_available, 1, memory_order_release);
     front_botw_touch_hud_mode_changed();
     LOG("BOTW touch HUD: MainShortCut pane probes installed for build %s", BOTW_BUILD);

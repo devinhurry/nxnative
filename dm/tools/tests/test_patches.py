@@ -27,7 +27,7 @@ def load(path, n):
 
 MODS = {p: load(p, n) for n, p in enumerate(FILES)}
 HEX = re.compile(r'[0-9a-f]+$')
-TABLES = ('CUTS', 'OBS', 'OBS_SAFE', 'FRAME_STEP', 'VALIDATE')
+TABLES = ('CUTS', 'OBS', 'OBS_SAFE', 'FRAME_STEP', 'VALIDATE', 'CAPABILITIES')
 
 # Execute the driver's actual file discovery and registry without loading a game image.
 source = REPO / 'dm/tools/patch_nso.py'; tree = ast.parse(source.read_text())
@@ -46,6 +46,7 @@ class Registry(unittest.TestCase):
         # as BL, while BR, RET and plain branches do not establish a call site.
         nodes = [n for n in ast.walk(tree) if isinstance(n, ast.Assign) and
                  any(isinstance(t, ast.Name) and t.id in ('previous', 'after_bl') for t in n.targets)]
+        nodes = nodes[:2]   # Explicit profile loop; later SDK discovery has its own call-site rule.
         code = compile(ast.Module(body=nodes, type_ignores=[]), str(source), 'exec')
         import struct
         for instruction, accepted in (
@@ -95,22 +96,38 @@ class Registry(unittest.TestCase):
                 self.assertIn(bid, getattr(m, 'VALIDATE', {}), f'{p}: OBS_SAFE sites need a build validator')
                 obs_offsets = {off for off, *_ in getattr(m, 'OBS', {}).get(bid, [])}
                 self.assertTrue(sites <= obs_offsets, f'{p}: OBS_SAFE contains an unregistered offset')
-            self.assertFalse({k for k in vars(m) if k.isupper() and k not in (*TABLES, 'MATCH_CUTS')} - set(dir(__import__('nso_asm'))),
+            for bid, names in getattr(m, 'CAPABILITIES', {}).items():
+                self.assertRegex(bid, r'^[0-9a-f]{32}$')
+                self.assertEqual(len(names), len(set(names)))
+                for name in names: self.assertRegex(name, r'^[A-Z][A-Z0-9_]*$')
+            self.assertFalse({k for k in vars(m) if k.isupper() and k not in ('CUTS', 'OBS', 'FRAME_STEP', 'CAPABILITIES', 'MATCH_CUTS', 'GENERALIZE', 'OBS_SAFE', 'VALIDATE')} - set(dir(__import__('nso_asm'))),
                              f'{p}: a table patch_nso.py does not read')
+            self.assertIsInstance(getattr(m, 'GENERALIZE', ''), str, f'{p}: GENERALIZE is a note (docs/agents/game-patches.md)')
 
     def test_function_match_rules(self):
         from nso_match import validate
         for p, m in MODS.items():
             for module, rules in getattr(m, 'MATCH_CUTS', {}).items():
-                self.assertEqual(p.name, 'patches.py')
-                self.assertIn(module, game.load(p.parent.name).words('modules'))
-                self.assertNotEqual(module, 'sdk', 'SDK fixes belong in sdk_patches.py, keyed by build ID')
+                if p.name == 'sdk_patches.py':   # SDK-wide: Nintendo's sdk module of any game
+                    self.assertEqual(module, 'sdk')
+                else:
+                    self.assertEqual(p.name, 'patches.py')
+                    self.assertIn(module, game.load(p.parent.name).words('modules'))
+                    self.assertNotEqual(module, 'sdk', 'SDK fixes belong in sdk_patches.py, for every game')
                 self.assertTrue(rules)
                 for rule in rules: validate(rule)
 
+    def test_sdk_wide_rules_restate_registered_cuts(self):
+        # every SDK-wide cut is one of the registered SDK cuts, the same bytes, at some build's function-relative offset (the rules were taken from them)
+        m = MODS[REPO / 'dm/tools/sdk_patches.py']
+        registered = {(old, new) for cuts in m.CUTS.values() for _, old, new, _ in cuts}
+        for rule in m.MATCH_CUTS['sdk']:
+            for delta, old, new, why in rule['cuts']:
+                self.assertIn((old, new), registered, why)
+
     def test_game_files_name_their_own_builds(self):
         for p, m in MODS.items():
-            if p.name != 'patches.py': continue
+            if p.name != 'patches.py' or not (p.parent / 'game.tsv').is_file(): continue
             own = builds_of(p.parent.name)
             for kind in TABLES:
                 for bid in getattr(m, kind, {}):

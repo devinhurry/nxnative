@@ -8,14 +8,15 @@
 #include "../botw_touch_menu.h"
 #include "../hle_botw_touchhud.c"
 
-module_t g_mod[MAX_MOD]; int g_nmod;
+static module_t test_modules[8];
+module_t *g_mod = test_modules; int g_nmod;
 static void (*test_gates[OBS_MAX])(const uint64_t *);
 static int map_region_valid;
 static int map_region_events;
 static int actions_reset_count;
 static float map_region[4];
 int gate_obs_present(int id) { return id == OBS_BOTW_TOUCH_PANE || id == OBS_BOTW_TOUCH_MATRIX; }
-void gate_obs_set(int id, void (*fn)(const uint64_t *)) { assert(id > 0 && id < OBS_MAX); test_gates[id] = fn; }
+void gate_obs_read_set(int id, void (*fn)(const uint64_t *)) { assert(id > 0 && id < OBS_MAX); test_gates[id] = fn; }
 void front_botw_touch_hud_mode_changed(void) {}
 void front_botw_rune_icon_changed(void) {}
 void dm_botw_touch_actions_reset(void) { actions_reset_count++; }

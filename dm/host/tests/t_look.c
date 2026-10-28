@@ -5,7 +5,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-module_t g_mod[MAX_MOD];
+static module_t test_modules[8];
+module_t *g_mod = test_modules;
 int g_nmod;
 static int test_gate_present, test_gate_registered, test_missing_gate;
 static uint64_t test_frame;
@@ -18,7 +19,7 @@ int dm_hid_look_sample_at(uint64_t frame, dm_hid_look_sample *out) {
 
 static int known_gate(int id) { return id == OBS_BOTW_LOOK_VECTOR || id == OBS_BOTW_LOOK_SOURCE; }
 int gate_obs_present(int id) { return known_gate(id) && test_gate_present && id != test_missing_gate; }
-void gate_obs_set(int id, void (*fn)(const uint64_t *regs)) {
+void gate_obs_read_set(int id, void (*fn)(const uint64_t *regs)) {
     assert(known_gate(id) && fn);
     test_gate_registered++;
 }
@@ -443,14 +444,14 @@ static void test_native_stick_float_mapping(void) {
 
 static void install_wrong_build(void) {
     static uint8_t image[0x2000000];
-    memset(g_mod, 0, sizeof g_mod); g_nmod = 1;
+    memset(g_mod, 0, sizeof test_modules); g_nmod = 1;
     strcpy(g_mod[0].name, "main"); strcpy(g_mod[0].build_id, "00000000000000000000000000000000");
     g_mod[0].base = image; g_mod[0].size = sizeof image; g_mod[0].text_end = sizeof image;
     test_gate_present = 1; dm_look_install();
 }
 static void install_missing_gate(void) {
     static uint8_t image[0x2000000];
-    memset(g_mod, 0, sizeof g_mod); g_nmod = 1;
+    memset(g_mod, 0, sizeof test_modules); g_nmod = 1;
     strcpy(g_mod[0].name, "main"); strcpy(g_mod[0].build_id, "cd57b23fa4bbad65803d9788c01821ee");
     g_mod[0].base = image; g_mod[0].size = sizeof image; g_mod[0].text_end = sizeof image;
     test_gate_present = 0; dm_look_install();
@@ -469,7 +470,7 @@ static void test_profile_guard(void) {
     expect_abort("the look observer refuses a stale rewrite without OBS32", install_missing_gate);
 
     static uint8_t image[0x2000000];
-    memset(g_mod, 0, sizeof g_mod); g_nmod = 1;
+    memset(g_mod, 0, sizeof test_modules); g_nmod = 1;
     strcpy(g_mod[0].name, "main"); strcpy(g_mod[0].build_id, "cd57b23fa4bbad65803d9788c01821ee");
     g_mod[0].base = image; g_mod[0].size = sizeof image; g_mod[0].text_end = sizeof image;
     test_gate_present = 1; test_missing_gate = 0; test_gate_registered = 0;

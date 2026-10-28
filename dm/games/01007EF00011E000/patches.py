@@ -66,6 +66,21 @@ def frame_step(ctx):
         emit(w)
     emit(B(here(), 0x151d3d4))
     fs_put(0x151d3d0, [B(0x151d3d0, start)], 'VFR::updateInterval: its own override published for the host (state page target fps; 0 = original)')
+    # Held buttons: sead::ControllerBase::updateDerivativeParams_ (main+0xeb0ef0) adds s8 to each held button's count, a constant 1.0 (main+0xeb0f78..88), and raises the repeat bit
+    # when fmod(count - delay, pulse) < s8: delays and pulses are counted in frames, so at 60 fps menus repeated twice as fast as at 30 (MacNativeGames 866beb9). s8 is now the VFR's
+    # ratio (+0x3c: interval / base interval 2), 0.5 at a one-vsync step, 1.0 at two as shipped; the constant stays when there is no VFR yet or the ratio is not positive.
+    # x8 is loaded again after the site, s0 before its first read
+    fs_site(0xeb0f80, '08f144f9'); fs_site(0xeb0f88, '080140bd')
+    start = here(); emit(0xbd400108)   # ldr s8,[x8]            the constant 1.0
+    emit(ADRP(8, here(), 0x1e93890)); emit(LDRX(8, 8, 0x890 // 8))   # the VFR
+    for w in (0xb40000a8,   # cbz x8,back (+5)
+              0xbd403d00,   # ldr s0,[x8,#0x3c]      its ratio
+              0x1e202008,   # fcmp s0,#0.0
+              0x5400004d,   # b.le back (+2)
+              0x1e204008):  # fmov s8,s0
+        emit(w)
+    emit(B(here(), 0xeb0f8c))   # back
+    fs_put(0xeb0f88, [B(0xeb0f88, start)], 'held-button counts step by the VFR ratio (menu repeat in game time at any frame step)')
     # Render scale (state +0x10, float written by the loader: DM_RENDER_SCALE, 1.0 by default; independent of the frame step). The dynamic-resolution method (main+0x12666e4) keeps a
     # scale in 0.8–1.0 rounded to 0.05 steps (+0x1218, main+0x1266818), or the game's forced 0.75 / 0.5 (+0x284 & 0x1800), in s8; from main+0x1266880 it applies s8: each view's
     # scale (+0x28a0 / +0x28a4 = s8 × base width (+0x1214: 1600 docked, 1280 handheld) / output width), from which the scene buffers are sized each frame (main+0x106340c), the
@@ -210,9 +225,9 @@ OBS = {
   'cd57b23fa4bbad65803d9788c01821ee': [
     (0x276a0, 34, 'd10243ff', 'Pane::Calculate entry: locate N_MainAll_00 and mark its global matrix dirty on touch HUD changes'),
     (0x27ae4, 35, '52800036', 'Pane::Calculate after global matrix composition and before child recursion: offset N_MainAll_00 translation'),
-    (0xeb4468, 22, 'a9be7bfd', 'projection update: apply the display aspect to the main camera before checking dirty flags'),
-    (0xd44a2c, 23, 'a94a2269', 'UI 3D camera update: x19 owns the source lens at +0xa0 and projection at +0xa8; apply aspect before copying lens parameters'),
-    (0xe1a628, 24, 'f960de68', 'MainScreen3D update: correct its copied projection before rebuilding the world-label view'),
+    (0xeb4468, 29, 'a9be7bfd', 'projection update: apply the display aspect to the main camera before checking dirty flags'),
+    (0xd44a2c, 30, 'a94a2269', 'UI 3D camera update: x19 owns the source lens at +0xa0 and projection at +0xa8; apply aspect before copying lens parameters'),
+    (0xe1a628, 31, 'f960de68', 'MainScreen3D update: correct its copied projection before rebuilding the world-label view'),
     (0xd58008, 33, 'f9409408', 'shared stick getter: snapshot the selected raw child pair before the native dead-zone/filter branches'),
     (0xd5801c, 32, 'fd400be8', 'shared normalized stick getter: inject one frame of relative input after native filtering and before return'),
     (0xf57ba0, 37, 'd10143ff', 'BoxCursorControl update entry: x0 is the native manager; observe focused/requested item before native validation and focus callbacks'),
@@ -225,3 +240,5 @@ OBS = {
 # 0xe1a628 follows MainScreen3D's successful camera check and the profile verifies x9-x17 stay unread
 # through the world-view setup until the next call; the getter / pane sites have their own proofs.
 OBS_SAFE = {'cd57b23fa4bbad65803d9788c01821ee': {0xd5801c, 0x27ae4, 0xe1a628}}
+# Whether a general rule could replace these patches (dm/tools/docs_patches.py lists it in docs/agents/game-patches.md)
+GENERALIZE = "No for the hook sites: sead::GameFrameworkNx's interval controller and ksys::VFR in this build; Tears of the Kingdom shares sead but not this code. The frame-step state page they use is general"

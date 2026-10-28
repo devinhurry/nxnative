@@ -12,6 +12,10 @@ from pathlib import Path
 import shutil
 import stat
 import struct
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+import romfs as rfs
 
 MAGIC = b'NXROM001'
 MAX_INDEX = 64 << 20
@@ -23,13 +27,13 @@ def json_bytes(value):
 
 def inventory(romfs, aoc=None):
     directories, files, sources, stamps = [], [], [], []
-    for mount, root in [('romfs', Path(romfs))] + ([('aoc', Path(aoc))] if aoc else []):
+    for mount, root in [('romfs', rfs.Path(romfs))] + ([('aoc', Path(aoc))] if aoc else []):
         if not root.is_dir() or root.is_symlink():
             raise ValueError(f'not a regular directory: {root}')
         def walk(folder, name):
             directories.append(name)
             for child in sorted(folder.iterdir()):
-                s = child.lstat()
+                s = child.stat(follow_symlinks=False)
                 path = name + '/' + child.name
                 if '\\' in path or any(ord(c) < 32 for c in path):
                     raise ValueError(f'unsupported game-data path: {child}')
@@ -47,7 +51,7 @@ def inventory(romfs, aoc=None):
 
 def pack(out, romfs, aoc, title_id, version, marker, metadata, stamp=None):
     out, metadata = Path(out), Path(metadata)
-    if not (Path(romfs) / marker).exists():
+    if not (rfs.Path(romfs) / marker).exists():
         raise ValueError(f'RomFS marker missing: {marker}')
     for root in [Path(romfs)] + ([Path(aoc)] if aoc else []):
         if out.resolve().is_relative_to(root.resolve()):
