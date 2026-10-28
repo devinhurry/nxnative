@@ -221,6 +221,32 @@ opening a prompt while reusing its transform. Closing/hidden/stale owners
 still cannot emit. Mac pointer checks continued the tutorial from blank body
 padding and emitted native X from the shrine's Skip text.
 
+**Corner-tip control visibility (2026-10-29; device acceptance pending).**
+`MessageTipsRunTime_00` and `MessageTipsPauseMenu_00` are non-modal corner
+notifications. The former's layout contains the upper-right text/window and
+guide; `MessageTips_00` separately owns the centered tutorial with its A
+continuation. The broad `Message` screen classification incorrectly treated
+the notifications as menus and hid the virtual gamepad for their duration.
+The shared screen classifier now excludes both corner-tip screens from menu
+presentation, focused/cursorless prompts and message continuation ownership.
+Gameplay retains the pad; actual tutorials, dialogue, menus and loading keep
+their existing input ownership. Headshot and shield-surf notifications require
+the user's in-game check; no attempt was made to trigger either automatically.
+
+**Resolved: full-health Eat/Cancel dialog ignored touches (2026-10-29).**
+The native screen is `PauseMenuMantan_00`, with two registered `Pa_Btn_*`
+entries. Only the exact `PauseMenu_00` and recipe screen were classified as
+touch menus, so this separate screen published zero targets despite owning
+input. The shared classifier now accepts the PauseMenu screen family while
+excluding the render-only `PauseMenuBG_00` and `PauseMenuInfo_00` surfaces.
+It uses the same live owner, entry eligibility, hit geometry and native focus
+acknowledgement as other menu buttons; the message text is not a confirm
+surface. Mac touch preview at 21:10 passed on an independent save copy:
+Cancel closed the warning with ten apples retained; Eat confirmed from the
+Cancel selection, closed it and reduced ten apples to nine. Captures, runtime
+identity and logs are in `full-health-touch-20261029/`, using the compatibility
+graphics runtime described under Rendering. Physical iPhone remains pending.
+
 Resolved: Sell category icons were not registered cursor rows. The observed
 shop navigation widget uses the same native category setter as quest tabs,
 with seven `Pa_CategoryS_*` descriptors rather than four quest descriptors.

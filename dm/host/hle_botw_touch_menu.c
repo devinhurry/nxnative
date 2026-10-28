@@ -2954,20 +2954,28 @@ static int selector_name_prefix(const char *name, const char *prefix) {
     return strncmp(name, prefix, strlen(prefix)) == 0;
 }
 
+static int selector_corner_tip_screen_name(const char *name) {
+    return !strcmp(name, "MessageTipsRunTime_00") || !strcmp(name, "MessageTipsPauseMenu_00");
+}
+
 static int selector_pointer_screen_name(const char *name) {
+    // Runtime tips are non-modal corner notifications, unlike MessageTips_00's
+    // full tutorial. Their Message prefix must not hide or intercept the pad.
     if (!name || !*name ||
         selector_name_prefix(name, "MainScreen") ||
         !strcmp(name, "DoCommand_00") || !strcmp(name, "MainShortCut_00") ||
-        !strcmp(name, "PauseMenuBG_00") || !strcmp(name, "AppCamera_00") ||
+        !strcmp(name, "PauseMenuBG_00") || !strcmp(name, "PauseMenuInfo_00") || !strcmp(name, "AppCamera_00") ||
         selector_name_prefix(name, "Message3D") ||
+        selector_corner_tip_screen_name(name) ||
         !strcmp(name, "BoxCursorTV") || !strcmp(name, "SeekPadMenuBG_00")) return 0;
-    return !strcmp(name, "PauseMenu_00") || !strcmp(name, "Title_00") ||
+    // Inventory modal screens (for example the full-health Eat/Cancel prompt)
+    // have their own native entries, outside the main PauseMenu screen.
+    return selector_name_prefix(name, "PauseMenu") || !strcmp(name, "Title_00") ||
         !strcmp(name, "AppHome_00") || !strcmp(name, "AppTool_00") || !strcmp(name, "AppAlbum_00") || selector_name_prefix(name, "AppMap") ||
         selector_name_prefix(name, "SystemWindow") || selector_name_prefix(name, "GameOver") ||
         selector_name_prefix(name, "ShopBtnList") || selector_name_prefix(name, "Message") ||
         !strcmp(name, "AppSystemWindow_00") || !strcmp(name, "OptionWindow_00") ||
         !strcmp(name, "End_00") || !strcmp(name, "ControllerWindow_00") || !strcmp(name, "Skip_00") ||
-        !strcmp(name, "PauseMenuRecipe_00") ||
         !strcmp(name, "DLCWindow_00") || !strcmp(name, "AmiiboWindow_00");
 }
 
@@ -3653,7 +3661,8 @@ static int selector_message_prompt_view(uintptr_t manager, uint64_t frame,
         if (!selector_range(state, 0x39) || !(((const uint8_t *)state)[0x38] & 2) ||
             !((int (*)(uintptr_t))screen_shown)(screen) ||
             ((int (*)(uintptr_t))group_getter)(screen) != group ||
-            !selector_screen_name(screen, name) || strncmp(name, "Message", 7) ||
+            !selector_screen_name(screen, name) || selector_corner_tip_screen_name(name) ||
+            strncmp(name, "Message", 7) ||
             !strncmp(name, "MessageDialog", 13)) continue;
         owner = screen; matches++;
     }
@@ -3948,7 +3957,7 @@ static void selector_publish_generic_view(uintptr_t manager, uintptr_t screen, i
     int pause_screen = !strcmp(screen_name, "PauseMenu_00");
     // Back is optional on native menus. Prefer prompts in the focused root;
     // only PauseMenu has the proven separate PauseMenuInfo footer fallback.
-    if (view.generic_mode && view.generic_root) {
+    if (pointer_screen && view.generic_mode && view.generic_root) {
         if (generic_back_prompt_snapshot(view.generic_root, frame, view.back))
             view.back_valid = 1;
         generic_action_prompts_to_view(view.generic_root, frame, &view);
@@ -3985,7 +3994,7 @@ static void selector_publish_generic_view(uintptr_t manager, uintptr_t screen, i
             }
         }
     }
-    if ((view.carousel_valid || (pause_screen && allow_pause_header)) && input_active && view.generic_root &&
+    if (pointer_screen && (view.carousel_valid || (pause_screen && allow_pause_header)) && input_active && view.generic_root &&
         ((int (*)(uintptr_t))native_screen_shown)(screen) &&
         ((int (*)(uintptr_t))native_group_getter)(screen) == group)
         selector_list_categories_to_view(screen, view.generic_root, frame, &view);
