@@ -15,10 +15,21 @@ BOTW touch-menu coverage and remaining runtime validation are tracked in
 Mac checks cover direct quest selection, category changes and paging, and
 Options adjustments and list swipes, stable control visibility during menu
 animations, direct map dragging, and Beedle dialogue/buy/sell/quantity flows.
-A shop quantity is accepted by tapping the dialogue window or the number box
-itself, and each +/- arrow keeps the strip outwards from the box as its touch
-target; the native arrow parts are pad-cursor sized and responded only on a
-sliver of the drawn arrow.
+A shop quantity is accepted through the blank area of its number-selection
+button, outside the number field and arrows. The dialogue body does not
+accept a quantity. Message buttons park their native cursor hit panes
+offscreen; use the live button window's bounds before falling back to text.
+This also includes the blank padding around OK/Cancel labels. The number
+field only focuses, and each +/- arrow retains its adjustment target.
+
+Resolved: a completely empty save bypasses Title, so BoxCursorControl's update
+has not run when Link wakes up. Observe the completed constructor as well as
+its update, retaining the same validated manager before its screen registry
+exists. Later native pane callbacks can then establish gameplay permission.
+This keeps controls hidden during the opening movie and restores them when
+the live MainScreen heart HUD appears. An empty-save Mac start passed without
+opening a menu first. The constructor sequence and observation are gated to
+the registered 1.9.0 build; existing input ownership checks still apply.
 The MainScreen root remains shown between dialogue pages; its native heart-HUD
 InOut layer establishes actual gameplay presentation across those gaps.
 Cursorless ability explanations use their live native Back and page arrows;

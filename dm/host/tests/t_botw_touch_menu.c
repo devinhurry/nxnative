@@ -609,13 +609,48 @@ static void test_option_arrow_touch(void) {
     link_child(part, left); link_child(part, right);
     uint8_t *number = fake_pane(82, "T_Num_00", 72, 60, 30, 0, 0);
     link_child(part, number);
+    uint8_t *window = fake_pane(83, "W_Base_04", 72, 400, 50, 0, 0);
+    link_child(part, window);
     float offscreen_x = 991; memcpy(hit + PANE_MATRIX + 0xc, &offscreen_x, 4);
     observe_native_pane(hit, 1); observe_native_pane(number, 1);
     selector_tick(); dm_botw_touch_menu_test_snapshot(&options);
-    assert(options.generic_count == 3 && options.generic_targets[0].rect[2] < .1f);
-    tap(options.generic_targets[2].rect[0] + options.generic_targets[2].rect[2] * .5f, .5f);
+    assert(options.generic_count == 4 && options.generic_targets[0].pane == (uintptr_t)window);
+    assert(options.generic_targets[0].rect[2] > .3f && options.generic_targets[1].focus_only);
+    tap(options.generic_targets[3].rect[0] + options.generic_targets[3].rect[2] * .5f, .5f);
     selector_tick(); axes[0] = axes[1] = 0; buttons = 0;
     assert(sample_axes(6004, axes, &buttons) && axes[0] == DM_STICK_MAX && !buttons);
+    sample(6005);
+    // Confirm through the blank area of the actual button, never through
+    // the dialogue body or number field. Arrows still adjust without A.
+    uint8_t *body = fake_pane(84, "W_SysBase_00", 70, 1000, 120, 0, -220);
+    link_child(root, body);
+    current_guest_frame = 6006; dm_botw_touch_menu_test_set_render_frame(6006);
+    observe_native_pane(hit, 1); observe_native_pane(number, 1); selector_tick();
+    dm_botw_touch_menu_test_snapshot(&options);
+    assert(options.generic_count == 4 && options.footer_action_count == 0);
+    tap(.5f, .82f); assert(!sample(6006));
+    current_guest_frame = 6007; dm_botw_touch_menu_test_set_render_frame(6007);
+    observe_native_pane(hit, 1); observe_native_pane(number, 1);
+    tap(.5f, .5f); selector_tick(); assert(!sample(6007));
+    current_guest_frame = 6008; dm_botw_touch_menu_test_set_render_frame(6008);
+    observe_native_pane(hit, 1); observe_native_pane(number, 1);
+    tap(.58f, .5f); selector_tick(); assert(sample(6008) == DM_BTN_A);
+    sample(6009);
+    window[0x58] = 0;
+    selector_tick(); dm_botw_touch_menu_test_snapshot(&options);
+    assert(options.generic_count == 3 && options.generic_targets[0].focus_only);
+    tap(.58f, .5f); assert(!sample(6010));
+    window[0x58] = 1; window[0x59] = 0;
+    selector_tick(); dm_botw_touch_menu_test_snapshot(&options);
+    assert(options.generic_count == 3 && options.footer_action_count == 0);
+    // Ordinary OK/Cancel rows also use the whole visible button, including
+    // padding outside their label, when the native hit anchor is offscreen.
+    window[0x59] = 255; number[0x58] = 0;
+    current_guest_frame = 6011; dm_botw_touch_menu_test_set_render_frame(6011);
+    observe_native_pane(hit, 1); observe_native_pane(number, 1);
+    selector_tick(); dm_botw_touch_menu_test_snapshot(&options);
+    assert(options.generic_count == 1 && options.generic_targets[0].pane == (uintptr_t)window);
+    tap(.58f, .5f); selector_tick(); assert(sample(6011) == DM_BTN_A);
     mock_guest_start = 0; mock_guest_size = 0;
     dm_botw_touch_menu_reset();
 }
@@ -944,6 +979,16 @@ static void test_menu_animation_visibility(void) {
     current_guest_frame = 8000;
     dm_botw_touch_menu_test_set_render_frame(8000);
     atomic_store(&g_selector_hook_installed, 1);
+    // A fresh save skips Title. The constructor observation happens before
+    // the registry exists; retain only its manager for later pane callbacks.
+    dm_botw_touch_menu_test_set_generic_selector(1, (uintptr_t)mock_native_group,
+                                               (uintptr_t)mock_native_shown);
+    atomic_store(&g_validated_box_cursor_manager, 0);
+    put_ptr(selector.manager + 0x20, 0);
+    selector_tick();
+    assert(atomic_load(&g_validated_box_cursor_manager) == (uintptr_t)selector.manager);
+    assert(!dm_botw_touch_controls_visible());
+    put_ptr(selector.manager + 0x20, (uintptr_t)selector.control);
     uint8_t *root = fake_pane(70, "RootPane", -1, 1280, 720, 0, 0);
     put_ptr(selector.screen + 0x30, (uintptr_t)selector.apphome_wrapper);
     put_ptr(selector.apphome_wrapper + 0x18, (uintptr_t)root);
@@ -991,7 +1036,7 @@ static void test_menu_animation_visibility(void) {
     uint8_t *hud = fake_pane(74, "N_InOut_00", 73, 0, 0, 0, 0);
     for (int i = 70; i < 74; i++) link_child(native_panes[i].bytes, native_panes[i + 1].bytes);
     selector.state[0x38] = 2;
-    selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
+    selector_refresh_presentation_pane(root); // no Title or cursor update needed
     assert(!dm_botw_touch_menu_visible());
     assert(dm_botw_touch_controls_visible());
     // Return-to-title unregisters the menu before MainScreen hides its HUD.
