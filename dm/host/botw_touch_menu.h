@@ -54,6 +54,7 @@ typedef struct {
     uintptr_t entry;
     uintptr_t root;
     int adjustment; // -1/+1 for a native horizontal value adjustment; zero confirms normally
+    int focus_only; // the number field selects focus without accepting its quantity
     float rect[4];
     float swipe_rect[4]; // Optional full native row bounds, including its label/value gaps.
 } dm_botw_touch_menu_target;

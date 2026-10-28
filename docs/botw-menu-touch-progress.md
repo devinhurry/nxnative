@@ -29,6 +29,7 @@ Mac menu coverage includes the complete merged graphics host with shaders from t
 | Map taps and stamp popup | Mac verified | Correct pointer position; both the B icon and Back text dismiss the stamp popup. |
 | Map/Runes header hints | Mac verified | L/R hints use their final rendered positions. R opens the empty album; its Back text returns to gameplay without a cursor selection. AppHome prompts are published from live guide/header panes even when BoxCursor updates stop. |
 | Startup and loading controls | Mac and UIKit verified | Gameplay controls start hidden and require a fresh, shown, input-enabled MainScreen HUD. Title and loading keep the Mac preview in menu routing; gameplay alone restores the artwork. Physical-controller and non-BOTW routing remain unchanged. |
+| First start with a completely empty save | Mac verified | The constructor observation retains the native cursor manager before its registry exists. Link waking up restores controls without visiting Title or opening a menu. See the [game note](../dm/games/01007EF00011E000/README.md#what-it-needs) for the cause. |
 | Map drag | Mac verified; iPhone pending | Replaced held-stick velocity with native position updates. Horizontal/vertical displacement follows the finger, holding still does not drift, release stops, reverse drag restores the map. Uses the inverse rendered transform for zoom/rotation. |
 | Map pinch zoom | UIKit and Mac backend verified; physical iPhone pending | Two-finger spread/contraction and release reach the host. Zoom now crosses the native stick-direction threshold; the old 20% spread produced only 3200, below 16384. Injecting the same host ratios into the Mac runtime visibly zooms in and back out. Uses the game's native zoom levels. |
 | Gameplay controls flashing during menu actions/slides | Mac state trace and UIKit checks passed; iPhone gameplay pending | Menu presentation is separate from clickable-target availability. L/R slides and item popup/cancel kept controls hidden: 12 frontend queries, zero false answers, including 6 with no clickable targets. Closing restored controls. Observe native screen lifecycle and root visibility each UI frame; retained map/rune children cannot outlive their AppHome owner. |
@@ -44,7 +45,7 @@ Mac menu coverage includes the complete merged graphics host with shaders from t
 | Shop Sell categories | Beedle Mac verified | Native category bindings select Cooking, Armor and Materials directly, including the two-page Materials configuration. Disabled weapon tabs remain inert; no sale was made in this regression check. |
 | Movement-stick L3 double-tap timing | Shared geometry and UIKit verified; physical iPhone pending | Maximum release-to-next-down gap is 200 ms. Platform tap/distance recognition remains in place; 190 ms passes, 210/350 ms fail. Camera double taps and ordinary gamepad handling stay unchanged. |
 | Dialogue choices | Mac verified | Direct buy/sell/Good-bye, quantity confirmation and cancellation choices work with Beedle. Domidak/Prissen's two-option conversation also selects its requested branch directly and advances across speaker changes. Other conditional NPC layouts remain unverified. |
-| Shops, buy/sell and quantity | Beedle Mac verified | Direct purchase rows use the shared native list setter with the independently validated shop receiver class. Numeric Message fields expose their live number and +/- controls even when the registered hit pane is offscreen. Quantity increment/decrement, All-of-them, cancellation, actual sale and two-item purchase passed. A chosen count is confirmed by tapping the dialogue window or the number box itself, and each arrow responds over a finger-sized strip outwards from the box rather than over the native pad-cursor part alone. Sell-grid left/right paging and page-arrow touch also passed; quantity dialogs block background paging. Other shop layouts remain unverified. |
+| Shops, buy/sell and quantity | Beedle Mac verified | Direct purchase rows use the shared native list setter with the independently validated shop receiver class. Numeric Message fields expose their live number and +/- controls even when the registered hit pane is offscreen. Quantity increment/decrement, All-of-them, cancellation, actual sale and two-item purchase passed. A chosen count is confirmed through the blank area of its number-selection button, outside the number field and arrows; the dialogue body does not accept it, and each arrow responds over a finger-sized strip outwards from the box rather than over the native pad-cursor part alone. Sell-grid left/right paging and page-arrow touch also passed; quantity dialogs block background paging. Other shop layouts remain unverified. |
 | Album/photo operations | Deferred by user | Thumbnail selection, viewing, paging, delete confirmation and Back. |
 | Ability Controls list and details | Mac verified | Direct final-row selection, native previous arrow, forward vertical swipe and Cancel back to the list. Cursorless pages resolve one live native owner and reject hidden, stale, ambiguous or input-disabled owners. |
 | Save selection list swipe | Mac verified | Swiping upward reveals the bottom save, swiping downward restores the top. Shares native focus-and-scroll with Options; a swipe never confirms a load. Tapping after a swipe still opens the selected save's confirmation. |
@@ -277,36 +278,54 @@ opening the map and Back restoring both buttons in their fixed positions.
 The matching host is registered for quick launch. Physical iPhone acceptance
 remains separate.
 
-## Quantity confirm and value arrows (2026-10-28)
+## Quantity button surfaces (2026-10-28)
 
-External evidence: `01007EF00011E000-work/inventory-touch-20261025/run31/`.
+External evidence: `01007EF00011E000-work/inventory-touch-20261025/run31/`
+and `run32/`.
 
-Two shop reports came from the same cause class: a control whose native hit
-part is sized for the pad cursor, not for a finger.
+The initial dialogue-body confirmation interpretation was incorrect and has
+been removed. Quantity acceptance belongs to the number-selection button's
+blank area, outside its number field and arrows. The number field only
+focuses; arrows adjust once without accepting. Dialogue-body taps do not
+accept the count.
 
-- A quantity dialogue (`Message_00` with a live `T_Num_00`) shows no confirm
-  row, and its button guide has no A row to tap, so a count dialled in with the
-  arrows could not be accepted by touch at all. The dialogue window
-  (`W_SysBase_00`, falling back to `W_Base_00`) is now published as that A, the
-  way a cursor-less prompt window already accepts A. Tapping the window body
-  (`0.470, 0.860`) or the number box (`0.806, 0.718`) both reach the native
-  confirmation: `BOTW menu tap ... footers=1` then `emit ... target=-3`, and
-  `emit ... target=0` for the box.
-- The +/- parts (`Pa_ArrowL_00`, `Pa_ArrowR_00`) are 25x56 canvas units beside
-  the value box, and the box's own hit pane overlaps their inner edge, so only
-  a ~25-pixel sliver of each drawn arrow adjusted. Each arrow now keeps the
-  strip outwards from the value box, one row pitch tall (57x72 units here,
-  about 40x28 points on a phone), stopping at the box's middle so the box keeps
-  its own tap. Probe taps at the strip's outer corners all adjusted in the
-  expected direction (`leftX=+32767`, `+32767`, `-32767`).
-- Actual Mac runs: selling Ancient Screws confirmed "I think 2 of those would be
-  worth about 24 rupees"; buying three Arrows confirmed 18 rupees, took the
-  coins to 47, the stock to 17 and the inventory to 25. Selling all 18 apples
-  paid 54.
+The native Message buttons keep their registered `B_Hit_00` cursor anchors
+offscreen. Falling back to text geometry left only the number or label
+clickable and omitted the visible button's padding. The shared native target
+builder now uses the same part's live `W_Base_04` or `W_Decide_00` button
+window before falling back to text. It retains the registered owner and entry,
+so both quantity acceptance and OK/Cancel follow native focus and validation.
+Hidden/transparent windows and other parts are excluded. Arrow geometry stays
+relative to the number field instead of the wider confirmation button.
 
-Focused checks: `make -C dm/host/tests GAME=01007EF00011E000
-build/t_botw_touch_menu` and `build/t_botw_touch_actions` pass, as do
-`build/t_hid` and `build/t_aspect`. Physical iPhone validation of both strips
-and the confirm tap is still open, as is the device report that the buy
-OK/On-second-thought rows did not respond: those rows are wide native
-`Pa_Btn_*` parts and responded in every Mac run.
+`run32/menu-unit.log` covers first-boot initialization before the registry
+exists, restoration through a pane callback without a cursor update, button
+blank-area acceptance, inert dialogue/number-field taps, hidden/transparent
+button rejection and ordinary choice-button padding. `run32/rewrite.log`
+records a coherent main/subsdk0/sdk rewrite and successful freshness check.
+Physical iPhone validation remains separate from these checks.
+
+The earlier 16:9 baseline captures (`sell-two-completed.png`,
+`buy-all-cancelled.png`, `buy-all-completed.png`) record an actual sale and
+both buy-all choice branches before the button-surface correction. They do
+not establish the corrected quantity gesture.
+
+Corrected 21:10 Mac acceptance (`mac-shop-fixed.log`):
+
+- `quantity-body-number-inert.png` and `button-touch-evidence.txt`: the value
+  changes to two with one right-arrow tap; dialogue and number-field taps emit
+  no A. Tapping the quantity button's blank right side emits A for its own
+  registered entry.
+- `sell-button-confirm.png`: that button accepts two Amber for 60 rupees;
+  tapping OK's blank right side completes the sale (balance 5 to 65).
+- `buy-button-confirm.png`: the same button accepts two frogs for 20 rupees;
+  cancellation returns to the unchanged stock of three and balance 65.
+- `buy-all-wide-confirm.png` and `buy-all-wide-cancelled.png`: All of them
+  opens the three-frog confirmation; tapping Cancel's blank left padding
+  returns without a purchase.
+- `buy-all-wide-completed.png`: repeating All of them and tapping OK's blank
+  right side completes the purchase (sold out, inventory three, balance 35).
+
+`quick-check.log` validates the final registered host and rewritten modules;
+`executable-check.txt` matches the prepared host to the running preview.
+`source-save-check.txt` confirms the six original save files are unchanged.

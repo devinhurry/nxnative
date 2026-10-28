@@ -3380,6 +3380,26 @@ static int selector_quest_list_scroll(uintptr_t screen, uintptr_t entry, uintptr
     return 1;
 }
 
+// Message buttons park their pad cursor's B_Hit offscreen. Their visible
+// window is the actual button surface, including the blank confirmation area
+// beside a quantity and the padding around OK/Cancel labels.
+static int selector_button_surface(uintptr_t part, uintptr_t *pane, float rect[4]) {
+    const char *names[] = {"W_Base_04", "W_Decide_00"};
+    for (unsigned i = 0; i < sizeof names / sizeof names[0]; i++) {
+        uintptr_t window = 0;
+        if (pane_find_unique((uint8_t *)part, names[i], NULL, &window) != 1 ||
+            selector_nearest_part(window) != part ||
+            !pane_chain_visible((uint8_t *)window) ||
+            !pane_chain_alpha_visible((uint8_t *)window)) continue;
+        float x, y;
+        memcpy(&x, (const void *)(window + PANE_MATRIX + 0xc), 4);
+        memcpy(&y, (const void *)(window + PANE_MATRIX + 0x1c), 4);
+        native_rect_from_pane((uint8_t *)window, x, y, rect);
+        if (rect_intersects_canvas(rect)) { *pane = window; return 1; }
+    }
+    return 0;
+}
+
 static int selector_find_generic_targets(uintptr_t manager, uintptr_t screen, int group,
                                          uintptr_t current_root,
                                          uintptr_t native_screen_shown,
@@ -3456,8 +3476,12 @@ static int selector_find_generic_targets(uintptr_t manager, uintptr_t screen, in
                     target->owner_pane = owner_pane;
                     target->entry = entry;
                     target->root = root;
+                    target->focus_only = 0;
                     if (hit->usable) {
                         memcpy(target->rect, hit->rect, sizeof target->rect);
+                    } else if (selector_button_surface(part, &target->pane, target->rect)) {
+                        // Keep the registered owner/entry; only its touch
+                        // geometry comes from the visible button window.
                     } else {
                         int text_match = -1, text_matches = 0;
                         for (int t = 0; t < text_count; t++)
@@ -3466,6 +3490,9 @@ static int selector_find_generic_targets(uintptr_t manager, uintptr_t screen, in
                                 text_match = t; text_matches++;
                             }
                         if (text_matches == 1) {
+                            char text_name[17];
+                            if (selector_pane_name(texts[text_match].pane, text_name) &&
+                                !strcmp(text_name, "T_Num_00")) target->focus_only = 1;
                             const float *r = texts[text_match].rect;
                             float pad_y = r[3] * .2f;
                             target->rect[0] = r[0] - .01f;
@@ -3623,8 +3650,8 @@ static int selector_message_prompt_view(uintptr_t manager, uint64_t frame,
 // 25 by 56 canvas units beside the value box, so a thumb adjusts a count only
 // when it lands dead on the drawn arrow and nothing else responds. Give each
 // arrow the room it has visually - the strip outwards from the value box, one
-// row pitch tall - without reaching the box's middle (a tap there still means
-// confirm) and without touching the rows below.
+// row pitch tall - without crossing the number box's middle or reaching the
+// rows below. The number itself only focuses its field.
 static void adjuster_touch_rect(float rect[4], const float box[4], int side) {
     const float outward = .032f, vertical = .008f;
     if (side > 0) rect[2] += outward;
@@ -3639,9 +3666,8 @@ static void adjuster_touch_rect(float rect[4], const float box[4], int side) {
 // Value controls expose native left/right arrow parts and ON/OFF labels.
 // Options rows and Message quantity fields share these controls. Keep the
 // registered entry identity and adjust after focus instead of confirming it.
-// Returns the number of live numeric (T_Num_00) fields it found.
-static int selector_value_adjusters_to_view(dm_botw_touch_menu_view *view) {
-    int rows = view->generic_count, numeric_rows = 0;
+static void selector_value_adjusters_to_view(dm_botw_touch_menu_view *view) {
+    int rows = view->generic_count;
     generic_hit_t texts[DM_BOTW_MENU_MAX_GENERIC_TARGETS];
     int text_count = generic_text_snapshot(texts, view->render_frame);
     for (int i = 0; i < rows; i++) {
@@ -3652,7 +3678,18 @@ static int selector_value_adjusters_to_view(dm_botw_touch_menu_view *view) {
         int numeric = part && pane_find_unique((uint8_t *)part, "T_Num_00", NULL, &number) == 1 &&
             pane_chain_visible((uint8_t *)number) && pane_chain_alpha_visible((uint8_t *)number);
         if (!row_part && !numeric) continue;
-        if (numeric) numeric_rows++;
+        float box[4]; memcpy(box, row.rect, sizeof box);
+        if (numeric) {
+            float x, y;
+            memcpy(&x, (const void *)(number + PANE_MATRIX + 0xc), 4);
+            memcpy(&y, (const void *)(number + PANE_MATRIX + 0x1c), 4);
+            native_rect_from_pane((uint8_t *)number, x, y, box);
+            if (!row.focus_only && view->generic_count < DM_BOTW_MENU_MAX_GENERIC_TARGETS) {
+                dm_botw_touch_menu_target *field = &view->generic_targets[view->generic_count++];
+                *field = row; field->pane = number; field->focus_only = 1;
+                memcpy(field->rect, box, sizeof field->rect);
+            }
+        }
         if (row_part) {
             float row_x, row_y;
             memcpy(&row_x, row_part + PANE_MATRIX + 0xc, 4);
@@ -3705,7 +3742,7 @@ static int selector_value_adjusters_to_view(dm_botw_touch_menu_view *view) {
                 if (matches != 1) pane = 0;
             } else pane = 0;
             if (!pane || !rect_intersects_canvas(rect)) continue;
-            adjuster_touch_rect(rect, row.rect, side);
+            adjuster_touch_rect(rect, box, side);
             dm_botw_touch_menu_target *target = &view->generic_targets[view->generic_count++];
             *target = row;
             target->pane = pane;
@@ -3713,29 +3750,6 @@ static int selector_value_adjusters_to_view(dm_botw_touch_menu_view *view) {
             memcpy(target->rect, rect, sizeof target->rect);
         }
     }
-    return numeric_rows;
-}
-
-// A quantity dialogue (Sell/Buy a chosen number) has no confirm row: the
-// number field's own controls are the arrows, and the native handler takes A
-// to accept the count. The button guide never shows an A row to tap, so a
-// number the player dialled in could not be confirmed by touch at all.
-// Publish the dialogue window itself as that A, the way a cursor-less prompt
-// window accepts A, so a tap outside the arrows confirms the count.
-static void selector_number_confirm_to_view(dm_botw_touch_menu_view *view, int numeric_rows) {
-    if (!numeric_rows || !view->generic_mode || !view->generic_root) return;
-    char name[64];
-    if (!selector_screen_name(view->generic_screen, name) || strncmp(name, "Message", 7) ||
-        !strncmp(name, "MessageDialog", 13)) return;
-    uintptr_t window = 0;
-    int found = pane_find_unique((uint8_t *)view->generic_root, "W_SysBase_00", NULL, &window);
-    if (found != 1) found = pane_find_unique((uint8_t *)view->generic_root, "W_Base_00", NULL, &window);
-    if (found != 1) return;
-    float x, y, rect[4];
-    memcpy(&x, (const void *)(window + PANE_MATRIX + 0xc), 4);
-    memcpy(&y, (const void *)(window + PANE_MATRIX + 0x1c), 4);
-    native_rect_from_pane((uint8_t *)window, x, y, rect);
-    menu_add_action(view, DM_BTN_A, rect);
 }
 
 static uintptr_t selector_scroll_row(uintptr_t pane) {
@@ -3880,8 +3894,7 @@ static void selector_publish_generic_view(uintptr_t manager, uintptr_t screen, i
           selector_find_generic_targets(manager, screen, group, view.generic_root, native_screen_shown,
                                         native_group_getter, &view) > 0))
         view.generic_count = 0;
-    int numeric_rows = selector_value_adjusters_to_view(&view);
-    selector_number_confirm_to_view(&view, numeric_rows);
+    selector_value_adjusters_to_view(&view);
     selector_grid_carousel_to_view(&view, frame);
     // The map is a separate full-screen native surface with its own stick
     // controls; keep its freshness through the generic publication, which
@@ -5775,7 +5788,7 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
                 g_target_popup_key = g_view.popup_key;
                 g_target_center[0] = hit->rect[0] + hit->rect[2] * .5f;
                 g_target_center[1] = hit->rect[1] + hit->rect[3] * .5f;
-                g_confirm_pending = 1;
+                g_confirm_pending = !hit->focus_only;
             }
             if (tapped_target < 0 && g_view.back_valid && point_in_rect(x, y, g_view.back)) {
                 g_target_valid = 1; g_target_generic = 1; g_target_popup = 0;
