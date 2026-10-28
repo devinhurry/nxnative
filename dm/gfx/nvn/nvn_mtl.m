@@ -3518,6 +3518,7 @@ static void shmap_load(void) {
     int gs_loc, lay_loc; char gs_comp, lay_comp;   // a slice-writing geometry shader (no function: the layer comes from input gs_loc.gs_comp) / a vertex shader with layer entry points writing output lay_loc.lay_comp (dmsh_build.py gs_slice, vs_layer_entry); -1 = none
     // The argument buffer encoded last time
     id<MTLBuffer> ab_buf; uint64_t ab_gpu; size_t ab_off; uint64_t ab_pass; uint32_t ab_binst;   // ab_pass: serial of the render pass that encoded this argument block - reused only within the same pass (the arena holding a block from another pass / another submission may already have been reclaimed and rewritten)
+    double ab_ui_clip_x, ab_ui_clip_bias; // projection correction belongs to the cached vertex argument block
     id<MTLLibrary> bflib; int bflib_tried; NSMutableDictionary<NSString *, id<MTLFunction>> *bffn;   // bflib: readable-tile version <key>_bf (merge B step 2)
     uint64_t mis[4];   // mis: texture slots 0-255 already reported for a type mismatch (tex_mis_note)
     NSString *ventry; id<MTLFunction> vfn; int vfn_state;
@@ -6440,6 +6441,17 @@ static void ubo_read(int stage, int reg, int off, size_t n, void *out) {
     memcpy(out, base + mo, n);
 }
 static uint32_t ubo_handle(int stage, int reg, int off) { uint32_t h; ubo_read(stage, reg, off, 4, &h); return h; }
+// BOTW's registered ui2d shaders use c3[0..3] for the clip matrix and c13.x
+// for the clip-x offset (NVN UBO slots 0 and 10). Correct clip x before clipping, keeping a full-sized
+// viewport: a narrowed viewport also clips native full-bleed backgrounds.
+static double g_ui_clip_x = 1, g_ui_clip_bias;
+static int g_ui_layout_draw;
+static void ui_projection_copy(int reg, const float *source, float *out, size_t size) {
+    if (out != source) memcpy(out, source, size);
+    if (reg == 0 && size >= 64)
+        for (int i = 0; i < 4; i++) out[i] = source[i] * g_ui_clip_x + source[12 + i] * g_ui_clip_bias;
+    else if (reg == 10 && size >= 4) out[0] = source[0] * g_ui_clip_x;
+}
 // A handle read from a uniform buffer names IDs of the pools bound when the draw runs: as bound handles are moved at recording (hle_nvn.c bind_handles), these take the bases here (0 = none)
 static int ubo_tex_id(uint32_t h) { int t = (int)(h & 0xfffff); return t ? t + S.tex_base : 0; }
 static int ubo_samp_id(uint32_t h) { int s = (int)(h >> 20); return s ? s + S.samp_base : 0; }
@@ -6452,7 +6464,8 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
 static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex) {
     if (!sh->ae) return 1;
     args_sync_dirty();
-    if (!passdump() && !g_args_dirty[nvn_stage] && sh->ab_buf && sh->ab_pass == g_pass.serial && nvn_stage != 5 && !(sh->rf.drv_read[0] && sh->ab_binst != g_draw_binst)) {
+    if (!passdump() && !g_args_dirty[nvn_stage] && sh->ab_buf && sh->ab_pass == g_pass.serial && nvn_stage != 5 && !(sh->rf.drv_read[0] && sh->ab_binst != g_draw_binst) &&
+        (nvn_stage != 0 || (sh->ab_ui_clip_x == g_ui_clip_x && sh->ab_ui_clip_bias == g_ui_clip_bias))) {
         bind_args(en, nvn_stage, metal_vertex, sh->ab_buf, sh->ab_gpu, sh->ab_off, sh->rf.abi);
         g_stat_args_reuse++;
         return 1;
@@ -6489,6 +6502,16 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
                     char p[1024]; snprintf(p, sizeof p, "%s/F%llu_p%llu_st%d_cb%d_%llx.bin", cbd, (unsigned long long)atomic_load(&g_cur_frame), g_stat_pass, nvn_stage, reg, (unsigned long long)u->addr);
                     FILE *f = fopen(p, "wb"); if (f) { fwrite((const void *)u->addr, 1, u->size, f); fclose(f); } else RED_ONCE(41, "CBDUMP cannot write %s", p);
                 }
+            }
+            if (nvn_stage == 0 && (g_ui_clip_x != 1 || g_ui_clip_bias != 0) && (reg == 0 || reg == 10)) {
+                // Read the replay-time uniform snapshot, including queued inline
+                // updates. Keep the guest buffer and the shader libraries intact.
+                id<MTLBuffer> corrected; size_t off = arena_alloc((size_t)ul, &corrected);
+                float *out = (float *)((uint8_t *)corrected.contents + off);
+                ubo_read(nvn_stage, reg, 0, MIN(ul, u->size), out);
+                if (ul > u->size) memset((uint8_t *)out + u->size, 0, ul - u->size);
+                ui_projection_copy(reg, out, out, (size_t)ul);
+                gpu = corrected.gpuAddress + off;
             }
             slots[aid] = gpu;
             USE((__bridge id<MTLBuffer>)mb, MTLResourceUsageRead);
@@ -6682,6 +6705,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
     memcpy((uint8_t *)ab.contents + off, slots, arg_len);
     bind_args(en, nvn_stage, metal_vertex, ab, g_cur_arena->gpu + off, off, sh->rf.abi);
     sh->ab_buf = ab; sh->ab_gpu = g_cur_arena->gpu + off; sh->ab_off = off; sh->ab_pass = g_pass.serial; sh->ab_binst = g_draw_binst; g_args_dirty[nvn_stage] = 0;
+    sh->ab_ui_clip_x = g_ui_clip_x; sh->ab_ui_clip_bias = g_ui_clip_bias;
     g_stat_args_enc++;
     return 1;
 }
@@ -8732,7 +8756,8 @@ static void ui_aspect_scale(double *ux, double *uy) {
     if (fabs(f - 1) < 1e-6) return;
     if (f > 1) *ux = f; else if (f > 0 && f < 1) *uy = 1.0 / f;
 }
-static int ui_squeeze_scale(NvProg *pr, double *ux, double *uy) {
+static int ui_squeeze_scale(NvProg *pr, double *ux, double *uy, int background) {
+    g_ui_layout_draw = 0;
     *ux = *uy = 1;
     // Identify the canvas only at its final composite draw. BOTW's rune capture
     // also needs this at 16:9, but other games keep the original aspect-only path.
@@ -8762,6 +8787,7 @@ static int ui_squeeze_scale(NvProg *pr, double *ux, double *uy) {
     char key[17]; memcpy(key, pr->sh[0]->key, 16); key[16] = 0;
     int layout = strstr(DM_GAME_ASPECT_UI, key) != NULL;
     if (!layout) return 0;
+    g_ui_layout_draw = !strcmp(DM_GAME_ID, "01007EF00011E000");
     // GPU canvas pictures (including aliases and filtered masks) already carry screen coordinates. Local pane
     // captures and CPU-uploaded illustrations retain layout coordinates and are transformed once below.
     int tid = (int)(S.tex[1][0] & 0xfffff);
@@ -8770,7 +8796,7 @@ static int ui_squeeze_scale(NvProg *pr, double *ux, double *uy) {
         // Transient NVN objects can alias an existing render target without having a serial-table entry yet.
         // Resolve first, as sampling will: otherwise its first draw is mistaken for a CPU illustration.
         tex_mtl(t);
-        if (mtl_tex_gpu_owned(t->serial)) return 0;
+        if (mtl_tex_gpu_owned(t->serial) && !background) return 0;
     }
     ui_aspect_scale(ux, uy);
     return *ux != 1 || *uy != 1;
@@ -9012,6 +9038,7 @@ void mtl_cshoist_stats(uint64_t *moved, uint64_t *depth, uint64_t *stops) { *mov
 static void draw_(const p_draw *dw, const p_draw_idx *di);
 static void draw(const p_draw *dw, const p_draw_idx *di) { cp_stamp start = cp_begin(); draw_(dw, di); cp_end(5, start); }
 static void draw_(const p_draw *dw, const p_draw_idx *di) {
+    g_ui_clip_x = 1; g_ui_clip_bias = 0;
     g_draw_binst = (uint32_t)(dw ? dw->base_instance : di ? di->base_instance : 0);   // c0 + 0x644 of the stages that read the driver segment (encode_args)
     if (passdump()) { NvProg *p = g_geo_program ? g_geo_program : S.prog ? prog_get(S.prog) : nil;
         PD("j %llu draw-entry vs=%s fs=%s gs=%s prim=%d count=%d instances=%d indexed=%d indirect=%#llx discard=%d feedback=%d", g_stat_pass + !g_enc,
@@ -9083,7 +9110,7 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
         g_fz_fallback++; rp_end(); }
     fb_prepare(pr);   // same-pass feedback sampling: copy the snapshot first (see fb_prepare)
     // Resolving a newly sampled picture can upload it or end the current pass. Do this before opening/binding the encoder.
-    double sux = 1, suy = 1; int sq = ui_squeeze_scale(pr, &sux, &suy);
+    double sux = 1, suy = 1; int sq = ui_squeeze_scale(pr, &sux, &suy, dw ? dw->pad : di ? di->pad : 0);
     int botw_canvas_draw = !strcmp(DM_GAME_ID, "01007EF00011E000") && pr->sh[1] &&
                            *DM_GAME_ASPECT_CANVAS && !strncmp(pr->sh[1]->key, DM_GAME_ASPECT_CANVAS, 16);
     int canvas_present_target = botw_canvas_draw && R.rt.n > 0 && R.rt.color[0] && xv_present(R.rt.color[0]->serial);
@@ -9152,8 +9179,14 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
       if (!(g_ed.ok & ED_SREF) || g_ed.sref != sr) { enc_r_stencil_ref(en, sr, sr); g_ed.sref = sr; g_ed.ok |= ED_SREF; } }
     // Viewport / scissor (clamped within the target size)
     NSUInteger tw = g_pass.tw, th = g_pass.th;
+    int ui_projection = g_ui_layout_draw && sq && sux > 1;
+    g_ui_clip_x = ui_projection ? 1 / sux : 1; g_ui_clip_bias = 0;
+    // A corrected bank is a value snapshot, whereas an ordinary argument block
+    // points at the game's live uniforms. Refresh the snapshot for every draw.
+    if (ui_projection) g_args_dirty[0] = 1;
     { MTLViewport v = S.has_vp ? (MTLViewport){S.vp[0][0], S.vp[0][1], S.vp[0][2], S.vp[0][3], S.dr[0], S.dr[1]} : (MTLViewport){0, 0, tw, th, 0, 1};
-      if (sq) { v.originX = tw / 2.0 + (v.originX - tw / 2.0) / sux; v.width /= sux; v.originY = th / 2.0 + (v.originY - th / 2.0) / suy; v.height /= suy; }
+      if (ui_projection && v.width > 0) g_ui_clip_bias = (tw - 2 * v.originX - v.width) * (1 - g_ui_clip_x) / v.width;
+      if (sq) { if (!ui_projection) { v.originX = tw / 2.0 + (v.originX - tw / 2.0) / sux; v.width /= sux; } v.originY = th / 2.0 + (v.originY - th / 2.0) / suy; v.height /= suy; }
       if (atomic_load_explicit(&g_origin_ll, memory_order_relaxed)) { v.originY += v.height; v.height = -v.height; }   // lower-left origin (see g_origin_ll)
       // Viewport swizzle: NEGATIVE_Y negates clip y, the same as the viewport flipped about its centre; facing is decided after it on the GPU as in Metal, so the winding stays.
       // Other swizzles (axis exchanges, negated x / z / w) are no viewport change and are drawn unswizzled
@@ -9166,7 +9199,10 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
         long x0 = R.sc.x < 0 ? 0 : R.sc.x, y0 = R.sc.y <= 0 ? 0 : R.sc.y, x1 = (long)R.sc.x + R.sc.w, y1 = (long)R.sc.y + R.sc.h;
         if (x1 > (long)tw) x1 = tw; if (y1 > (long)th) y1 = th;
         if (sq) {
-            x0 = (long)floor(tw / 2.0 + (x0 - tw / 2.0) / sux); x1 = (long)ceil(tw / 2.0 + (x1 - tw / 2.0) / sux);
+            int full_bleed = ui_projection && (dw ? dw->pad : di ? di->pad : 0);
+            if (!full_bleed || x0 > 0 || x1 < (long)tw) {
+                x0 = (long)floor(tw / 2.0 + (x0 - tw / 2.0) / sux); x1 = (long)ceil(tw / 2.0 + (x1 - tw / 2.0) / sux);
+            }
             y0 = (long)floor(th / 2.0 + (y0 - th / 2.0) / suy); y1 = (long)ceil(th / 2.0 + (y1 - th / 2.0) / suy);
             if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0; if (x1 > (long)tw) x1 = tw; if (y1 > (long)th) y1 = th;
         }

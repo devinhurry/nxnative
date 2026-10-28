@@ -53,6 +53,8 @@ int dm_opmode(void);
 int dm_aspect_native(void);
 float dm_aspect_ratio(void);
 void dm_aspect_set_display(float ratio);
+void dm_aspect_ui_pane(uint8_t *pane); // BOTW fullscreen background widths, independent of input mode
+int dm_aspect_ui_background_drawing(void); // current guest thread's native background DrawSelf scope
 void dm_set_opmode(int m);          // On change, push notification 30 / 31 according to the switches the game has turned on
 // Focus (1 foreground / 2 focus lost / 3 background): called by the front end on lifecycle changes; a change pushes notification 15
 void dm_focus_set(int st);

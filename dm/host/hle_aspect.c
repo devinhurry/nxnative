@@ -1,8 +1,10 @@
 // Native aspect: only publish display geometry from the front end. The game's projection-update gate applies it on the
-// guest thread, before the matrix is calculated. UI replay corrects the complete layout into a centered 16:9 region.
+// guest thread, before the matrix is calculated. UI content remains centered at
+// 16:9; native full-width background panes can extend to the display edges.
 #include "hle.h"
 #include <ctype.h>
 #include <math.h>
+#include <search.h>
 #include <stdatomic.h>
 
 static pthread_once_t g_config_once = PTHREAD_ONCE_INIT;
@@ -89,6 +91,147 @@ static void aspect_ui_camera(const uint64_t *regs) {
     memcpy(proj + g_field_off, &want, sizeof want); proj[g_dirty_off] = 1;
 }
 
+// BOTW's full-width backgrounds are leaf Pictures/Windows, separate from its
+// text, selectors and capture pictures. Resize these panes before Calculate:
+// Window then keeps its native corner/edge sizes instead of stretching them.
+// Remember native widths because Calculate does not reset Pane::m_Size, and a
+// window resize must also restore the original width when returning to 16:9.
+typedef struct {
+    uintptr_t pane, parent, type;
+    char name[16];
+    float native_width, written_width, native_height, written_height, native_x, written_x, native_y, written_y;
+} aspect_ui_width;
+static void *g_ui_widths;
+static pthread_mutex_t g_ui_width_mu = PTHREAD_MUTEX_INITIALIZER;
+static int aspect_ui_width_order(const void *a, const void *b) {
+    uintptr_t x = ((const aspect_ui_width *)a)->pane, y = ((const aspect_ui_width *)b)->pane;
+    return (x > y) - (x < y);
+}
+static int aspect_ui_background(const char *name) {
+    static const char *const prefixes[] = {
+        "P_BG_", "P_Black_", "P_BlackBG_", "Black8_", "White8_", "P_Grad_",
+        "P_Abstract_", "P_BackGround_", "TitleBG_", "P_MainV", "P_BootBG_",
+        "P_WallU_", "P_WallD_", "P_MoyaU_", "P_MoyaD_", "P_SSFrameCore_",
+        "P_UeBlack_", "P_SitaBlack_", "W_Shadow_", "W_BlackBG_", "W_Line_"
+    };
+    for (unsigned i = 0; i < sizeof prefixes / sizeof *prefixes; i++)
+        if (!strncmp(name, prefixes[i], strlen(prefixes[i]))) return 1;
+    return 0;
+}
+static int aspect_ui_named(const uint8_t *pane, const char *name) {
+    return pane && !strncmp((const char *)pane + 0xb8, name, 16);
+}
+static int aspect_ui_title_shade(uint8_t *pane) {
+    if (!pane || !(aspect_ui_named(pane, "FBLayout_00") || aspect_ui_named(pane, "FBLayout_01") ||
+                   aspect_ui_named(pane, "FBLayout_02") || aspect_ui_named(pane, "FBLayout_03"))) return 0;
+    float size[2]; memcpy(size, pane + 0x50, sizeof size);
+    if (!isfinite(size[0]) || size[0] < 480 || size[1] != 720) return 0;
+    // Title_00 has two pairs of right-anchored gradient panels. Each pair
+    // covers [-320,160] and [160,640] and contains no menu controls.
+    uint8_t *p = *(uint8_t **)(pane + 0x18);
+    if (!aspect_ui_named(p, "N_Base_00") && !aspect_ui_named(p, "N_Base_01")) return 0;
+    p = *(uint8_t **)(p + 0x18); if (!aspect_ui_named(p, "N_All_00")) return 0;
+    p = *(uint8_t **)(p + 0x18); if (!aspect_ui_named(p, "N_InOut_00")) return 0;
+    p = *(uint8_t **)(p + 0x18); return aspect_ui_named(p, "RootPane");
+}
+// Keep the offscreen source artwork native; only its visible composition and
+// glow/blur quads use proportional cover sizing.
+static int aspect_ui_title_art(uint8_t *pane) {
+    if (!pane) return 0;
+    const char *name = (const char *)pane + 0xb8;
+    if (strncmp(name, "TitleBG", 7) && strncmp(name, "P_MainV", 7) && strncmp(name, "P_Image", 7) &&
+        strncmp(name, "P_Light_", 8) && strncmp(name, "P_Blur_", 7)) return 0;
+    uint8_t *group = *(uint8_t **)(pane + 0x18);
+    if (group && !strncmp((char *)group + 0xb8, "Null_", 5)) group = *(uint8_t **)(group + 0x18);
+    static const char *const groups[] = {
+        "N_0_MainV_00", "N_1_Arrow_00", "N_2_Horse_00", "N_3_Gake_00", "N_4_SenakaLink_00",
+        "N_5_Gardian_00", "N_6_MainVE_00", "N_0_00", "N_1_00", "N_2_00", "N_3_00", "N_4_00", "N_5_00", "N_6_00"
+    };
+    int known = 0;
+    for (unsigned i = 0; i < sizeof groups / sizeof *groups; i++) known |= aspect_ui_named(group, groups[i]);
+    if (!known) return 0;
+    uint8_t *owner = *(uint8_t **)(group + 0x18);
+    int role = aspect_ui_named(owner, "N_InOut_00") ? 1 : aspect_ui_named(owner, "N_Capture_00") ? 2 : 0;
+    return role && aspect_ui_named(*(uint8_t **)(owner + 0x18), "RootPane") ? role : 0;
+}
+static int aspect_ui_background_pane(uint8_t *pane) {
+    if (aspect_ui_title_shade(pane) || aspect_ui_title_art(pane)) return 1;
+    if (!pane || !aspect_ui_background((char *)pane + 0xb8)) return 0;
+    float width, height;
+    memcpy(&width, pane + 0x50, 4); memcpy(&height, pane + 0x54, 4);
+    if (!isfinite(width) || !isfinite(height) || width < 1280 || height <= 0) return 0;
+    uintptr_t child; memcpy(&child, pane + 0x28, sizeof child);
+    return !child || child == (uintptr_t)pane + 0x20;
+}
+static _Thread_local int g_ui_background_drawing;
+int dm_aspect_ui_background_drawing(void) { return g_ui_background_drawing; }
+static void aspect_ui_draw(const uint64_t *regs) {
+    // x21 is Pane::Draw's saved this across the DrawSelf virtual call.
+    g_ui_background_drawing = dm_aspect_ratio() > GAME_ASPECT &&
+        aspect_ui_background_pane((uint8_t *)(uintptr_t)regs[21]);
+}
+static void aspect_ui_draw_end(const uint64_t *regs) { (void)regs; g_ui_background_drawing = 0; }
+void dm_aspect_ui_pane(uint8_t *pane) {
+    if (!pane || strcmp(DM_GAME_ID, "01007EF00011E000") || !dm_aspect_native()) return;
+    int title_shade = aspect_ui_title_shade(pane);
+    int title_right = title_shade && (aspect_ui_named(pane, "FBLayout_02") || aspect_ui_named(pane, "FBLayout_03"));
+    if (title_shade && !title_right) return;
+    int title_art = aspect_ui_title_art(pane);
+    if (title_art == 2) return;
+    // A background must not resize a container that owns foreground content.
+    if (!aspect_ui_background_pane(pane)) return;
+    float width, height, x, y;
+    memcpy(&width, pane + 0x50, 4); memcpy(&height, pane + 0x54, 4);
+    memcpy(&x, pane + 0x30, 4); memcpy(&y, pane + 0x34, 4);
+    aspect_ui_width key = {.pane = (uintptr_t)pane};
+    pthread_mutex_lock(&g_ui_width_mu);
+    aspect_ui_width **found = tfind(&key, &g_ui_widths, aspect_ui_width_order);
+    float wide = fmaxf(1, dm_aspect_ratio() / GAME_ASPECT);
+    if (!found && wide == 1) { pthread_mutex_unlock(&g_ui_width_mu); return; }
+    if (!found) {
+        aspect_ui_width *entry = calloc(1, sizeof *entry);
+        if (!entry) die("[RED] aspect: cannot allocate background pane state");
+        *entry = key;
+        found = tsearch(entry, &g_ui_widths, aspect_ui_width_order);
+        if (!found) die("[RED] aspect: cannot register background pane state");
+    }
+    aspect_ui_width *entry = *found;
+    uintptr_t parent, type;
+    memcpy(&parent, pane + 0x18, sizeof parent); memcpy(&type, pane, sizeof type);
+    if (entry->parent != parent || entry->type != type || memcmp(entry->name, pane + 0xb8, 16)) {
+        entry->parent = parent; entry->type = type; memcpy(entry->name, pane + 0xb8, 16);
+        entry->native_width = width; entry->native_height = height; entry->native_x = x; entry->native_y = y;
+    }
+    if (width != entry->written_width) entry->native_width = width;
+    if (height != entry->written_height) entry->native_height = height;
+    if (x != entry->written_x) entry->native_x = x;
+    if (y != entry->written_y) entry->native_y = y;
+    entry->written_width = entry->native_width * wide;
+    // Title illustrations cover the display without distorting their artwork;
+    // flat fills and Windows extend horizontally with their edge sizes intact.
+    int cover = title_art == 1;
+    entry->written_height = entry->native_height * (cover ? wide : 1);
+    entry->written_x = entry->native_x;
+    entry->written_y = entry->native_y;
+    if (cover) { entry->written_x *= wide; entry->written_y *= wide; }
+    if (title_right) {
+        // The native origin is the right edge. Extending width and moving that
+        // edge together preserves the seam with the unchanged left panel.
+        float margin = 640 * (wide - 1);
+        entry->written_width = entry->native_width + margin;
+        entry->written_x += margin;
+    }
+    if (width != entry->written_width || height != entry->written_height ||
+        ((title_right || cover) && x != entry->written_x) || (cover && y != entry->written_y)) {
+        memcpy(pane + 0x50, &entry->written_width, 4);
+        memcpy(pane + 0x54, &entry->written_height, 4);
+        if (title_right || cover) memcpy(pane + 0x30, &entry->written_x, 4);
+        if (cover) memcpy(pane + 0x34, &entry->written_y, 4);
+        pane[0x58] |= 0x10;
+    }
+    pthread_mutex_unlock(&g_ui_width_mu);
+}
+
 // After relocation and gate registration, before any guest code runs. Unsupported builds and stale rewrites fail before rendering.
 void dm_aspect_install(void) {
     if (!dm_aspect_native()) return;
@@ -115,6 +258,12 @@ void dm_aspect_install(void) {
         if (!gate_obs_present(OBS_ASPECT_UI_CAMERA)) die("[RED] aspect: UI camera gate missing; rewrite main with the current patch_nso.py");
         g_ui_source = source; g_ui_projection = projection; g_ui_fovy = fovy;
         gate_obs_read_set(OBS_ASPECT_UI_CAMERA, aspect_ui_camera);
+    }
+    if (!strcmp(DM_GAME_ID, "01007EF00011E000")) {
+        if (!gate_obs_present(OBS_BOTW_UI_DRAW) || !gate_obs_present(OBS_BOTW_UI_DRAW_END))
+            die("[RED] aspect: UI background draw gates missing; rewrite main with the current patches.py");
+        gate_obs_read_set(OBS_BOTW_UI_DRAW, aspect_ui_draw);
+        gate_obs_read_set(OBS_BOTW_UI_DRAW_END, aspect_ui_draw_end);
     }
     LOG("aspect: projection gate installed for main build %s", build);
 }

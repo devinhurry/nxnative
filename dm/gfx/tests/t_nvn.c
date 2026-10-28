@@ -3,6 +3,8 @@
 #include "../nvn/hle_nvn.c"
 uint64_t g_t0_ns;   // process start time from host main.c (used by hle_nvn's per-frame @t_s); unit test stub
 _Atomic uint64_t dm_present_ns;   // when the last present was made (hle_thread.c, DM_HITCH_DUMP); unit test stub
+static int test_ui_background;
+int dm_aspect_ui_background_drawing(void) { return test_ui_background; }
 #include "../tex/nvn_deswizzle.h"
 #include <time.h>
 void *front_metal_layer(void) { return NULL; }   // no window in unit tests: present only counts
@@ -268,6 +270,20 @@ int main(void) {
         op_hdr rh; memcpy(&rh, m, sizeof rh); p_draw_idx dt; const p_draw_idx *d = draw_idx_rec(m + 8, rh.size, &dt);
         EXPECT("its handle is the draw record", 1, (const uint8_t *)hd == m && rh.op == OP_DRAW_IDX);
         EXPECT("draw read back: count, base vertex, no indirect address", 1, d->count == 36 && d->base_vertex == 5 && d->ibuf == 0x10000 && !d->ind && !d->mdi_cnt);
+        test_ui_background = 1;
+        P(nvnCommandBufferAddCommandMemory)(&c2, &mp, 0, sizeof m); P(nvnCommandBufferBeginRecording)(&c2);
+        P(nvnCommandBufferDrawElementsBaseVertex)(&c2, NVN_DRAW_PRIMITIVE_TRIANGLES, NVN_INDEX_TYPE_UNSIGNED_SHORT, 36, 0x10000, 5);
+        P(nvnCommandBufferEndRecording)(&c2); memcpy(&rh, m, sizeof rh);
+        d = draw_idx_rec(m + 8, rh.size, &dt);
+        EXPECT("background tag keeps compact indexed record size", 0x30, P(nvnCommandBufferGetCommandMemoryUsed)(&c2));
+        EXPECT("native background decoded without changing draw arguments", 1, d->pad == 1 && d->instances == 1 && d->count == 36 && d->base_vertex == 5);
+        P(nvnCommandBufferAddCommandMemory)(&c2, &mp, 0, sizeof m); P(nvnCommandBufferBeginRecording)(&c2);
+        P(nvnCommandBufferDrawArrays)(&c2, NVN_DRAW_PRIMITIVE_TRIANGLES, 2, 6);
+        P(nvnCommandBufferEndRecording)(&c2); memcpy(&rh, m, sizeof rh);
+        p_draw array_draw; const p_draw *ad = draw_rec(m + 8, rh.size, &array_draw);
+        EXPECT("background tag keeps compact array record size", 0x28, P(nvnCommandBufferGetCommandMemoryUsed)(&c2));
+        EXPECT("array background preserves first/count/instances", 1, ad->pad == 1 && ad->first == 2 && ad->count == 6 && ad->instances == 1);
+        test_ui_background = 0;
         P(nvnCommandBufferAddCommandMemory)(&c2, &mp, 0, sizeof m); P(nvnCommandBufferBeginRecording)(&c2); NVNcommandHandle he = P(nvnCommandBufferEndRecording)(&c2);
         memcpy(&rh, m, sizeof rh);
         EXPECT("empty recording: its END only", 8, P(nvnCommandBufferGetCommandMemoryUsed)(&c2));

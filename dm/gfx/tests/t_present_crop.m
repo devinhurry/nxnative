@@ -209,29 +209,29 @@ int main(void) { @autoreleasepool {
     char *keys = strdup(DM_GAME_ASPECT_UI), *save = NULL;
     for (char *key = strtok_r(keys, " ", &save); key; key = strtok_r(NULL, " ", &save)) {
         strcpy(layout->sh[0]->key, key); double ux, uy;
-        EXPECT("each font/layout variant corrected", 1, ui_squeeze_scale(layout, &ux, &uy));
+        EXPECT("each font/layout variant corrected", 1, ui_squeeze_scale(layout, &ux, &uy, 0));
         EXPECT("20:9 UI x scale", 1250, lround(ux * 1000)); EXPECT("20:9 UI y scale", 1000, lround(uy * 1000));
     }
     free(keys); double ux, uy;
     dm_aspect_set_display(16.f / 9);
-    EXPECT("16:9 leaves viewport/scissor exactly unchanged", 0, ui_squeeze_scale(layout, &ux, &uy));
+    EXPECT("16:9 leaves viewport/scissor exactly unchanged", 0, ui_squeeze_scale(layout, &ux, &uy, 0));
     dm_aspect_set_display(4.f / 3);
-    EXPECT("4:3 layout corrected vertically", 1, ui_squeeze_scale(layout, &ux, &uy));
+    EXPECT("4:3 layout corrected vertically", 1, ui_squeeze_scale(layout, &ux, &uy, 0));
     EXPECT("4:3 UI x unchanged", 1000, lround(ux * 1000)); EXPECT("4:3 UI y scale", 1333, lround(uy * 1000));
     dm_aspect_set_display(20.f / 9);
     R.rt.color[0] = &tex;
-    EXPECT("offscreen capture remains unscaled (no double transform)", 0, ui_squeeze_scale(layout, &ux, &uy));
+    EXPECT("offscreen capture remains unscaled (no double transform)", 0, ui_squeeze_scale(layout, &ux, &uy, 0));
     R.rt.color[0] = &canvas; strcpy(layout->sh[0]->key, "0000000000000000_b");
-    EXPECT("3D composite remains unscaled", 0, ui_squeeze_scale(layout, &ux, &uy));
+    EXPECT("3D composite remains unscaled", 0, ui_squeeze_scale(layout, &ux, &uy, 0));
     memcpy(layout->sh[0]->key, DM_GAME_ASPECT_UI, 16); layout->sh[0]->key[16] = 0;
     dm_aspect_set_display(21.f / 10);
     const char *split_fill_vs[] = {"78a4ace2913b091d_b", "a983fef957911db8_b"};
     for (int i = 0; i < 2; i++) {
         strcpy(layout->sh[0]->key, split_fill_vs[i]);
-        EXPECT("BOTW split-fill layout VS scales at 21:10", 1, ui_squeeze_scale(layout, &ux, &uy));
+        EXPECT("BOTW split-fill layout VS scales at 21:10", 1, ui_squeeze_scale(layout, &ux, &uy, 0));
         EXPECT("BOTW split-fill 21:10 factor", 1181, lround(ux * 1000));
         R.rt.color[0] = &tex;
-        EXPECT("BOTW split-fill offscreen capture stays unscaled", 0, ui_squeeze_scale(layout, &ux, &uy));
+        EXPECT("BOTW split-fill offscreen capture stays unscaled", 0, ui_squeeze_scale(layout, &ux, &uy, 0));
         R.rt.color[0] = &canvas;
     }
     tex_t picture = {.magic=MAGIC('T','E','X',0), .serial=60001};
@@ -241,14 +241,15 @@ int main(void) { @autoreleasepool {
     picture.serial++; // the game's new transient object has not been resolved yet
     EXPECT("transient serial is unresolved before its first draw", 0, mtl_tex_gpu_owned(picture.serial));
     mtl_reg_tex(1200, &picture, NULL); S.tex[1][0] = 1200;
-    EXPECT("first sample of an aliased screen picture is not transformed twice", 0, ui_squeeze_scale(layout, &ux, &uy));
+    EXPECT("first sample of an aliased screen picture is not transformed twice", 0, ui_squeeze_scale(layout, &ux, &uy, 0));
     EXPECT("transient serial resolves to GPU content", 1, mtl_tex_gpu_owned(picture.serial));
+    EXPECT("a resized background capture follows layout coordinates once", 1, ui_squeeze_scale(layout, &ux, &uy, 1));
     EXPECT("texture setup completes", 1, mtl_wait(mtl_sub_commit(), 5000000000ull));
     // An illustration of the same size, uploaded by the CPU, remains in layout coordinates.
     MTLTextureDescriptor *pd=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:320 height:180 mipmapped:NO];
     pd.usage=MTLTextureUsageShaderRead; serial_put(++picture.serial, [g_dev newTextureWithDescriptor:pd]);
     mtl_reg_tex(1201, &picture, NULL); S.tex[1][0] = 1201;
-    EXPECT("CPU illustration keeps its proportions", 1, ui_squeeze_scale(layout, &ux, &uy));
+    EXPECT("CPU illustration keeps its proportions", 1, ui_squeeze_scale(layout, &ux, &uy, 0));
     check(src, "native present fills its target", tl, 20, 9, 0);
 #endif
 #ifndef CROP_LEGACY_HEADER
@@ -265,5 +266,25 @@ int main(void) { @autoreleasepool {
         mtl_present_wait(t2);mtl_present_test_stall(0);
     }
 #endif
+    // Clip-space correction keeps content at its former location but permits
+    // an enlarged native background to reach beyond the old 16:9 viewport.
+    float projection[32], corrected[32], original[32];
+    for (int i = 0; i < 32; i++) projection[i] = i + 0.25f;
+    memcpy(original, projection, sizeof original);
+    g_ui_clip_x = (16.0 / 9) / (21.0 / 10); g_ui_clip_bias = 0;
+    ui_projection_copy(0, projection, corrected, sizeof corrected);
+    EXPECT("UI source uniforms remain unchanged", 1, !memcmp(original, projection, sizeof original));
+    EXPECT("UI x projection scaled before clipping", lround(projection[0] * g_ui_clip_x * 10000), lround(corrected[0] * 10000));
+    EXPECT("UI y/z/w and material parameters unchanged", 1, !memcmp(projection + 4, corrected + 4, sizeof projection - 16));
+    EXPECT("enlarged background reaches clip edge", 10000, lround((21.0 / 10) / (16.0 / 9) * g_ui_clip_x * 10000));
+    g_ui_clip_bias = 0.125;
+    ui_projection_copy(0, projection, corrected, sizeof corrected);
+    EXPECT("partial viewport clip center preserved", lround((projection[1] * g_ui_clip_x + projection[13] * g_ui_clip_bias) * 10000), lround(corrected[1] * 10000));
+    ui_projection_copy(10, projection, corrected, sizeof corrected);
+    EXPECT("UI clip-x offset follows projection", lround(projection[0] * g_ui_clip_x * 10000), lround(corrected[0] * 10000));
+    EXPECT("other driver constants unchanged", 1, !memcmp(projection + 1, corrected + 1, sizeof projection - 4));
+    g_ui_clip_x = 1; g_ui_clip_bias = 0;
+    ui_projection_copy(0, projection, corrected, sizeof corrected);
+    EXPECT("16:9 projection remains byte-identical", 1, !memcmp(projection, corrected, sizeof projection));
     printf("== %d checks, %d failed ==\n",cases,failed);return failed!=0;
 } }

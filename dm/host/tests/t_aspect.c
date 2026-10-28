@@ -18,13 +18,16 @@ module_t *g_mod = test_modules; int g_nmod = 1;
 static void (*callback)(const uint64_t *);
 static void (*ui_callback)(const uint64_t *);
 static void (*screen_callback)(const uint64_t *);
+static void (*draw_callback)(const uint64_t *), (*draw_end_callback)(const uint64_t *);
 static int have_gate = 1;
 void gate_obs_read_set(int id, void (*fn)(const uint64_t *)) {
     if (id == OBS_ASPECT_PROJECTION) callback = fn;
     else if (id == OBS_ASPECT_UI_CAMERA) ui_callback = fn;
+    else if (id == OBS_BOTW_UI_DRAW) draw_callback = fn;
+    else if (id == OBS_BOTW_UI_DRAW_END) draw_end_callback = fn;
     else { assert(id == OBS_ASPECT_WORLD_PROJECTION); screen_callback = fn; }
 }
-int gate_obs_present(int id) { return (id == OBS_ASPECT_PROJECTION || id == OBS_ASPECT_UI_CAMERA || id == OBS_ASPECT_WORLD_PROJECTION) && have_gate && !(id == OBS_ASPECT_UI_CAMERA && have_gate == 2) && !(id == OBS_ASPECT_WORLD_PROJECTION && have_gate == 3); }
+int gate_obs_present(int id) { return (id == OBS_ASPECT_PROJECTION || id == OBS_ASPECT_UI_CAMERA || id == OBS_ASPECT_WORLD_PROJECTION || id == OBS_BOTW_UI_DRAW || id == OBS_BOTW_UI_DRAW_END) && have_gate && !(id == OBS_ASPECT_UI_CAMERA && have_gate == 2) && !(id == OBS_ASPECT_WORLD_PROJECTION && have_gate == 3); }
 static void failure(const char *value, int bad_build, int stale) {
     pid_t pid = fork(); assert(pid >= 0);
     if (!pid) {
@@ -90,5 +93,92 @@ int main(void) {
         assert(fabsf(tanf(original[0]/2)/tanf(lens[0]/2) - sy) < 1e-6f);
         assert(fabsf(lens[1] - original[1]*sx) < 1e-6f && fabsf(lens[2] - original[2]*sy) < 1e-6f);
     }
-    free(g_mod[0].base); puts("aspect: parsing, build/gate validation, camera timing, UI lens proportions and touch checks passed");
+    // Full-width backgrounds extend independently of any touch/controller state.
+    // Repeated Calculate callbacks and display resizing must not multiply widths.
+    uint8_t bg[0x100] = {0};
+    strcpy((char *)bg + 0xb8, "P_BG_03");
+    *(float *)(bg + 0x50) = 1280; *(float *)(bg + 0x54) = 720;
+    *(uintptr_t *)(bg + 0x28) = (uintptr_t)bg + 0x20;
+    dm_aspect_set_display(21.f/10);
+    for (int i = 0; i < 20; i++) dm_aspect_ui_pane(bg);
+    assert(fabsf(*(float *)(bg + 0x50) - 1512) < 0.001f);
+    regs[21] = (uintptr_t)bg; draw_callback(regs);
+    assert(dm_aspect_ui_background_drawing());
+    draw_end_callback(regs); assert(!dm_aspect_ui_background_drawing());
+    assert(*(float *)(bg + 0x54) == 720 && (bg[0x58] & 0x10));
+    dm_aspect_set_display(32.f/9); dm_aspect_ui_pane(bg);
+    assert(*(float *)(bg + 0x50) == 2560);
+    dm_aspect_set_display(GAME_ASPECT); dm_aspect_ui_pane(bg);
+    assert(*(float *)(bg + 0x50) == 1280);
+    dm_aspect_set_display(21.f/10);
+    const char *untouched[] = {"P_Capture_00", "P_CaptureMask_00", "P_MapCapture_00", "T_Text_00", "P_Icon_00"};
+    for (unsigned i = 0; i < sizeof untouched / sizeof *untouched; i++) {
+        memset(bg + 0xb8, 0, 16); strcpy((char *)bg + 0xb8, untouched[i]);
+        dm_aspect_ui_pane(bg); assert(*(float *)(bg + 0x50) == 1280);
+        draw_callback(regs); assert(!dm_aspect_ui_background_drawing());
+    }
+    strcpy((char *)bg + 0xb8, "W_Shadow_00");
+    *(float *)(bg + 0x50) = 640;
+    dm_aspect_ui_pane(bg); assert(*(float *)(bg + 0x50) == 640);
+    *(float *)(bg + 0x50) = 1280;
+    *(uintptr_t *)(bg + 0x28) = 0x1234; // Containers must not resize their children.
+    dm_aspect_ui_pane(bg); assert(*(float *)(bg + 0x50) == 1280);
+    *(uintptr_t *)(bg + 0x28) = (uintptr_t)bg + 0x20;
+    dm_aspect_ui_pane(bg); assert(fabsf(*(float *)(bg + 0x50) - 1512) < 0.001f);
+    *(float *)(bg + 0x50) = 1500; // The game replaces a pane's native size.
+    dm_aspect_ui_pane(bg); assert(fabsf(*(float *)(bg + 0x50) - 1771.875f) < 0.001f);
+    // Title's right-anchored gradient extends to the new right edge, keeping
+    // its seam with the left panel and leaving foreground placement intact.
+    uint8_t title[0x100] = {0}, inout[0x100] = {0}, all[0x100] = {0}, base[0x100] = {0}, shade[0x100] = {0};
+    strcpy((char *)title + 0xb8, "RootPane"); strcpy((char *)inout + 0xb8, "N_InOut_00");
+    strcpy((char *)all + 0xb8, "N_All_00"); strcpy((char *)base + 0xb8, "N_Base_00");
+    *(uint8_t **)(inout + 0x18) = title; *(uint8_t **)(all + 0x18) = inout;
+    *(uint8_t **)(base + 0x18) = all; *(uint8_t **)(shade + 0x18) = base;
+    *(float *)(shade + 0x50) = 480; *(float *)(shade + 0x54) = 720;
+    dm_aspect_set_display(21.f/10); regs[21] = (uintptr_t)shade;
+    for (int i = 0; i < 4; i++) {
+        snprintf((char *)shade + 0xb8, 16, "FBLayout_0%d", i);
+        *(float *)(shade + 0x50) = 480; *(float *)(shade + 0x30) = i < 2 ? 160 : 640;
+        for (int frame = 0; frame < 20; frame++) dm_aspect_ui_pane(shade);
+        draw_callback(regs);
+        assert(dm_aspect_ui_background_drawing());
+        assert(*(float *)(shade + 0x54) == 720);
+        if (i < 2) assert(*(float *)(shade + 0x50) == 480 && *(float *)(shade + 0x30) == 160);
+        else {
+            assert(fabsf(*(float *)(shade + 0x50) - 596) < 0.001f);
+            assert(fabsf(*(float *)(shade + 0x30) - 756) < 0.001f);
+            assert(*(float *)(shade + 0x30) - *(float *)(shade + 0x50) == 160);
+        }
+        draw_end_callback(regs);
+    }
+    dm_aspect_set_display(32.f/9); dm_aspect_ui_pane(shade);
+    assert(*(float *)(shade + 0x50) == 1120 && *(float *)(shade + 0x30) == 1280);
+    dm_aspect_set_display(GAME_ASPECT); dm_aspect_ui_pane(shade);
+    assert(*(float *)(shade + 0x50) == 480 && *(float *)(shade + 0x30) == 640);
+    dm_aspect_set_display(21.f/10);
+    strcpy((char *)base + 0xb8, "Other_00"); draw_callback(regs);
+    assert(!dm_aspect_ui_background_drawing());
+    strcpy((char *)base + 0xb8, "N_Base_01"); draw_callback(regs);
+    assert(dm_aspect_ui_background_drawing()); draw_end_callback(regs);
+    uint8_t art_group[0x100] = {0}, art[0x100] = {0}, capture[0x100] = {0};
+    strcpy((char *)art_group + 0xb8, "N_5_Gardian_00");
+    strncpy((char *)art + 0xb8, "P_Image_Gurdian_00", 16);
+    *(uint8_t **)(art_group + 0x18) = inout; *(uint8_t **)(art + 0x18) = art_group;
+    *(float *)(art + 0x50) = 1000; *(float *)(art + 0x54) = 709;
+    *(float *)(art + 0x30) = -196; *(float *)(art + 0x34) = -60;
+    for (int i = 0; i < 20; i++) dm_aspect_ui_pane(art);
+    float cover = (21.f / 10) / GAME_ASPECT;
+    assert(fabsf(*(float *)(art + 0x50) - 1000 * cover) < 0.001f);
+    assert(fabsf(*(float *)(art + 0x54) - 709 * cover) < 0.001f);
+    assert(fabsf(*(float *)(art + 0x30) + 196 * cover) < 0.001f);
+    assert(fabsf(*(float *)(art + 0x34) + 60 * cover) < 0.001f);
+    dm_aspect_set_display(GAME_ASPECT); dm_aspect_ui_pane(art);
+    assert(*(float *)(art + 0x50) == 1000 && *(float *)(art + 0x30) == -196);
+    strcpy((char *)capture + 0xb8, "N_Capture_00"); *(uint8_t **)(capture + 0x18) = title;
+    strcpy((char *)art_group + 0xb8, "N_5_00"); *(uint8_t **)(art_group + 0x18) = capture;
+    dm_aspect_set_display(21.f / 10); dm_aspect_ui_pane(art);
+    assert(*(float *)(art + 0x50) == 1000 && *(float *)(art + 0x54) == 709);
+    float hit[4]; dm_aspect_touch_rect(1008, 480, hit);
+    assert(fabsf(hit[0] - 77.3333f) < 0.001f && fabsf(hit[2] - 853.3333f) < 0.001f);
+    free(g_mod[0].base); puts("aspect: camera, centered content/hit regions and independent fullscreen backgrounds passed");
 }
