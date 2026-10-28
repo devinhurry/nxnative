@@ -760,16 +760,38 @@ static int native_hit_pane_tier(const char *name) {
     return !strcmp(name, "B_Btn_00") || !strcmp(name, "B_Area_00") ? 2 : 0;
 }
 
+// Captured dialogue text is displayed by a P_Text/P_Sh pane under N_TextOut.
+// Find that shared layout role beside a window, independently of the speaker,
+// event, content-container name or numeric instance suffix.
+static int native_message_output_sibling(uint8_t *owner) {
+    uintptr_t parent = (uintptr_t)owner;
+    if (!owner || !dm_guest_as_contains(parent) || !dm_guest_as_contains(parent + PANE_NAME + 16)) return 0;
+    uintptr_t sentinel = parent + 0x20, node = selector_read_ptr(parent, 0x28);
+    for (int n = 0; n < 512 && node && node != sentinel; n++) {
+        if (node < 8) return 0;
+        uintptr_t child = node - 8;
+        if (!dm_guest_as_contains(child) || !dm_guest_as_contains(child + PANE_NAME + 16) ||
+            selector_read_ptr(child, PANE_PARENT) != parent) return 0;
+        char name[17]; pane_name((uint8_t *)child, name);
+        if (!strncmp(name, "N_TextOut_", 10)) return 1;
+        node = selector_read_ptr(child, 0x10);
+    }
+    return 0;
+}
+
 static int native_message_body(uint8_t *pane, const char *name) {
-    int window = !strcmp(name, "W_Base_00"), system = !strcmp(name, "W_SysBase_00");
-    int speech = !strcmp(name, "P_Sh_01");
-    if (!window && !system && !speech) return 0;
+    int output = !strncmp(name, "P_Text_", 7) || !strncmp(name, "P_Sh_", 5);
+    int background = !strncmp(name, "W_", 2);
+    if (!output && !background) return 0;
+    if (pane_private_capture_branch(pane)) return 0;
     uint8_t *owner = *(uint8_t **)(pane + PANE_PARENT);
     char parent[17] = {0}; if (owner) pane_name(owner, parent);
-    // MessageSp has no name window. Its visible text capture and shadow are
-    // rendered under N_VoiceA_00; the private capture source stays inert.
-    if (speech) return !strcmp(parent, "N_TextOut_01") &&
-        ancestor_named(owner, "N_VoiceA_00") && !pane_private_capture_branch(pane);
+    if (output && !strncmp(parent, "N_TextOut_", 10)) return 1;
+    // Include the native window's blank padding and continuation indicator,
+    // rather than limiting a touch to its rendered letters or arrow shape.
+    if (background && native_message_output_sibling(owner)) return 1;
+    int window = !strcmp(name, "W_Base_00"), system = !strcmp(name, "W_SysBase_00");
+    if (!window && !system) return 0;
     uint8_t *tips = ancestor_named(pane, "Pa_Tips_00");
     uint8_t *inout = owner ? *(uint8_t **)(owner + PANE_PARENT) : NULL;
     // Action tutorials use their part's outer window, not its controller

@@ -17,7 +17,25 @@ Options adjustments and list swipes, stable control visibility during menu
 animations, direct map dragging, and Beedle dialogue/buy/sell/quantity flows.
 A shop quantity is accepted through the blank area of its number-selection
 button, outside the number field and arrows. The dialogue body does not
-accept a quantity. Message buttons park their native cursor hit panes
+accept a quantity. Terminal, divine and NPC speech now share text-output
+role detection: rendered `P_Text_*`/`P_Sh_*` panes under `N_TextOut_*`, plus
+sibling window bounds including blank padding. Container names and instance
+suffixes do not select event-specific rules. The shown, input-enabled native
+Message owner remains required; focused choices, quantity fields, hidden or
+stale screens and private capture sources keep their existing restrictions.
+The supplied `before-activate-tower` save reproduced the former inert body
+tap. With the shared fix, "Sheikah Tower activated" (body), "Scanning
+area..." (blank padding) and "Regional map extracted" over AppMap advanced
+through native A, then returned to gameplay. The original save stayed
+unchanged. Runtime evidence is in `01007EF00011E000-work/tower-dialogue-20261028/`:
+the matching pre-merge graphics host carries the current menu adapter, with
+only the observation registration API renamed for that host. The current
+merged host also compiles and its native regression passes; the full merged
+shader build remains incomplete and was stopped after retaining its completed
+cache entries. This test does not establish merged graphics or physical
+iPhone acceptance.
+
+Message buttons park their native cursor hit panes
 offscreen; use the live button window's bounds before falling back to text.
 This also includes the blank padding around OK/Cancel labels. The number
 field only focuses, and each +/- arrow retains its adjustment target.

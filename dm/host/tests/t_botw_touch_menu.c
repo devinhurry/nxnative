@@ -1438,6 +1438,38 @@ static void test_message_advance_owner(void) {
     tap(.1f,.3f); assert(!g_target_valid);
     tips_inout[0x59] = 0;
     assert(!selector_message_prompt_view((uintptr_t)selector.manager,current_guest_frame,&message));
+    // MessageSp renders NPC, divine and terminal speech through the same text-output role.
+    // An unfamiliar content container and suffix must not require another event-name rule.
+    uintptr_t saved_guest_start = mock_guest_start; size_t saved_guest_size = mock_guest_size;
+    mock_guest_start = (uintptr_t)native_panes; mock_guest_size = sizeof native_panes;
+    for (int style = 0; style < 3; style++) {
+        dm_botw_touch_menu_reset(); current_guest_frame = 7300 + style * 2;
+        dm_botw_touch_menu_test_set_render_frame(current_guest_frame);
+        strcpy((char *)selector.screen + 0x200, style == 0 ? "MessageSp_00" : style == 1 ? "Message_99" : "Message3D_00");
+        root = fake_pane(110, "RootPane", -1, 1280, 720, 0, 0);
+        uint8_t *container = fake_pane(111, style == 0 ? "N_Seeker_00" : "N_Console_17", 110, 640, 140, 0, -235);
+        uint8_t *output = fake_pane(112, style == 0 ? "N_TextOut_00" : "N_TextOut_17", 111, 640, 140, 0, -235);
+        uint8_t *window = fake_pane(113, style == 0 ? "W_Base_01" : "W_Base_11", 111, 640, 140, 0, -235);
+        uint8_t *text = fake_pane(114, style == 0 ? "P_Text_00" : "P_Text_17", 112, 360, 90, 0, -235);
+        link_child(root, container); link_child(container, output); link_child(container, window); link_child(output, text);
+        put_ptr(selector.apphome_wrapper + 0x18, (uintptr_t)root);
+        observe_native_pane(window, 1); observe_native_pane(text, 1);
+        dm_botw_touch_menu_test_snapshot(&message);
+        assert(message.footer_action_count == 1 && message.footer_action_buttons[0] == DM_BTN_A);
+        tap(.27f, .82f); // window padding outside the rendered text and any continuation arrow
+        assert(sample(current_guest_frame) == DM_BTN_A && !sample(current_guest_frame+1));
+        tap(.1f, .82f); assert(!g_target_valid);
+        put_ptr(selector.manager + 0x48, (uintptr_t)selector.entry);
+        assert(!selector_message_prompt_view((uintptr_t)selector.manager, current_guest_frame, &message));
+        put_ptr(selector.manager + 0x48, 0);
+        container[0x59] = 0;
+        assert(!selector_message_prompt_view((uintptr_t)selector.manager, current_guest_frame, &message));
+        container[0x59] = 255;
+        fake_pane(115, "N_Capture_17", 110, 640, 140, 0, -235);
+        put_ptr(container + PANE_PARENT, (uintptr_t)native_panes[115].bytes);
+        assert(!selector_message_prompt_view((uintptr_t)selector.manager, current_guest_frame, &message));
+    }
+    mock_guest_start = saved_guest_start; mock_guest_size = saved_guest_size;
     atomic_store(&g_validated_box_cursor_manager,0);
     dm_botw_touch_menu_reset();
 }
