@@ -5,8 +5,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -289,6 +291,19 @@ def launch_host(plan, args, env, repo, make_call=None, exec_call=None, prepared_
     else:
         env.pop('DM_GAMES_FIRST', None)
     env.setdefault('DM_SAVE', str(plan['base'] / 'run' / 'save'))
+    if getattr(args, 'save_copy', None) is not None:
+        source = _path(args.save_copy)
+        if not source or not source.is_dir(): raise LaunchError(f'save source is not a folder: {args.save_copy}')
+        copies = (plan['base'] / 'run' / 'save-copies').resolve()
+        if copies == source or source in copies.parents:
+            raise LaunchError(f'save source contains the copy destination: {copies}; choose a narrower save folder')
+        copies.mkdir(parents=True, exist_ok=True)
+        save = Path(tempfile.mkdtemp(prefix=source.name + '-', dir=copies)) / 'save'
+        # Follow source symlinks while copying so game writes cannot reach the original files.
+        shutil.copytree(source, save)
+        env['DM_SAVE'] = str(save)
+        print(f'save source (unchanged): {source}')
+    print(f'save folder: {env["DM_SAVE"]}')
     env.setdefault('DM_TEMP', str(plan['base'] / 'run' / 'tmp'))
     if env.get('DM_WINDOW') is None: env['DM_WINDOW'] = '1'
     if env.get('DM_FULLSCREEN') is None: env['DM_FULLSCREEN'] = '1'
@@ -327,6 +342,7 @@ def parser():
     p.add_argument('--exefs', help='original module folder')
     p.add_argument('--romfs', help='RomFS folder (default: DM_ROMFS or detected layout)')
     p.add_argument('--msl', help='shader cache parent (default: DM_MSL_DIR or detected layout)')
+    p.add_argument('--save-copy', metavar='DIR', help='start from an independent copy of DIR under the game build/run/save-copies; original save unchanged, overrides DM_SAVE for this run')
     p.add_argument('--windowed', action='store_true', help='disable fullscreen; DM_ASPECT_RATIO still sets the window size')
     p.add_argument('--touch-preview', action='store_true', help='BOTW-only Mac preview of the iOS virtual touch controls and relocated touch HUD')
     p.add_argument('--quick', action='store_true', help='launch the recorded run/mac-runtime.json without rebuilding host, game modules or shaders')

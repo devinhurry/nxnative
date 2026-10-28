@@ -68,6 +68,36 @@ class MacLauncherTests(unittest.TestCase):
             self.assertEqual(env['DM_SAVE'], str(root/'my save'))
             self.assertEqual(env['DM_NVN_SHMAP'], str(g.table('shader_map.tsv')))
             self.assertEqual(env['DM_TOUCH_PREVIEW'], '1'); self.assertEqual(env['DM_FULLSCREEN'], '0')
+            source = root / 'original save'; source.mkdir()
+            original = source / 'game_data.sav'; original.write_bytes(b'original progress')
+            (source / 'linked.sav').symlink_to(original)
+            args.save_copy = run_mac.parser().parse_args(['--save-copy', str(source)]).save_copy
+            with redirect_stdout(io.StringIO()):
+                run_mac.launch(plan, args, {'DM_SAVE': str(root/'my save')}, REPO,
+                               rewrite_call=rewrite, make_call=make, exec_call=execute)
+            copied = Path(execute.call_args.args[2]['DM_SAVE'])
+            self.assertEqual(copied.parent.parent, (root / 'run/save-copies').resolve())
+            self.assertFalse(copied.is_symlink())
+            self.assertEqual((copied/'game_data.sav').read_bytes(), b'original progress')
+            self.assertFalse((copied/'linked.sav').is_symlink())
+            (copied/'game_data.sav').write_bytes(b'new progress')
+            (copied/'linked.sav').write_bytes(b'linked progress')
+            self.assertEqual(original.read_bytes(), b'original progress')
+            with redirect_stdout(io.StringIO()):
+                run_mac.launch(plan, args, {}, REPO, rewrite_call=rewrite, make_call=make, exec_call=execute)
+            another = Path(execute.call_args.args[2]['DM_SAVE'])
+            self.assertNotEqual(copied, another)
+            self.assertEqual((another/'game_data.sav').read_bytes(), b'original progress')
+            for invalid, message in ((str(root), 'copy destination'), (str(root/'missing'), 'not a folder'), ('', 'not a folder')):
+                args.save_copy = invalid
+                with redirect_stdout(io.StringIO()), self.assertRaisesRegex(run_mac.LaunchError, message):
+                    run_mac.launch(plan, args, {}, REPO, exec_call=execute)
+            args.save_copy = str(source)
+            args.check = True
+            before = list((root / 'run/save-copies').iterdir())
+            with redirect_stdout(io.StringIO()): run_mac.launch(plan, args, {}, REPO, exec_call=execute)
+            self.assertEqual(list((root/'run/save-copies').iterdir()), before)
+            rewrite.assert_not_called(); make.assert_not_called()
             host.write_bytes(b'new unrelated host')
             with self.assertRaisesRegex(run_mac.LaunchError, 'prepared runtime changed'):
                 run_mac.resolve(args, {}, REPO)
