@@ -236,8 +236,8 @@ void dm_look_install(void) {
     e = getenv("DM_LOOK_TRACE");
     if (e && strcmp(e, "0") && strcmp(e, "1")) die("[RED] DM_LOOK_TRACE must be 0 or 1");
     g_trace = e && !strcmp(e, "1");
-    gate_obs_set(OBS_BOTW_LOOK_SOURCE, camera_look_source);
-    gate_obs_set(OBS_BOTW_LOOK_VECTOR, camera_look_vector);
+    gate_obs_read_set(OBS_BOTW_LOOK_SOURCE, camera_look_source);
+    gate_obs_read_set(OBS_BOTW_LOOK_VECTOR, camera_look_vector);
     dm_look_set_available(1);
     front_look_mode_changed();
     LOG("look: BOTW shared stick vector main+%#llx installed for build %s (%.1f normalized-input impulse per short edge)",

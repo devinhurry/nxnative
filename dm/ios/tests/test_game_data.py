@@ -80,6 +80,16 @@ class GameDataTests(unittest.TestCase):
         self.metadata.write_bytes(game_data.json_bytes(descriptor))
         self.reader_run(ready=True)
 
+    def test_image_input_keeps_the_existing_import_format(self):
+        import romfs_image
+        self.pack()
+        expected = self.out.read_bytes()
+        image = self.root / 'RomFS.img'
+        romfs_image.pack(self.romfs, image)
+        game_data.pack(self.out, image, self.aoc, '010015100B514000', '1.2.1', 'marker', self.metadata)
+        self.assertEqual(self.out.read_bytes(), expected)
+        self.reader_run()
+
     def test_update_corruption_and_recovery_preserve_previous_data_and_saves(self):
         old = self.pack()
         self.reader_run()

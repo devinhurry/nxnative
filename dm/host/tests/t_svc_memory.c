@@ -27,7 +27,8 @@ static int memory_getpagesize(void) {
 #undef mprotect
 #undef getpagesize
 
-module_t g_mod[MAX_MOD];
+static module_t test_modules[2];
+module_t *g_mod = test_modules;
 int g_nmod;
 struct dm_flags g_flag;
 void hlecount_svc(int num) { (void)num; }
@@ -38,6 +39,8 @@ uint64_t guest_ns(void) { return 0; }
 uint64_t dm_entropy64(void) { return 0; }
 int thr_limit_used(void) { return 0; }
 int dm_ue_heap_owns(uint64_t a, uint64_t n) { (void)a; (void)n; return 0; } // No Unreal allocator is installed in this fixture.
+// This fixture calls the SVC dispatcher directly, without rewritten guest gates.
+void gate_obs_set(int id, void (*fn)(uint64_t *, int)) { (void)id; (void)fn; }
 module_t *module_of(const void *p) {
     uintptr_t a = (uintptr_t)p;
     for (int i = 0; i < g_nmod; ++i) {
@@ -95,7 +98,7 @@ static _Noreturn void memory_abort(void) {
         g_nmap != failure_nmap || prepares != failure_prepares) _exit(78);
     _exit(77);
 }
-enum { P = 0x1000, BAD = 0xd401, LIMIT = 0x10801 };
+enum { P = 0x1000, BAD = 0xd401, OOM = 0xd001, LIMIT = 0x10801 };
 static uintptr_t alias, stack, heap;
 static uint64_t call(unsigned svc, uint64_t x0, uint64_t x1, uint64_t x2) {
     uint64_t r[31] = {x0, x1, x2}; svc_dispatch(svc, r, 0); return r[0];
@@ -234,8 +237,12 @@ static void module_sources(void) {
     *(uint8_t *)stack = 0x62;
     assert(!unmap(stack, (uintptr_t)b + 0x4000, P) && b[0x4000] == 0x62);
     g_mod[0].nro = 1;
+    assert(!map(stack, (uintptr_t)b + 0x4000, P));
+    assert(!svc_nro_deactivate(&g_mod[0]) && g_mod[0].loaded);
+    assert(!unmap(stack, (uintptr_t)b + 0x4000, P));
+    assert(svc_nro_deactivate(&g_mod[0]) && !g_mod[0].loaded);
     assert(map(stack, (uintptr_t)b + 0x4000, P) == BAD);
-    g_nmod = 0; memset(g_mod, 0, sizeof g_mod); assert(!munmap(b, 0x20000));
+    g_nmod = 0; memset(g_mod, 0, sizeof test_modules); assert(!munmap(b, 0x20000));
 }
 
 // Apple has no pthread_barrier. The gate makes races deterministic at entry,
@@ -449,7 +456,7 @@ static void *init_worker(void *arg) { *(uint64_t *)arg = info(I_AliasAddr); retu
 int main(int argc, char **argv) {
     if (argc == 2 && !strcmp(argv[1], "--heap-probe")) {
         mem_init();
-        assert(resize(g_heap_cap + 0x200000) == BAD);
+        assert(resize(g_heap_cap + 0x200000) == OOM);
         g_nmod = 1; g_mod[0].size = 0xa00000;
         assert(resize(0x800000) == LIMIT);
         return 0;
@@ -466,6 +473,14 @@ int main(int argc, char **argv) {
 #endif
     assert(!g_nmap && !g_alias_mapped && !g_heap_cur);
     assert(info(I_UsedMem) == DM_GAME_MEM_USED);
+    // Offline NRO copies are not extra guest memory: the game allocates their buffers in its heap. Ordinary modules' large bss still counts.
+    g_nmod = 2;
+    g_mod[0] = (module_t){.size=0x10000000, .file_image_len=0x100000, .patch_off=-0x2000000};
+    g_mod[1] = (module_t){.size=0x160000000, .file_image_len=0x100000, .patch_off=-0x2000000, .nro=1};
+    assert(info(I_UsedMem) == DM_GAME_MEM_USED + 0xff00000);
+    assert(info(I_UsedNonSys) == DM_GAME_MEM_USED + 0xff00000);
+    assert(image_bytes() == 0x10000000);
+    g_nmod = 0;
     free(g_alias_bits); free(g_alias_exposed); assert(!munmap(g_as, RESERVE));
     printf("memory SVCs passed (map limit=%d, host page=%d)\n", DM_GAME_MEM_MAP_LIMIT, memory_getpagesize());
     return 0;

@@ -13,12 +13,13 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
-module_t g_mod[MAX_MOD]; int g_nmod = 1;
+static module_t test_modules[8];
+module_t *g_mod = test_modules; int g_nmod = 1;
 static void (*callback)(const uint64_t *);
 static void (*ui_callback)(const uint64_t *);
 static void (*screen_callback)(const uint64_t *);
 static int have_gate = 1;
-void gate_obs_set(int id, void (*fn)(const uint64_t *)) {
+void gate_obs_read_set(int id, void (*fn)(const uint64_t *)) {
     if (id == OBS_ASPECT_PROJECTION) callback = fn;
     else if (id == OBS_ASPECT_UI_CAMERA) ui_callback = fn;
     else { assert(id == OBS_ASPECT_WORLD_PROJECTION); screen_callback = fn; }

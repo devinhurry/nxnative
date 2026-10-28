@@ -101,12 +101,12 @@ void dm_aspect_install(void) {
         die("[RED] aspect: camera_aspect offsets out of range");
     if (!gate_obs_present(OBS_ASPECT_PROJECTION)) die("[RED] aspect: projection gate missing; rewrite main with the current patch_nso.py");
     g_single_off = a; g_proj_off = b; g_vt_off = c; g_field_off = d; g_dirty_off = e;
-    gate_obs_set(OBS_ASPECT_PROJECTION, aspect_projection);
+    gate_obs_read_set(OBS_ASPECT_PROJECTION, aspect_projection);
     if (*DM_GAME_CAMERA_WORLD_ASPECT) {
         if (sscanf(DM_GAME_CAMERA_WORLD_ASPECT, "%u:0x%llx", &g_world_reg, &g_world_projection) != 2 || g_world_reg > 28 || g_world_projection > 0x10000)
             die("[RED] aspect: invalid camera_world_aspect profile");
         if (!gate_obs_present(OBS_ASPECT_WORLD_PROJECTION)) die("[RED] aspect: world-UI projection gate missing; rewrite main with the current patch_nso.py");
-        gate_obs_set(OBS_ASPECT_WORLD_PROJECTION, aspect_world_projection);
+        gate_obs_read_set(OBS_ASPECT_WORLD_PROJECTION, aspect_world_projection);
     }
     if (*DM_GAME_CAMERA_UI_ASPECT) {
         unsigned long long source, projection, fovy;
@@ -114,7 +114,7 @@ void dm_aspect_install(void) {
             die("[RED] aspect: invalid camera_ui_aspect profile");
         if (!gate_obs_present(OBS_ASPECT_UI_CAMERA)) die("[RED] aspect: UI camera gate missing; rewrite main with the current patch_nso.py");
         g_ui_source = source; g_ui_projection = projection; g_ui_fovy = fovy;
-        gate_obs_set(OBS_ASPECT_UI_CAMERA, aspect_ui_camera);
+        gate_obs_read_set(OBS_ASPECT_UI_CAMERA, aspect_ui_camera);
     }
     LOG("aspect: projection gate installed for main build %s", build);
 }

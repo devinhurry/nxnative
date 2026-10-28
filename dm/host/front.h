@@ -80,7 +80,7 @@ void front_look_mode_changed(void);
 // May be called from any thread; NULL disables device motion (the synthetic at-rest / shake sensor is used again).
 enum { DM_MOTION_RESET = 1u };
 typedef struct { float acc[3], gyro[3], quat[4]; uint32_t flags; } dm_motion;
-void dm_motion_set(const dm_motion *m);
+void dm_device_motion_set(const dm_motion *m);
 
 // Save not written (called by the host's hle_fs.c; the iOS front end provides a strong implementation of the same name that shows the native prompt "Not enough storage. Progress was not saved"; the default weak implementation only logs).
 // Timing: when a save write fails (disk full etc.) within one of the game's save transactions (between two Commits), so that this Commit is refused and the previously committed save is unchanged, it is called once per refused transaction;

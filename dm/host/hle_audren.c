@@ -156,6 +156,15 @@ static Result ar_open(void **handle, void *ev, const uint8_t *param, void *work,
     t_in_open = 1; Result r = ev ? orig_ev(handle, ev, p, work, sz) : orig(handle, p, work, sz); t_in_open = 0;
     if (r) { free(owned); LOG("[RED] audren: SDK OpenAudioRenderer failed %#x", r); return r; }
     if (owned) objmap_put(handle[0], owned);   // Close releases it only after the render thread and the SDK have finished with it
+    // The renderer event as the service gives it. With the DSP service (device 0, what the game asked for) OpenAudioRenderer attaches the service's kernel event (auto-clear,
+    // AttachReadableHandleToSystemEvent); with CPU + manual it creates a local one instead (CreateSystemEvent(ev, AutoClear, false), SDK 4: sdk+0x190b6c). A signal of a local
+    // auto-clear event wakes only its highest-priority waiter, a kernel event wakes every waiter (each tries ResetSignal). Donkey Kong Country: Tropical Freeze waits on it from
+    // two threads: its audio thread (priority 29) every frame, and the main thread while CAudioMemoryPool::Shutdown detaches a pool as a level loads (main+0x6fa8c); the audio
+    // thread took every wake and the main thread waited forever. The renderer signals the event through os::SignalSystemEvent, which takes either kind
+    if (ev && *(int32_t *)(param + P_DEVICE) == 0) {
+        static void (*destroy)(void *); if (!destroy) destroy = gsym("_ZN2nn2os18DestroySystemEventEPNS0_15SystemEventTypeE");
+        destroy(ev); hle_bind_system_event(ev, 1);
+    }
     if (atomic_load(&g_open)) { LOG("[RED] audren: a second renderer (the host drives only one)"); return r; }
     g_handle[0] = handle[0]; g_handle[1] = handle[1]; atomic_store(&g_open, 1);
     g_render_tt = dm_guest_thread_spawn(render_main, NULL, 9, 0x10000);
@@ -181,17 +190,24 @@ HLE_FORCE("_ZN2nn5audio18CloseAudioRendererENS0_19AudioRendererHandleE", "close 
 //   (without this, Link's Awakening rendered every frame and played silence: the music and sound effects never reached the output, only the movies' own AudioOut did)
 // SDK 6 (Fire Emblem: Three Houses, CommandListProcessor::Process at sdk+0xaaa00) lays out the command header differently: +0x04 size (s16), +0x06 command ID (s16), +0x10 enabled (u8),
 //   where SDK 8–20 have +0x04 enabled (u8), +0x05 ID (u8), +0x06 size (s16); DeviceSink is ID 16 there (its case in Process is a no-op). Walked with the newer header, the first command's ID
-//   was taken as its size, the second "command" had no magic and the game was silent. The first full command list decides the layout: the one whose walk finds the magic on every command
+//   was taken as its size, the second "command" had no magic and the game was silent. The first list that walks in a supported layout decides the header; an incomplete startup list decides nothing
 // SDK 21 (Rhythm Heaven Groove, CommandListProcessor::Process at sdk+0x24fd50) has no magic: +0x00 enabled (bit 0), +0x01 command ID (u8), +0x02 size (s16), +0x04 estimated time, +0x08 node ID,
 //   and every command body sits 8 bytes earlier. DeviceSink is still ID 0x14 but 0x140 bytes (written at sdk+0x23a7b0): +0x18 device name, +0x120 upsample buffer, +0x128 input count, +0x12c input
 //   indices. Walked as SDK 20, the first command's enabled / ID / size bytes read as a magic of 0x181901 and the game was silent. With no magic, that walk must stay inside the generated list
 // SDK 4.4.0 (Mario Kart 8 Deluxe, GenerateDeviceSinkCommand at sdk+0x19e690) has the SDK 6 header, and its DeviceSink is ID 0xf and 0x130 bytes: +0x14 device name, +0x118 upsample buffer,
 //   +0x120 input count, +0x124 input indices as bytes (s8). No 0x148-byte command, so the first full command list's one 0x130-byte command with 1 to 6 inputs is the sink (g_sink4)
 static int g_sink_id = 0x13, g_hdr6, g_hdr21, g_sink4;
-static int cmd_size(const uint8_t *q) { return g_hdr21 ? *(const int16_t *)(q + 2) : g_hdr6 ? *(const int16_t *)(q + 4) : *(const int16_t *)(q + 6); }
-static int cmd_id(const uint8_t *q) { return g_hdr21 ? q[1] : g_hdr6 ? *(const int16_t *)(q + 6) : q[5]; }
+// Probing the wrong layout can advance by an unaligned size: decode wire fields without typed loads.
+static int cmd_size(const uint8_t *q) { int16_t n; memcpy(&n, q + (g_hdr21 ? 2 : g_hdr6 ? 4 : 6), sizeof n); return n; }
+static int cmd_id(const uint8_t *q) { int16_t id; if (g_hdr21) return q[1]; if (g_hdr6) { memcpy(&id, q + 6, sizeof id); return id; } return q[5]; }
 static int cmd_on(const uint8_t *q) { return g_hdr21 ? q[0] & 1 : g_hdr6 ? q[0x10] : q[4]; }
-static int cmd_ok(const uint8_t *q, const uint8_t *end) { int n = cmd_size(q); return g_hdr21 ? n >= 0x10 && q + n <= end : *(const uint32_t *)q == 0xcafebabeu && n > 0; }
+static int cmd_ok(const uint8_t *q, const uint8_t *end) {
+    size_t header = g_hdr21 ? 0x10 : g_hdr6 ? 0x11 : 8;
+    if (q > end || (size_t)(end - q) < header) return 0;
+    if (!g_hdr21) { uint32_t magic; memcpy(&magic, q, sizeof magic); if (magic != 0xcafebabeu) return 0; }
+    int n = cmd_size(q);
+    return n >= (int)header && (size_t)n <= (size_t)(end - q);
+}
 static int sink_body(void) { return g_hdr21 ? -8 : 0; }   // where DeviceSink's fields sit relative to SDK 8–20
 static int cmd_walks(const uint8_t *cl, uint32_t ncmd, const uint8_t *end) {
     const uint8_t *q = cl + 0x20;
@@ -234,14 +250,19 @@ static uint32_t up_3_2(const int32_t *in, uint32_t n, int32_t *out) {
     return m;
 }
 static int capture(const uint8_t *cl, size_t len, int16_t *dst) {
+    if (len < 0x20) return 0;
     uint32_t ncmd = *(const uint32_t *)(cl + 4), samples = *(const uint32_t *)(cl + 0x14), rate = *(const uint32_t *)(cl + 0x18);
     const int32_t *mix = *(const int32_t *const *)(cl + 8); const uint8_t *cend = cl + len;
     static int logged, hist_logged, layout_done;
-    if (!layout_done && ncmd) {   // first command list: the header layout (SDK 21's first lists have 4 commands or fewer, which the old layout would report as malformed)
-        layout_done = 1;
-        if (!cmd_walks(cl, ncmd, cend)) { g_hdr6 = 1; if (cmd_walks(cl, ncmd, cend)) { g_sink_id = 0x10; LOG("audren: command headers in the SDK 6 layout (+4 size, +6 command ID, +0x10 enabled), DeviceSink is ID 0x10"); } else g_hdr6 = 0; }
-        if (!g_hdr6 && !cmd_walks(cl, ncmd, cend)) { g_hdr21 = 1; if (cmd_walks(cl, ncmd, cend)) LOG("audren: command headers in the SDK 21 layout (no magic: +0 enabled, +1 command ID, +2 size), DeviceSink 0x140 bytes"); else g_hdr21 = 0; }
+    if (!layout_done && ncmd) {   // the header layout, from the first list that walks in one (SDK 21's first lists have 4 commands or fewer, which the old layout would report as malformed)
+        // A list generated before the game's first update need not walk in any layout: Mario Kart 8 Deluxe's (SDK 4.4.0) first list, made by the render thread before the first
+        // RequestUpdate, ends in a zeroed command (first word 0). Taken as the layout, it left the SDK 6 headers read in the newer layout and the game silent; such a list is skipped
+        if (cmd_walks(cl, ncmd, cend)) layout_done = 1;
+        else { g_hdr6 = 1; if (cmd_walks(cl, ncmd, cend)) { layout_done = 1; g_sink_id = 0x10; LOG("audren: command headers in the SDK 6 layout (+4 size, +6 command ID, +0x10 enabled), DeviceSink is ID 0x10"); } else g_hdr6 = 0; }
+        if (!layout_done) { g_hdr21 = 1; if (cmd_walks(cl, ncmd, cend)) { layout_done = 1; LOG("audren: command headers in the SDK 21 layout (no magic: +0 enabled, +1 command ID, +2 size), DeviceSink 0x140 bytes"); } else g_hdr21 = 0; }
+        if (!layout_done) { static int skipped; if (!skipped++) LOG("audren: command list %u commands long walks in no header layout (generated before the first update?): silent frame, the layout is taken from a later list", ncmd); return 0; }
     }
+    if (!layout_done) return 0;
     if (!hist_logged && ncmd > 4) {   // first full command list: command ID histogram and the sink ID check
         hist_logged = 1;
         int hist[64] = {0}, cand = -1, ncand = 0, cand4 = -1, ncand4 = 0, sink_sz = 0x148 + sink_body(); const uint8_t *q = cl + 0x20; char line[512]; size_t o = 0;
@@ -259,8 +280,8 @@ static int capture(const uint8_t *cl, size_t len, int16_t *dst) {
     }
     const uint8_t *c = cl + 0x20;
     for (uint32_t i = 0; i < ncmd; i++) {
+        if (!cmd_ok(c, cend)) { if (!logged++) LOG("[RED] audren: command %u in the command list is malformed (offset %#zx, list %#zx bytes)", i, (size_t)(c - cl), len); return 0; }
         int size = cmd_size(c);
-        if (!cmd_ok(c, cend)) { if (!logged++) LOG("[RED] audren: command %u in the command list is malformed (first word %#x size %d)", i, *(const uint32_t *)c, size); return 0; }
         if (cmd_id(c) == g_sink_id && cmd_on(c)) {
             const uint8_t *b = c + sink_body();
             uint32_t nin = *(const uint32_t *)(b + (g_sink4 ? 0x120 : 0x130)); int16_t in[6];
@@ -304,7 +325,7 @@ static _Atomic uint64_t g_updates, g_renders, g_catchups;
 //   +0x48 rendering device and +0x4c execution mode, both must be 1; +0xf8 / +0x100 command buffer start / length), GenerateCommand takes a Span<std::byte> and returns a Span (x0 start, x1 length: the generated command list),
 //   and the mutex UpdateImpl holds is at +0x2d0 (+0x1f0 in SDK 16). The layout is recognized by the presence of the Span version of GenerateCommand
 typedef struct { uint8_t *p; size_t n; } span_t;
-// The update lock before SDK 19 is the one AudioRenderSystem::Update takes at its start, read off the SDK's own code: nn::os::LockMutex(MutexType*) at +0x1d0 in SDK 4.4.0 (Mario Kart 8 Deluxe)
+// The update lock before SDK 19 is the one AudioRenderSystem::Update takes at its start, read off the SDK's own code: nn::os::LockMutex(MutexType*) at +0x1f8 in SDK 3.5.1 (OCTOPATH TRAVELER), +0x1d0 in SDK 4.4.0 (Mario Kart 8 Deluxe)
 //   and at +0x1d8 in SDK 6.4–8.2, SdkMutexType::Lock at +0x1d8 in SDK 10.4–11.4, +0x1f0 in 13.3–16.2, +0x1f8 in 17.5 (the sdk builds of 24 games on hand; 19 and 20 inline it).
 //   The SDK 16 layout (SdkMutexType at +0x1f0) taken for all of them wrote a lock word into another field and excluded nothing. The prologue copies `this`, adds the offset into a register
 //   and moves it to x0 before the first bl, a PLT stub whose GOT slot the loader bound to one of the two functions; anything else keeps the SDK 16 layout
@@ -342,8 +363,7 @@ static Result render_once(uint8_t *sys, int16_t *dst, int *nout) {
     static span_t (*gen20)(void *, void *, size_t); static size_t mu_off;
     static void (*tmax)(void *, uint32_t), (*setup)(void *, const void *, size_t), (*process)(void *), (*lock)(void *), (*unlock)(void *);
     if (!process) {
-        lock = gsym("_ZN2nn2os12SdkMutexType4LockEv"); unlock = gsym("_ZN2nn2os12SdkMutexType6UnlockEv");
-        gen20 = guest_sym("_ZN2nn5audio6server17AudioRenderSystem15GenerateCommandENS_4SpanISt4byteEE");
+        gen20 =guest_sym("_ZN2nn5audio6server17AudioRenderSystem15GenerateCommandENS_4SpanISt4byteEE");
         if (!gen20) {
             mode = gsym("_ZNK2nn5audio6server17AudioRenderSystem16GetExecutionModeEv"); device = gsym("_ZNK2nn5audio6server17AudioRenderSystem18GetRenderingDeviceEv");
             cbuf = gsym("_ZNK2nn5audio6server17AudioRenderSystem26GetCommandBufferWorkBufferEv"); cbsz = gsym("_ZNK2nn5audio6server17AudioRenderSystem30GetCommandBufferWorkBufferSizeEv");
@@ -351,7 +371,9 @@ static Result render_once(uint8_t *sys, int16_t *dst, int *nout) {
         }
         mu_off = gen20 ? 0x2d0 : 0x1f0; g_sink_id = gen20 ? 0x14 : 0x13;
         int os_mutex = 0;
+        // SdkMutexType is looked up only when the SDK uses it: SDK 3.5.1 has none (OCTOPATH TRAVELER: LockMutex at +0x1f8)
         if (!gen20 && update_lock(&mu_off, &os_mutex) && os_mutex) { lock = gsym("_ZN2nn2os9LockMutexEPNS0_9MutexTypeE"); unlock = gsym("_ZN2nn2os11UnlockMutexEPNS0_9MutexTypeE"); }
+        else { lock = gsym("_ZN2nn2os12SdkMutexType4LockEv"); unlock = gsym("_ZN2nn2os12SdkMutexType6UnlockEv"); }
         LOG("audren: AudioRenderSystem in the SDK %s layout (update lock %s at +%#zx)", gen20 ? "20" : "16", os_mutex ? "nn::os::MutexType" : "SdkMutexType", mu_off);
         tmax = gsym("_ZN2nn5audio3dsp20CommandListProcessor17SetProcessTimeMaxEj"); setup = gsym("_ZN2nn5audio3dsp20CommandListProcessor5SetupEPKvm");
         process = gsym("_ZN2nn5audio3dsp20CommandListProcessor7ProcessEv");

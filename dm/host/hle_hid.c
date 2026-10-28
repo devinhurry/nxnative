@@ -19,6 +19,7 @@
 #include <math.h>
 #include <ctype.h>
 #include <errno.h>
+#include "motion_fusion.h"
 
 enum { NPAD_NO1 = 0, NPAD_HANDHELD = 0x20 };
 enum { STYLE_FULLKEY = 1u << 0, STYLE_HANDHELD = 1u << 1, STYLE_JOYDUAL = 1u << 2, STYLE_JOYLEFT = 1u << 3, STYLE_JOYRIGHT = 1u << 4 };
@@ -30,9 +31,10 @@ enum { STICK_THRESH = 0x4000 };
 typedef struct { int64_t sampling; uint64_t buttons; int32_t lx, ly, rx, ry; uint32_t attributes, _pad; } NpadState;
 _Static_assert(sizeof(NpadState) == 0x28, "NpadState");
 
-// Front-end publishing: the keyboard / touch path (dm_input_set) and player 1's physical controller path (dm_pad_set) are ORed; each further player has a controller path of its own
-// (dm_pad_set_player). Press edges are latched until the game's next read so short presses are not lost
-static _Atomic uint64_t g_btn, g_axes, g_latch, g_pad_btn[DM_PLAYERS], g_pad_axes[DM_PLAYERS], g_pad_latch[DM_PLAYERS];
+// Front-end publishing: the keyboard / touch path (dm_input_set), the scripted path (script_set: DM_KEYS and DM_CTL) and player 1's physical controller path (dm_pad_set) are ORed;
+// each further player has a controller path of its own (dm_pad_set_player). Press edges are latched until the game's next read so short presses are not lost. Scripted presses have
+// their own path because a connected controller publishes its whole state on every change (a DualShock 4's sticks change all the time), which overwrote them on the shared one
+static _Atomic uint64_t g_btn, g_axes, g_latch, g_sc_btn, g_sc_axes, g_sc_latch, g_pad_btn[DM_PLAYERS], g_pad_axes[DM_PLAYERS], g_pad_latch[DM_PLAYERS];
 static _Atomic int64_t g_sampling = 1 << 16;   // starts high so the history entries below the newest keep positive sampling numbers
 static pthread_mutex_t g_look_sample_mu = PTHREAD_MUTEX_INITIALIZER;
 static dm_hid_look_sample g_look_sample;
@@ -40,14 +42,14 @@ static int g_look_sample_valid;
 static uint64_t pack(int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     return (uint64_t)(uint16_t)lx | (uint64_t)(uint16_t)ly << 16 | (uint64_t)(uint16_t)rx << 32 | (uint64_t)(uint16_t)ry << 48;
 }
-// Shake (DM_BTN_SHAKE on either path): whole side-to-side cycles on the guest clock, so the controller always comes back to rest. A press starts a shake (or continues one still
+// Shake (DM_BTN_SHAKE on any player 1 path): whole side-to-side cycles on the guest clock, so the controller always comes back to rest. A press starts a shake (or continues one still
 // finishing), holding keeps shaking, and a release lets the current cycle finish: a tap of one frame is still one whole shake
 #define SHAKE_HZ 6.0
 static const uint64_t SHAKE_CYCLE_NS = (uint64_t)(1e9 / SHAKE_HZ);
 static _Atomic uint64_t g_shake_t0, g_shake_end;   // the current shake's start and end; end = UINT64_MAX while held
 static _Atomic int g_shake_on;
 static void shake_note(void) {
-    int on = ((atomic_load(&g_btn) | atomic_load(&g_pad_btn[0])) & DM_BTN_SHAKE) != 0;
+    int on = ((atomic_load(&g_btn) | atomic_load(&g_sc_btn) | atomic_load(&g_pad_btn[0])) & DM_BTN_SHAKE) != 0;
     if (atomic_exchange(&g_shake_on, on) == on) return;
     uint64_t t = guest_ns();
     if (on) { if (t >= atomic_load(&g_shake_end)) atomic_store(&g_shake_t0, t); atomic_store(&g_shake_end, UINT64_MAX); }
@@ -64,10 +66,14 @@ void dm_pad_set_player(int p, uint64_t buttons, int32_t lx, int32_t ly, int32_t 
     if (!p) shake_note();
 }
 void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) { dm_pad_set_player(0, buttons, lx, ly, rx, ry); }
+static void script_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
+    uint64_t old = atomic_exchange(&g_sc_btn, buttons); atomic_fetch_or(&g_sc_latch, buttons & ~old); atomic_store(&g_sc_axes, pack(lx, ly, rx, ry));
+    shake_note();
+}
 uint64_t dm_input_samples(void) { return (uint64_t)atomic_load(&g_sampling); }
 // DM_KEYS scripted input (for tests): "seconds:key[+key][~hold seconds][*count/interval seconds],...", e.g. "8:A,12:A,15:Down~0.5,16:A+B,40:A*80/2" (A every 2 s from 40 s on, 80 times). Key names A B X Y LS RS L R ZL ZR (plus the sticks LLeft LUp LRight LDown and RLeft RUp RRight RDown) Plus Minus Left Up Right Down, left stick LLeft LUp LRight LDown,
 //   L<x>/<y> and R<x>/<y> = a stick tilted part way (each -1 to 1, y up: a cursor that a full tilt sweeps past its target), T<x>x<y> = a touch at normalized picture coordinates (origin top left) for the hold time, and Shake = the controller shaken for the hold time (at least one whole shake);
-//   held 0.15 s by default, at most 1024 steps (counted after repeats are expanded). Goes through player 1's controller path (dm_pad_set), ORed with keyboard / touch, neither overrides the other. Times are counted from host start.
+//   held 0.15 s by default, at most 1024 steps (counted after repeats are expanded). Goes through player 1's scripted path (script_set), ORed with keyboard / touch and player 1's controller, none overrides another. Times are counted from host start.
 //   An f before the time means a presented frame number ("f7600:A", and the repeat interval counts frames too): when the machine is busy seconds drift from the game's progress, frame numbers do not (used for the Zelda BotW opening route)
 typedef struct { double at, hold; uint64_t btn; int32_t lx, ly, rx, ry; int frame, tap; float tx, ty; } key_step;   // tap: a touch at (tx, ty), normalized
 #define KEY_STEPS 1024
@@ -79,7 +85,7 @@ static void *keys_main(void *arg) {
                    if (g_steps[i].frame ? (double)dm_guest_frame() >= g_steps[i].at : el >= g_steps[i].at) break; usleep(5000); }
         LOG("DM_KEYS: %s%.2f press %#llx (hold %.2f s)", g_steps[i].frame ? "frame " : "", g_steps[i].at, (unsigned long long)g_steps[i].btn, g_steps[i].hold);
         if (g_steps[i].tap) { dm_touch t = {0, g_steps[i].tx, g_steps[i].ty}; dm_touch_set(&t, 1); }
-        dm_pad_set(g_steps[i].btn, g_steps[i].lx, g_steps[i].ly, g_steps[i].rx, g_steps[i].ry); usleep((useconds_t)(g_steps[i].hold * 1e6)); dm_pad_set(0, 0, 0, 0, 0);
+        script_set(g_steps[i].btn, g_steps[i].lx, g_steps[i].ly, g_steps[i].rx, g_steps[i].ry); usleep((useconds_t)(g_steps[i].hold * 1e6)); script_set(0, 0, 0, 0, 0);
         if (g_steps[i].tap) dm_touch_set(NULL, 0);
     }
     return NULL;
@@ -204,7 +210,7 @@ static void *ctl_main(void *arg) {
                 parse_keys(line, &st);
                 LOG("DM_CTL: press %#llx (hold %.2f s)", (unsigned long long)st.btn, st.hold);
                 if (st.tap) { dm_touch t = {0, st.tx, st.ty}; dm_touch_set(&t, 1); }
-                dm_pad_set(st.btn, st.lx, st.ly, st.rx, st.ry); usleep((useconds_t)(st.hold * 1e6)); dm_pad_set(0, 0, 0, 0, 0);
+                script_set(st.btn, st.lx, st.ly, st.rx, st.ry); usleep((useconds_t)(st.hold * 1e6)); script_set(0, 0, 0, 0, 0);
                 if (st.tap) dm_touch_set(NULL, 0);
             }
         }
@@ -239,7 +245,8 @@ static int player_of(uint32_t id) {   // the reported player on npad id; -1 when
     if (id == connected_id()) return 0;
     return id > 0 && id < DM_PLAYERS && reported((int)id) ? (int)id : -1;
 }
-static uint32_t style_of(uint32_t id) { return player_of(id) < 0 ? 0 : id == NPAD_HANDHELD ? STYLE_HANDHELD : STYLE_FULLKEY; }
+static uint32_t style_for_player(uint32_t id, int p) { return p < 0 ? 0 : id == NPAD_HANDHELD ? STYLE_HANDHELD : STYLE_FULLKEY; }
+static uint32_t style_of(uint32_t id) { return style_for_player(id, player_of(id)); }
 static int32_t ax(uint64_t v, int i) { return (int16_t)(v >> (16 * i)); }
 static int32_t pick(int32_t a, int32_t b) { return (a < 0 ? -a : a) >= (b < 0 ? -b : b) ? a : b; }   // whichever of two sources is deflected more
 
@@ -302,12 +309,16 @@ static dm_hid_look_sample look_sample_freeze(const dm_hid_look_sample *sample) {
 static void fill(NpadState *s, uint32_t id, uint32_t style) {
     memset(s, 0, sizeof *s);
     s->sampling = atomic_fetch_add(&g_sampling, 1) + 1;
-    if (!(style_of(id) & style)) return;   // no controller of this id / style: attributes = 0
+    if (!(style_for_player(id, player_of(id)) & style)) return;   // no controller of this id / style: attributes = 0
     // Player 1: the keyboard / touch path, its controller path and those of the players merged into it; another player: its own controller path
     int pl = player_of(id); uint32_t src = pl ? 1u << pl : 1u | merged_players();
     uint64_t b = 0, virtual_buttons = 0; int32_t a[4] = {0};
-    uint64_t k = atomic_load(&g_axes);
-    if (!pl) { virtual_buttons = atomic_load(&g_btn); b = atomic_exchange(&g_latch, 0); for (int i = 0; i < 4; i++) a[i] = ax(k, i); }
+    uint64_t k = atomic_load(&g_axes), c = atomic_load(&g_sc_axes);
+    if (!pl) {
+        virtual_buttons = atomic_load(&g_btn);
+        b = atomic_exchange(&g_latch, 0) | atomic_load(&g_sc_btn) | atomic_exchange(&g_sc_latch, 0);
+        for (int i = 0; i < 4; i++) a[i] = pick(ax(k, i), ax(c, i));
+    }
     int32_t pad_axes[4] = {0};
     for (int p = 0; p < DM_PLAYERS; p++) if (src >> p & 1) {
         b |= atomic_load(&g_pad_btn[p]) | atomic_exchange(&g_pad_latch[p], 0);
@@ -320,7 +331,7 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
     }
     s->lx = a[0]; s->ly = a[1]; s->rx = a[2]; s->ry = a[3];
     if (pl == 0 && dm_look_enabled()) {
-        int32_t virtual_rx = ax(k, 2), virtual_ry = ax(k, 3);
+        int32_t virtual_rx = pick(ax(k, 2), ax(c, 2)), virtual_ry = pick(ax(k, 3), ax(c, 3));
         int32_t physical_rx = pad_axes[2], physical_ry = pad_axes[3];
         int physical_present = physical_rx != 0 || physical_ry != 0;
         int virtual_present = virtual_rx != 0 || virtual_ry != 0;
@@ -427,7 +438,7 @@ HLE_FORCE("_ZN2nn3hid21ShowControllerSupportEPNS0_27ControllerSupportResultInfoE
 // guest clock, as the sensor's 200 Hz, and numbered by time, so a history read returns the samples at those times. Super Mario Odyssey reads all 16 entries of GetSixAxisSensorStates
 // whatever count comes back (main+0x93fd84), takes the newest entry's acceleration for its swing detection (main+0x626244) and its angular velocity, angle and direction (main+0x5d72d4)
 //
-// Device motion (iOS CoreMotion, dm_motion_set): the front end pushes the phone's acceleration, angular velocity and attitude. The first sample becomes the neutral pose, and the
+// Device motion (iOS CoreMotion, dm_device_motion_set): the front end pushes the phone's acceleration, angular velocity and attitude. The first sample becomes the neutral pose, and the
 // phone's screen frame at that pose becomes the virtual controller's frame: X is screen right, Y points into the screen, Z is world up. So at rest the sensor reads (0, 0, -1) G, a
 // forward/back tilt is pitch about the controller's X axis and a left/right turn is yaw about its Z axis, as on a controller held normally. Every later sample is reported relative to
 // that frame. Without samples (Mac, sensor off, or a sensor that stopped) the synthetic at-rest / shake sensor below is used; DM_KEYS Shake keeps working on both paths. The direction
@@ -438,7 +449,7 @@ enum { SIX_PERIOD_NS = 5000000 };
 #define SHAKE_G 3.0
 #define SHAKE_REV 1.5
 typedef struct { uint64_t t_ns; float acc[3], gyro[3], angle[3], dir[9], quat[4]; } MotionSample;   // quat = (w, x, y, z), relative to the neutral pose
-enum { MOTION_HIST = 128, MOTION_STALE_NS = 200000000 };
+enum { MOTION_HIST = 128, DEVICE_MOTION_STALE_NS = 200000000 };
 static MotionSample g_mhist[MOTION_HIST];
 static int g_mhead, g_mcount, g_motion_live, g_frame_ok, g_motion_logged;
 static float g_qdc[4], g_rdc[9];   // device -> controller (qdc: quaternion, rdc: matrix)
@@ -492,7 +503,7 @@ static void euler_zyx(const float m[9], float out[3]) {   // yaw / pitch / roll 
     const float k = (float)(1.0 / (2.0 * M_PI));
     out[0] = x * k; out[1] = y * k; out[2] = z * k;
 }
-void dm_motion_set(const dm_motion *m) {
+void dm_device_motion_set(const dm_motion *m) {
     if (!m) { pthread_mutex_lock(&g_ml); g_motion_live = 0; g_frame_ok = 0; pthread_mutex_unlock(&g_ml); return; }
     float q[4] = { m->quat[0], m->quat[1], m->quat[2], m->quat[3] };
     qnorm(q);
@@ -544,7 +555,7 @@ static int motion_sample(MotionSample *out, uint64_t t) {   // newest sample at 
     pthread_mutex_lock(&g_ml);
     if (g_motion_live && g_mcount > 0) {
         int newest = (g_mhead - 1 + MOTION_HIST) % MOTION_HIST;
-        if (t > g_mhist[newest].t_ns + MOTION_STALE_NS) { pthread_mutex_unlock(&g_ml); return 0; }
+        if (t > g_mhist[newest].t_ns + DEVICE_MOTION_STALE_NS) { pthread_mutex_unlock(&g_ml); return 0; }
         int idx = (g_mhead - g_mcount + MOTION_HIST) % MOTION_HIST;
         for (int i = 0; i < g_mcount; i++) {
             int k = (g_mhead - 1 - i + MOTION_HIST) % MOTION_HIST;
@@ -563,6 +574,87 @@ static int six_at_rest(uint64_t t) {
     }
     return !shaking(t);
 }
+// Live motion (dm_motion_set: a controller's gyro and accelerometer, front_mac.m / DmGamepad.m through motion_apple.h; dm_motion_set_switch: the iPhone's own, already in the
+// Switch frame, DmGamepad.m): while a player's samples keep arriving (within
+// MOTION_STALE_NS on the host clock) their six-axis sensor reports them (motion_fusion.h) instead of lying flat; a shake (DM_BTN_SHAKE) still adds its side-to-side acceleration.
+// Every history entry is the newest sample, numbered by time. DM_MOTION=0 ignores live motion; DM_MOTION_AXES / DM_MOTION_ACC_SIGN map Apple's axes (motion_fusion.h);
+// DM_MOTION_GAIN sets the tilt correction (default 0.5); DM_MOTION_LOG=1 logs player 1's mapped sample once a second, for checking the axes
+enum { MOTION_STALE_NS = 300000000 };
+typedef struct { pthread_mutex_t mu; motion_state st; uint64_t last_ns, received_ns, logged; } live_motion;
+static live_motion g_motion[DM_PLAYERS] = {[0 ... DM_PLAYERS - 1] = {.mu = PTHREAD_MUTEX_INITIALIZER}};
+static live_motion g_hid_motion[DM_PLAYERS] = {[0 ... DM_PLAYERS - 1] = {.mu = PTHREAD_MUTEX_INITIALIZER}};
+static live_motion g_phone_motion = {.mu = PTHREAD_MUTEX_INITIALIZER};
+static pthread_once_t g_motion_once = PTHREAD_ONCE_INIT;
+static motion_map g_motion_map; static float g_motion_gain = 0.5f; static int g_motion_off, g_motion_log, g_phone_mode;
+static void motion_env(void) {
+    const char *e = getenv("DM_MOTION"); g_motion_off = e && !atoi(e);
+    if (!motion_map_parse(&g_motion_map, getenv("DM_MOTION_AXES"))) LOG("[hid] DM_MOTION_AXES='%s' is not like \"x,-z,y\": using x,y,z", getenv("DM_MOTION_AXES"));
+    if ((e = getenv("DM_MOTION_ACC_SIGN")) && atof(e) < 0) g_motion_map.acc_sign = -1;
+    if ((e = getenv("DM_MOTION_GAIN"))) g_motion_gain = (float)atof(e);
+    g_motion_log = (e = getenv("DM_MOTION_LOG")) && atoi(e);
+    e = getenv("DM_PHONE_MOTION"); g_phone_mode = !e || !strcmp(e, "auto") ? -1 : !!atoi(e);
+}
+static void motion_set(int p, const float acc[3], const float rot[3], int source, uint64_t sample_ns) {
+    if (p < 0 || p >= DM_PLAYERS || (source == 1 && p)) return;
+    pthread_once(&g_motion_once, motion_env); if (g_motion_off) return;
+    static motion_map identity = {{0, 1, 2}, {1, 1, 1}, 1, 1};
+    // Each transport owns its orientation. HID batches carry three sample times; arrival time controls freshness, never their integration intervals.
+    live_motion *m = source == 1 ? &g_phone_motion : source == 2 ? &g_hid_motion[p] : &g_motion[p];
+    uint64_t now = now_ns(), t = sample_ns ? sample_ns : now;
+    if (!t || t > now || now - t > MOTION_STALE_NS) return;
+    pthread_mutex_lock(&m->mu);
+    if (!m->last_ns || now - m->received_ns > MOTION_STALE_NS) { motion_reset(&m->st); m->last_ns = 0; }
+    if (m->last_ns && t <= m->last_ns) { pthread_mutex_unlock(&m->mu); return; }
+    float dt = m->last_ns && t > m->last_ns ? (float)((double)(t - m->last_ns) / 1e9) : 0;
+    motion_update(&m->st, source ? &identity : &g_motion_map, acc, rot, dt, g_motion_gain);
+    if (g_motion_log && !p && t - m->logged > 1000000000ull) {
+        m->logged = t;
+        LOG("[hid] motion player 1 (%s): acc %+.2f %+.2f %+.2f G, gyro %+.3f %+.3f %+.3f rev/s (flat and still should read acc 0 0 -1)",
+            source == 1 ? "phone" : source == 2 ? "controller HID" : "controller", m->st.acc[0], m->st.acc[1], m->st.acc[2], m->st.gyro[0], m->st.gyro[1], m->st.gyro[2]);
+    }
+    m->last_ns = t; m->received_ns = now;
+    pthread_mutex_unlock(&m->mu);
+}
+void dm_motion_set(int p, const float acc[3], const float rot[3]) { motion_set(p, acc, rot, 0, 0); }
+void dm_motion_set_switch(int p, const float acc[3], const float rot[3]) { motion_set(p, acc, rot, 1, 0); }
+void dm_motion_set_hid(int p, const float acc[3], const float rot[3], uint64_t t) { if (t) motion_set(p, acc, rot, 2, t); }
+void dm_motion_clear(int p) {
+    if (p < 0 || p >= DM_PLAYERS) return;
+    pthread_mutex_lock(&g_motion[p].mu); g_motion[p].last_ns = 0; pthread_mutex_unlock(&g_motion[p].mu);
+}
+void dm_motion_clear_hid(int p) {
+    if (p < 0 || p >= DM_PLAYERS) return;
+    pthread_mutex_lock(&g_hid_motion[p].mu); g_hid_motion[p].last_ns = 0; pthread_mutex_unlock(&g_hid_motion[p].mu);
+}
+static uint64_t motion_copy(live_motion *m, motion_state *out) {   // copies a source while it is fresh; returns its timestamp
+    uint64_t t;
+    pthread_mutex_lock(&m->mu);
+    t = m->last_ns && now_ns() - m->received_ns <= MOTION_STALE_NS ? m->last_ns : 0;
+    if (t) *out = m->st;
+    pthread_mutex_unlock(&m->mu);
+    return t;
+}
+static int motion_live(int p, motion_state *out) {
+    if (p < 0 || p >= DM_PLAYERS) return 0;
+    pthread_once(&g_motion_once, motion_env);
+    if (!p && g_phone_mode > 0) return motion_copy(&g_phone_motion, out) != 0;
+    // Match the button path: in a one-player game, a controller in another slot also drives player 1.
+    uint32_t src = p ? 1u << p : 1u | merged_players(); uint64_t newest = 0;
+    for (int i = 0; i < DM_PLAYERS; i++) if (src >> i & 1) {
+        motion_state st; uint64_t t = motion_copy(&g_motion[i], &st);
+        if (!t) t = motion_copy(&g_hid_motion[i], &st);
+        if (t > newest) { newest = t; *out = st; }
+    }
+    if (newest) return 1;
+    return !p && g_phone_mode < 0 && motion_copy(&g_phone_motion, out);
+}
+static void six_sample_live(SixAxisState *s, int64_t samp, const motion_state *ms, int shakes) {
+    memset(s, 0, sizeof *s);
+    uint64_t t = (uint64_t)samp * SIX_PERIOD_NS;
+    s->delta_ns = SIX_PERIOD_NS; s->sampling = samp; s->attributes = 1;
+    motion_fill(ms, s->acc, s->gyro, s->angle, s->dir);
+    if (shakes && shaking(t)) s->acc[0] += (float)(SHAKE_G * sin(2 * M_PI * SHAKE_HZ * (double)(t - atomic_load(&g_shake_t0)) / 1e9));
+}
 static void six_synthetic(SixAxisState *s, int64_t samp, uint64_t t, int shakes) {
     memset(s, 0, sizeof *s);
     s->delta_ns = SIX_PERIOD_NS; s->sampling = samp; s->attributes = 1;   // IsConnected
@@ -580,7 +672,7 @@ static void six_synthetic(SixAxisState *s, int64_t samp, uint64_t t, int shakes)
 static void six_sample(SixAxisState *s, int64_t samp, int shakes) {
     uint64_t t = (uint64_t)samp * SIX_PERIOD_NS;
     MotionSample m;
-    if (shakes && !shaking(t) && motion_sample(&m, t)) {   // real device motion; a scripted shake still uses the synthetic cycle
+    if (shakes && g_phone_mode && !shaking(t) && motion_sample(&m, t)) {   // real device motion; a scripted shake still uses the synthetic cycle
         memset(s, 0, sizeof *s);
         s->delta_ns = SIX_PERIOD_NS; s->sampling = samp; s->attributes = 1;
         memcpy(s->acc, m.acc, sizeof m.acc); memcpy(s->gyro, m.gyro, sizeof m.gyro);
@@ -597,7 +689,9 @@ static int six_states(SixAxisState *out, int n, uint32_t h) {
     if (n <= 0) return 0;
     if (!six_connected(h)) { memset(out, 0, sizeof *out * (size_t)n); return 0; }
     int64_t samp = (int64_t)(guest_ns() / SIX_PERIOD_NS);
-    int shakes = player_of(h >> 8 & 0xff) == 0;
+    int pl = player_of(h >> 8 & 0xff), shakes = pl == 0;
+    motion_state ms;
+    if (motion_live(pl, &ms)) { for (int i = 0; i < n; i++) six_sample_live(&out[i], samp - i, &ms, shakes); return n; }
     for (int i = 0; i < n; i++) six_sample(&out[i], samp - i, shakes);
     return n;
 }
@@ -615,8 +709,8 @@ HLE_FORCE("_ZN2nn3hid22GetSixAxisSensorStatesEPNS0_18SixAxisSensorStateEiRKNS0_1
 static uint32_t vib_targets(uint32_t h) {
     unsigned type = h & 0xff, id = h >> 8 & 0xff, motor = h >> 16 & 0xff;
     if (h >> 24 || motor > 1 || (type != 3 && type != 4)) return 0;
-    if (style_of(id) != (1u << (type - 3))) return 0;
     int p = player_of(id);
+    if (style_for_player(id, p) != (1u << (type - 3))) return 0;
     return dm_haptics_available() & (p == 0 ? 1u | merged_players() : 1u << p);
 }
 static void vib_send(const uint32_t *handles, const dm_vibration *values, int n) {
@@ -753,7 +847,11 @@ HLE_FORCE("_ZN2nn3hid16GetGestureStatesEPNS0_12GestureStateEi", "gesture states,
 // Six-axis details: the current state, at rest unless shaking, fusion off
 HLE_FORCE("_ZN2nn3hid17StopSixAxisSensorERKNS0_19SixAxisSensorHandleE", "six-axis sensor; always sampling on the host", void, h_hid_SixStop, const uint32_t *h) { (void)h; }
 HLE_FORCE("_ZN2nn3hid21GetSixAxisSensorStateEPNS0_18SixAxisSensorStateERKNS0_19SixAxisSensorHandleE", "six-axis sensor current state", void, h_hid_SixState, SixAxisState *s, const uint32_t *h) { six_states(s, 1, *h); }
-HLE_FORCE("_ZN2nn3hid21IsSixAxisSensorAtRestERKNS0_19SixAxisSensorHandleE", "six-axis sensor at rest: no motion on the device (or no shake)", unsigned, h_hid_SixRest, const uint32_t *h) { return player_of(*h >> 8 & 0xff) != 0 || six_at_rest(guest_ns()); }
+HLE_FORCE("_ZN2nn3hid21IsSixAxisSensorAtRestERKNS0_19SixAxisSensorHandleE", "six-axis sensor at rest: yes unless player 1's is shaking or a live controller is turning", unsigned, h_hid_SixRest, const uint32_t *h) {
+    int pl = player_of(*h >> 8 & 0xff); motion_state ms;
+    if (motion_live(pl, &ms)) return fabsf(ms.gyro[0]) + fabsf(ms.gyro[1]) + fabsf(ms.gyro[2]) < 0.01f && !(pl == 0 && shaking(guest_ns()));
+    return pl != 0 || !shaking(guest_ns());
+}
 // The console's own six-axis sensor (SevenSixAxisSensor, the body's orientation in handheld mode; The Legend of Zelda: Breath of the Wild): takes a work buffer and is switched through the hid service.
 // SevenSixAxisSensorState (0x40): two timestamps, one counter, acceleration, angular velocity and the attitude quaternion (x, y, z, w). The host only answers when device motion is live; without it
 // (Mac, DM_MOTION=0) it keeps the old "no states" behaviour, so games that never used it see no change.
@@ -761,6 +859,8 @@ typedef struct { uint64_t t0, sampling, unknown; float acc[3], gyro[3], quat[4];
 _Static_assert(sizeof(SevenState) == 0x40, "SevenState");
 static int seven_states(SevenState *out, int n) {
     if (n <= 0) return 0;
+    motion_state controller;
+    if (motion_live(0, &controller) || g_motion_off || !g_phone_mode) return 0;
     uint64_t now = guest_ns();
     MotionSample m;
     if (!motion_sample(&m, now)) return 0;

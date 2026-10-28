@@ -4,7 +4,8 @@
 #include <assert.h>
 #include <stdio.h>
 
-module_t g_mod[MAX_MOD];
+static module_t test_modules[8];
+module_t *g_mod = test_modules;
 int g_nmod;
 static int g_hud_active, g_action_notifications;
 uint64_t dm_guest_frame(void) { return 0; }
@@ -13,7 +14,7 @@ int dm_botw_touch_hud_available(void) { return g_hud_active; }
 void front_botw_touch_action_changed(void) { g_action_notifications++; }
 
 static void setup(void) {
-    memset(g_mod, 0, sizeof g_mod);
+    memset(g_mod, 0, sizeof test_modules);
     g_nmod = 1;
     strcpy(g_mod[0].name, "main");
     strcpy(g_mod[0].build_id, "cd57b23fa4bbad65803d9788c01821ee");

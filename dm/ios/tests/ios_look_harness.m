@@ -80,7 +80,7 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
 - (void)dm_testBotwTouchActionChanged;
 - (void)dm_testPulseBotwL3;
 - (void)reset;
-- (void)padsChanged;
+- (void)padsChanged:(NSNotification *)note;
 - (void)deviceOrientationChanged;
 - (CGPoint)facePos:(int)button;
 - (CGPoint)clickCenter:(int)button;
@@ -206,7 +206,10 @@ void dm_touch_set(const dm_touch *touches, int count) {
     if (count > 0 && touches) g_last_touch = touches[0];
 }
 void dm_aspect_touch_rect(float w, float h, float rect[4]) { rect[0] = rect[1] = 0; rect[2] = w; rect[3] = h; }
-void dm_motion_set(const dm_motion *motion) {
+void dm_motion_set(int p, const float acc[3], const float rot[3]) { (void)p; (void)acc; (void)rot; }
+void dm_motion_clear(int p) { (void)p; }
+void dm_motion_set_switch(int p, const float acc[3], const float rot[3]) { (void)p; (void)acc; (void)rot; }
+void dm_device_motion_set(const dm_motion *motion) {
     if (g_motion_count >= (int)(sizeof g_motion_samples / sizeof g_motion_samples[0])) abort();
     g_motion_samples[g_motion_count++] = *motion;
 }
@@ -1296,7 +1299,7 @@ static void run_tests(DmGamepad *view) {
     } else CHECK(NO, "simulator reports a known interface orientation for the orientation-cancel check");
     reset_look();
     t = touch(600, 150); began(view, t);
-    [view padsChanged];
+    [view padsChanged:nil];
     dispatch_async(dispatch_get_main_queue(), ^{
         CHECK(g_look_count == 2 && g_look_events[1].phase == DM_LOOK_CANCEL,
               "controller-change reset cancels an active look session");

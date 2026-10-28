@@ -276,4 +276,3 @@ static inline void dm_touchpad_botw_move_axis(float dx, float dy, float radius,
                                              int32_t *x, int32_t *y) {
     dm_touchpad_stick_axis_with_response(dx, dy, radius, dm_touchpad_botw_move_defaults(), x, y);
 }
-

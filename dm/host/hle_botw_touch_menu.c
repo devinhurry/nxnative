@@ -2298,9 +2298,9 @@ void dm_botw_touch_menu_install(void) {
     if (strcmp(DM_GAME_ID, "01007EF00011E000") || strcmp(dm_main_build(), BOTW_BUILD)) return;
     if (!gate_obs_present(OBS_BOTW_TOUCH_PANE) || !gate_obs_present(OBS_BOTW_TOUCH_MATRIX) ||
         !gate_obs_present(OBS_BOTW_MENU_SELECT)) return;
-    gate_obs_set(OBS_BOTW_MENU_SELECT, dm_botw_touch_menu_selector);
+    gate_obs_read_set(OBS_BOTW_MENU_SELECT, dm_botw_touch_menu_selector);
     if (gate_obs_present(OBS_BOTW_LIST_WIDGET_UPDATE))
-        gate_obs_set(OBS_BOTW_LIST_WIDGET_UPDATE, selector_list_widget_observe);
+        gate_obs_read_set(OBS_BOTW_LIST_WIDGET_UPDATE, selector_list_widget_observe);
     atomic_store_explicit(&g_selector_hook_installed, 1, memory_order_release);
     const char *trace = getenv("DM_BOTW_MENU_TRACE");
     int tracing = trace ? atoi(trace) : 0;

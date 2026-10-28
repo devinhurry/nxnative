@@ -10,8 +10,9 @@ source "$SRCROOT/Gen/resources.env"
 APP="${TARGET_BUILD_DIR:?}/${UNLOCALIZED_RESOURCES_FOLDER_PATH:?}"
 case "$APP" in /*.app) ;; *) die "Unexpected app resource destination: $APP";; esac
 # Validate every source before copying or removing anything (the external drive may be disconnected).
+resource_dm=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().parents[2])' "$0")
 if [ "$DM_RESOURCE_SEPARATE_ROM" = 0 ]; then
-    [ -e "$DM_RESOURCE_ROMFS/$DM_RESOURCE_MARKER" ] || die "Game files unavailable: $DM_RESOURCE_ROMFS/$DM_RESOURCE_MARKER"
+    python3 "$resource_dm/tools/romfs.py" "$DM_RESOURCE_ROMFS" "$DM_RESOURCE_MARKER" || die "Game files unavailable: $DM_RESOURCE_ROMFS/$DM_RESOURCE_MARKER"
     [ -z "$DM_RESOURCE_AOC" ] || [ -d "$DM_RESOURCE_AOC" ] || die "Add-on content unavailable: $DM_RESOURCE_AOC"
 elif [ "$DM_RESOURCE_SEPARATE_ROM" != 1 ]; then die 'DM_RESOURCE_SEPARATE_ROM must be 0 or 1'; fi
 [ -d "$SRCROOT/Gen/dm" ] || die 'Missing generated game tables; prepare the game again.'
@@ -32,11 +33,21 @@ mkdir -p "$APP/msl/$DM_RESOURCE_MSLDIR"
 mkdir -p "$APP/dm"
 # Remove stale descriptors when switching a prepared project back to a bundled build.
 /usr/bin/rsync -a --delete -- "$SRCROOT/Gen/dm/" "$APP/dm/"
+# DM_COPY_ROMFS=NO: the game files stay out of the app (main.m takes Documents/romfs first, copied there once): a reinstall then sends the code and shaders, not the whole game
 if [ "$DM_RESOURCE_SEPARATE_ROM" = 1 ]; then
-    rm -rf "$APP/romfs" "$APP/aoc"
+    rm -rf "$APP/romfs" "$APP/romfs.img" "$APP/romfs.id" "$APP/aoc"
+elif [ "${DM_COPY_ROMFS:-YES}" = NO ]; then
+    rm -rf "$APP/romfs" "$APP/romfs.img" "$APP/romfs.id"
+    # the image's identity (dm/host/romfs_identity.h): main.m uses only a Documents/romfs.img that matches it; a RomFS folder has none yet (push_romfs.sh packs it), so no identity is written for it
+    if [ -f "$DM_RESOURCE_ROMFS" ]; then
+        python3 -I "$resource_dm/tools/romfs_image.py" --identity "$DM_RESOURCE_ROMFS" "${DM_RESOURCE_TITLE:-}" "${DM_RESOURCE_VERSION:-}" "${DM_RESOURCE_BUILD:-}" > "$APP/romfs.id" || die "identity of $DM_RESOURCE_ROMFS"
+    fi
+elif [ -f "$DM_RESOURCE_ROMFS" ]; then
+    /usr/bin/rsync -a -- "$DM_RESOURCE_ROMFS" "$APP/romfs.img"
+    rm -rf "$APP/romfs"; rm -f "$APP/romfs.id"
 else
-    mkdir -p "$APP/romfs"
-    /usr/bin/rsync -a --delete -- "$DM_RESOURCE_ROMFS/" "$APP/romfs/"
+    mkdir -p "$APP/romfs"; /usr/bin/rsync -a --delete -- "$DM_RESOURCE_ROMFS/" "$APP/romfs/"
+    rm -f "$APP/romfs.img" "$APP/romfs.id"
 fi
 /usr/bin/rsync -a --delete -- "$DM_RESOURCE_SHADERS/" "$APP/msl/$DM_RESOURCE_MSLDIR/"
 for old in "$APP/msl/"*; do

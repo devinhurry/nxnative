@@ -43,7 +43,7 @@ struct dm_flags g_flag;
 uint64_t g_t0_ns;
 static void flags_init(void) {
     g_flag.thr = !!getenv("DM_THR"); g_flag.svc = !!getenv("DM_SVC"); g_flag.fs = !!getenv("DM_FS");
-    g_flag.movie = !!getenv("DM_MOVIE"); g_flag.dbg = !!getenv("DM_DBG"); g_flag.imports = !!getenv("DM_IMPORTS");
+    g_flag.dbg = !!getenv("DM_DBG"); g_flag.imports = !!getenv("DM_IMPORTS");
     g_flag.bootprof = !!getenv("DM_BOOTPROF");
 }
 
@@ -85,16 +85,16 @@ static void host_preload(int argc, char **argv) {
     }
     { void dm_term_install(void); dm_term_install(); }   // SIGTERM graceful exit (hle_lifecycle.c)
     { void crash_set_dump_hook(void (*)(void)); void svc_thread_dump(void); crash_set_dump_hook(svc_thread_dump); }   // Dump guest thread state on a crash
-    const char *names[MAX_MOD]; int n = 0;
+    const char *names[argc + DM_GAME_NMOD]; int n = 0;
     int i = 2;
-    for (; i < argc && strcmp(argv[i], "--") && n < MAX_MOD; i++) names[n++] = argv[i];
+    for (; i < argc && strcmp(argv[i], "--"); i++) names[n++] = argv[i];
     if (i < argc && !strcmp(argv[i], "--")) for (i++; i < argc && g_argc < 63; i++) g_argv[g_argc++] = argv[i];
     else if (*DM_GAME_ARGS) {   // no "--" on the command line (the iOS app, the NSP script's Mac runs): the game profile's game_args, split at spaces
         char *s = strdup(DM_GAME_ARGS);
         for (char *t = strtok(s, " "); t && g_argc < 63; t = strtok(NULL, " ")) g_argv[g_argc++] = t;
         LOG("game arguments from the game profile: %s", DM_GAME_ARGS);
     }
-    if (!n) { static const char *def[] = DM_GAME_MODULES; for (int k = 0; k < DM_GAME_NMOD && n < MAX_MOD; k++) names[n++] = def[k]; }   // default module list from the game profile's modules (Mario: main sdk)
+    if (!n) { static const char *def[] = DM_GAME_MODULES; for (int k = 0; k < DM_GAME_NMOD; k++) names[n++] = def[k]; }   // default module list from the game profile's modules (Mario: main sdk)
     load_modules(argv[1], names, n);
     dm_aspect_install();   // validate support and update the camera on the guest projection-update gate
     dm_look_install();     // validate BOTW's shared native stick-vector gate before enabling relative input
