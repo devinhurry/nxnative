@@ -141,7 +141,7 @@ $(B)/t_movie_vpx: t_movie_vpx.c ../hle_movie.c $(GAME_H) ../gen/vpx/libvpx.a | $
 .PHONY: touchpad_geometry
 touchpad_geometry: $(B)/t_touchpad_geometry
 	$(B)/t_touchpad_geometry
-$(B)/t_touchpad_geometry: t_touchpad_geometry.c ../touchpad_geometry.h ../dm_input.h | $(B)
+$(B)/t_touchpad_geometry: t_touchpad_geometry.c ../touchpad_geometry.h ../botw_stick_settings.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_touchpad_geometry.c -lm
 $(B)/t_aspect: t_aspect.c ../hle_aspect.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	clang -O1 -Wall -I.. $(GINC) -o $@ t_aspect.c

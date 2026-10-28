@@ -9,16 +9,16 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE)); sys.path.insert(0, str(HERE.parent / 'tools'))
 import game, nacp
 
-SECTIONS = ('Game', 'Controls', 'Performance')   # headings on the single settings screen
+SECTIONS = ('Game', 'Controls', 'Touch left stick', 'Performance')   # headings on the single settings screen
 
 
 def rows():
     for n, line in enumerate((HERE / 'settings.tsv').read_text(encoding='utf-8').splitlines(), 1):
         if not line.strip() or line.startswith('#'): continue
         c = line.split('\t')
-        if len(c) not in (7, 8): sys.exit(f'settings.tsv:{n}: 7 or 8 columns expected, {len(c)} found')
+        if len(c) not in (7, 8, 9): sys.exit(f'settings.tsv:{n}: 7 to 9 columns expected, {len(c)} found')
         if c[5] not in SECTIONS: sys.exit(f'settings.tsv:{n}: unknown section: {c[5]}')
-        yield n, c + [''] * (8 - len(c))
+        yield n, c + [''] * (9 - len(c))
 
 
 def fixups_keys(path):   # '# KEY<TAB>value' header rows of a rewriter table
@@ -53,8 +53,9 @@ def build(gid, patched, control):
         return d
 
     out = []
-    for n, (var, kind, values, default, cond, section, label, note) in rows():
+    for n, (var, kind, values, default, cond, section, label, note, fmt) in rows():
         if not shown(cond, n): continue
+        if fmt and (kind != 'range' or fmt not in ('percent', 'number')): sys.exit(f'settings.tsv:{n}: range format is percent or number: {fmt}')
         s = {'env': var, 'kind': kind, 'section': section, 'label': label, 'note': note, 'default': value(default, n)}
         if kind == 'choice':
             opts = [list(l) for l in langs] if values == 'languages' else [v.split('=', 1) for v in values.split(',')]
@@ -64,6 +65,7 @@ def build(gid, patched, control):
         elif kind == 'range':
             lo, hi, st = (float(x) for x in values.split(':'))
             s.update(min=lo, max=hi, step=st)
+            if fmt: s['format'] = fmt
         elif kind == 'toggle':
             if s['default'] not in ('0', '1'): sys.exit(f'settings.tsv:{n}: a toggle defaults to 0 or 1: {s["default"]}')
             on_off = ['1', '0'] if values == '-' else values.split('/')

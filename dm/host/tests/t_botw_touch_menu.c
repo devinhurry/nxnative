@@ -1367,6 +1367,27 @@ static void test_message_advance_owner(void) {
     body_parent[0x59] = 255; body[0x58] = 0;
     assert(!selector_message_prompt_view((uintptr_t)selector.manager, 7000, &message));
 
+    // The goddess uses MessageSp's rendered speech plate, without a name
+    // window. Its whole text area works while the arrow is hidden as well.
+    dm_botw_touch_menu_reset();
+    strcpy((char *)selector.screen + 0x200, "MessageSp_00");
+    fake_pane(85, "N_VoiceA_00", 80, 30, 40, 0, 0);
+    uint8_t *speech_parent = fake_pane(86, "N_TextOut_01", 85, 30, 40, 0, 0);
+    uint8_t *speech = fake_pane(87, "P_Sh_01", 86, 560, 150, 0, -235);
+    assert(native_message_body(speech, "P_Sh_01"));
+    observe_native_pane(speech, 1);
+    dm_botw_touch_menu_test_snapshot(&message);
+    assert(message.footer_action_count == 1 && message.footer_action_buttons[0] == DM_BTN_A);
+    tap(.4f, .82f); assert(sample(current_guest_frame) == DM_BTN_A && !sample(current_guest_frame+1));
+    tap(.15f, .82f); assert(!g_target_valid);
+    speech_parent[0x59] = 0;
+    assert(!selector_message_prompt_view((uintptr_t)selector.manager, current_guest_frame, &message));
+    speech_parent[0x59] = 255;
+    fake_pane(88, "N_Capture_00", 80, 30, 40, 0, 0);
+    put_ptr(speech_parent + PANE_PARENT, (uintptr_t)native_panes[88].bytes);
+    assert(!native_message_body(speech, "P_Sh_01"));
+    dm_botw_touch_menu_reset();
+    strcpy((char *)selector.screen + 0x200, "Message_00");
     // The first-acquisition card uses a differently numbered continuation
     // part and a direct N_Sp_00 backdrop, not the dialogue name window.
     dm_botw_touch_menu_reset();
@@ -1915,6 +1936,44 @@ int main(void) {
     dm_botw_touch_menu_test_snapshot(&generic_view);
     assert(generic_view.map_visible && g_pointer_down && g_map_prompt_down);
     dm_botw_touch_menu_pointer(DM_BOTW_MENU_CANCEL, .75f, .925f);
+    // Impa's map explanation keeps AppMap and AppHome shown underneath
+    // Message_00 in the same input group. Background pane/guide callbacks
+    // and selector ticks must all retain the dialogue's whole-window A.
+    uint8_t *dialog_root = fake_pane(90, "RootPane", -1, 1280, 720, 0, 0);
+    fake_pane(91, "N_NameBase_00", 90, 800, 160, 0, -240);
+    uint8_t *dialog_body = fake_pane(92, "W_Base_00", 91, 800, 160, 0, -240);
+    fake_pane(93, "Pa_ABtn_00", 90, 60, 60, 0, -300);
+    uint8_t *dialog_arrow = fake_pane(94, "P_ArrowS_00", 93, 48, 48, 0, -300);
+    uint8_t dialog_layout[0x40] = {0};
+    uintptr_t previous_layout = selector_read_ptr((uintptr_t)selector.screen, 0x30);
+    put_ptr(dialog_layout + 0x18, (uintptr_t)dialog_root);
+    put_ptr(selector.screen + 0x30, (uintptr_t)dialog_layout);
+    strcpy((char *)selector.screen + 0x200, "Message_00");
+    observe_native_pane(dialog_body, 1);
+    observe_native_pane(dialog_arrow, 1);
+    observe_native_pane(map_pane, 1);
+    dm_botw_touch_menu_test_snapshot(&generic_view);
+    assert(!generic_view.map_visible && generic_view.generic_root == (uintptr_t)dialog_root);
+    observe_native_pane(map_y_icon, 1);
+    dm_botw_touch_menu_test_snapshot(&generic_view);
+    assert(!generic_view.map_visible && generic_view.generic_root == (uintptr_t)dialog_root);
+    dm_botw_touch_menu_view background_page = snapshot_native_view_locked();
+    publish_native_menu_view(&background_page, guide_frame);
+    dm_botw_touch_menu_test_snapshot(&generic_view);
+    assert(!generic_view.map_visible && generic_view.generic_root == (uintptr_t)dialog_root);
+    selector_publish_generic_view((uintptr_t)selector.manager, (uintptr_t)selector.map_screen,
+        2, 1, (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, 0);
+    dm_botw_touch_menu_test_snapshot(&generic_view);
+    assert(!generic_view.map_visible && generic_view.generic_root == (uintptr_t)dialog_root);
+    assert(!sample(guide_frame)); // release any preceding map-button pulse
+    tap(.21f, .75f); // blank dialogue padding, not the map behind it
+    assert(sample(guide_frame + 1) == DM_BTN_A && !sample(guide_frame + 2));
+    dialog_root[0x59] = 0;
+    observe_native_pane(map_pane, 1);
+    dm_botw_touch_menu_test_snapshot(&generic_view);
+    assert(generic_view.map_visible); // the map resumes after the dialogue closes
+    strcpy((char *)selector.screen + 0x200, "PauseMenu_00");
+    put_ptr(selector.screen + 0x30, previous_layout);
     dm_botw_touch_menu_view empty_album = {0};
     assert(selector_cursorless_prompt_view((uintptr_t)selector.manager, guide_frame,
         (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &empty_album));
