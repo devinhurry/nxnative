@@ -72,13 +72,13 @@ module_t *module_of(const void *p);
 uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs);
 // Observation gates (rewriter OBS tables in the profiles' patches.py, applied by patch_nso.py; numbering matches): ordinary callbacks preserve registers; explicit result filters can change x0.
 // IDs 19 / 20 are retained for old rewritten modules; missing callbacks make those gates harmless pass-throughs.
+// ID 36 is retired (BOTW touch sprint); older modules keep it as a pass-through.
 enum { OBS_MOVIE_RING_LINK = 19, OBS_MOVIE_RING_UNLINK = 20,   // legacy Metroid Dread movie request-ring gates
        OBS_UE_MALLOC = 21,                                  // DRAGON QUEST VII Reimagined 1.2.0: Unreal's allocator object just made (hle_uemalloc.c)
        OBS_ASPECT_PROJECTION = 22, OBS_ASPECT_UI_CAMERA = 23, OBS_ASPECT_WORLD_PROJECTION = 24, // BOTW guest camera updates (hle_aspect.c)
        OBS_BOTW_LOOK_VECTOR = 32,                            // BOTW 1.9.0 shared post-filter stick vector (hle_look.c)
        OBS_BOTW_LOOK_SOURCE = 33,                            // BOTW 1.9.0 selected raw stick pair before filtering (hle_look.c)
        OBS_BOTW_TOUCH_PANE = 34, OBS_BOTW_TOUCH_MATRIX = 35, // BOTW 1.9.0 MainShortCut equipment subtree (hle_botw_touchhud.c)
-       OBS_BOTW_SPRINT_QUERY = 36,                         // BOTW 1.9.0 native Dash input result (hle_botw_touch_actions.c)
        OBS_BOTW_MENU_SELECT = 37,                          // BOTW 1.9.0 native box-cursor update before requested-entry consumption
        OBS_BOTW_LIST_WIDGET_UPDATE = 38,                    // BOTW 1.9.0 native list-widget update (passive receiver observation)
        OBS_MAX = 39 };

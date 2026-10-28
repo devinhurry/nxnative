@@ -118,7 +118,6 @@ static dm_botw_rune_icon_state g_botw_rune_icon_snapshot;
 static BOOL g_botw_touch_actions_available;
 static uint64_t g_botw_cancel_complete;
 static uint64_t g_botw_cancel_requested;
-static int g_botw_sprint_requested;
 static BOOL g_botw_touch_menu_active;
 static BOOL g_botw_touch_menu_presented;
 static BOOL g_botw_gameplay_ready = YES;
@@ -148,10 +147,9 @@ int dm_botw_rune_icon_snapshot(dm_botw_rune_icon_state *out) { if (!out) return 
 void dm_botw_touch_hud_publish(int active, float center_x, float center_y) { (void)active; (void)center_x; (void)center_y; }
 void dm_botw_touch_hud_map_tapped(void) {}
 int dm_botw_touch_actions_available(void) { return g_botw_touch_actions_available; }
-void dm_botw_touch_sprint_request(int active) { g_botw_sprint_requested = active; }
 void dm_botw_touch_cancel_trigger(uint64_t bit) { g_botw_cancel_requested |= bit; }
 int dm_botw_touch_cancel_complete(uint64_t bit) { return (g_botw_cancel_complete & bit) != 0; }
-void dm_botw_touch_actions_reset(void) { g_botw_sprint_requested=0; g_botw_cancel_requested=0; g_botw_cancel_complete=0; }
+void dm_botw_touch_actions_reset(void) { g_botw_cancel_requested=0; g_botw_cancel_complete=0; }
 void dm_haptics_apple_controller(int player, GCController *controller) { (void)player; (void)controller; }
 int dm_opmode(void) { return 0; }
 void dm_look_input(int phase, float dx, float dy) {
@@ -526,17 +524,17 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
     CGPoint stickHome=[view dm_testStickHome], shieldHome=[view dm_testShieldHome];
     FakeTouch *ordinaryStick=touch(stickHome.x,stickHome.y), *shieldConcurrent=touch(shieldHome.x+25,shieldHome.y);
     began(view,ordinaryStick); moved(view,ordinaryStick,stickHome.x+110,stickHome.y);
-    CHECK(g_botw_sprint_requested && g_lx > 0,
-          "ordinary left-stick overshoot requests sprint independently");
+    CHECK(!(g_buttons&DM_BTN_B) && g_lx > 0,
+          "ordinary left-stick overshoot remains movement without B");
     began(view,shieldConcurrent); moved(view,shieldConcurrent,shieldHome.x+75,shieldHome.y);
-    CHECK((g_buttons&DM_BTN_ZL) && g_lx > 0 && !g_botw_sprint_requested,
-          "shield-stick movement owns the left axis and clears the suspended ordinary-stick sprint request");
+    CHECK((g_buttons&DM_BTN_ZL) && g_lx > 0 && !(g_buttons&DM_BTN_B),
+          "shield-stick movement owns the left axis without B");
     ended(view,shieldConcurrent,shieldHome.x+75,shieldHome.y);
-    CHECK(!(g_buttons&DM_BTN_ZL) && g_lx > 0 && g_botw_sprint_requested,
-          "lifting the shield stick restores the still-held ordinary left-stick axis and its overshoot sprint request");
+    CHECK(!(g_buttons&DM_BTN_ZL) && g_lx > 0 && !(g_buttons&DM_BTN_B),
+          "lifting the shield stick restores the ordinary left-stick axis without B");
     ended(view,ordinaryStick,stickHome.x+110,stickHome.y);
-    CHECK(g_lx == 0 && !g_botw_sprint_requested,
-          "lifting the ordinary left stick clears its axis and sprint request");
+    CHECK(g_lx == 0 && !(g_buttons&DM_BTN_B),
+          "lifting the ordinary left stick clears its axis");
 
     CGPoint shoulder=[view dm_testDropCenter:7]; FakeTouch *trigger=touch(shoulder.x,shoulder.y); began(view,trigger);
     moved(view,trigger,shoulder.x+150,shoulder.y);
@@ -685,9 +683,13 @@ static void test_botw_stick_response(DmGamepad *view) {
             moved(view,t,home.x+radius*.08,home.y);
             CHECK(g_lx>0 && (!shield || (g_buttons&DM_BTN_ZL)),
                   "both BOTW sticks respond before ten percent, preserving ZL while moving");
+            moved(view,t,home.x+radius*.2,home.y);
+            CHECK(shield ? g_lx>DM_STICK_MAX*.17 && g_lx<DM_STICK_MAX*.19 :
+                           g_lx>DM_STICK_MAX*.29 && g_lx<DM_STICK_MAX*.31,
+                  "only BOTW movement gets the stronger short-drag response; ZL stays linear");
             moved(view,t,home.x+radius*.8,home.y);
-            CHECK(g_lx==DM_STICK_MAX && !g_botw_sprint_requested,
-                  "eighty-percent travel remains full movement without requesting sprint");
+            CHECK(g_lx==DM_STICK_MAX && !(g_buttons&DM_BTN_B),
+                  "eighty-percent travel remains full movement without B");
             ended(view,t,home.x+radius*.8,home.y);
         }
         [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES]; [view setNeedsLayout]; [view layoutIfNeeded];
@@ -723,28 +725,28 @@ static void test_botw_stick_feedback(DmGamepad *view) {
     FakeTouch *stick=touch(start.x,start.y); began(view,stick);
     NSUInteger grip=feedback.count;
     moved(view,stick,start.x+radius*1.1,start.y);
-    CHECK(feedback.count==grip,"moving inside the sprint threshold does not pulse repeatedly");
+    CHECK(feedback.count==grip,"ordinary stick movement adds no haptic pulses");
     CGRect walkDirection=CGPathGetPathBoundingBox([view dm_testStickDirectionLayer].path);
     moved(view,stick,start.x+radius*1.21,start.y);
-    CHECK(feedback.count==grip+1 && g_botw_sprint_requested,"crossing outward pulses once and requests sprint");
+    CHECK(feedback.count==grip && !(g_buttons&DM_BTN_B),"moving outside the ring adds neither haptics nor B");
     CGRect direction=CGPathGetPathBoundingBox([view dm_testStickDirectionLayer].path);
     CHECK(!ring.hidden && !ring.fillColor && ![view dm_testStickDirectionLayer].hidden &&
           fabs(graph.position.x-start.x)<.01 && fabs(graph.position.y-start.y)<.01 &&
           fabs(CGRectGetMinX(direction)-start.x-radius-ring.lineWidth*.5)<.1 &&
-          fabs(direction.size.width-walkDirection.size.width-10*dm_touchpad_u(view.bounds.size.height))<.1,
-          "sprint keeps the center at touch-down and stacks two arrows outside the ring");
+          fabs(direction.size.width-walkDirection.size.width)<.1,
+          "dragging beyond the ring retains the touch-down center and one direction arrow");
     save_pad_preview(view,@"botw-left-drag.png");
     moved(view,stick,start.x+radius*1.3,start.y);
-    CHECK(feedback.count==grip+1,"remaining outside the sprint threshold does not pulse repeatedly");
+    CHECK(feedback.count==grip,"remaining outside the ring adds no haptics");
     moved(view,stick,start.x+radius*1.1,start.y);
-    CHECK(feedback.count==grip+2 && !g_botw_sprint_requested,"crossing inward pulses once and clears sprint");
+    CHECK(feedback.count==grip && !(g_buttons&DM_BTN_B),"moving back toward the ring adds neither haptics nor B");
     direction=CGPathGetPathBoundingBox([view dm_testStickDirectionLayer].path);
     CHECK(fabs(direction.size.width-walkDirection.size.width)<.1,
-          "returning to walking restores a single direction arrow");
+          "moving inward keeps the same single direction arrow");
     moved(view,stick,start.x+radius*1.21,start.y);
     NSUInteger beforeRelease=feedback.count; ended(view,stick,start.x+radius*1.21,start.y);
     CHECK(feedback.count==beforeRelease && ring.hidden && [view dm_testStickDirectionLayer].hidden,
-          "release restores the idle graph without an extra threshold haptic");
+          "release restores the idle graph without an extra haptic");
 
     g_look_enabled=YES; reset_look(); feedback.count=0;
     CGPoint camera=CGPointMake(view.bounds.size.width*.82,view.bounds.size.height*.38);

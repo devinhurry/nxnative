@@ -1,4 +1,4 @@
-// BOTW 1.9 touch-only sprint request and R/ZR drag-cancel input sequencing.
+// BOTW 1.9 touch-only R/ZR drag-cancel input sequencing.
 #include "botw_touch_actions.h"
 #include "dm.h"
 #include "dm_input.h"
@@ -11,7 +11,6 @@ enum { CANCEL_IDLE, CANCEL_REQUESTED, CANCEL_WAIT_FRAME };
 static const char BOTW_TOUCH_ACTION_BUILD[] = "cd57b23fa4bbad65803d9788c01821ee";
 static pthread_mutex_t g_actions_mu = PTHREAD_MUTEX_INITIALIZER;
 static int g_actions_ready, g_cancel_phase;
-static _Atomic int g_sprint_requested;
 static uint64_t g_cancel_pending, g_cancel_complete, g_cancel_frame, g_suppressed_virtual_triggers;
 static _Atomic int g_actions_test_ready;
 
@@ -30,11 +29,6 @@ static int touch_mode_active(void) {
     return actions_ready() && dm_botw_touch_hud_active();
 }
 
-static uint64_t botw_sprint_query_result(const uint64_t *regs) {
-    if (!regs || !dm_botw_touch_sprint_requested()) return regs ? regs[0] : 0;
-    return regs[0] | 1;
-}
-
 void dm_botw_touch_actions_install(void) {
     if (strcmp(DM_GAME_ID, "01007EF00011E000")) return;
     if (strcmp(dm_main_build(), BOTW_TOUCH_ACTION_BUILD)) {
@@ -42,31 +36,13 @@ void dm_botw_touch_actions_install(void) {
         return;
     }
     if (!dm_botw_touch_hud_available()) return;
-    if (!gate_obs_present(OBS_BOTW_SPRINT_QUERY)) {
-        LOG("BOTW touch actions: native Dash query gate is missing; sprint remains disabled");
-        return;
-    }
     pthread_mutex_lock(&g_actions_mu);
     g_actions_ready = 1;
     pthread_mutex_unlock(&g_actions_mu);
-    gate_obs_result_set(OBS_BOTW_SPRINT_QUERY, botw_sprint_query_result);
-    LOG("BOTW touch actions: R/ZR cancel and native Dash query filter enabled for build %s", BOTW_TOUCH_ACTION_BUILD);
+    LOG("BOTW touch actions: R/ZR cancel enabled for build %s", BOTW_TOUCH_ACTION_BUILD);
 }
 
 int dm_botw_touch_actions_available(void) { return actions_ready(); }
-
-void dm_botw_touch_sprint_request(int active) {
-    if (!touch_mode_active()) active = 0;
-    pthread_mutex_lock(&g_actions_mu);
-    atomic_store_explicit(&g_sprint_requested, !!active, memory_order_release);
-    pthread_mutex_unlock(&g_actions_mu);
-}
-
-int dm_botw_touch_sprint_requested(void) {
-    // This is called from the native actor update gate each frame; HUD activity
-    // and the request are atomic so the idle path does not take host mutexes.
-    return dm_botw_touch_hud_active() && atomic_load_explicit(&g_sprint_requested, memory_order_acquire);
-}
 
 static int valid_trigger(uint64_t bit) { return bit == DM_BTN_R || bit == DM_BTN_ZR; }
 
@@ -93,7 +69,6 @@ int dm_botw_touch_cancel_complete(uint64_t trigger_bit) {
 
 void dm_botw_touch_actions_reset(void) {
     pthread_mutex_lock(&g_actions_mu);
-    atomic_store_explicit(&g_sprint_requested, 0, memory_order_release);
     g_cancel_pending = 0;
     g_cancel_complete = 0;
     g_cancel_frame = 0;

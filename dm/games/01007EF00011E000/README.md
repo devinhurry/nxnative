@@ -55,10 +55,9 @@ paths from [zelda-hyrule-ui](https://chaos-xxl.github.io/zelda-hyrule-ui/#/docs)
 and passing input/release checks. The movement stick now rests 10 frontend points
 up/right of its ordinary home. Its idle artwork is a white circle with four inner
 arrows at alpha 0.15; dragging reveals an unfilled gray ring and an arrow just outside it.
-Crossing into sprint stacks a second outward-facing arrow; walking restores one.
-Crossing either way through the existing 120% sprint threshold emits one touch
-haptic, without repeated pulses while staying on one side or an extra release
-pulse. BOTW camera dragging is silent; camera double-tap retains R3 and one pulse.
+Dragging beyond the ring retains one direction arrow, without an extra haptic
+or automatic sprint. BOTW camera dragging is silent; camera double-tap retains
+R3 and one pulse.
 The map/environment cluster moves 60 native layout units left, reserving space
 for + with an 8-point gap. Both +/- use a white cross over a 40%-opaque black
 circle, with no border. Plus has one fixed anchor beside the minimap; its circle
@@ -72,12 +71,22 @@ Y's opaque gray fill and gold outline.
 BOTW touch movement and ZL sticks use a 7% deadzone. Above 430 frontend
 points of viewport height, both outer rings have a fixed 140-point diameter;
 at or below 430, their previous size scaling remains. Full movement stays at
-80% of the radius, and movement-stick sprint stays at 120%. Controller and
-other-game defaults remain unchanged. `inventory-touch-20261025/run28/`
+80% of the radius. Movement uses a continuous radial 0.7-power curve after
+the deadzone: 20% radius produces about 30% stick output instead of 18%, and
+40% produces about 57% instead of 45%. This raises short-drag output without
+a time-based ramp; ZL keeps its linear response. The overshoot sprint gesture,
+double-arrow indication, threshold haptics and native Dash observation have
+been removed. The ordinary B button retains its native behavior. Controller
+and other-game defaults remain unchanged. `inventory-touch-20261025/run28/`
 records passing shared geometry checks, a Mac build and zero UIKit failures,
 including both sticks, short/tall canvases and ordinary-mode restoration.
+`inventory-touch-20261025/run33/` verifies the new curve and sprint removal:
+native input/cancel checks pass, UIKit reports zero failures in 31 look
+sessions, and the rewritten modules have no Dash observation. The matching
+Mac preview reaches gameplay and is registered for quick launch; physical
+iPhone movement feel remains for user acceptance.
 `inventory-touch-20261025/run26/ios-style/` records the plain +/- glyphs,
-outside direction arrows, sprint double arrows and current outline colors;
+outside direction arrows, the historical sprint double arrows and outline colors;
 the UIKit harness passed with zero failures in 31 look sessions.
 `inventory-touch-20261025/run24/ios-final/` records zero UIKit failures, including
 controller/non-BOTW restoration and haptic call counts. Mac gameplay confirmed
