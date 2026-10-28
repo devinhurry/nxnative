@@ -51,17 +51,12 @@ typedef struct { float x, y, width, height; } dm_touchpad_rect;
 #define DM_TP_SHOULDER_HIT_SCALE 1.0f
 #define DM_TP_SHIELD_GAP 8.0f
 #define DM_TP_CANCEL_RADIUS 70.0f
-#define DM_TP_SPRINT_OVERSHOOT 1.2f
 #define DM_TP_BOTW_MAP_RIGHT_INSET 84.0f
 #define DM_TP_BOTW_MAP_TOP 340.0f
 #define DM_TP_BOTW_MENU_SIZE 39.0f
 #define DM_TP_BOTW_MENU_GLYPH_SIZE 19.0f
 #define DM_TP_BOTW_MENU_Y_OFFSET 4.0f
 #define DM_TP_BOTW_MENU_GAP 8.0f
-
-static inline int dm_touchpad_sprint_requested(float displacement, float visible_radius) {
-    return visible_radius > 0.0f && displacement > visible_radius * DM_TP_SPRINT_OVERSHOOT;
-}
 
 static inline float dm_touchpad_u(float height) {
     float u = height / 430.0f;
@@ -257,5 +252,17 @@ static inline void dm_touchpad_stick_axis_with_deadzone(float dx, float dy, floa
 static inline void dm_touchpad_stick_axis(float dx, float dy, float radius,
                                          int full_tilt, int32_t *x, int32_t *y) {
     dm_touchpad_stick_axis_with_deadzone(dx, dy, radius, full_tilt, DM_TP_DEAD, x, y);
+}
+
+// BOTW touch movement: retain the radial deadzone and full-travel endpoint,
+// but give short drags more output with a continuous 0.7-power response.
+static inline void dm_touchpad_botw_move_axis(float dx, float dy, float radius,
+                                             int32_t *x, int32_t *y) {
+    dm_touchpad_stick_axis_with_deadzone(dx, dy, radius, 0, DM_TP_BOTW_STICK_DEAD, x, y);
+    float magnitude = hypotf((float)*x, (float)*y) / DM_STICK_MAX;
+    if (magnitude <= 0.0f || magnitude >= 1.0f) return;
+    float gain = powf(magnitude, -0.3f);
+    *x = (int32_t)lrintf(*x * gain);
+    *y = (int32_t)lrintf(*y * gain);
 }
 

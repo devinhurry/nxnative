@@ -425,10 +425,9 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
 - (void)updateStick:(dm_touchpad_point)p {
     float dx = p.x - _stickCenter.x, dy = p.y - _stickCenter.y, radius = self.stickRadius;
     float d = hypotf(dx, dy);
-    if (_active) dm_botw_touch_sprint_request(dm_touchpad_sprint_requested(d, radius));
     if (d > radius) { dx *= radius / d; dy *= radius / d; }
-    dm_touchpad_stick_axis_with_deadzone(dx, dy, radius, 0,
-        _active ? DM_TP_BOTW_STICK_DEAD : DM_TP_DEAD, &g_preview_lx, &g_preview_ly);
+    if (_active) dm_touchpad_botw_move_axis(dx, dy, radius, &g_preview_lx, &g_preview_ly);
+    else dm_touchpad_stick_axis(dx, dy, radius, 0, &g_preview_lx, &g_preview_ly);
     push(); [self setNeedsDisplay:YES];
 }
 - (void)updateShield:(dm_touchpad_point)p {
@@ -552,7 +551,6 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
             _lookTapPending = NO;
         }
     }
-    if (_active) dm_botw_touch_sprint_request(0);
     if (_owner == PREVIEW_BUTTON && (_button == 7 || _button == 9)) {
         uint64_t bit = 1ull << _button;
         if (!(_cancelPending & bit)) _cancelLatched &= ~bit;
@@ -567,7 +565,6 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     if (_owner == PREVIEW_GAME) dm_touch_set(NULL,0);
     if (_owner == PREVIEW_LOOK) dm_look_input(DM_LOOK_CANCEL,0,0);
     if (dm_botw_touch_hud_available()) dm_botw_touch_actions_reset();
-    dm_botw_touch_sprint_request(0);
     _lookTapPending = NO; _stickTapEnd = 0; _owner = PREVIEW_NONE; _hasTouch = NO; _held = 0; _cancelPending = _cancelLatched = 0;
     g_preview_lx = g_preview_ly = 0; g_preview_buttons = 0;
     dm_input_cancel_virtual_latch(DM_BTN_LS | DM_BTN_RS | DM_BTN_MINUS); push();
@@ -599,8 +596,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
         [[NSColor colorWithWhite:DM_BOTW_STROKE_GRAY alpha:DM_BOTW_STROKE_ALPHA] setStroke];
         NSBezierPath *outer=[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(ring.x-r,ring.y-r,2*r,2*r)];
         outer.lineWidth=DM_BOTW_STICK_RING_WIDTH; [outer stroke];
-        int sprint=dm_touchpad_sprint_requested(hypotf(_last.x-sh.x,_last.y-sh.y),r);
-        preview_draw_botw_glyph(dm_botw_stick_direction_path(CGPointMake(sh.x,sh.y),CGPointMake(_last.x,_last.y),r,u,sprint),h,glyphColor);
+        preview_draw_botw_glyph(dm_botw_stick_direction_path(CGPointMake(sh.x,sh.y),CGPointMake(_last.x,_last.y),r,u),h,glyphColor);
     }
     NSColor *faint=[NSColor colorWithWhite:1 alpha:DM_BOTW_STICK_GRAPH_ALPHA]; [faint setStroke];
     CGFloat kr=DM_TP_KNOB_R*u;
@@ -682,7 +678,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
         CGPoint origin=CGPointMake(home.x,home.y);
         preview_draw_botw_glyph(dm_botw_shield_graph_path(origin,u),h,glyphColor);
         if (_owner==PREVIEW_SHIELD)
-            preview_draw_botw_glyph(dm_botw_stick_direction_path(origin,CGPointMake(_last.x,_last.y),self.stickRadius,u,0),h,glyphColor);
+            preview_draw_botw_glyph(dm_botw_stick_direction_path(origin,CGPointMake(_last.x,_last.y),self.stickRadius,u),h,glyphColor);
     }
     float py=DM_TP_PILL_Y*u;
     for (int b=10;b<=11;b++) {

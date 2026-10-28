@@ -143,19 +143,13 @@ static inline CGPathRef dm_botw_shield_graph_path(CGPoint center, CGFloat unit) 
 }
 
 static inline CGPathRef dm_botw_stick_direction_path(CGPoint origin, CGPoint touch,
-                                                     CGFloat radius, CGFloat unit, int sprint) {
+                                                     CGFloat radius, CGFloat unit) {
     CGFloat dx = touch.x - origin.x, dy = touch.y - origin.y, distance = hypot(dx, dy);
     if (!(distance > 0)) return NULL;
     // The arrow's inner edge meets the ring's outer edge, rather than
-    // straddling the perimeter. Sprint adds a second outward-facing arrow.
+    // straddling the perimeter.
     CGFloat height = 22 * unit;
     radius += height * 5 / 18 + DM_BOTW_STICK_RING_WIDTH * .5;
-    CGMutablePathRef path = CGPathCreateMutable();
-    for (int i = 0; i < (sprint ? 2 : 1); i++) {
-        CGFloat r = radius + i * 10 * unit;
-        CGPoint at = CGPointMake(origin.x + r * dx / distance, origin.y + r * dy / distance);
-        CGPathRef arrow = dm_botw_hyrule_arrow_path(at, height, atan2(dy, dx));
-        CGPathAddPath(path, NULL, arrow); CGPathRelease(arrow);
-    }
-    return path;
+    CGPoint at = CGPointMake(origin.x + radius * dx / distance, origin.y + radius * dy / distance);
+    return dm_botw_hyrule_arrow_path(at, height, atan2(dy, dx));
 }

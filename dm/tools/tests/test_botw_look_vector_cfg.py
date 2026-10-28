@@ -101,9 +101,7 @@ assert word(0xD5800C) == 0x910023E0 and word(0xD58010) == 0xF90007E8
 assert word(0xD58014) == 0x941FBE5F and word(0xD58018) == 0x360000C0
 assert re.search(r"\(0xd58008,\s*33,\s*'f9409408'", patches), "OBS33 is not at the pre-filter selected source load"
 assert re.search(r"\(0xd5801c,\s*32,\s*'fd400be8'", patches), "OBS32 is not installed at the shared getter epilogue"
-assert re.search(r"OBS_SAFE\s*=\s*\{'cd57b23fa4bbad65803d9788c01821ee':\s*\{0xd5801c,\s*0x27ae4,\s*0xe1a628,\s*0xccfd5c\}\}", patches), "BOTW's established interior sites and validated Dash result filter changed"
-assert re.search(r"\(0xccfd5c,\s*36,\s*'0a080008'", patches), "BOTW native Dash query result filter moved or changed"
-assert re.search(r"OBS_SAFE\s*=\s*\{'cd57b23fa4bbad65803d9788c01821ee':\s*\{[^}]*0xccfd5c", patches), "BOTW native Dash result filter lacks its validated interior-site declaration"
+assert re.search(r"OBS_SAFE\s*=\s*\{'cd57b23fa4bbad65803d9788c01821ee':\s*\{0xd5801c,\s*0x27ae4,\s*0xe1a628\}\}", patches), "BOTW's established interior sites changed"
 assert "VALIDATE = {'cd57b23fa4bbad65803d9788c01821ee': validate_main}" in patches, "strict original-word checks are not profile-owned"
 dm_h = (Path(__file__).parents[2] / "host" / "dm.h").read_text()
 assert re.search(r"OBS_BOTW_LOOK_VECTOR\s*=\s*32", dm_h), "host observer ID does not match OBS32"

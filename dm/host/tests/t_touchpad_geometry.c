@@ -77,6 +77,19 @@ static void test_stick_shaping(void) {
         assert(x == DM_STICK_MAX && !y);
         dm_touchpad_stick_axis(radius*.08f,0,radius,0,&x,&y);
         assert(!x && !y); // shared default stays unchanged
+        dm_touchpad_botw_move_axis(radius*.06f,0,radius,&x,&y);
+        assert(!x && !y);
+        dm_touchpad_botw_move_axis(radius*.2f,0,radius,&x,&y);
+        assert(x > DM_STICK_MAX*.29f && x < DM_STICK_MAX*.31f && !y);
+        dm_touchpad_botw_move_axis(radius*.4f,0,radius,&x,&y);
+        assert(x > DM_STICK_MAX*.57f && x < DM_STICK_MAX*.59f && !y);
+        dm_touchpad_botw_move_axis(radius*.8f,0,radius,&x,&y);
+        assert(x == DM_STICK_MAX && !y);
+        dm_touchpad_botw_move_axis(radius*1.3f,0,radius,&x,&y);
+        assert(x == DM_STICK_MAX && !y); // outside the ring remains ordinary full movement
+        dm_touchpad_botw_move_axis(-radius*.12f,-radius*.16f,radius,&x,&y);
+        assert(x < 0 && y > 0);
+        nearf(-(float)x/y,.75f,.0003f); // radial shaping preserves direction
     }
 }
 
@@ -153,11 +166,6 @@ static void test_botw_new_touch_geometry(void) {
         assert(shield.y < rune.y && rune.y < stick.y);
         assert(rune_dist >= (DM_TP_STICK_R*DM_TP_STICK_GRAB + DM_TP_L_R*1.45f + DM_TP_SHIELD_GAP)*u - 0.01f);
         assert(hypotf(rune.x-shield.x, rune.y-shield.y) > (DM_TP_STICK_R+DM_TP_L_R)*u);
-        float stick_r = DM_TP_STICK_R * u;
-        assert(!dm_touchpad_sprint_requested(stick_r * 1.19f, stick_r));
-        assert(!dm_touchpad_sprint_requested(stick_r * 1.2f, stick_r));
-        assert(dm_touchpad_sprint_requested(stick_r * 1.21f, stick_r));
-        assert(!dm_touchpad_sprint_requested(stick_r * 1.21f, 0.0f));
         assert(!dm_touchpad_cancel_outside(60,50,50,50,DM_TP_CANCEL_RADIUS));
         assert(dm_touchpad_cancel_outside(50+DM_TP_CANCEL_RADIUS+1,50,50,50,DM_TP_CANCEL_RADIUS));
         float canvas_width = h * 16.0f / 9.0f;

@@ -7,10 +7,6 @@
 module_t g_mod[MAX_MOD];
 int g_nmod;
 static int g_hud_active, g_action_notifications;
-static uint64_t (*g_result_filter)(const uint64_t *regs);
-int gate_obs_present(int id) { return id == OBS_BOTW_SPRINT_QUERY; }
-void gate_obs_set(int id, void (*fn)(const uint64_t *)) { (void)id; (void)fn; }
-void gate_obs_result_set(int id, uint64_t (*fn)(const uint64_t *)) { assert(id == OBS_BOTW_SPRINT_QUERY); g_result_filter = fn; }
 uint64_t dm_guest_frame(void) { return 0; }
 int dm_botw_touch_hud_active(void) { return g_hud_active; }
 int dm_botw_touch_hud_available(void) { return g_hud_active; }
@@ -24,32 +20,19 @@ static void setup(void) {
     g_hud_active = 1;
     g_action_notifications = 0;
     dm_botw_touch_actions_test_clear();
-    dm_botw_touch_actions_test_enable(1);
-    g_result_filter = NULL;
     dm_botw_touch_actions_install();
-    assert(g_result_filter);
+    assert(dm_botw_touch_actions_available()); // cancellation needs no native Dash observation
 }
 
 int main(void) {
     setup();
     uint64_t other = 0, virtual = 0;
     assert(dm_botw_touch_actions_available());
-    uint64_t regs[31] = {0};
-    regs[0] = 0x15;
-    assert(g_result_filter(regs) == 0x15); // no sprint intent preserves the native result exactly
-    dm_botw_touch_sprint_request(1);
-    assert(dm_botw_touch_sprint_requested());
-    regs[0] = 0;
-    assert(g_result_filter(regs) == 1); // only this native B-query result receives touch intent
-    regs[0] = 0x15;
-    assert(g_result_filter(regs) == 0x15); // native result stays unchanged when already true
-    g_hud_active = 0;
-    assert(!dm_botw_touch_sprint_requested());
-    dm_botw_touch_sprint_request(1);
-    assert(!dm_botw_touch_sprint_requested());
-    regs[0] = 0x15;
-    assert(g_result_filter(regs) == 0x15); // HUD/controller mode-off leaves the query untouched
-    g_hud_active = 1;
+    dm_botw_touch_actions_apply(&other, &virtual, 40);
+    assert(!other && !virtual); // ordinary movement never contributes B
+    other = DM_BTN_B;
+    dm_botw_touch_actions_apply(&other, &virtual, 40);
+    assert(other == DM_BTN_B); // the normal button keeps its native behavior
     other = DM_BTN_A; virtual = DM_BTN_X;
     g_hud_active = 0;
     dm_botw_touch_actions_apply(&other, &virtual, 41);
@@ -137,5 +120,5 @@ int main(void) {
     dm_botw_touch_cancel_trigger(DM_BTN_L);
     assert(!dm_botw_touch_cancel_complete(DM_BTN_L));
     dm_botw_touch_actions_test_clear();
-    puts("t_botw_touch_actions: touch-mode sprint gating and frame-acknowledged R/ZR cancel sequencing passed");
+    puts("t_botw_touch_actions: native button preservation and frame-acknowledged R/ZR cancel sequencing passed");
 }

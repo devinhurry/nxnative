@@ -214,7 +214,7 @@ The movement-stick, threshold-feedback, circular +/- spacing and L badge revisio
 
 The exterior-only button-border revision is documented in the [game note](../dm/games/01007EF00011E000/README.md#what-it-needs). `run25/ios-border/` records zero failures in 31 look sessions and its rendered `botw-buttons.png`; `run25/mac-borders.log` belongs to the matching Mac preview.
 
-The subsequent plain +/- and direction-cursor revision is checked in `run26/ios-style/`: zero failures in 31 look sessions, including controller/non-BOTW restoration. Plus and Minus retain their hit areas but draw only white glyphs. Movement and ZL direction arrows meet the outside edge of the ring. Movement sprint stacks two outward-facing arrows and returning below the threshold restores one, without changing the native axes or feedback edges. `botw-left-drag.png` records the double-arrow sprint appearance.
+The subsequent plain +/- and direction-cursor revision is checked in `run26/ios-style/`: zero failures in 31 look sessions, including controller/non-BOTW restoration. Plus and Minus retain their hit areas but draw only white glyphs. Movement and ZL direction arrows meet the outside edge of the ring. The historical movement sprint stacked two outward-facing arrows; `botw-left-drag.png` records that appearance. The sprint gesture and its feedback were removed in the later movement-response revision below.
 
 The same run closes the Sell-grid horizontal-paging regression; see the [game note](../dm/games/01007EF00011E000/README.md#what-it-needs) for the cause and fix. `sell-swipe-next.png`, `sell-swipe-previous.png`, `sell-quantity-blocks-paging.png` and `sell-paging-evidence.txt` record actual Mac pointer checks. `menu-unit.log` passes direction/release, live geometry, hidden/stale/other-owner rejection and quantity-modal checks. `mac-final.log` is the current preview, and `quick-check.log` checks its registered launch manifest.
 
@@ -329,3 +329,15 @@ Corrected 21:10 Mac acceptance (`mac-shop-fixed.log`):
 `quick-check.log` validates the final registered host and rewritten modules;
 `executable-check.txt` matches the prepared host to the running preview.
 `source-save-check.txt` confirms the six original save files are unchanged.
+
+## Movement response and sprint removal (2026-10-28)
+
+The stronger short-drag response and removal of overshoot sprint are recorded
+in the [game note](../dm/games/01007EF00011E000/README.md#what-it-needs).
+`inventory-touch-20261025/run33/native-input.log` covers direction, neutral/full
+endpoints, ordinary B preservation and R/ZR cancellation. `ios-input/` reports
+zero failures in 31 look sessions, including short/tall layouts, linear ZL,
+controller/non-BOTW restoration, one direction arrow and no overshoot haptics.
+`rewrite.log` and `look-cfg.log` validate the refreshed modules and retained
+camera observations. `mac-shop-response.log` records the updated Mac preview
+reaching gameplay; `quick-check.log` validates the prepared launch runtime.

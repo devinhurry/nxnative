@@ -5,8 +5,6 @@
 // physical controller state and the ordinary virtual button/latch paths stay separate.
 void dm_botw_touch_actions_install(void);
 int dm_botw_touch_actions_available(void);
-void dm_botw_touch_sprint_request(int active);
-int dm_botw_touch_sprint_requested(void); // queried only by BOTW's native walking sprint decision
 void dm_botw_touch_cancel_trigger(uint64_t trigger_bit); // DM_BTN_R or DM_BTN_ZR
 int dm_botw_touch_cancel_complete(uint64_t trigger_bit);
 void dm_botw_touch_actions_reset(void);
