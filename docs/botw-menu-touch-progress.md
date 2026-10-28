@@ -1,6 +1,6 @@
 # BOTW menu touch progress
 
-Updated: 2026-10-27 (Asia/Shanghai).
+Updated: 2026-10-28 (Asia/Shanghai).
 
 This is the active progress tracker. Update it after each verified feature or new failure. `HANDOFF.md` is historical context, not the current status.
 
@@ -44,7 +44,7 @@ Mac menu coverage includes the complete merged graphics host with shaders from t
 | Shop Sell categories | Beedle Mac verified | Native category bindings select Cooking, Armor and Materials directly, including the two-page Materials configuration. Disabled weapon tabs remain inert; no sale was made in this regression check. |
 | Movement-stick L3 double-tap timing | Shared geometry and UIKit verified; physical iPhone pending | Maximum release-to-next-down gap is 200 ms. Platform tap/distance recognition remains in place; 190 ms passes, 210/350 ms fail. Camera double taps and ordinary gamepad handling stay unchanged. |
 | Dialogue choices | Mac verified | Direct buy/sell/Good-bye, quantity confirmation and cancellation choices work with Beedle. Domidak/Prissen's two-option conversation also selects its requested branch directly and advances across speaker changes. Other conditional NPC layouts remain unverified. |
-| Shops, buy/sell and quantity | Beedle Mac verified | Direct purchase rows use the shared native list setter with the independently validated shop receiver class. Numeric Message fields expose their live number and +/- controls even when the registered hit pane is offscreen. Quantity increment/decrement, All-of-them, cancellation, actual sale and two-item purchase passed. Sell-grid left/right paging and page-arrow touch also passed; quantity dialogs block background paging. Other shop layouts remain unverified. |
+| Shops, buy/sell and quantity | Beedle Mac verified | Direct purchase rows use the shared native list setter with the independently validated shop receiver class. Numeric Message fields expose their live number and +/- controls even when the registered hit pane is offscreen. Quantity increment/decrement, All-of-them, cancellation, actual sale and two-item purchase passed. A chosen count is confirmed by tapping the dialogue window or the number box itself, and each arrow responds over a finger-sized strip outwards from the box rather than over the native pad-cursor part alone. Sell-grid left/right paging and page-arrow touch also passed; quantity dialogs block background paging. Other shop layouts remain unverified. |
 | Album/photo operations | Deferred by user | Thumbnail selection, viewing, paging, delete confirmation and Back. |
 | Ability Controls list and details | Mac verified | Direct final-row selection, native previous arrow, forward vertical swipe and Cancel back to the list. Cursorless pages resolve one live native owner and reject hidden, stale, ambiguous or input-disabled owners. |
 | Save selection list swipe | Mac verified | Swiping upward reveals the bottom save, swiping downward restores the top. Shares native focus-and-scroll with Options; a swipe never confirms a load. Tapping after a swipe still opens the selected save's confirmation. |
@@ -276,3 +276,37 @@ opening inventory. `shrine-final.png` shows the final build in the shrine.
 opening the map and Back restoring both buttons in their fixed positions.
 The matching host is registered for quick launch. Physical iPhone acceptance
 remains separate.
+
+## Quantity confirm and value arrows (2026-10-28)
+
+External evidence: `01007EF00011E000-work/inventory-touch-20261025/run31/`.
+
+Two shop reports came from the same cause class: a control whose native hit
+part is sized for the pad cursor, not for a finger.
+
+- A quantity dialogue (`Message_00` with a live `T_Num_00`) shows no confirm
+  row, and its button guide has no A row to tap, so a count dialled in with the
+  arrows could not be accepted by touch at all. The dialogue window
+  (`W_SysBase_00`, falling back to `W_Base_00`) is now published as that A, the
+  way a cursor-less prompt window already accepts A. Tapping the window body
+  (`0.470, 0.860`) or the number box (`0.806, 0.718`) both reach the native
+  confirmation: `BOTW menu tap ... footers=1` then `emit ... target=-3`, and
+  `emit ... target=0` for the box.
+- The +/- parts (`Pa_ArrowL_00`, `Pa_ArrowR_00`) are 25x56 canvas units beside
+  the value box, and the box's own hit pane overlaps their inner edge, so only
+  a ~25-pixel sliver of each drawn arrow adjusted. Each arrow now keeps the
+  strip outwards from the value box, one row pitch tall (57x72 units here,
+  about 40x28 points on a phone), stopping at the box's middle so the box keeps
+  its own tap. Probe taps at the strip's outer corners all adjusted in the
+  expected direction (`leftX=+32767`, `+32767`, `-32767`).
+- Actual Mac runs: selling Ancient Screws confirmed "I think 2 of those would be
+  worth about 24 rupees"; buying three Arrows confirmed 18 rupees, took the
+  coins to 47, the stock to 17 and the inventory to 25. Selling all 18 apples
+  paid 54.
+
+Focused checks: `make -C dm/host/tests GAME=01007EF00011E000
+build/t_botw_touch_menu` and `build/t_botw_touch_actions` pass, as do
+`build/t_hid` and `build/t_aspect`. Physical iPhone validation of both strips
+and the confirm tap is still open, as is the device report that the buy
+OK/On-second-thought rows did not respond: those rows are wide native
+`Pa_Btn_*` parts and responded in every Mac run.

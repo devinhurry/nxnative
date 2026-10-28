@@ -15,6 +15,10 @@ BOTW touch-menu coverage and remaining runtime validation are tracked in
 Mac checks cover direct quest selection, category changes and paging, and
 Options adjustments and list swipes, stable control visibility during menu
 animations, direct map dragging, and Beedle dialogue/buy/sell/quantity flows.
+A shop quantity is accepted by tapping the dialogue window or the number box
+itself, and each +/- arrow keeps the strip outwards from the box as its touch
+target; the native arrow parts are pad-cursor sized and responded only on a
+sliver of the drawn arrow.
 The MainScreen root remains shown between dialogue pages; its native heart-HUD
 InOut layer establishes actual gameplay presentation across those gaps.
 Cursorless ability explanations use their live native Back and page arrows;
