@@ -48,7 +48,8 @@ int dm_botw_touch_hud_active(void) {
 void dm_botw_touch_hud_publish(int active, float center_x, float center_y) {
     if (!strcmp(DM_GAME_ID, "01007EF00011E000")) {
         if (!isfinite(center_x) || !isfinite(center_y)) active = 0;
-        if (center_x < 0 || center_x > 1 || center_y < 0 || center_y > 1) active = 0;
+        // Coordinates use the centered 16:9 canvas, not the whole display.
+        // Edge controls can legitimately lie outside [0,1] on wider screens.
         int became_inactive;
         pthread_mutex_lock(&g_touchhud_mu);
         became_inactive = g_touchhud.active && !active;
@@ -342,9 +343,12 @@ static void publish_map_rect(uint8_t *pane) {
         invalidate_map_rect();
         return;
     }
-    float edge_left = dm_aspect_hud_offset(0), hud_width = 1280 + edge_left + dm_aspect_hud_offset(1);
-    float x0 = fmaxf(0, (left + 640.0f + edge_left) / hud_width);
-    float x1 = fminf(1, (right + 640.0f + edge_left) / hud_width);
+    float edge_left = dm_aspect_hud_offset(0), edge_right = dm_aspect_hud_offset(1);
+    float hud_width = 1280 + edge_left + edge_right;
+    // The map's horizontal edge anchor is applied after native scissor
+    // calculation, during GPU replay. Publish hits at that final position.
+    float x0 = fmaxf(0, (left + edge_right + 640.0f + edge_left) / hud_width);
+    float x1 = fminf(1, (right + edge_right + 640.0f + edge_left) / hud_width);
     float y0 = fmaxf(0, (360.0f - top) / 720.0f);
     float y1 = fminf(1, (360.0f - bottom) / 720.0f);
     if (x1 <= x0 || y1 <= y0) { invalidate_map_rect(); return; }
@@ -487,7 +491,7 @@ static void botw_touchhud_matrix(const uint64_t *regs) {
         if (!touchhud_update_cluster_delta(pane)) { invalidate_map_rect(); return; }
         pthread_mutex_lock(&g_touchhud_mu); float dx = g_touchhud.map_dx, dy = g_touchhud.map_dy; pthread_mutex_unlock(&g_touchhud_mu);
         float tx, ty; memcpy(&tx, pane + BOTW_TOUCH_MATRIX + 0x0c, 4); memcpy(&ty, pane + BOTW_TOUCH_MATRIX + 0x1c, 4);
-        tx += dx; ty += dy; memcpy(pane + BOTW_TOUCH_MATRIX + 0x0c, &tx, 4); memcpy(pane + BOTW_TOUCH_MATRIX + 0x1c, &ty, 4);
+        tx += dx - dm_aspect_hud_offset(1); ty += dy; memcpy(pane + BOTW_TOUCH_MATRIX + 0x0c, &tx, 4); memcpy(pane + BOTW_TOUCH_MATRIX + 0x1c, &ty, 4);
         publish_map_rect(pane);
         return;
     }
@@ -497,6 +501,7 @@ static void botw_touchhud_matrix(const uint64_t *regs) {
         float dx = g_touchhud.map_dx, dy = g_touchhud.map_dy;
         pthread_mutex_unlock(&g_touchhud_mu);
         if (apply) {
+            if (!main_environment_pane(pane)) dx -= dm_aspect_hud_offset(1);
             float tx, ty;
             memcpy(&tx, pane + BOTW_TOUCH_MATRIX + 0x0c, sizeof tx);
             memcpy(&ty, pane + BOTW_TOUCH_MATRIX + 0x1c, sizeof ty);

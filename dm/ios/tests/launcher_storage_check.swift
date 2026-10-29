@@ -22,8 +22,8 @@ import Foundation
         expect(m.values["DM_FPS_TARGET"] == "30" && m.values["DM_PSO_MTL4"] == "0" && m.values["DM_FPS_HOLD"] == "on" && m.values["DM_METAL_HUD"] == "1", "stored choices and the env file are read")
         expect(m.changed, "Reset is offered with changed settings")
         let stick = m.touchStickResponse!
-        expect(stick.deadzone == 0.07 && stick.curve == 0.3 && stick.full == 0.7 && stick.size == 0.8, "touch stick starts at the current movement defaults")
-        expect(stick.strength(at: 0.07) == 0 && abs(stick.strength(at: 0.2) - 0.622846) < 0.001 && stick.strength(at: 0.7) == 1, "curve preview has the real deadzone, short-drag strength and endpoint")
+        expect(stick.deadzone == 0.07 && stick.curve == 0.3 && stick.full == 0.71 && stick.size == 0.8, "touch stick starts at the current movement defaults")
+        expect(stick.strength(at: 0.07) == 0 && abs(stick.strength(at: 0.2) - pow(0.13/0.64,0.3)) < 0.001 && stick.strength(at: 0.71) == 1, "curve preview has the real deadzone, short-drag strength and endpoint")
         let curve = file.settings.first { $0.env == "DM_BOTW_MOVE_CURVE" }!
         expect(curve.formattedValue("0.7") == "0.70" && scale.formattedValue("0.5") == "50 %", "curve values are numbers and existing ranges remain percentages")
         m.values["DM_BOTW_MOVE_DEADZONE"] = "0.15"; m.values["DM_BOTW_MOVE_CURVE"] = "1.00"
@@ -46,13 +46,13 @@ import Foundation
         expect(reopened.values["DM_BOTW_PAD_BADGES"] == "0", "corner badge switch persists")
         expect(!file.settings.contains { $0.env.hasPrefix("DM_BOTW_PAD_PLUS") || $0.env.hasPrefix("DM_BOTW_PAD_MINUS") }, "plus and minus remain fixed")
         reopened.reset(keys: TouchStickResponse.keys)
-        expect(!reopened.touchStickChanged && reopened.values["DM_BOTW_MOVE_DEADZONE"] == "0.07" && reopened.values["DM_BOTW_MOVE_SIZE"] == "0.8", "left-stick reset restores the entire group")
+        expect(!reopened.touchStickChanged && reopened.values["DM_BOTW_MOVE_DEADZONE"] == "0.070" && reopened.values["DM_BOTW_MOVE_SIZE"] == "0.800", "left-stick reset restores the entire group")
         expect(reopened.values["DM_FPS_TARGET"] == "30" && d.string(forKey: "launcher.DM_PSO_MTL4") == "0", "left-stick reset preserves unrelated game and performance choices")
         reopened.values["DM_BOTW_PAD_R_Y"] = "0.100"
         reopened.reset(keys: BotwTouchControl.all[0].keys.union(["DM_BOTW_PAD_FACE_GAP"]))
-        expect(reopened.values["DM_BOTW_PAD_FACE_X"] == "0" && reopened.values["DM_BOTW_PAD_FACE_GAP"] == "1.0" && reopened.values["DM_BOTW_PAD_R_Y"] == "0.100", "per-control restore resets XYAB spacing and position without changing R")
+        expect(reopened.values["DM_BOTW_PAD_FACE_X"] == "-0.006" && reopened.values["DM_BOTW_PAD_FACE_GAP"] == "1.060" && reopened.values["DM_BOTW_PAD_R_Y"] == "0.100", "per-control restore resets XYAB spacing and position without changing R")
         reopened.reset(keys: reopened.touchSettingsKeys)
-        expect(reopened.values["DM_BOTW_PAD_R_Y"] == "0" && reopened.values["DM_FPS_TARGET"] == "30", "restore all touch defaults leaves frame rate alone")
+        expect(reopened.values["DM_BOTW_PAD_R_Y"] == "-0.098" && reopened.values["DM_FPS_TARGET"] == "30", "restore all touch defaults leaves frame rate alone")
         d.set("nan", forKey: "launcher.DM_BOTW_MOVE_CURVE"); d.set("2.00", forKey: "launcher.DM_BOTW_MOVE_SIZE")
         expect(LauncherModel(file.settings, defaults: d).touchStickResponse!.curve == 0.3 && LauncherModel(file.settings, defaults: d).touchStickResponse!.size == 0.8, "invalid saved tuning values load defaults")
         setenv("DM_ENV_FILE_KEYS", "DM_BOTW_MOVE_DEADZONE", 1); setenv("DM_BOTW_MOVE_DEADZONE", "0.12", 1)

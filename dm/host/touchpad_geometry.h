@@ -32,7 +32,6 @@ typedef struct { float x, y, width, height; } dm_touchpad_rect;
 #define DM_TP_FULL 0.8f
 #define DM_TP_DEAD 0.1f
 #define DM_TP_BOTW_STICK_DEAD 0.07f
-#define DM_TP_BOTW_RUNE_HOLD_SECONDS 0.20
 #define DM_TP_LOW_X 231.0f
 #define DM_TP_LOW_Y 64.0f
 #define DM_TP_DPAD_R 48.0f
@@ -52,7 +51,7 @@ typedef struct { float x, y, width, height; } dm_touchpad_rect;
 #define DM_TP_SHOULDER_HIT_SCALE 1.0f
 #define DM_TP_SHIELD_GAP 8.0f
 #define DM_TP_CANCEL_RADIUS 70.0f
-#define DM_TP_BOTW_MAP_RIGHT_INSET 84.0f
+#define DM_TP_BOTW_MAP_RIGHT_INSET 72.0f
 #define DM_TP_BOTW_MAP_TOP 340.0f
 #define DM_TP_BOTW_MENU_SIZE 39.0f
 #define DM_TP_BOTW_MENU_GLYPH_SIZE 19.0f
@@ -258,7 +257,7 @@ static inline void dm_touchpad_stick_axis(float dx, float dy, float radius,
 typedef struct { float deadzone, curve, full, size; } dm_touchpad_stick_response;
 
 static inline dm_touchpad_stick_response dm_touchpad_botw_move_defaults(void) {
-    return (dm_touchpad_stick_response){DM_TP_BOTW_STICK_DEAD, .3f, .7f, .8f};
+    return (dm_touchpad_stick_response){DM_TP_BOTW_STICK_DEAD, .3f, .71f, .8f};
 }
 
 static inline void dm_touchpad_stick_axis_with_response(float dx, float dy, float radius,

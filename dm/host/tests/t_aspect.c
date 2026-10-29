@@ -65,8 +65,8 @@ static void test_edge_hud(void) {
     pane_init(sibling,"N_Cut_01",0,1500,1500); pane_child(inout,sibling);
     pane_init(picture,"P_MapCapture_00",0,192,192); pane_child(sibling,picture);
     dm_aspect_ui_pane(inout); dm_aspect_ui_pane(ornaments);
-    assert(fabsf(*(float *)(inout+0x30)-116)<.001f && fabsf(*(float *)(ornaments+0x30)-116)<.001f);
-    regs[21]=(uintptr_t)picture; draw_callback(regs); assert(dm_aspect_ui_hud_drawing()); draw_end_callback(regs);
+    assert(*(float *)(inout+0x30)==0 && *(float *)(ornaments+0x30)==0);
+    regs[21]=(uintptr_t)picture; draw_callback(regs); assert(dm_aspect_ui_hud_drawing()==2); draw_end_callback(regs);
     *(float *)(cut+0x50)=1500; *(float *)(cut+0x54)=720;
     dm_aspect_ui_pane(inout); dm_aspect_ui_pane(ornaments);
     assert(*(float *)(inout+0x30)==0 && *(float *)(ornaments+0x30)==0);

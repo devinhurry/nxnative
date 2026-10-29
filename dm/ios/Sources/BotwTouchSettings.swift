@@ -25,12 +25,14 @@ struct BotwTouchSettingsView: View {
         withUnsafeMutableBytes(of: &result.control) { bytes in
             let controls = bytes.bindMemory(to: dm_botw_control_transform.self)
             for control in BotwTouchControl.all {
-                controls[control.id] = .init(x: Float(value(control.env("X"))), y: Float(value(control.env("Y"))),
-                    scale: control.id == 4 ? 1 : Float(value(control.env("SCALE"), fallback: 1)))
+                let base = controls[control.id]
+                controls[control.id] = .init(x: Float(value(control.env("X"), fallback: Double(base.x))),
+                    y: Float(value(control.env("Y"), fallback: Double(base.y))),
+                    scale: control.id == 4 ? 1 : Float(value(control.env("SCALE"), fallback: Double(base.scale))))
             }
         }
-        result.face_gap = Float(value("DM_BOTW_PAD_FACE_GAP", fallback: 1))
-        result.badges = value("DM_BOTW_PAD_BADGES", fallback: 1) == 0 ? 0 : 1
+        result.face_gap = Float(value("DM_BOTW_PAD_FACE_GAP", fallback: Double(result.face_gap)))
+        result.badges = value("DM_BOTW_PAD_BADGES", fallback: Double(result.badges)) == 0 ? 0 : 1
         return result
     }
     private var canvas: dm_touchpad_rect { dm_botw_layout_canvas(Float(viewport.width), Float(viewport.height)) }
@@ -53,7 +55,7 @@ struct BotwTouchSettingsView: View {
                         ForEach(BotwTouchControl.all) { control in
                             let r = rect(control)
                             BotwControlPreview(control: control, m: m, selected: $selected, canvas: canvas,
-                                previewScale: scale, rect: r, gap: value("DM_BOTW_PAD_FACE_GAP", fallback: 1))
+                                previewScale: scale, rect: r, gap: Double(layout.face_gap))
                                 .frame(width: r.width*scale, height: r.height*scale)
                                 .position(x: r.midX*scale, y: r.midY*scale)
                         }
@@ -145,7 +147,7 @@ private struct BotwControlPreview: View {
     @State private var dragOrigin: CGPoint?
     @State private var scaleOrigin: Double?
     private var gold: Color { Color(red: 0.94, green: 0.88, blue: 0.70) }
-    private var badges: Bool { m.values["DM_BOTW_PAD_BADGES"] != "0" }
+    private var badges: Bool { (m.values["DM_BOTW_PAD_BADGES"] ?? "0") != "0" }
     private func icon(_ name: String) -> Image? {
         guard let path = Bundle.main.resourceURL?.appendingPathComponent("dm/touch_\(name.lowercased()).png").path else { return nil }
         #if os(iOS)

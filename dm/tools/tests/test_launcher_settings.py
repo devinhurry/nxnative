@@ -49,15 +49,15 @@ class LauncherSettingsTests(unittest.TestCase):
         self.assertEqual(botw['DM_PSO_MTL4']['default'], '1')   # pso_mtl4 on
         self.assertEqual((wonder['DM_PRESENT_SNAP']['default'], wonder['DM_PSO_MTL4']['default']), ('0', '0'))
         self.assertEqual((botw['DM_PSO_PREBUILD']['default'], botw['DM_NVN_ENC_THREAD']['default'], botw['DM_METAL_HUD']['default']), ('1', '1', '0'))   # the host's iOS defaults
-        self.assertEqual(list(dict.fromkeys(s['section'] for s in botw.values())), ['Game', 'Controls', 'Touch left stick', 'Performance'])
+        self.assertEqual(list(dict.fromkeys(s['section'] for s in botw.values())), ['Game', 'Controls', 'Touch left stick', 'Touch layout', 'Performance'])
         self.assertNotIn('DM_FPS_HOLD', wonder)   # no frame step, as the Frame rate row
         self.assertIn('first start', botw['DM_PSO_PREBUILD']['note'])   # it runs once in the prepare step, before the first frame
 
     def test_touch_stick_settings_are_botw_only(self):
         botw = build(BOTW, 'nvn')
         expected = {
-            'DM_BOTW_MOVE_DEADZONE': ('0.07', 0, .3, .01), 'DM_BOTW_MOVE_CURVE': ('0.7', .3, 2, .05),
-            'DM_BOTW_MOVE_FULL': ('0.8', .35, 1, .01), 'DM_BOTW_MOVE_SIZE': ('1.0', .6, 1.5, .05),
+            'DM_BOTW_MOVE_DEADZONE': ('0.070', 0, .3, .01), 'DM_BOTW_MOVE_CURVE': ('0.300', .3, 2, .05),
+            'DM_BOTW_MOVE_FULL': ('0.710', .35, 1, .01), 'DM_BOTW_MOVE_SIZE': ('0.800', .6, 1.5, .05),
         }
         for key, bounds in expected.items():
             self.assertEqual(tuple(botw[key][k] for k in ('default', 'min', 'max', 'step')), bounds)
@@ -74,6 +74,23 @@ class LauncherSettingsTests(unittest.TestCase):
         self.assertEqual((s['on'], s['off'], s['default']), ('on', 'off', 'on'))
         s = build(BOTW, 'nvn')['DM_SHOW_FPS']
         self.assertEqual((s['on'], s['off']), ('1', '0'))
+
+    def test_touch_layout_defaults_and_game_scope(self):
+        expected = {
+            'FACE_X': '-0.006', 'FACE_Y': '-0.068', 'FACE_SCALE': '1.100',
+            'STICK_X': '0.000', 'STICK_Y': '0.023',
+            'ZL_X': '0.000', 'ZL_Y': '0.000', 'ZL_SCALE': '1.000',
+            'L_X': '0.021', 'L_Y': '0.000', 'L_SCALE': '1.200',
+            'R_X': '-0.022', 'R_Y': '-0.098', 'R_SCALE': '1.100',
+            'ZR_X': '0.025', 'ZR_Y': '-0.097', 'ZR_SCALE': '1.100',
+            'DPAD_X': '0.042', 'DPAD_Y': '0.000', 'DPAD_SCALE': '1.000',
+            'FACE_GAP': '1.060', 'BADGES': '0',
+        }
+        expected = {'DM_BOTW_PAD_' + key: value for key, value in expected.items()}
+        for platform in ('mac', 'ios'):
+            botw = build(BOTW, 'nvn', platform)
+            self.assertEqual({key: row['default'] for key, row in botw.items() if key.startswith('DM_BOTW_PAD_')}, expected)
+        self.assertTrue(set(expected).isdisjoint(build(WONDER, 'nvn')))
 
     def test_iphone_switches_only_on_the_iphone(self):   # the frame-rate counter and touch feedback are the iOS front end's (front_ios.m, DmGamepad.m)
         ios, mac = build(BOTW, 'nvn'), build(BOTW, 'nvn', 'mac')

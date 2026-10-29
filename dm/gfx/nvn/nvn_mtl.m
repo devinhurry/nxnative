@@ -32,10 +32,12 @@
 #include "dmsh_chain.h"   // DMSH_CHAIN: the translation chain version of the B shader library expected by this source tree, one for every game (beside this file, tools/dmsh_chain.py --header)
 #include "game_profile.h"   // game profile constants (profile id, the profile's switches)
 int dm_aspect_native(void); float dm_aspect_ratio(void); float dm_aspect_custom_ratio(void);   // hle_aspect.c
+float dm_aspect_hud_offset(int right);
 #ifndef NVN_ASPECT_HOST
 // Standalone graphics tests have no host; real hosts link the strong implementations in hle_aspect.c.
 __attribute__((weak)) int dm_aspect_native(void) { return 0; }
 __attribute__((weak)) float dm_aspect_ratio(void) { return 0; }
+__attribute__((weak)) float dm_aspect_hud_offset(int right) { (void)right; return 0; }
 __attribute__((weak)) float dm_aspect_custom_ratio(void) { return 0; }
 #endif
 // Texture slot table per stage: 0-127 the combined handles (nvnCommandBufferBindTexture), 128-255 the separate texture binds (NVN_SEPTEX_SLOT0, nvn_obj.h)
@@ -6458,8 +6460,9 @@ static void ui_scissor_x(long *x0, long *x1, long width, double squeeze, int pro
     // open edges; partial interior clips still follow the corrected projection.
     int left_open = projection && *x0 <= 0 && (scope == NVN_UI_HUD || (scope == NVN_UI_BACKGROUND && *x1 >= width));
     int right_open = projection && *x1 >= width && (scope == NVN_UI_HUD || (scope == NVN_UI_BACKGROUND && *x0 <= 0));
-    *x0 = left_open ? 0 : (long)floor(width / 2.0 + (*x0 - width / 2.0) / squeeze);
-    *x1 = right_open ? width : (long)ceil(width / 2.0 + (*x1 - width / 2.0) / squeeze);
+    double shift = projection && scope == NVN_UI_MAP ? width * dm_aspect_hud_offset(1) / (1280.0 * squeeze) : 0;
+    *x0 = left_open ? 0 : (long)floor(width / 2.0 + (*x0 - width / 2.0) / squeeze + shift);
+    *x1 = right_open ? width : (long)ceil(width / 2.0 + (*x1 - width / 2.0) / squeeze + shift);
 }
 // A handle read from a uniform buffer names IDs of the pools bound when the draw runs: as bound handles are moved at recording (hle_nvn.c bind_handles), these take the bases here (0 = none)
 static int ubo_tex_id(uint32_t h) { int t = (int)(h & 0xfffff); return t ? t + S.tex_base : 0; }
@@ -9155,6 +9158,8 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
     if (ui_projection) g_args_dirty[0] = 1;
     { MTLViewport v = S.has_vp ? (MTLViewport){S.vp[0][0], S.vp[0][1], S.vp[0][2], S.vp[0][3], S.dr[0], S.dr[1]} : (MTLViewport){0, 0, tw, th, 0, 1};
       if (ui_projection && v.width > 0) g_ui_clip_bias = (tw - 2 * v.originX - v.width) * (1 - g_ui_clip_x) / v.width;
+      if (ui_projection && ui_scope == NVN_UI_MAP && v.width > 0)
+          g_ui_clip_bias += dm_aspect_hud_offset(1) / (640.0 * sux) * tw / v.width;
       if (sq) { if (!ui_projection) { v.originX = tw / 2.0 + (v.originX - tw / 2.0) / sux; v.width /= sux; } v.originY = th / 2.0 + (v.originY - th / 2.0) / suy; v.height /= suy; }
       if (atomic_load_explicit(&g_origin_ll, memory_order_relaxed)) { v.originY += v.height; v.height = -v.height; }   // lower-left origin (see g_origin_ll)
       // Viewport swizzle: NEGATIVE_Y negates clip y, the same as the viewport flipped about its centre; facing is decided after it on the GPU as in Metal, so the winding stays.

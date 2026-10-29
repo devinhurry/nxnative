@@ -244,7 +244,7 @@ static void pads_start(void) {
     dm_motion_pro_start(pro_devices_changed);
 }
 
-enum { PREVIEW_NONE, PREVIEW_STICK, PREVIEW_DPAD, PREVIEW_FACE, PREVIEW_BUTTON, PREVIEW_LOOK, PREVIEW_GAME, PREVIEW_SHIELD, PREVIEW_MENU, PREVIEW_RUNE };
+enum { PREVIEW_NONE, PREVIEW_STICK, PREVIEW_DPAD, PREVIEW_FACE, PREVIEW_BUTTON, PREVIEW_LOOK, PREVIEW_GAME, PREVIEW_SHIELD, PREVIEW_MENU };
 @interface DmTouchPreviewView : NSView
 - (void)setPreviewActive:(BOOL)active;
 - (void)setMapRegionValid:(BOOL)valid x:(float)x y:(float)y width:(float)width height:(float)height;
@@ -310,8 +310,6 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     NSImage *_runeIcon, *_buttonIcons[12];
     uint64_t _runeIconGeneration;
     BOOL _runeIconValid;
-    NSTimer *_runeHoldTimer;
-    BOOL _runeSelecting;
 }
 - (instancetype)initWithFrame:(NSRect)frame {
     if ((self = [super initWithFrame:frame])) {
@@ -509,13 +507,6 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     dm_touch t = {0, fminf(fmaxf((p.x-r[0])/r[2], 0), .999f), fminf(fmaxf((p.y-r[1])/r[3], 0), .999f)};
     dm_touch_set(&t, 1);
 }
-- (void)beginRuneSelection:(NSTimer *)timer {
-    if (timer != _runeHoldTimer) return;
-    _runeHoldTimer = nil;
-    if (!_hasTouch || _owner != PREVIEW_RUNE || !_active || !dm_botw_touch_controls_visible()) return;
-    _runeSelecting = YES; _held |= DM_BTN_UP;
-    [self publishButtons];
-}
 - (void)mouseDown:(NSEvent *)e {
     dm_touchpad_point p = [self topPoint:e];
     _down = _last = NSMakePoint(p.x, p.y); _hasTouch = YES; _held = _cancelPending; _owner = PREVIEW_NONE;
@@ -532,14 +523,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     int b = [self buttonAtTop:p];
     // The L hit circle slightly overlaps the shield stick's grab radius; keep
     // the explicit L button's touch-down ownership ahead of shield capture.
-    if (_active && b == 6) {
-        _lookTapPending = NO; _owner = PREVIEW_RUNE; _runeSelecting = NO;
-        // Keep L silent until release so a hold opens the rune selector without activating a rune.
-        _runeHoldTimer = [NSTimer timerWithTimeInterval:DM_TP_BOTW_RUNE_HOLD_SECONDS target:self selector:@selector(beginRuneSelection:) userInfo:nil repeats:NO];
-        [NSRunLoop.mainRunLoop addTimer:_runeHoldTimer forMode:NSRunLoopCommonModes];
-        [self publishButtons]; return;
-    }
-    if (_active) {
+    if (_active && b != 6) {
         dm_touchpad_point sh = [self shieldHome];
         if (hypotf(p.x-sh.x,p.y-sh.y) <= self.shieldRadius*DM_TP_STICK_GRAB) {
             _lookTapPending = NO; _owner = PREVIEW_SHIELD; _shieldOrigin = NSMakePoint(p.x,p.y); _held |= DM_BTN_ZL; [self updateShield:p]; return;
@@ -591,11 +575,6 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
 - (void)mouseUp:(NSEvent *)e {
     if (!_hasTouch) return;
     dm_touchpad_point release = [self topPoint:e];
-    if (_owner == PREVIEW_RUNE) {
-        [_runeHoldTimer invalidate]; _runeHoldTimer = nil;
-        if (!_runeSelecting) { g_preview_buttons |= DM_BTN_L; push(); g_preview_buttons &= ~DM_BTN_L; push(); }
-        _runeSelecting = NO;
-    }
     if (_owner == PREVIEW_MENU && _menuPointerActive) {
         [self sendBotwMenuPointer:DM_BOTW_MENU_END point:release];
         _menuPointerActive=NO; _owner=PREVIEW_NONE; _hasTouch=NO; _held=_cancelPending;
@@ -607,6 +586,9 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
         dm_touchpad_point c = [self layoutCenter:_button];
         if (!(_cancelLatched & bit) && dm_touchpad_cancel_outside(release.x,release.y,c.x,c.y,DM_TP_CANCEL_RADIUS*self.u*[self layoutScale:_button])) {
             _cancelLatched |= bit; _cancelPending |= bit; dm_botw_touch_cancel_trigger(bit);
+            const char *feedback = getenv("DM_TOUCH_HAPTICS");
+            if (!feedback || atoi(feedback))
+                [NSHapticFeedbackManager.defaultPerformer performFeedbackPattern:NSHapticFeedbackPatternGeneric performanceTime:NSHapticFeedbackPerformanceTimeNow];
         }
     }
     if (_owner == PREVIEW_GAME) dm_touch_set(NULL,0);
@@ -645,9 +627,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
 }
 - (void)cancelInput {
     uint64_t cancelMask = DM_BTN_LS | DM_BTN_RS | DM_BTN_MINUS;
-    if (_owner == PREVIEW_RUNE) cancelMask |= DM_BTN_L | DM_BTN_UP;
-    [_runeHoldTimer invalidate]; _runeHoldTimer = nil;
-    _runeSelecting = NO;
+    if (_held & DM_BTN_L) cancelMask |= DM_BTN_L;
     dm_touchpad_point noPoint = {0};
     if (_menuPointerActive) [self sendBotwMenuPointer:DM_BOTW_MENU_CANCEL point:noPoint];
     _menuPointerActive = NO;

@@ -83,9 +83,9 @@ static void test_stick_shaping(void) {
         dm_touchpad_botw_move_axis(radius*.06f,0,radius,&x,&y);
         assert(!x && !y);
         dm_touchpad_botw_move_axis(radius*.2f,0,radius,&x,&y);
-        assert(x > DM_STICK_MAX*.62f && x < DM_STICK_MAX*.63f && !y);
+        assert(x > DM_STICK_MAX*.619f && x < DM_STICK_MAX*.621f && !y);
         dm_touchpad_botw_move_axis(radius*.4f,0,radius,&x,&y);
-        assert(x > DM_STICK_MAX*.82f && x < DM_STICK_MAX*.83f && !y);
+        assert(x > DM_STICK_MAX*.819f && x < DM_STICK_MAX*.821f && !y);
         dm_touchpad_botw_move_axis(radius*.8f,0,radius,&x,&y);
         assert(x == DM_STICK_MAX && !y);
         dm_touchpad_botw_move_axis(radius*1.3f,0,radius,&x,&y);
@@ -175,7 +175,7 @@ static void test_botw_new_touch_geometry(void) {
         dm_touchpad_rect plus = dm_touchpad_botw_menu_rect(40,20,canvas_width,h,0);
         dm_touchpad_rect minus = dm_touchpad_botw_menu_rect(40,20,canvas_width,h,1);
         nearf(plus.width,39*h/720,.01f); nearf(plus.height,plus.width,.01f);
-        nearf(plus.x-(40+1196*canvas_width/1280),8,.01f);
+        nearf(plus.x-(40+1208*canvas_width/1280),8,.01f);
         nearf(plus.y,20+20*h/720+4,.01f); // four frontend points below the minimap top
         nearf(minus.x,plus.x,.001f); nearf(minus.y-plus.y-plus.height,8,.001f);
         assert(dm_touchpad_rounded_rect_contains(plus,plus.width*.5f,plus.x+plus.width*.5f,plus.y+plus.height*.5f));
@@ -189,7 +189,7 @@ static void test_configurable_stick(void) {
     dm_touchpad_stick_response response;
     assert(!dm_botw_stick_settings_read(&response));
     nearf(response.deadzone,.07f,1e-6f); nearf(response.curve,.3f,1e-6f);
-    nearf(response.full,.7f,1e-6f); nearf(response.size,.8f,1e-6f);
+    nearf(response.full,.71f,1e-6f); nearf(response.size,.8f,1e-6f);
     setenv(keys[0],"0.15",1); setenv(keys[1],"1.00",1);
     setenv(keys[2],"0.60",1); setenv(keys[3],"1.25",1);
     assert(!dm_botw_stick_settings_read(&response));
@@ -229,10 +229,18 @@ static void test_configurable_stick(void) {
 
 static void test_custom_layout(void) {
     dm_botw_touch_layout layout; assert(dm_botw_layout_read(&layout));
-    assert(layout.badges);
-    setenv("DM_BOTW_PAD_BADGES","0",1); assert(dm_botw_layout_read(&layout) && !layout.badges);
+    assert(!layout.badges);
+    nearf(layout.face_gap,1.06f,.0001f);
+    nearf(layout.control[0].x,-.006f,.0001f); nearf(layout.control[0].y,-.068f,.0001f); nearf(layout.control[0].scale,1.1f,.0001f);
+    nearf(layout.control[4].x,0,.0001f); nearf(layout.control[4].y,.023f,.0001f);
+    nearf(layout.control[6].x,.021f,.0001f); nearf(layout.control[6].y,0,.0001f); nearf(layout.control[6].scale,1.2f,.0001f);
+    nearf(layout.control[7].x,-.022f,.0001f); nearf(layout.control[7].y,-.098f,.0001f); nearf(layout.control[7].scale,1.1f,.0001f);
+    nearf(layout.control[9].x,.025f,.0001f); nearf(layout.control[9].y,-.097f,.0001f); nearf(layout.control[9].scale,1.1f,.0001f);
+    nearf(layout.control[12].x,.042f,.0001f); nearf(layout.control[12].y,0,.0001f); nearf(layout.control[12].scale,1,.0001f);
+    nearf(layout.control[8].x,0,.0001f); nearf(layout.control[8].y,0,.0001f); nearf(layout.control[8].scale,1,.0001f);
+    setenv("DM_BOTW_PAD_BADGES","1",1); assert(dm_botw_layout_read(&layout) && layout.badges);
     setenv("DM_BOTW_PAD_BADGES","0.5",1); assert(!dm_botw_layout_read(&layout));
-    unsetenv("DM_BOTW_PAD_BADGES"); assert(dm_botw_layout_read(&layout) && layout.badges);
+    unsetenv("DM_BOTW_PAD_BADGES"); assert(dm_botw_layout_read(&layout) && !layout.badges);
     dm_touchpad_rect canvas=dm_botw_layout_canvas(932,430);
     dm_touchpad_rect r=dm_botw_layout_control(&layout,7,932,430,0,0,0,0,canvas);
     dm_touchpad_rect zr=dm_botw_layout_control(&layout,9,932,430,0,0,0,0,canvas);
@@ -243,11 +251,11 @@ static void test_custom_layout(void) {
     setenv("DM_BOTW_PAD_FACE_GAP","1.2",1); setenv("DM_BOTW_PAD_R_Y","0.1",1);
     assert(dm_botw_layout_read(&layout));
     dm_touchpad_rect after=dm_botw_layout_control(&layout,0,932,430,0,0,0,0,canvas);
-    nearf(after.x+after.width/2,before.x+before.width/2-canvas.width*.1f,.001f);
+    nearf(after.x+after.width/2,before.x+before.width/2-canvas.width*.094f,.001f);
     nearf(after.width,2*(27+50*1.2f)*.8f,.001f);
     dm_touchpad_rect shoulder=dm_botw_layout_control(&layout,7,932,430,0,0,0,0,canvas);
     dm_touchpad_point native=dm_touchpad_right_shoulder(932,430,0,0,0,0,0);
-    nearf(shoulder.x+shoulder.width/2,native.x,.001f);
+    nearf(shoulder.x+shoulder.width/2,native.x-canvas.width*.022f,.001f);
     nearf(shoulder.y+shoulder.height/2,native.y+43,.001f);
     setenv("DM_BOTW_PAD_FACE_SCALE","nan",1); assert(!dm_botw_layout_read(&layout));
     const char *keys[]={"DM_BOTW_PAD_FACE_X","DM_BOTW_PAD_FACE_SCALE","DM_BOTW_PAD_FACE_GAP","DM_BOTW_PAD_R_Y"};

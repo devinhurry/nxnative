@@ -140,9 +140,9 @@ int main(void) {
     scaled_matrix(cut, 1, 510, -240); scaled_matrix(cut_sibling, 1, 510, -240);
     calculate_entry(cut); calculated_matrix(cut);
     assert(map_region_valid); // a visible map owns taps even before hidden siblings recalculate
-    expect_translation(cut, 473, 257);
+    expect_translation(cut, 485, 257);
     calculate_entry(cut_sibling); calculated_matrix(cut_sibling);
-    expect_translation(cut_sibling, 473, 257);
+    expect_translation(cut_sibling, 485, 257);
 
     uint8_t env_all[0x100] = {0}, env_root[0x100] = {0}, weather[0x100] = {0}, status[0x100] = {0};
     pane_name(env_all, "N_All_00"); pane_name(env_root, "RootPane");
@@ -150,34 +150,34 @@ int main(void) {
     set_pane_parent(env_all, env_root); set_pane_parent(weather, env_all); set_pane_parent(status, env_all);
     env_root[BOTW_TOUCH_FLAGS] = env_all[BOTW_TOUCH_FLAGS] = weather[BOTW_TOUCH_FLAGS] = status[BOTW_TOUCH_FLAGS] = 1;
     matrix_translation(weather, 392, -182); calculate_entry(weather); calculated_matrix(weather);
-    expect_translation(weather, 355, 315);
+    expect_translation(weather, 367, 315);
     pane_size(status, 582, 78.2f); matrix_translation(status, 392, -182);
     calculate_entry(status); calculated_matrix(status);
-    expect_translation(status, 355, 315);
+    expect_translation(status, 367, 315);
     // N_Cut_00 is the viewport. Sibling N_Cut_01 and Pa_Sensor_00 have wider
     // transparent bounds, so they move with the map without setting its edge.
     scaled_matrix(cut, 1, 510, -240); calculate_entry(cut); calculated_matrix(cut);
     assert(map_region_valid && fabsf(map_region[2] - 166.0f / 1280.0f) < .001f);
     assert(fabsf(map_region[1] - 20.0f / 720.0f) < .001f);
-    expect_translation(cut, 473, 257);
+    expect_translation(cut, 485, 257);
     scaled_matrix(cut_sibling, 1, 510, -240); calculate_entry(cut_sibling); calculated_matrix(cut_sibling);
-    expect_translation(cut_sibling, 473, 257);
+    expect_translation(cut_sibling, 485, 257);
     matrix_translation(status, 392, -182); calculate_entry(status); calculated_matrix(status);
-    expect_translation(status, 355, 315);
+    expect_translation(status, 367, 315);
     assert(fabsf((315.0f - 257.0f) - 58.0f) < .001f); // gauges retain their native offset from the map
-    assert(355.0f + 280.0f * .5f < 640.0f); // linked gauge content fits; Pa_Sensor's extra width is padding
-    assert(fabsf((473.0f + 166.0f * .5f) - 556.0f) < .001f);
+    assert(367.0f + 280.0f * .5f < 640.0f); // linked gauge content fits; Pa_Sensor's extra width is padding
+    assert(fabsf((485.0f + 166.0f * .5f) - 568.0f) < .001f);
     // A wider safe HUD canvas moves the whole touch map cluster and publishes
     // its hit bounds in that same canvas, independently of centered menus.
     hud_offset[0]=76; hud_offset[1]=96;
     scaled_matrix(cut,1,510,-240); calculate_entry(cut); calculated_matrix(cut);
-    expect_translation(cut,569,257);
-    assert(fabsf(map_region[0]-(486.f+640+76)/1452)<.001f && fabsf(map_region[2]-166.f/1452)<.001f);
+    expect_translation(cut,485,257); // GPU replay applies the wide edge offset after native clipping
+    assert(fabsf(map_region[0]-(498.f+640+76)/1452)<.001f && fabsf(map_region[2]-166.f/1452)<.001f);
     matrix_translation(status,392,-182); calculate_entry(status); calculated_matrix(status);
-    expect_translation(status,451,315);
+    expect_translation(status,463,315);
     hud_offset[0]=hud_offset[1]=0;
     scaled_matrix(cut,1,510,-240); calculate_entry(cut); calculated_matrix(cut);
-    expect_translation(cut,473,257);
+    expect_translation(cut,485,257);
     int map_events_before_tap = map_region_events;
     dm_botw_touch_hud_map_tapped();
     assert(!map_region_valid && map_region_events == map_events_before_tap + 1);
@@ -189,20 +189,20 @@ int main(void) {
     assert(!map_region_valid); expect_translation(cut, 0, 0);
     pane_size(cut, 166, 166); scaled_matrix(cut, 1, 510, -240);
     calculate_entry(cut); calculated_matrix(cut);
-    assert(map_region_valid); expect_translation(cut, 473, 257);
+    assert(map_region_valid); expect_translation(cut, 485, 257);
     scaled_matrix(cut_sibling, 1, 510, -240); calculate_entry(cut_sibling); calculated_matrix(cut_sibling);
     matrix_translation(status, 392, -182); calculate_entry(status); calculated_matrix(status);
     scaled_matrix(cut, 1, 510, -240); calculate_entry(cut); calculated_matrix(cut);
     assert(map_region_valid && map_region_events == map_events_before_tap + 2);
     assert(fabsf(map_region[1] - 20.0f / 720.0f) < .001f);
-    expect_translation(cut, 473, 257);
+    expect_translation(cut, 485, 257);
 
     // Shrines hide N_InOut_00 with alpha zero while its visible bit stays set.
     map_inout[BOTW_TOUCH_FLAGS+1] = 0;
     calculate_entry(map_inout);
     assert(!map_region_valid && atomic_load(&g_touchhud_map_collapsed));
     matrix_translation(status,392,-182); calculate_entry(status); calculated_matrix(status);
-    expect_translation(status,355,315); // environment HUD retains its touch-mode position
+    expect_translation(status,367,315); // environment HUD retains its touch-mode position
     map_inout[BOTW_TOUCH_FLAGS+1] = 255;
     calculate_entry(cut);
     scaled_matrix(cut_sibling,1,510,-240); calculate_entry(cut_sibling); calculated_matrix(cut_sibling);
@@ -341,6 +341,20 @@ int main(void) {
     calculate_entry(other);
     assert(other[BOTW_TOUCH_FLAGS] == 0);
 
+    // An ultrawide D-pad lies left of the centered UI canvas. Its normalized
+    // coordinate is legitimately negative; it must not disable the whole HUD.
+    hud_offset[0] = hud_offset[1] = 640; // 32:9
+    dm_botw_touch_hud_publish(1, -.35f, .75f);
+    assert(dm_botw_touch_hud_active());
+    matrix_translation(target2, -509, 210); calculate_entry(target2); calculated_matrix(target2);
+    expect_translation(target2, -1043, -216);
+    cut[BOTW_TOUCH_FLAGS] = 1;
+    scaled_matrix(cut, 1, 510, -240); calculate_entry(cut); calculated_matrix(cut);
+    expect_translation(cut, 485, 257); // stays inside native clip space even at 32:9
+    assert(map_region_valid && fabsf(map_region[0] - 2322.f / 2560) < .001f);
+    dm_botw_touch_hud_publish(1, NAN, .75f);
+    assert(!dm_botw_touch_hud_active() && !map_region_valid);
+    hud_offset[0] = hud_offset[1] = 0;
     // The shared pane hook still services widescreen backgrounds without an
     // installed touch HUD (ordinary Mac/controller mode).
     dm_botw_touchhud_test_clear();

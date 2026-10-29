@@ -187,7 +187,7 @@ static int aspect_ui_hud_anchor(uint8_t *pane) {
 static int aspect_ui_hud_pane(uint8_t *pane) {
     for (int i=0; pane && i<64; i++,pane=aspect_ui_parent(pane)) {
         int anchor=aspect_ui_hud_anchor(pane);
-        if (anchor && (anchor!=2 || aspect_ui_map_collapsed(aspect_ui_map_cut(pane)))) return 1;
+        if (anchor && (anchor!=2 || aspect_ui_map_collapsed(aspect_ui_map_cut(pane)))) return anchor == 2 ? 2 : 1;
     }
     return 0;
 }
@@ -246,13 +246,13 @@ static int aspect_ui_background_pane(uint8_t *pane) {
 }
 static _Thread_local int g_ui_background_drawing, g_ui_hud_drawing;
 int dm_aspect_ui_background_drawing(void) { return g_ui_background_drawing; }
-int dm_aspect_ui_hud_drawing(void) { return g_ui_hud_drawing; }
+int dm_aspect_ui_hud_drawing(void) { return g_ui_hud_drawing; } // 1 = edge HUD; 2 = collapsed map
 static void aspect_ui_draw(const uint64_t *regs) {
     // x21 is Pane::Draw's saved this across the DrawSelf virtual call.
     g_ui_background_drawing = dm_aspect_ratio() > GAME_ASPECT &&
         aspect_ui_background_pane((uint8_t *)(uintptr_t)regs[21]);
     if (g_ui_background_drawing && aspect_ui_loading_fill((uint8_t *)(uintptr_t)regs[21])) g_ui_background_drawing = 2;
-    g_ui_hud_drawing = dm_aspect_ratio() > GAME_ASPECT && aspect_ui_hud_pane((uint8_t *)(uintptr_t)regs[21]);
+    g_ui_hud_drawing = dm_aspect_ratio() > GAME_ASPECT ? aspect_ui_hud_pane((uint8_t *)(uintptr_t)regs[21]) : 0;
     dm_botw_rune_icon_draw_begin((uint8_t *)(uintptr_t)regs[21]);
 }
 static void aspect_ui_draw_end(const uint64_t *regs) { (void)regs; g_ui_background_drawing = g_ui_hud_drawing = 0; dm_botw_rune_icon_draw_end(); }
@@ -305,8 +305,9 @@ void dm_aspect_ui_pane(uint8_t *pane) {
     // Hearts sit above it, with their own authored top/corner padding; adding
     // the entire inset here leaves an unnecessary gap on iPhone.
     if (hud == -1) entry->written_x -= fmaxf(0, 360 * dm_aspect_ratio() - 640);
-    else if (hud && !dm_botw_touch_hud_active() &&
-             (hud != 2 || aspect_ui_map_collapsed(aspect_ui_map_cut(pane))))
+    // AppMap's ScissorPane::Draw rejects clips outside its native 16:9
+    // target before submitting draws. Anchor that subtree during GPU replay.
+    else if (hud == 1 && !dm_botw_touch_hud_active())
         entry->written_x += dm_aspect_hud_offset(1);
     if (title_right) {
         // The native origin is the right edge. Extending width and moving that

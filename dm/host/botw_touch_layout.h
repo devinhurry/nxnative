@@ -16,8 +16,14 @@ static inline const char *dm_botw_control_name(int id) {
     }
 }
 static inline dm_botw_touch_layout dm_botw_layout_defaults(void) {
-    dm_botw_touch_layout layout = {.face_gap = 1, .badges = 1};
+    dm_botw_touch_layout layout = {.face_gap = 1.060f, .badges = 0};
     for (int i = 0; i < 16; i++) layout.control[i].scale = 1;
+    layout.control[0] = (dm_botw_control_transform){-.006f, -.068f, 1.100f};
+    layout.control[4].y = .023f;
+    layout.control[6] = (dm_botw_control_transform){.021f, 0, 1.200f};
+    layout.control[7] = (dm_botw_control_transform){-.022f, -.098f, 1.100f};
+    layout.control[9] = (dm_botw_control_transform){.025f, -.097f, 1.100f};
+    layout.control[12].x = .042f;
     return layout;
 }
 static inline int dm_botw_layout_number(const char *key, float low, float high, float *out) {
@@ -37,7 +43,7 @@ static inline int dm_botw_layout_read(dm_botw_touch_layout *out) {
             if (!dm_botw_layout_number(key, f == 2 ? .5f : -.5f, f == 2 ? 1.5f : .5f, values[f])) return 0;
         }
     }
-    float badges = 1;
+    float badges = out->badges;
     if (!dm_botw_layout_number("DM_BOTW_PAD_BADGES", 0, 1, &badges) || (badges != 0 && badges != 1)) return 0;
     out->badges = (int)badges;
     return dm_botw_layout_number("DM_BOTW_PAD_FACE_GAP", .5f, 1.5f, &out->face_gap);
