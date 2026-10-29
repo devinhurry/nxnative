@@ -56,7 +56,7 @@ void dm_aspect_set_display(float ratio);
 void dm_aspect_set_safe_area(float w, float h, float left, float right);
 float dm_aspect_hud_offset(int right);
 void dm_aspect_ui_pane(uint8_t *pane); // BOTW fullscreen backgrounds and edge HUD, independent of input mode
-int dm_aspect_ui_background_drawing(void); // current guest thread's native background DrawSelf scope
+int dm_aspect_ui_background_drawing(void); // 0: ordinary, 1: extended native background, 2: stretch complete projected fill
 int dm_aspect_ui_hud_drawing(void);
 void dm_set_opmode(int m);          // On change, push notification 30 / 31 according to the switches the game has turned on
 // Focus (1 foreground / 2 focus lost / 3 background): called by the front end on lifecycle changes; a change pushes notification 15

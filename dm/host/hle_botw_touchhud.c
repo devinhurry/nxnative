@@ -20,8 +20,6 @@ static pthread_mutex_t g_touchhud_mu = PTHREAD_MUTEX_INITIALIZER;
 static struct {
     int active, home_valid, delta_valid, map_rect_valid;
     float x, y, home_x, home_y, map_dx, map_dy, map_rect[4];
-    int cut_bounds_valid, sibling_bounds_valid, sensor_bounds_valid;
-    float cut_right, cut_top;
     int rune_valid;
     uint64_t rune_token;
     uintptr_t rune_pane, rune_chain[10];
@@ -316,35 +314,22 @@ static int transform_bounds(uint8_t *pane, float *left, float *bottom, float *ri
     return *right > *left && *top > *bottom;
 }
 
-// Keep the relocated viewport and the panes around it in one live cluster.
-// N_Cut_00 bounds the visible minimap. Pa_Sensor_00 is 582 px wide, while its
-// linked PaAppAllRadarGauge layout draws a centered 280 px capture/gauge; the
-// pane's extra width is transparent padding and must not move this anchor.
-static int touchhud_record_cluster_bounds(uint8_t *pane, int branch) {
+// Only the live map viewport determines this translation. Environment and
+// capture siblings can remain hidden after dialogue; waiting for their matrix
+// callbacks leaves a visible map without a hit region. Their own callbacks
+// apply the same delta whenever they are drawn again.
+static int touchhud_update_cluster_delta(uint8_t *pane) {
     float left, bottom, right, top;
     if (!transform_bounds(pane, &left, &bottom, &right, &top)) return 0;
     pthread_mutex_lock(&g_touchhud_mu);
-    if (branch == 0) { g_touchhud.cut_bounds_valid = 1; g_touchhud.cut_right = right; g_touchhud.cut_top = top; }
-    if (branch == 1) g_touchhud.sibling_bounds_valid = 1;
-    if (branch == 2) g_touchhud.sensor_bounds_valid = 1;
-    int valid = g_touchhud.cut_bounds_valid && g_touchhud.sibling_bounds_valid && g_touchhud.sensor_bounds_valid;
+    g_touchhud.map_dx = 640.0f + dm_aspect_hud_offset(1) - DM_TP_BOTW_MAP_RIGHT_INSET - right;
+    g_touchhud.map_dy = DM_TP_BOTW_MAP_TOP - top;
+    g_touchhud.delta_valid = 1;
     pthread_mutex_unlock(&g_touchhud_mu);
-    return valid;
-}
-static int touchhud_update_cluster_delta(void) {
-    pthread_mutex_lock(&g_touchhud_mu);
-    int valid = g_touchhud.cut_bounds_valid && g_touchhud.sibling_bounds_valid && g_touchhud.sensor_bounds_valid;
-    if (valid) {
-        g_touchhud.map_dx = 640.0f + dm_aspect_hud_offset(1) - DM_TP_BOTW_MAP_RIGHT_INSET - g_touchhud.cut_right;
-        g_touchhud.map_dy = DM_TP_BOTW_MAP_TOP - g_touchhud.cut_top;
-        g_touchhud.delta_valid = 1;
-    }
-    pthread_mutex_unlock(&g_touchhud_mu);
-    return valid;
+    return 1;
 }
 static void touchhud_clear_cluster(void) {
     pthread_mutex_lock(&g_touchhud_mu);
-    g_touchhud.cut_bounds_valid = g_touchhud.sibling_bounds_valid = g_touchhud.sensor_bounds_valid = 0;
     g_touchhud.delta_valid = 0;
     pthread_mutex_unlock(&g_touchhud_mu);
 }
@@ -499,7 +484,7 @@ static void botw_touchhud_matrix(const uint64_t *regs) {
             invalidate_map_rect();
             return;
         }
-        if (!touchhud_record_cluster_bounds(pane, 0) || !touchhud_update_cluster_delta()) { invalidate_map_rect(); return; }
+        if (!touchhud_update_cluster_delta(pane)) { invalidate_map_rect(); return; }
         pthread_mutex_lock(&g_touchhud_mu); float dx = g_touchhud.map_dx, dy = g_touchhud.map_dy; pthread_mutex_unlock(&g_touchhud_mu);
         float tx, ty; memcpy(&tx, pane + BOTW_TOUCH_MATRIX + 0x0c, 4); memcpy(&ty, pane + BOTW_TOUCH_MATRIX + 0x1c, 4);
         tx += dx; ty += dy; memcpy(pane + BOTW_TOUCH_MATRIX + 0x0c, &tx, 4); memcpy(pane + BOTW_TOUCH_MATRIX + 0x1c, &ty, 4);
@@ -511,8 +496,6 @@ static void botw_touchhud_matrix(const uint64_t *regs) {
         int apply = active && collapsed && g_touchhud.delta_valid;
         float dx = g_touchhud.map_dx, dy = g_touchhud.map_dy;
         pthread_mutex_unlock(&g_touchhud_mu);
-        if (active && collapsed && map_cut_sibling(pane)) touchhud_record_cluster_bounds(pane, 1);
-        if (active && collapsed && main_environment_pane(pane) && pane_named(pane, "Pa_Sensor_00") && visible_to_root(pane)) touchhud_record_cluster_bounds(pane, 2);
         if (apply) {
             float tx, ty;
             memcpy(&tx, pane + BOTW_TOUCH_MATRIX + 0x0c, sizeof tx);

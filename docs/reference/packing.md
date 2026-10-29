@@ -27,6 +27,13 @@
 
 ## RomFS images
 
+### Mac launchers accept RomFS files and directories
+
+- **Symptom:** `run_mac.py` rejects an existing `RomFS.img` as missing, or cannot find a complete extracted layout after the NSP builder produced an image.
+- **Cause:** layout discovery and recorded-runtime validation required RomFS to be a directory, although extraction and the host support image files.
+- **Fix:** discover `RomFS.img` beside ExeFS and accept a file or directory as the runtime's RomFS. Test and release modes mount the same resource in place; no expansion is required.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game).
+
 ### RomFS folder transfers fail or leave stale game files
 
 - **Symptom:** `devicectl` copying a large RomFS folder fails with POSIX error 24 (`EMFILE`) or spends most of its time on small files; deleting an old folder during iOS startup hits the launch watchdog. A push after changing extracted files can also keep sending old assets if an image is reused solely because it exists.

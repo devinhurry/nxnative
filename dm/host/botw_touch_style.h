@@ -13,6 +13,25 @@
 #define DM_BOTW_STICK_RING_WIDTH (1.5 * DM_BOTW_STROKE_WIDTH_SCALE)
 #define DM_BOTW_STICK_GRAPH_ALPHA .15
 
+// MainShortCut's guide uses four pale round keys with triangular cutouts.
+// Draw the same silhouette at the larger virtual D-pad size, without the
+// ordinary pad's pentagonal arms, background or border.
+static inline CGPathRef dm_botw_dpad_key_path(CGPoint center, CGFloat radius, int button) {
+    CGFloat angle = button == 12 ? M_PI : button == 13 ? -M_PI_2 : button == 14 ? 0 : M_PI_2;
+    CGFloat r = radius * .20, gap = radius * .64;
+    CGPoint c = CGPointMake(center.x + gap*cos(angle), center.y + gap*sin(angle));
+    CGPathRef disk = CGPathCreateWithEllipseInRect(CGRectMake(c.x-r,c.y-r,2*r,2*r), NULL);
+    CGMutablePathRef triangle = CGPathCreateMutable();
+    CGAffineTransform t = CGAffineTransformMake(cos(angle),sin(angle),-sin(angle),cos(angle),c.x,c.y);
+    CGPathMoveToPoint(triangle,&t,r*.56,0);
+    CGPathAddLineToPoint(triangle,&t,-r*.32,-r*.46);
+    CGPathAddLineToPoint(triangle,&t,-r*.32,r*.46);
+    CGPathCloseSubpath(triangle);
+    CGPathRef key = CGPathCreateCopyBySubtractingPath(disk,triangle,false);
+    CGPathRelease(disk); CGPathRelease(triangle);
+    return key;
+}
+
 // Menu glyphs sit over a translucent circular button fill.
 static inline CGPathRef dm_botw_menu_key_path(CGPoint center, CGFloat size, CGFloat circleSize, int plus) {
     CGMutablePathRef path = CGPathCreateMutable();

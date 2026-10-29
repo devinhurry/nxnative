@@ -246,7 +246,7 @@ void front_botw_rune_icon_changed(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ [g_view botwRuneIconChanged]; });
 }
 void front_botw_touch_menu_changed(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{ [g_view refreshBotwTouchMenuMode]; });
+    dispatch_async(dispatch_get_main_queue(), ^{ [g_view refreshBotwTouchMenuMode]; [g_view setNeedsLayout]; });
 }
 
 @implementation DmGamepad {
@@ -448,7 +448,7 @@ static BOOL botwTouchHudSupported(void) { return dm_botw_touch_hud_available(); 
     [self refreshBotwRuneIcon];
     _key[B_MINUS].hidden = _tap || (botwActive && _botwMapValid);
     _leftStickDoubleTap.enabled = botwActive && !_botwMenuMode;
-    BOOL hideDpadArt = [self botwTouchControlsActive] || _padOff;
+    BOOL hideDpadArt = ([self botwTouchControlsActive] && dm_botw_touch_loadout_visible()) || _padOff;
     _key[B_LEFT].hidden = _key[B_UP].hidden = _key[B_RIGHT].hidden = _key[B_DOWN].hidden = _tap || !_full || hideDpadArt;
     _ring.hidden = _tap || (botwActive && !_stick[0]); _knob.hidden = _tap;
     _stickDirection.hidden = YES;
@@ -481,7 +481,7 @@ static BOOL botwTouchHudSupported(void) { return dm_botw_touch_hud_available(); 
     }
     BOOL botwActive = [self botwTouchControlsActive];
     if (!botwActive) _botwLookTapPending = NO;
-    BOOL hideDpadArt = botwActive || _padOff;
+    BOOL hideDpadArt = (botwActive && dm_botw_touch_loadout_visible()) || _padOff;
     _key[B_ZL].hidden = _tap || botwActive;
     _shieldGraph.hidden = !botwActive;
     _shieldRing.hidden = !botwActive || !_shieldTouch;
@@ -1261,7 +1261,8 @@ static CGImageRef botwRuneImage(const dm_botw_rune_icon_state *snapshot) {
         placeLabel(_label[b], CGPointMake(CGRectGetMidX(badge),CGRectGetMidY(badge)), 9*u);
     }
     static const struct { int b; CGFloat angle; } arms[] = {{B_UP, 0}, {B_RIGHT, M_PI_2}, {B_DOWN, M_PI}, {B_LEFT, -M_PI_2}};   // the same arm in 90° steps
-    for (int i = 0; i < 4; i++) setPath(_key[arms[i].b], armPath(self.dpadCenter, self.dpadR, K_ARM_W * u * [self botwLayoutScale:B_LEFT], K_ARM_IN * u * [self botwLayoutScale:B_LEFT], arms[i].angle, 6 * u * [self botwLayoutScale:B_LEFT]));
+    for (int i = 0; i < 4; i++) setPath(_key[arms[i].b], botw ? dm_botw_dpad_key_path(self.dpadCenter,self.dpadR,arms[i].b) :
+        armPath(self.dpadCenter, self.dpadR, K_ARM_W * u * [self botwLayoutScale:B_LEFT], K_ARM_IN * u * [self botwLayoutScale:B_LEFT], arms[i].angle, 6 * u * [self botwLayoutScale:B_LEFT]));
     CGPoint sc = self.swapCenter; setPath(_swap, circlePath(sc, K_SWAP_R * u)); placeLabel(_swapLabel, sc, 12 * u);
     CGFloat stickUnit = u * (botw ? _moveResponse.size : 1);
     CGFloat k = K_KNOB_R * stickUnit; _knob.bounds = CGRectMake(0, 0, 2 * k, 2 * k);
@@ -1302,7 +1303,7 @@ static CGImageRef botwRuneImage(const dm_botw_rune_icon_state *snapshot) {
             setPath(_buttonBadgeBorder[b], dm_botw_outer_border_path(_buttonBadge[b].path, _buttonBadge[b].lineWidth));
         setPath(_runeBadgeBorder, dm_botw_outer_border_path(_runeBadge.path, _runeBadge.lineWidth));
     }
-    BOOL hideDpadArt = [self botwTouchControlsActive] || _padOff;
+    BOOL hideDpadArt = (botw && dm_botw_touch_loadout_visible()) || _padOff;
     _key[B_LEFT].hidden = _key[B_UP].hidden = _key[B_RIGHT].hidden = _key[B_DOWN].hidden = _tap || !_full || hideDpadArt;
     [CATransaction commit];
     [self publishTouchHudForController:atomic_load(&g_any_controller_connected)];
@@ -1420,6 +1421,10 @@ static CGImageRef botwRuneImage(const dm_botw_rune_icon_state *snapshot) {
             _key[b].strokeColor = nil;
             _label[b].foregroundColor = UIColor.whiteColor.CGColor;
         }
+        if (botw && b >= B_LEFT && b <= B_DOWN) {
+            _key[b].fillColor = [UIColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:on ? 1 : .8].CGColor;
+            _key[b].strokeColor = nil;
+        }
         if (b == B_PLUS || b == B_MINUS) _label[b].hidden = botw;
     }
     for (int b = 0; b < B_N; b++) if (_buttonIcon[b]) {
@@ -1459,7 +1464,7 @@ static CGImageRef botwRuneImage(const dm_botw_rune_icon_state *snapshot) {
         _cancelRing.strokeColor = line.CGColor;
     }
     for (int b = 0; b < B_N; b++)
-        refreshBotwBorder(_key[b], _keyBorder[b], botw && b != B_PLUS && b != B_MINUS);
+        refreshBotwBorder(_key[b], _keyBorder[b], botw && b < B_LEFT && b != B_PLUS && b != B_MINUS);
     for (int b = 0; b < B_N; b++) if (_buttonBadge[b])
         refreshBotwBorder(_buttonBadge[b], _buttonBadgeBorder[b], botw);
     refreshBotwBorder(_runeBadge, _runeBadgeBorder, botw);

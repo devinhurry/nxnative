@@ -146,6 +146,7 @@ static uint64_t g_botw_cancel_requested;
 static BOOL g_botw_touch_menu_active;
 static BOOL g_botw_touch_menu_presented;
 static BOOL g_botw_gameplay_ready = YES;
+static BOOL g_botw_loadout_visible = YES;
 static BOOL g_force_controls_hidden;
 static BOOL g_botw_touch_map_active;
 typedef struct { int phase; float x, y; } menu_pointer_event;
@@ -156,6 +157,7 @@ int dm_look_enabled(void) { return g_look_enabled; }
 int dm_botw_touch_hud_available(void) { return g_botw_touchhud_available; }
 int dm_botw_touch_menu_active(void) { return g_botw_touch_menu_active; }
 int dm_botw_touch_menu_visible(void) { return g_botw_touch_menu_active || g_botw_touch_menu_presented; }
+int dm_botw_touch_loadout_visible(void) { return g_botw_loadout_visible; }
 int dm_botw_touch_controls_visible(void) {
     if (g_force_controls_hidden) return 0;
     return !g_botw_touchhud_available || (g_botw_gameplay_ready && !dm_botw_touch_menu_visible());
@@ -291,6 +293,13 @@ static void test_dpad_art_visibility(DmGamepad *view) {
           "late BOTW activation does not overwrite the shared layout preference");
     [view setFull:YES];
     CHECK([view dm_testDpadArtworkHidden], "active BOTW touch 3D mode hides D-pad artwork");
+    g_botw_loadout_visible=NO; [view setNeedsLayout]; [view layoutIfNeeded];
+    CHECK(![view dm_testDpadArtworkHidden],"BOTW gameplay without the native loadout shows the round direction-key fallback");
+    CAShapeLayer *leftKey=[view dm_testButtonLayer:12];
+    CHECK(CGPathGetPathBoundingBox(leftKey.path).size.width < 30 && !leftKey.strokeColor &&
+          [view dm_testButtonBorder:12].hidden,"fallback keys use pale round silhouettes without the ordinary pad border");
+    g_botw_loadout_visible=YES; [view setNeedsLayout]; [view layoutIfNeeded];
+    CHECK([view dm_testDpadArtworkHidden],"native loadout restoration hides the fallback immediately");
     CHECK([view dm_testSwapHidden] && ![view dm_testInSwap:CGPointMake(view.bounds.size.width*.5,20)],
           "BOTW touch removes both the visible layout toggle and its hit area");
     [view dm_testNextLayout];
@@ -399,6 +408,9 @@ static void test_botw_button_artwork(DmGamepad *view) {
     CHECK((g_buttons & DM_BTN_Y) && !(g_buttons & DM_BTN_X), "the overlapping Y badge still presses Y");
     ended(view,t,badgeCenter.x,badgeCenter.y);
     save_pad_preview(view, @"botw-buttons.png");
+    g_botw_loadout_visible=NO; [view setNeedsLayout]; [view layoutIfNeeded];
+    save_pad_preview(view, @"botw-dpad-fallback.png");
+    g_botw_loadout_visible=YES; [view setNeedsLayout]; [view layoutIfNeeded];
     g_botw_rune_icon_snapshot.valid=1; g_botw_rune_icon_snapshot.generation=1;
     g_botw_rune_icon_snapshot.width=g_botw_rune_icon_snapshot.height=DM_BOTW_RUNE_ICON_SIDE;
     g_botw_rune_icon_snapshot.stride=DM_BOTW_RUNE_ICON_STRIDE;

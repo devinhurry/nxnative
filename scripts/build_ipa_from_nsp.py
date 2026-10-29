@@ -1135,7 +1135,7 @@ def rewrite(py, repo, exe_dir, out, env, logs, g, romfs=None, provisional=False)
     The modules are the profile's and the NROs the game registers (collect_nros; nro.tsv beside them lists those); a provisional profile first gets the subsdks those NROs import from (nro_modules).
     Reused when the modules, patch_nso.py (with nso.py, nso_code.py, nso_asm.py and the selected profile's function rules / the patch files of their builds), its switches and capstone are as at the
     last successful rewrite (Monster Hunter Rise's main alone takes 5.5 min). Returns the profile"""
-    import capstone
+    __import__('capstone')   # fail before starting a rewrite without its decoder dependency
     PROG.stage('rewrite', step='checking the inputs')
     logs.mkdir(parents=True, exist_ok=True)
     romfs = rfs.Path(romfs) if romfs else rfs.source(Path(exe_dir).parent)
@@ -1207,6 +1207,14 @@ def apple_silicon():   # hw.optional.arm64 is 1 on Apple silicon (for a Python u
 HOST_DIRS = ('dm/host', 'dm/gfx', 'dm/gfx/nvn', 'dm/gfx/nvn/include', 'dm/gfx/tex', 'dm/gfx/vk', 'dm/gfx/gl')   # the folders the host's compile line takes its sources and headers from (dm/host/Makefile SRC, GFX, GFX_H)
 
 
+def mac_source_identity(repo):
+    """Record source identity at build time, never infer it from the checkout at launch."""
+    rev = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=repo, capture_output=True, text=True)
+    status = subprocess.run(['git', 'status', '--porcelain'], cwd=repo, capture_output=True, text=True)
+    return dict(commit=rev.stdout.strip() if not rev.returncode else 'unknown',
+                dirty=bool(status.stdout.strip()) if not status.returncode else True)
+
+
 def build_mac_host(repo, out, env, logs, g):
     """The Mac host for the profile, built into out: dm/host's own compile line (make -n) with the output moved, since make takes no target path with spaces and dm/host/dmhost may be another build's.
     Reused when the compile line and its inputs (the source files of HOST_DIRS, the chain header dm/gfx/nvn/dmsh_chain.h among them, the profile header make generates, libvpx and the third-party headers, the compiler
@@ -1222,10 +1230,17 @@ def build_mac_host(repo, out, env, logs, g):
     srcs = [p for d in HOST_DIRS for p in sorted((repo / d).iterdir()) if p.is_file() and p.suffix in ('.c', '.m', '.h', '.S', '.inc')]
     key = fingerprint(cmd, ('files', srcs + [host / f'gen/{g.id}/game_profile.h', host / 'gen/vpx/libvpx.a', tp / 'stb_vorbis/stb_vorbis.c']),
                       ('tree', tp / 'vulkan-headers/include'), ('tree', tp / 'libvpx/vpx'), ('cmd', ['clang', '--version']), ('cmd', ['xcrun', '--show-sdk-build-version']), env=env)
-    if out.is_file() and reused(kf, key) is not None: return out
+    source_file = out.with_name(out.name + '.source.json')
+    if out.is_file() and reused(kf, key) is not None and source_file.is_file():
+        try: source = json.loads(source_file.read_text())
+        except (OSError, ValueError): source = {}
+        if isinstance(source, dict) and source.get('inputs') == key and source.get('host_sha256') == hashlib.sha256(out.read_bytes()).hexdigest(): return out
     rmtree(kf); out.parent.mkdir(parents=True, exist_ok=True)
+    source = dict(mac_source_identity(repo), inputs=key, shader_chain=chain_of(repo))
     run(cmd, logs / 'mac_host_build.log', env=env, cwd=host)
     kf.write_text(f'{key}\n')
+    source['host_sha256'] = hashlib.sha256(out.read_bytes()).hexdigest()
+    source_file.write_text(json.dumps(source, indent=2) + '\n')
     return out
 
 
@@ -2038,25 +2053,40 @@ def mac_host(py, repo, work, env, logs, g):
     return host, font
 
 
-def write_mac_runtime(work, host, patched, renv, g, gfx, chain=None, description='prepared Mac build', cwd=None):
-    """Record one matched runtime for run_mac.py --quick; never pin its save path."""
+def write_mac_runtime(work, host, patched, renv, g, gfx, chain=None, description='prepared Mac build', cwd=None, mode='release'):
+    """Record a test or release runtime with its compiled source identity; never pin its save path."""
     host, patched = Path(host).resolve(), Path(patched).resolve()
+    source_file = host.with_name(host.name + '.source.json')
+    source = json.loads(source_file.read_text())
+    if source['host_sha256'] != hashlib.sha256(host.read_bytes()).hexdigest(): raise BuildError('Mac host differs from its recorded build source; rebuild it')
+    if gfx == 'nvn' and source['shader_chain'] != chain: raise BuildError('Mac host and shader chain differ; rebuild a matching runtime')
+    renv = dict(renv)
+    assets = Path(work) / 'run' / mode
+    if gfx == 'nvn':
+        profile = assets / 'profile'; profile.mkdir(parents=True, exist_ok=True)
+        origin = Path(renv['DM_NVN_SHMAP']).resolve()
+        for p in sorted(origin.parent.glob('*.tsv')) + sorted(origin.parent.glob('touch_*.png')):
+            if p.resolve() != (profile / p.name).resolve(): shutil.copy2(p, profile / p.name)
+        renv['DM_NVN_SHMAP'] = profile / origin.name
+    if renv.get('DM_FONT_DIR'):
+        font = assets / 'font'; font.mkdir(parents=True, exist_ok=True)
+        for p in Path(renv['DM_FONT_DIR']).iterdir():
+            if p.is_file() and p.resolve() != (font / p.name).resolve(): shutil.copy2(p, font / p.name)
+        renv['DM_FONT_DIR'] = font
     msl = Path(renv['DM_MSL_DIR']).resolve()
-    files = [host]
+    files = [host, source_file] + [p for p in assets.rglob('*') if p.is_file()]
     if (patched / 'build_src.sha256').is_file(): files.append(patched / 'build_src.sha256')
-    files += [patched / f'{mod}.{suffix}' for mod in g.words('modules')
-              for suffix in ('patched.bin', 'fixups.tsv', 'gates.tsv')]
+    files += [p for p in patched.iterdir() if p.is_file() and p.suffix in ('.bin', '.tsv')]
     if gfx == 'nvn':
         files += [msl / f'b-{chain}' / 'inputs.tsv', Path(renv['DM_NVN_SHMAP'])]
-        files += [g.table(name) for name in ('shader_pairs.tsv', 'c1_full.tsv', 'cb_extent.tsv') if g.table(name).is_file()]
     else:
         api = 'vk' if gfx == 'vulkan' else 'gl'
         files += [msl / api / f'{api}_shaders.{suffix}' for suffix in ('tsv', 'metallib')]
-    data = dict(schema=1, game=g.id, version=g.get('package'), host=str(host), patched=str(patched),
+    data = dict(schema=2, mode=mode, source=source, modules=g.words('modules'), game=g.id, version=g.get('package'), host=str(host), patched=str(patched),
                 cwd=str(Path(cwd or Path(work) / 'run').resolve()),
                 romfs=str(Path(renv['DM_ROMFS']).resolve()), msl=str(msl), graphics=gfx, chain=chain,
                 description=description, checksums={str(p.resolve()): hashlib.sha256(p.read_bytes()).hexdigest() for p in files},
-                environment={k: str(v) for k, v in renv.items() if k not in ('DM_ROOT', 'DM_SAVE', 'DM_TEMP', 'DM_CTL', 'DM_TOUCH_PREVIEW')})
+                environment={k: str(v) for k, v in renv.items() if k.startswith('DM_') and k not in ('DM_ROOT', 'DM_SAVE', 'DM_TEMP', 'DM_CTL', 'DM_TOUCH_PREVIEW')})
     manifest = Path(work) / 'run/mac-runtime.json'
     manifest.parent.mkdir(parents=True, exist_ok=True)
     tmp = manifest.with_suffix('.json.tmp'); tmp.write_text(json.dumps(data, indent=2) + '\n'); tmp.replace(manifest)
@@ -2085,8 +2115,9 @@ def mac_run(work, game, patched, host, font, msl, aoc, gfx, lang, env, logs, g, 
         run([host], logs / 'pso_prebuild.log', env=penv, cwd=rd)
         PROG.end()
     q = lambda v: shlex.quote(str(v))
-    write_mac_runtime(work, host, patched, renv, g, gfx,
-                      chain_of(Path(__file__).resolve().parent.parent) if gfx == 'nvn' else None)
+    manifest = write_mac_runtime(work, host, patched, renv, g, gfx,
+                                 chain_of(Path(__file__).resolve().parent.parent) if gfx == 'nvn' else None)
+    renv.update(json.loads(manifest.read_text())['environment'])
     return f'cd {q(rd)} && ' + ' '.join(f'{k}={q(v)}' for k, v in renv.items()) + f' {q(host)} {q(patched)}'
 
 

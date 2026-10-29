@@ -26,6 +26,9 @@ int dm_botw_touch_menu_visible(void);
 // and no presented menu. Other games retain their existing control policy.
 int dm_botw_touch_controls_visible(void);
 
+// The native equipment/rune group can fade independently of gameplay controls.
+int dm_botw_touch_loadout_visible(void);
+
 // Diagnostic for DM_CTL ("panes <hex root> [max depth]"): log the live pane tree
 // below a native layout root with names, flags, alpha and normalized geometry,
 // so a bar or button that the host does not route yet can be identified by the

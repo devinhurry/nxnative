@@ -910,7 +910,10 @@ static void rec_ui_scope(int32_t *instances, int32_t *base_instance) {
     } else if (dm_aspect_ui_hud_drawing() && !*base_instance) {
         *instances |= NVN_DRAW_UI_BACKGROUND;
         *base_instance = INT32_MIN+1;
-    } else if (dm_aspect_ui_background_drawing()) *instances |= NVN_DRAW_UI_BACKGROUND;
+    } else if (dm_aspect_ui_background_drawing()) {
+        *instances |= NVN_DRAW_UI_BACKGROUND;
+        if (dm_aspect_ui_background_drawing() == 2 && !*base_instance) *base_instance = INT32_MIN+2;
+    }
 }
 static void rec_draw(NVNcommandBuffer *c, p_draw d) { size_t n = d.ind || d.mdi_cnt ? sizeof d : offsetof(p_draw, ind); rec_ui_scope(&d.instances, &d.base_instance); memcpy(rec(c, OP_DRAW, n), &d, n); }
 static void rec_draw_idx(NVNcommandBuffer *c, p_draw_idx d) { size_t n = d.ind || d.mdi_cnt ? sizeof d : offsetof(p_draw_idx, ind); rec_ui_scope(&d.instances, &d.base_instance); memcpy(rec(c, OP_DRAW_IDX, n), &d, n); }

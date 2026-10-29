@@ -224,15 +224,19 @@ static int aspect_ui_title_art(uint8_t *pane) {
     int role = aspect_ui_named(owner, "N_InOut_00") ? 1 : aspect_ui_named(owner, "N_Capture_00") ? 2 : 0;
     return role && aspect_ui_named(*(uint8_t **)(owner + 0x18), "RootPane") ? role : 0;
 }
-static int aspect_ui_background_pane(uint8_t *pane) {
-    if (aspect_ui_title_shade(pane) || aspect_ui_title_art(pane)) return 1;
-    // Fade_00's upper cream panel is a flat capture picture. Its status icons
-    // and tip text are separate panes and keep their native proportions.
+static int aspect_ui_loading_fill(uint8_t *pane) {
+    // Fade_00 projects its animated gradient onto this panel. Stretch the
+    // completed native draw, keeping its geometry and texture projection in
+    // the same coordinate system throughout the cream/black wipe.
     if (aspect_ui_named(pane, "P_Capture_00") && aspect_ui_named(aspect_ui_parent(pane), "N_LogoInOut_00") &&
         aspect_ui_named(aspect_ui_parent(aspect_ui_parent(pane)), "RootPane")) {
         float size[2]; memcpy(size, pane + 0x50, sizeof size);
         if (size[0] >= 1280 && fabsf(size[1] - 275) < .01f) return 1;
     }
+    return 0;
+}
+static int aspect_ui_background_pane(uint8_t *pane) {
+    if (aspect_ui_title_shade(pane) || aspect_ui_title_art(pane) || aspect_ui_loading_fill(pane)) return 1;
     if (!pane || !aspect_ui_background((char *)pane + 0xb8)) return 0;
     float width, height;
     memcpy(&width, pane + 0x50, 4); memcpy(&height, pane + 0x54, 4);
@@ -247,12 +251,14 @@ static void aspect_ui_draw(const uint64_t *regs) {
     // x21 is Pane::Draw's saved this across the DrawSelf virtual call.
     g_ui_background_drawing = dm_aspect_ratio() > GAME_ASPECT &&
         aspect_ui_background_pane((uint8_t *)(uintptr_t)regs[21]);
+    if (g_ui_background_drawing && aspect_ui_loading_fill((uint8_t *)(uintptr_t)regs[21])) g_ui_background_drawing = 2;
     g_ui_hud_drawing = dm_aspect_ratio() > GAME_ASPECT && aspect_ui_hud_pane((uint8_t *)(uintptr_t)regs[21]);
     dm_botw_rune_icon_draw_begin((uint8_t *)(uintptr_t)regs[21]);
 }
 static void aspect_ui_draw_end(const uint64_t *regs) { (void)regs; g_ui_background_drawing = g_ui_hud_drawing = 0; dm_botw_rune_icon_draw_end(); }
 void dm_aspect_ui_pane(uint8_t *pane) {
     if (!pane || strcmp(DM_GAME_ID, "01007EF00011E000") || !dm_aspect_native()) return;
+    if (aspect_ui_loading_fill(pane)) return;
     int hud = aspect_ui_hud_anchor(pane);
     int title_shade = aspect_ui_title_shade(pane);
     int title_right = title_shade && (aspect_ui_named(pane, "FBLayout_02") || aspect_ui_named(pane, "FBLayout_03"));
@@ -295,7 +301,10 @@ void dm_aspect_ui_pane(uint8_t *pane) {
     entry->written_x = entry->native_x;
     entry->written_y = entry->native_y;
     if (cover) { entry->written_x *= wide; entry->written_y *= wide; }
-    if (hud == -1) entry->written_x -= dm_aspect_hud_offset(0);
+    // Landscape's horizontal safe inset reserves the notch at mid-height.
+    // Hearts sit above it, with their own authored top/corner padding; adding
+    // the entire inset here leaves an unnecessary gap on iPhone.
+    if (hud == -1) entry->written_x -= fmaxf(0, 360 * dm_aspect_ratio() - 640);
     else if (hud && !dm_botw_touch_hud_active() &&
              (hud != 2 || aspect_ui_map_collapsed(aspect_ui_map_cut(pane))))
         entry->written_x += dm_aspect_hud_offset(1);

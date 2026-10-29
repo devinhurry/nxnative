@@ -139,10 +139,10 @@ int main(void) {
     pane_size(cut, 166, 166); pane_size(capture, 192, 192); pane_size(cut_sibling, 210, 328);
     scaled_matrix(cut, 1, 510, -240); scaled_matrix(cut_sibling, 1, 510, -240);
     calculate_entry(cut); calculated_matrix(cut);
-    assert(!map_region_valid); // wait until the full live cluster geometry is known
-    expect_translation(cut, 510, -240);
+    assert(map_region_valid); // a visible map owns taps even before hidden siblings recalculate
+    expect_translation(cut, 473, 257);
     calculate_entry(cut_sibling); calculated_matrix(cut_sibling);
-    expect_translation(cut_sibling, 510, -240);
+    expect_translation(cut_sibling, 473, 257);
 
     uint8_t env_all[0x100] = {0}, env_root[0x100] = {0}, weather[0x100] = {0}, status[0x100] = {0};
     pane_name(env_all, "N_All_00"); pane_name(env_root, "RootPane");
@@ -150,10 +150,10 @@ int main(void) {
     set_pane_parent(env_all, env_root); set_pane_parent(weather, env_all); set_pane_parent(status, env_all);
     env_root[BOTW_TOUCH_FLAGS] = env_all[BOTW_TOUCH_FLAGS] = weather[BOTW_TOUCH_FLAGS] = status[BOTW_TOUCH_FLAGS] = 1;
     matrix_translation(weather, 392, -182); calculate_entry(weather); calculated_matrix(weather);
-    expect_translation(weather, 392, -182);
+    expect_translation(weather, 355, 315);
     pane_size(status, 582, 78.2f); matrix_translation(status, 392, -182);
     calculate_entry(status); calculated_matrix(status);
-    expect_translation(status, 392, -182);
+    expect_translation(status, 355, 315);
     // N_Cut_00 is the viewport. Sibling N_Cut_01 and Pa_Sensor_00 have wider
     // transparent bounds, so they move with the map without setting its edge.
     scaled_matrix(cut, 1, 510, -240); calculate_entry(cut); calculated_matrix(cut);
@@ -189,7 +189,7 @@ int main(void) {
     assert(!map_region_valid); expect_translation(cut, 0, 0);
     pane_size(cut, 166, 166); scaled_matrix(cut, 1, 510, -240);
     calculate_entry(cut); calculated_matrix(cut);
-    assert(!map_region_valid); expect_translation(cut, 510, -240);
+    assert(map_region_valid); expect_translation(cut, 473, 257);
     scaled_matrix(cut_sibling, 1, 510, -240); calculate_entry(cut_sibling); calculated_matrix(cut_sibling);
     matrix_translation(status, 392, -182); calculate_entry(status); calculated_matrix(status);
     scaled_matrix(cut, 1, 510, -240); calculate_entry(cut); calculated_matrix(cut);

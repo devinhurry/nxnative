@@ -72,7 +72,7 @@ static void test_edge_hud(void) {
     assert(*(float *)(inout+0x30)==0 && *(float *)(ornaments+0x30)==0);
     draw_callback(regs); assert(!dm_aspect_ui_hud_drawing()); draw_end_callback(regs);
     dm_aspect_set_safe_area(1512,720,40,20); dm_aspect_ui_pane(heart); dm_aspect_ui_pane(sensor);
-    assert(fabsf(*(float *)(heart+0x30)+510)<.001f && fabsf(*(float *)(sensor+0x30)-488)<.001f);
+    assert(fabsf(*(float *)(heart+0x30)+550)<.001f && fabsf(*(float *)(sensor+0x30)-488)<.001f);
     float rect[4]; dm_aspect_hud_rect(1512,720,rect);
     assert(fabsf(rect[0]-40)<.001f && fabsf(rect[2]-1452)<.001f && rect[1]==0 && rect[3]==720);
     dm_aspect_touch_rect(1512,720,rect); assert(fabsf(rect[0]-116)<.001f && rect[2]==1280);
@@ -83,8 +83,8 @@ static void test_edge_hud(void) {
     pane_init(fade,"RootPane",0,1280,720); pane_init(logo,"N_LogoInOut_00",0,30,40); pane_child(fade,logo);
     pane_init(upper,"P_Capture_00",0,1280,275); pane_child(logo,upper);
     dm_aspect_set_display(21.f/10); dm_aspect_ui_pane(upper);
-    assert(fabsf(*(float *)(upper+0x50)-1512)<.001f && *(float *)(upper+0x54)==275);
-    regs[21]=(uintptr_t)upper; draw_callback(regs); assert(dm_aspect_ui_background_drawing()); draw_end_callback(regs);
+    assert(*(float *)(upper+0x50)==1280 && *(float *)(upper+0x54)==275);
+    regs[21]=(uintptr_t)upper; draw_callback(regs); assert(dm_aspect_ui_background_drawing()==2); draw_end_callback(regs);
     dm_aspect_set_display(GAME_ASPECT); dm_aspect_ui_pane(upper); assert(*(float *)(upper+0x50)==1280);
 }
 static void failure(const char *value, int bad_build, int stale) {

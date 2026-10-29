@@ -1119,6 +1119,20 @@ static void test_menu_animation_visibility(void) {
     selector.active[1] = 0x80;
     selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
     assert(!dm_botw_touch_menu_visible() && dm_botw_touch_controls_visible());
+    strcpy((char *)selector.map_screen + 0xa0, "MainShortCut_00");
+    uint8_t *shortcut_all=fake_pane(76,"N_All_00",75,0,0,0,0);
+    uint8_t *shortcut_main=fake_pane(77,"N_MainAll_00",76,0,0,0,0);
+    uint8_t *shortcut_pos=fake_pane(78,"N_Pos_00",77,0,0,0,0);
+    link_child(fade,shortcut_all); link_child(shortcut_all,shortcut_main); link_child(shortcut_main,shortcut_pos);
+    selector.active[1]=0;
+    selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
+    assert(dm_botw_touch_loadout_visible() && dm_botw_touch_controls_visible());
+    shortcut_main[0x59]=0;
+    selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
+    assert(!dm_botw_touch_loadout_visible() && dm_botw_touch_controls_visible());
+    shortcut_main[0x59]=255; selector.active[1]=0x80;
+    selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
+    assert(!dm_botw_touch_loadout_visible()); // an allocated but unregistered layout cannot hide the fallback
     // Corner notifications can enter, remain and leave over the gameplay HUD
     // without becoming a menu. Full tutorials and dialogues still own input.
     selector.active[1] = 0;

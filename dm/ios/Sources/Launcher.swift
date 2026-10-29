@@ -35,7 +35,7 @@ private struct LauncherView: View {
                     List {
                         if m.touchStickResponse != nil {
                             Section("Touch") {
-                                Button("Touch settings") { showTouchSettings = true }
+                                Button("BOTW touch settings") { showTouchSettings = true }
                                     .accessibilityIdentifier("botw.touch.settings")
                             }
                         }
