@@ -304,6 +304,12 @@ int main(void) {
         P(nvnCommandBufferEndRecording)(&c2); memcpy(&rh, m, sizeof rh);
         ad = draw_rec(m + 8, rh.size, &array_draw);
         EXPECT("edge HUD scope preserves compact draw size and native arguments", 1, P(nvnCommandBufferGetCommandMemoryUsed)(&c2)==0x28 && ad->pad==NVN_UI_HUD && ad->base_instance==0 && ad->instances==1);
+        test_ui_hud = 2;
+        P(nvnCommandBufferAddCommandMemory)(&c2, &mp, 0, sizeof m); P(nvnCommandBufferBeginRecording)(&c2);
+        P(nvnCommandBufferDrawArrays)(&c2, NVN_DRAW_PRIMITIVE_TRIANGLES, 0, 6);
+        P(nvnCommandBufferEndRecording)(&c2); memcpy(&rh, m, sizeof rh);
+        ad = draw_rec(m + 8, rh.size, &array_draw);
+        EXPECT("map scope preserves compact draw size and native arguments", 1, P(nvnCommandBufferGetCommandMemoryUsed)(&c2)==0x28 && ad->pad==NVN_UI_MAP && ad->base_instance==0 && ad->instances==1);
         test_ui_hud = 0;
         test_ui_background = 2;
         P(nvnCommandBufferAddCommandMemory)(&c2, &mp, 0, sizeof m); P(nvnCommandBufferBeginRecording)(&c2);

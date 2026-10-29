@@ -89,7 +89,7 @@ Select a control in the preview or the control picker. Drag it to move, pinch to
 |---|---|---|---|
 | Deadzone | 7% | 0–30% | Small drags within this fraction of the radius produce no movement. |
 | Response curve | 0.30 | 0.30–2.00 | Below 1 makes short drags stronger; 1 is linear; above 1 makes them gentler. |
-| Full movement at | 70% | 35–100% | How far to drag, as a fraction of the radius, to reach maximum stick strength. |
+| Full movement at | 71% | 35–100% | How far to drag, as a fraction of the radius, to reach maximum stick strength. |
 | Stick size | 80% | 60–150% | Scales the whole stick: its center artwork, outer ring and drag range. |
 
 **Current parameters** displays every touch value as a `DM_...=value` assignment. **Copy all parameters** copies that complete list, including unchanged defaults, so you can send a layout back to the developer without estimating positions from a screenshot. Offset and size readouts show the exact decimal as well as its percentage. These are the normalized runtime values used by the preview and both gamepads.
@@ -100,7 +100,7 @@ The curve updates as you adjust the sliders. Drag across it to see the stick str
 
 Size at 100% keeps the existing dimensions: a 140-point outer diameter when the viewport is taller than 430 points, with the existing scaling on shorter screens. These settings do not add an overshoot sprint gesture; B keeps its ordinary action.
 
-On the Mac, touch preview uses the same parameters through `DM_BOTW_MOVE_DEADZONE`, `DM_BOTW_MOVE_CURVE`, `DM_BOTW_MOVE_FULL` and `DM_BOTW_MOVE_SIZE` in `env.txt` or the launch environment. Fractions are written as decimals: for example, `DM_BOTW_MOVE_DEADZONE=0.07` means 7%. Packaged Mac apps expose the same Touch settings page; the raw host uses the launch environment. Layout variables use `DM_BOTW_PAD_<CONTROL>_X`, `_Y` and `_SCALE`, where `<CONTROL>` is `FACE`, `DPAD`, `ZL`, `L`, `R` or `ZR`. Movement uses `DM_BOTW_PAD_STICK_X` / `_Y` and the existing `DM_BOTW_MOVE_SIZE`. `DM_BOTW_PAD_FACE_GAP` controls XYAB spacing. `DM_BOTW_PAD_BADGES=0` hides the corner letter circles (default `1`).
+On the Mac, touch preview uses the same parameters through `DM_BOTW_MOVE_DEADZONE`, `DM_BOTW_MOVE_CURVE`, `DM_BOTW_MOVE_FULL` and `DM_BOTW_MOVE_SIZE` in `env.txt` or the launch environment. Fractions are written as decimals: for example, `DM_BOTW_MOVE_DEADZONE=0.07` means 7%. Packaged Mac apps expose the same Touch settings page; the raw host uses the launch environment. Layout variables use `DM_BOTW_PAD_<CONTROL>_X`, `_Y` and `_SCALE`, where `<CONTROL>` is `FACE`, `DPAD`, `ZL`, `L`, `R` or `ZR`. Movement uses `DM_BOTW_PAD_STICK_X` / `_Y` and the existing `DM_BOTW_MOVE_SIZE`. `DM_BOTW_PAD_FACE_GAP` controls XYAB spacing (default `1.060`). Corner letter circles are off by default; `DM_BOTW_PAD_BADGES=1` enables them. The runtime and Restore defaults match the values listed in `dm/games/settings.tsv`; saved custom choices and explicit environment overrides retain precedence.
 
 If a BOTW menu does not respond to direct touch on iPhone, **double-tap with three fingers** to reveal the original full virtual gamepad for that menu visit. It sends ordinary buttons and UI right-stick input. Leaving menus restores the normal touch layout; a controller connection or input reset also ends the temporary override. It is not saved. The gesture is reserved while automatic controls are hidden, so ordinary three-finger combat combinations keep working.
 

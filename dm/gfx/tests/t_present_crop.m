@@ -303,5 +303,14 @@ int main(void) { @autoreleasepool {
     EXPECT("full backgrounds retain both open edges",1,left==0 && right==1280);
     left=40;right=1200;ui_scissor_x(&left,&right,1280,1,1,NVN_UI_HUD);
     EXPECT("16:9 HUD scissor stays unchanged",1,left==40 && right==1200);
+    g_on=1; g_custom=0; dm_aspect_set_display(32.f/9); dm_aspect_set_safe_area(2560,720,0,0);
+    left=1042;right=1208;ui_scissor_x(&left,&right,1280,2,1,NVN_UI_MAP);
+    EXPECT("32:9 map clip moves to the right edge without leaving native clip space",1,left==1161 && right==1244);
+    dm_aspect_set_safe_area(2560,720,0,40);
+    left=1042;right=1208;ui_scissor_x(&left,&right,1280,2,1,NVN_UI_MAP);
+    EXPECT("32:9 map clip retains its width and respects the safe edge",1,left==1141 && right==1224);
+    dm_aspect_set_display(16.f/9); dm_aspect_set_safe_area(1280,720,0,0);
+    left=1042;right=1208;ui_scissor_x(&left,&right,1280,1,0,NVN_UI_MAP);
+    EXPECT("map clip restores its native position at 16:9",1,left==1042 && right==1208);
     printf("== %d checks, %d failed ==\n",cases,failed);return failed!=0;
 } }

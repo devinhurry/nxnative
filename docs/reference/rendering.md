@@ -544,9 +544,9 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 
 ### Edge-anchored UI keeps open scissor edges
 
-- **Symptom:** a widescreen HUD moves toward the screen edge, but the minimap is cut off at the old centered 16:9 boundary.
-- **Cause:** native ui2d clamps a pane's scissor to its original render target before NVN records it. Applying the centered UI correction to that clamped edge recreates the old boundary even after the pane moves outward.
-- **Fix:** carry the build-checked native HUD DrawSelf scope through compact draw records. For those draws, preserve each target-clamped horizontal edge independently and transform interior clip boundaries with the UI projection. Full-display backgrounds retain both open edges; menu clips stay centered. Restore the original instance count and base instance when decoding the scope marker.
+- **Symptom:** a widescreen HUD moves toward the screen edge, but the minimap is cut off at the old centered 16:9 boundary or disappears entirely at very wide ratios.
+- **Cause:** native ui2d clamps a pane's scissor to its original render target before NVN records it. Applying the centered UI correction to that clamped edge recreates the old boundary even after the pane moves outward. At 32:9, BOTW's `ScissorPane::Draw` (`main+0xf66f0c`, build `cd57b23fa4bbad65803d9788c01821ee`) finds an empty intersection and returns at `main+0xf67134` before drawing its children or recording any NVN commands.
+- **Fix:** carry the build-checked native HUD DrawSelf scope through compact draw records. For ordinary edge HUD draws, preserve each target-clamped horizontal edge independently and transform interior clip boundaries with the UI projection. The collapsed map keeps its horizontal native position during CPU clipping; its distinct recorded scope applies the edge translation to both the clip projection and scissor during final UI-canvas replay. Its published touch bounds include that same final translation. Full-display backgrounds retain both open edges; expanded map/menu clips stay centered. Restore the original instance count and base instance when decoding the scope marker.
 - **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#rendering). Other games do not publish this HUD scope.
 
 ### Instanced array draws

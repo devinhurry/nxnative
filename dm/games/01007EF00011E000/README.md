@@ -63,8 +63,8 @@ merged graphics runtime uses the matching 1.9.0 shader package. BOTW touch
 artwork overrides the ordinary pad style: no button shadows, 35% gray at 20%
 opacity and a 52% gray outline, with 20% thicker strokes. A/B/X/Y/R/ZR are
 round and use the six supplied 240-pixel icons at half the button diameter.
-Every action label sits in a 20% gray, gold-outlined badge on the upper-right
-edge, half overlapping the main circle. The outer half of each badge presses
+When enabled, each action label sits in a 20% gray, gold-outlined badge on the upper-right
+edge, half overlapping the main circle. Badges default off. The outer half of each visible badge presses
 the same button; face-button sliding remains available.
 Mac preview and UIKit rendering passed; controller/non-BOTW UIKit checks
 restore the ordinary artwork. The seven `touch_*.png` assets are packaged beside the profile
@@ -80,13 +80,13 @@ a double tap. `inventory-touch-20261025/run36-goddess-buttons/ios/` verifies
 these paths, all six round icon buttons, palette values and ordinary-mode
 restoration with zero UIKit failures. Mac packaging tests cover all seven assets, including the default L icon.
 `inventory-touch-20261025/run23/ios-shield/` records the rendered idle/drag states
-and passing input/release checks. The movement stick now rests 10 frontend points
-up/right of its ordinary home. Its idle artwork is a white circle with four inner
+and passing input/release checks. The movement stick's base anchor is 10 frontend points
+up/right of its ordinary home, before the configured default vertical offset of 0.023 canvas height. Its idle artwork is a white circle with four inner
 arrows at alpha 0.15; dragging reveals an unfilled gray ring and an arrow just outside it.
 Dragging beyond the ring retains one direction arrow, without an extra haptic
 or automatic sprint. BOTW camera dragging is silent; camera double-tap retains
 R3 and one pulse.
-The map/environment cluster moves 60 native layout units left, reserving space
+The map/environment cluster moves 48 native layout units left, reserving space
 for + with an 8-point gap. Both +/- use a white cross over a 40%-opaque black
 circle, with no border. Plus has one fixed anchor beside the minimap; its circle
 sits 4 frontend points below the minimap top. The circle is 39 native layout
@@ -105,24 +105,18 @@ source; the former canvas crop/guide mask has been removed. Inherited native
 alpha and visibility invalidate the provider, and lifetime tokens reject late
 GPU copies. The compact NVN draw records keep their original size and restore
 the native instance/base-instance values before rendering.
-In BOTW touch gameplay, L now distinguishes a tap from a hold. A tap sends one
-normal L press on release; a 200 ms hold sends held D-pad Up without activating
-the current rune. Keep L held and use the existing right-side drag with another
-finger to choose; the L finger stays Up-only, matching the D-pad. Releasing L
-releases Up to accept the native selection. Reset or
-a controller/menu transition clears the hold and any unread Up edge. Controller,
-ordinary-game and temporary menu-pad L input keep their original handling.
-`rune-hold-20261029/ios/` checks tap/hold ownership, selection dragging, release,
-cancellation, stale callbacks and scope with zero failures in 32 look sessions.
-Mac gameplay verifies that a real mouse hold opens the native selector, native
-right-stick input selects Magnesis from Remote Bomb, and release updates both
-rune icons without activating the rune. That runtime retains the validated
-graphics base; the current merged host also compiles. Physical iPhone
-recognition remains for device acceptance.
+In BOTW touch gameplay, the rune-style L button uses the ordinary button path:
+it sends L immediately on touch-down, remains held while the finger is down,
+and releases on finger-up or cancellation. It no longer delays the press or
+substitutes D-pad Up after a long hold. The D-pad's own rune-selection behavior
+is unchanged. Reset clears a held L and its unread press edge. The explicit L
+hit region retains priority over the shield stick's nearby grab area.
+`rune-immediate-20261029/` records the focused handler checks and Mac build;
+physical iPhone gameplay acceptance remains pending.
 By default, BOTW touch movement and ZL sticks use a 7% deadzone. Above 430 frontend
 points of viewport height, their base outer-ring diameter is 140 points;
 at or below 430, their previous size scaling remains. Movement defaults to 80%
-of that size, reaches full output at 70% of its radius, and uses a continuous
+of that size, reaches full output at 71% of its radius, and uses a continuous
 radial 0.3-power curve after the deadzone: 20% radius produces about 62% stick
 output and 40% produces about 82%. This raises short-drag output without
 a time-based ramp; ZL keeps its linear response. The overshoot sprint gesture,
@@ -162,6 +156,16 @@ border widths, R/ZR size and ordinary-mode restoration. The current merged Mac
 host builds; native gameplay uses the retained matching graphics base, and the
 full regression remains blocked by the existing translator/lock mismatch.
 Physical iPhone acceptance remains separate.
+
+The 2026-10-29 touch defaults use the supplied layout offsets and scales in
+`settings.tsv` and `botw_touch_layout.h`; runtime, preview and Restore defaults
+agree. Existing saved customization is retained. The minimap/environment cluster
+and fixed +/- anchor move 12 native layout units farther right (72 units of right
+inset). R/ZR cancellation still happens only on an outside release; that release
+now emits one touch-feedback pulse. Cancel rings follow live finger ownership,
+not the virtual trigger retained for native acknowledgement. Release and reset
+invalidate UIKit layout even when the published button bits have not changed,
+preventing a canceled ZR guide from remaining visible.
 
 The production launcher is also compiled separately for simulator UI checks:
 `run34/ui-custom-curve.png` records an interactive custom curve, and
@@ -431,6 +435,22 @@ Validation: aspect/background restoration and menu/HUD regressions pass; 173 NVN
 - Windowed on the Mac with `present_now`'s residency commit: its title, 60 fps, no GPU error.
 
 **Gameplay edge HUD and loading fills (2026-10-29, resolved on Mac).** The native heart container moves toward the left display edge, preserving the spacing of full and partial hearts. The collapsed minimap and its sensor, noise, temperature, time and weather panes move together toward the right edge. Touch mode retains its upper-right map layout; ordinary input retains the lower-right layout. Hearts retain native padding against the full display; the map cluster additionally respects the horizontal safe area. Touch map bounds and the adjacent plus/minus buttons use the same HUD rectangle. Expanding the Slate restores its native centered position; returning to 16:9 restores all original positions without accumulating offsets. The HUD draw scope fixes [target-clamped scissors](../../../docs/reference/rendering.md#edge-anchored-ui-keeps-open-scissor-edges) without opening menu clips.
+
+**Resolved: minimap disappeared in very wide windows (2026-10-29).**
+The D-pad center is published relative to the centered 16:9 UI canvas. At 32:9,
+its valid position beside that canvas has a negative normalized x. Rejecting
+coordinates outside `[0,1]` disabled the entire touch HUD, restored the native
+map placement and removed its touch target. Publication now accepts finite
+coordinates outside that centered canvas; it still rejects nonfinite values.
+That fixes touch-HUD activation; the separate native scissor rejection is fixed
+by [anchoring the collapsed map after CPU clipping](../../../docs/reference/rendering.md#edge-anchored-ui-keeps-open-scissor-edges).
+Native checks cover the negative D-pad position, valid map hits at 32:9 and
+inactive restoration. Mac 3.6:1 gameplay verifies the complete touch minimap,
+click-to-open Slate, Back and resizing to 16:9 and back. There are 178 passing
+recording checks and 160 passing graphics checks, including safe-edge clips.
+Evidence is in `ultrawide-minimap-20261029/`. Gameplay uses the retained graphics
+base and matching shaders; the current merged host compiles separately.
+Physical iPhone acceptance remains pending.
 
 The loading screen's upper cream background is `P_Capture_00` under `N_LogoInOut_00`, a 1280x275 panel with an animated projected texture. Its complete native draw now stretches with the display, preserving texture/clip alignment throughout the wipe; see [Projected fullscreen fills](../../../docs/reference/rendering.md#projected-fullscreen-fills-keep-texture-and-clip-coordinates-together). Text, status icons and logo keep their proportions. The lower black background already uses the full-display background path. Both fill a wide display.
 
