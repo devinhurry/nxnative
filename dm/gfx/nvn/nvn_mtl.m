@@ -8764,7 +8764,7 @@ static void ui_aspect_scale(double *ux, double *uy) {
     if (fabs(f - 1) < 1e-6) return;
     if (f > 1) *ux = f; else if (f > 0 && f < 1) *uy = 1.0 / f;
 }
-static int ui_squeeze_scale(NvProg *pr, double *ux, double *uy, int background) {
+static int ui_squeeze_scale(NvProg *pr, double *ux, double *uy, int scope) {
     g_ui_layout_draw = 0;
     *ux = *uy = 1;
     // Identify the canvas only at its final composite draw.
@@ -8790,6 +8790,10 @@ static int ui_squeeze_scale(NvProg *pr, double *ux, double *uy, int background) 
     int layout = strstr(DM_GAME_ASPECT_UI, key) != NULL;
     if (!layout) return 0;
     g_ui_layout_draw = !strcmp(DM_GAME_ID, "01007EF00011E000");
+    // A projected fullscreen fill must retain its native clip/texture matrices
+    // together. The final canvas stretch extends both, without exposing the
+    // animated texture's far edge on ultrawide displays.
+    if (scope == NVN_UI_STRETCH) return 0;
     // GPU canvas pictures (including aliases and filtered masks) already carry screen coordinates. Local pane
     // captures and CPU-uploaded illustrations retain layout coordinates and are transformed once below.
     int tid = (int)(S.tex[1][0] & 0xfffff);
@@ -8798,7 +8802,7 @@ static int ui_squeeze_scale(NvProg *pr, double *ux, double *uy, int background) 
         // Transient NVN objects can alias an existing render target without having a serial-table entry yet.
         // Resolve first, as sampling will: otherwise its first draw is mistaken for a CPU illustration.
         tex_mtl(t);
-        if (mtl_tex_gpu_owned(t->serial) && !background) return 0;
+        if (mtl_tex_gpu_owned(t->serial) && scope != NVN_UI_BACKGROUND) return 0;
     }
     ui_aspect_scale(ux, uy);
     return *ux != 1 || *uy != 1;
@@ -9078,7 +9082,7 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
     fb_prepare(pr);   // same-pass feedback sampling: copy the snapshot first (see fb_prepare)
     // Resolving a newly sampled picture can upload it or end the current pass. Do this before opening/binding the encoder.
     double sux = 1, suy = 1; int ui_scope = dw ? dw->pad : di ? di->pad : 0;
-    int sq = ui_squeeze_scale(pr, &sux, &suy, ui_scope == NVN_UI_BACKGROUND);
+    int sq = ui_squeeze_scale(pr, &sux, &suy, ui_scope);
     if (ui_scope == NVN_UI_RUNE && dm_botw_touch_hud_active()) botw_rune_capture();
     if (R.has_sc && !g_enc && !S.rast_discard) {
         NSUInteger tw0 = 0, th0 = 0; rt_dims(&tw0, &th0);

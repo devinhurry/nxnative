@@ -711,6 +711,11 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     center.lineWidth=1.5; [center stroke];
     preview_draw_botw_glyph(dm_botw_four_arrows_path(CGPointMake(sh.x,sh.y),17*u*_moveResponse.size,12*u*_moveResponse.size),h,faint);
     dm_touchpad_point fc = [self faceCenter];
+    if (!dm_botw_touch_loadout_visible()) {
+        dm_touchpad_point d = self.dpadCenter;
+        for (int b=12;b<16;b++)
+            preview_draw_botw_glyph(dm_botw_dpad_key_path(CGPointMake(d.x,d.y),self.dpadRadius,b),h,glyphColor);
+    }
     for (int b=0;b<4;b++) {
         dm_touchpad_point q = [self facePosition:b];
         NSPoint center=preview_from_top(q.x,q.y,h); float radius=self.faceRadius;

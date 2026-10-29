@@ -109,7 +109,7 @@ struct BotwTouchSettingsView: View {
             }.frame(width: 285)
         }
         .padding(16)
-        .navigationTitle("Touch settings")
+        .navigationTitle("BOTW touch settings")
         .onChange(of: m.values) { _, _ in copied = false }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

@@ -535,6 +535,13 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Fix:** the replay keeps the compute program apart (`S.cprog` in `nvn_mtl.m`, and `g_pp_cprog` in the pass analysis).
 - **Found on:** [Hyrule Warriors: Age of Calamity](../../dm/games/01002B00111A2000/README.md): the game interleaves dispatches and draws; its intro movie's NV12 → RGB draw was dropped and the movie played black under its "+ Skip" prompt.
 
+### Projected fullscreen fills keep texture and clip coordinates together
+
+- **Symptom:** a white fringe appears at the right of a widescreen loading animation, followed by a dark gradient after the upper panel becomes cream.
+- **Cause:** enlarging the native panel and correcting its clip projection changed its geometry relative to the animated projected texture.
+- **Fix:** a recorded fullscreen-stretch draw scope retains the original panel size and clip/texture matrices together. Final canvas presentation extends the complete fill; separate foreground draws retain centered UI proportions. Compact draw records restore native instance arguments before replay.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#rendering), Fade_00's 1280x275 upper panel; `touch-hud-refinements-20261029/reload-*.png` includes the native wipe and uniform cream phase at 21:10.
+
 ### Edge-anchored UI keeps open scissor edges
 
 - **Symptom:** a widescreen HUD moves toward the screen edge, but the minimap is cut off at the old centered 16:9 boundary.

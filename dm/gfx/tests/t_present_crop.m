@@ -250,6 +250,8 @@ int main(void) { @autoreleasepool {
     pd.usage=MTLTextureUsageShaderRead; serial_put(++picture.serial, [g_dev newTextureWithDescriptor:pd]);
     mtl_reg_tex(1201, &picture, NULL); S.tex[1][0] = 1201;
     EXPECT("CPU illustration keeps its proportions", 1, ui_squeeze_scale(layout, &ux, &uy, 0));
+    EXPECT("projected fullscreen fill keeps clip and texture projection together", 0, ui_squeeze_scale(layout, &ux, &uy, NVN_UI_STRETCH));
+    EXPECT("projected fill retains its native horizontal coordinates", 1, ux == 1 && uy == 1);
     check(src, "native present fills its target", tl, 20, 9, 0);
 #endif
 #ifndef CROP_LEGACY_HEADER

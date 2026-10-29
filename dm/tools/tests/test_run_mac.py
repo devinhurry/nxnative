@@ -1,4 +1,6 @@
 import importlib.util
+import hashlib
+import json
 import io
 import shutil
 import tempfile
@@ -10,6 +12,7 @@ from types import SimpleNamespace
 
 REPO = Path(__file__).resolve().parents[3]
 SPEC = importlib.util.spec_from_file_location('run_mac', REPO / 'scripts/run_mac.py')
+assert SPEC is not None and SPEC.loader is not None
 run_mac = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(run_mac)
 
@@ -27,19 +30,81 @@ def game_profile(game_id='010015100B514000'):
 def stamp_nvn(lib, g):
     import importlib.util
     spec = importlib.util.spec_from_file_location('dmsh_chain_test', REPO / 'dm/gfx/tools/dmsh_chain.py')
+    assert spec is not None and spec.loader is not None
     chain = importlib.util.module_from_spec(spec); spec.loader.exec_module(chain)
     chain.write_stamp(lib, g.id, chain.inputs(g))
 
 
 class MacLauncherTests(unittest.TestCase):
-    def test_quick_runtime_uses_matched_artifacts_and_preserves_save(self):
+    def test_only_test_and_release_modes_are_accepted(self):
+        from contextlib import redirect_stderr
+        self.assertEqual(run_mac.parser().parse_args([]).mode, 'test')
+        self.assertEqual(run_mac.parser().parse_args(['--test']).mode, 'test')
+        self.assertEqual(run_mac.parser().parse_args(['--release']).mode, 'release')
+        for args in (['--quick'], ['--test', '--release']):
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                run_mac.parser().parse_args(args)
+
+    def test_test_mode_isolates_outputs_and_refreshes_only_missing_shaders(self):
+        g = game_profile('01007EF00011E000')
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t) / f'{g.id}_build'
+            exefs, romfs, release_patched, _ = self.make_layout(root, g)
+            sentinel = release_patched/'main.patched.bin'; sentinel.write_bytes(b'fixed release')
+            args = run_mac.parser().parse_args(['--game', str(root), '--test'])
+            plan = run_mac.resolve(args, {}, REPO)
+            self.assertEqual(plan['work'], root.resolve().with_name(f'{g.id}-work')/'mac-test')
+            self.assertFalse(plan['patched'].is_relative_to(root))
+            counts = dict(rewrite=0, shader=0, execute=0)
+            def rewrite(repo_py, repo, source, output, env, logs, game, game_romfs):
+                counts['rewrite'] += 1
+                self.fill_outputs(repo,source,output,env,game)
+            def shaders(plan, env, repo, builder, logs):
+                counts['shader'] += 1
+                msl = plan['work']/'shader/cache'; lib = msl/f'b-{plan["chain"]}'
+                lib.mkdir(parents=True); (lib/'test_b.metallib').write_bytes(b'current shaders'); stamp_nvn(lib,g)
+                plan.update(msl=msl,graphics='nvn')
+            def execute(exe, argv, env):
+                counts['execute'] += 1
+                self.assertEqual(exe,str(plan['work']/'tools/dmhost'))
+                self.assertEqual(argv[1],str(plan['patched']))
+                self.assertEqual(env['DM_SAVE'],str(root/'chosen save'))
+            with redirect_stdout(io.StringIO()) as output:
+                for _ in range(2):
+                    run_mac.launch(plan,args,{'DM_SAVE':str(root/'chosen save'),'UNRELATED_SETTING':'not a runtime setting'},REPO,
+                        rewrite_call=rewrite,host_call=self.fake_host,shader_call=shaders,exec_call=execute)
+            self.assertEqual(counts,dict(rewrite=1,shader=1,execute=2))
+            self.assertEqual(sentinel.read_bytes(),b'fixed release')
+            self.assertFalse((root/'run/mac-runtime.json').exists())
+            self.assertIn('code: 0123456789abcdef',output.getvalue())
+            self.assertIn('mode: test',output.getvalue())
+            record = json.loads((plan['work']/'run/mac-runtime.json').read_text())
+            self.assertEqual(record['mode'],'test')
+            self.assertNotIn('UNRELATED_SETTING',record['environment'])
+
+    def test_test_mode_accepts_romfs_image_without_expanding_it(self):
+        g = game_profile()
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            exefs, romfs, _, _ = self.make_layout(root,g)
+            romfs.rmdir(); image = romfs.with_name('RomFS.img'); image.write_bytes(b'romfs image')
+            args = run_mac.parser().parse_args(['--game',g.id,'--build',str(root)])
+            plan = run_mac.resolve(args,{},REPO)
+            self.assertEqual(plan['romfs'],image.resolve())
+            self.assertEqual(plan['exefs'],exefs.resolve())
+
+    def test_release_runtime_uses_matched_artifacts_and_preserves_save(self):
         from unittest.mock import Mock
-        spec = importlib.util.spec_from_file_location('build_quick', REPO / 'scripts/build_ipa_from_nsp.py')
+        spec = importlib.util.spec_from_file_location('build_release', REPO / 'scripts/build_ipa_from_nsp.py')
+        assert spec is not None and spec.loader is not None
         builder = importlib.util.module_from_spec(spec); spec.loader.exec_module(builder)
         g = game_profile('01007EF00011E000')
-        with tempfile.TemporaryDirectory(prefix='Quick runtime ') as t:
+        with tempfile.TemporaryDirectory(prefix='Release runtime ') as t:
             root = Path(t) / f'{g.id}_build'; root.mkdir()
+            origin = root/'source-profile'/g.id; shutil.copytree(g.dir,origin)
+            g = type(g)(origin)
             _, romfs, patched, msl = self.make_layout(root, g)
+            romfs.rmdir(); romfs = romfs.with_name('RomFS.img'); romfs.write_bytes(b'romfs image')
             host = root / 'prepared host'; host.write_bytes(b'prepared host'); host.chmod(0o755)
             (patched / 'build_src.sha256').write_text('prepared source')
             for mod in g.words('modules'):
@@ -52,21 +117,25 @@ class MacLauncherTests(unittest.TestCase):
             # The prepared host may use an older chain than the working tree.
             old_chain = 'previous-chain'; lib = msl / f'b-{old_chain}'; lib.mkdir()
             (lib / 'test_b.metallib').write_bytes(b'prepared shaders'); stamp_nvn(lib, g)
+            self.record_host_source(host, old_chain)
+            (root/'run').mkdir()
             builder.write_mac_runtime(root, host, patched,
                                       dict(DM_ROMFS=romfs, DM_MSL_DIR=msl, DM_NVN_SHMAP=g.table('shader_map.tsv'),
                                            DM_SAVE='/old/test/save', DM_TEMP='/old/test/temp'), g, 'nvn', old_chain)
-            args = run_mac.parser().parse_args(['--game', str(root.parent), '--quick', '--touch-preview', '--windowed'])
+            g.table('shader_map.tsv').write_text('new working-tree shader map')
+            args = run_mac.parser().parse_args(['--game', str(root.parent), '--release', '--touch-preview', '--windowed'])
             plan = run_mac.resolve(args, {}, REPO)
             rewrite, make, execute = Mock(), Mock(), Mock()
             execute.side_effect = lambda *_: self.assertEqual(Path.cwd(), (root/'run').resolve())
             with redirect_stdout(io.StringIO()):
                 run_mac.launch(plan, args, {'DM_SAVE': str(root/'my save'), 'DM_NVN_SHMAP': '/wrong/map'}, REPO,
-                               rewrite_call=rewrite, make_call=make, exec_call=execute, builder=Mock())
+                               rewrite_call=rewrite, host_call=make, exec_call=execute, builder=Mock())
             rewrite.assert_not_called(); make.assert_not_called()
             path, argv, env = execute.call_args.args
             self.assertEqual(path, str(host.resolve())); self.assertEqual(argv[1], str(patched.resolve()))
             self.assertEqual(env['DM_SAVE'], str(root/'my save'))
-            self.assertEqual(env['DM_NVN_SHMAP'], str(g.table('shader_map.tsv')))
+            self.assertEqual(env['DM_NVN_SHMAP'], plan['runtime_env']['DM_NVN_SHMAP'])
+            self.assertNotEqual(env['DM_NVN_SHMAP'], str(g.table('shader_map.tsv')))
             self.assertEqual(env['DM_TOUCH_PREVIEW'], '1'); self.assertEqual(env['DM_FULLSCREEN'], '0')
             source = root / 'original save'; source.mkdir()
             original = source / 'game_data.sav'; original.write_bytes(b'original progress')
@@ -74,7 +143,7 @@ class MacLauncherTests(unittest.TestCase):
             args.save_copy = run_mac.parser().parse_args(['--save-copy', str(source)]).save_copy
             with redirect_stdout(io.StringIO()):
                 run_mac.launch(plan, args, {'DM_SAVE': str(root/'my save')}, REPO,
-                               rewrite_call=rewrite, make_call=make, exec_call=execute)
+                               rewrite_call=rewrite, host_call=make, exec_call=execute)
             copied = Path(execute.call_args.args[2]['DM_SAVE'])
             self.assertEqual(copied.parent.parent, (root / 'run/save-copies').resolve())
             self.assertFalse(copied.is_symlink())
@@ -84,7 +153,7 @@ class MacLauncherTests(unittest.TestCase):
             (copied/'linked.sav').write_bytes(b'linked progress')
             self.assertEqual(original.read_bytes(), b'original progress')
             with redirect_stdout(io.StringIO()):
-                run_mac.launch(plan, args, {}, REPO, rewrite_call=rewrite, make_call=make, exec_call=execute)
+                run_mac.launch(plan, args, {}, REPO, rewrite_call=rewrite, host_call=make, exec_call=execute)
             another = Path(execute.call_args.args[2]['DM_SAVE'])
             self.assertNotEqual(copied, another)
             self.assertEqual((another/'game_data.sav').read_bytes(), b'original progress')
@@ -101,6 +170,10 @@ class MacLauncherTests(unittest.TestCase):
             host.write_bytes(b'new unrelated host')
             with self.assertRaisesRegex(run_mac.LaunchError, 'prepared runtime changed'):
                 run_mac.resolve(args, {}, REPO)
+            record = root/'run/mac-runtime.json'; data = json.loads(record.read_text())
+            data['schema'] = 1; record.write_text(json.dumps(data))
+            with self.assertRaisesRegex(run_mac.LaunchError,'no current release record'):
+                run_mac.resolve(args,{},REPO)
 
     def test_touch_preview_is_explicitly_botw_only(self):
         args = SimpleNamespace(game='010015100B514000', build=None, version=None, patched=None,
@@ -113,6 +186,17 @@ class MacLauncherTests(unittest.TestCase):
         with self.assertRaisesRegex(run_mac.LaunchError, 'set --build'):
             run_mac.resolve(botw, {}, REPO)
 
+    @staticmethod
+    def record_host_source(host, chain):
+        data = dict(commit='0123456789abcdef', dirty=False, inputs='test-build-inputs', shader_chain=chain,
+                    host_sha256=hashlib.sha256(host.read_bytes()).hexdigest())
+        host.with_name(host.name+'.source.json').write_text(json.dumps(data))
+
+    def fake_host(self, repo, out, env, logs, g):
+        out.parent.mkdir(parents=True, exist_ok=True); out.write_bytes(b'fresh test host'); out.chmod(0o755)
+        self.record_host_source(out,run_mac.chain_id(repo))
+        return out
+
     def make_layout(self, root, g):
         v = g.get('package')
         exefs, romfs, patched, msl = (root / p for p in (Path('extract') / v / 'ExeFS', Path('extract') / v / 'RomFS', Path(f'patched_{v}'), Path('shader') / 'cache'))
@@ -124,7 +208,9 @@ class MacLauncherTests(unittest.TestCase):
     def fill_outputs(repo, exefs, patched, env, g):
         from importlib.util import spec_from_file_location, module_from_spec
         spec = spec_from_file_location('build_ipa_from_nsp', repo / 'scripts/build_ipa_from_nsp.py')
+        assert spec is not None and spec.loader is not None
         b = module_from_spec(spec); spec.loader.exec_module(b)
+        patched.mkdir(parents=True,exist_ok=True)
         _, _, key = b.rewrite_freshness(repo, exefs, patched, env, g)
         for name in b.rewrite_outputs(g.words('modules')): (patched / name).write_bytes(b'generated')
         patched.with_name(patched.name + '.key').write_text(key + '\n')
@@ -137,8 +223,8 @@ class MacLauncherTests(unittest.TestCase):
             args = SimpleNamespace(game=g.id, build=str(root), version=None, patched=None, exefs=None, romfs=None, msl=None)
             plan = run_mac.resolve(args, {}, REPO)
             self.assertEqual(plan['game'].id, g.id)
-            self.assertEqual((plan['patched'], plan['exefs'], plan['romfs']), (patched.resolve(), exefs.resolve(), romfs.resolve()))
-            self.assertEqual(plan['msl'], msl.resolve())
+            self.assertEqual((plan['patched'], plan['exefs'], plan['romfs']), (run_mac.test_work(root.resolve(), g) / f'patched_{g.get("package")}', exefs.resolve(), romfs.resolve()))
+            self.assertEqual(plan['msl'], run_mac.test_work(root.resolve(),g) / 'shader/cache')
 
     def test_game_folder_resolves_one_standard_work_child_or_direct_work_folder(self):
         g = game_profile()
@@ -154,7 +240,7 @@ class MacLauncherTests(unittest.TestCase):
             self.assertEqual(plan['game'].id, g.id)
             self.assertEqual(plan['base'], child.resolve())
             self.assertEqual((plan['patched'], plan['exefs'], plan['romfs']),
-                             (patched.resolve(), exefs.resolve(), romfs.resolve()))
+                             (child.resolve() / f'mac-test/patched_{g.get("package")}', exefs.resolve(), romfs.resolve()))
 
             explicit_root = Path(t) / 'explicit-root'
             self.make_layout(explicit_root, g)
@@ -200,9 +286,9 @@ class MacLauncherTests(unittest.TestCase):
             for mod in g.words('modules'): (exefs / mod).write_bytes(b'original')
             args = SimpleNamespace(game=g.id, build=str(root), version=None, patched=None, exefs=None, romfs=str(romfs), msl=None)
             plan = run_mac.resolve(args, {}, REPO)
-            self.assertEqual(plan['patched'], (root / 'build' / f'patched_{g.get("package")}').resolve())
+            self.assertEqual(plan['patched'], root.resolve() / 'mac-test' / f'patched_{g.get("package")}')
             self.assertFalse(plan['patched'].exists())
-            self.assertEqual(plan['msl'], (root / 'build/cache/metal_shader_cache').resolve())
+            self.assertEqual(plan['msl'], root.resolve() / 'mac-test/shader/cache')
             self.assertEqual(plan['layout'], 'manual')
 
             runtime = root / 'runtime-only'; (runtime / f'patched_{g.get("package")}').mkdir(parents=True)
@@ -216,13 +302,12 @@ class MacLauncherTests(unittest.TestCase):
             self.assertEqual(legacy['romfs'], (external_data / 'RomFS').resolve())
 
             class BareProfile:
-                def __init__(self, directory): self.dir = directory
+                def __init__(self, directory): self.dir = directory; self.id = g.id; self.rows = g.rows
                 def get(self, key, default=None): return default
                 def table(self, name): return self.dir / name
             bare = BareProfile(root / 'bare-profile'); bare.dir.mkdir()
             (bare.table('shader_map.tsv')).write_text('header\n')
             (bare.table('dmsh_chain.h')).write_text('#define DMSH_CHAIN "ignored-per-profile-header"\n')
-            bare.id, bare.rows = g.id, g.rows
             chain = run_mac.chain_id(REPO)
             nvn = root / 'shader/cache' / f'b-{chain}'; nvn.mkdir(parents=True)
             (nvn / 'test_b.metallib').write_bytes(b'x')
@@ -266,13 +351,14 @@ class MacLauncherTests(unittest.TestCase):
             args = SimpleNamespace(game=g0.id, build=str(build), version=None, patched=None, exefs=None, romfs=None, msl=None)
             plan = run_mac.resolve(args, env, REPO)
             self.assertEqual(plan['game'].dir.resolve(), ext.resolve())
-            self.fill_outputs(REPO, exefs, patched, env, plan['game'])
+            self.fill_outputs(REPO, exefs, plan['patched'], env, plan['game'])
             observed = []
-            def make(_cmd, make_env):
-                observed.extend((make_env['DM_GAMES_DIR'].split(':')[0], make_env['DM_GAMES_FIRST'], make_env['DM_NVN_SHMAP']))
+            def make(repo, out, make_env, logs, g):
+                observed.extend((make_env['DM_GAMES_DIR'].split(':')[0], make_env['DM_GAMES_FIRST'], str(g.table('shader_map.tsv'))))
+                return self.fake_host(repo,out,make_env,logs,g)
             with redirect_stdout(io.StringIO()):
                 run_mac.launch(plan, SimpleNamespace(check=False, windowed=False), dict(env), REPO,
-                               make_call=make, exec_call=lambda *_: None)
+                               host_call=make, exec_call=lambda *_: None)
             self.assertEqual(observed, [str(profiles.resolve()), '1', str((ext / 'shader_map.tsv').resolve())])
 
             stamp_nvn(cache, g0)
@@ -280,16 +366,19 @@ class MacLauncherTests(unittest.TestCase):
             repo_plan = run_mac.resolve(repo_args, env, REPO)
             self.assertEqual(repo_plan['game'].dir.resolve(), g0.dir.resolve())
             observed.clear()
-            def make_repo(_cmd, make_env):
-                observed.extend((make_env.get('DM_GAMES_FIRST'), make_env['DM_NVN_SHMAP']))
+            self.fill_outputs(REPO,exefs,repo_plan['patched'],{},repo_plan['game'])
+            def make_repo(repo, out, make_env, logs, g):
+                observed.extend((make_env.get('DM_GAMES_FIRST'), str(g.table('shader_map.tsv'))))
+                return self.fake_host(repo,out,make_env,logs,g)
             with redirect_stdout(io.StringIO()):
                 run_mac.launch(repo_plan, SimpleNamespace(check=False, windowed=False), dict(env), REPO,
-                               make_call=make_repo, exec_call=lambda *_: None)
+                               host_call=make_repo, exec_call=lambda *_: None)
             self.assertEqual(observed, [None, str((g0.dir / 'shader_map.tsv').resolve())])
 
     def test_freshness_requires_all_rewrite_sidecars(self):
         from importlib.util import spec_from_file_location, module_from_spec
         spec = spec_from_file_location('build_ipa_from_nsp', REPO / 'scripts/build_ipa_from_nsp.py')
+        assert spec is not None and spec.loader is not None
         b = module_from_spec(spec); spec.loader.exec_module(b)
         g = game_profile()
         with tempfile.TemporaryDirectory() as t:
@@ -312,6 +401,7 @@ class MacLauncherTests(unittest.TestCase):
     def test_nro_manifest_patch_and_explicit_romfs_share_freshness_inputs(self):
         from importlib.util import spec_from_file_location, module_from_spec
         spec = spec_from_file_location('build_ipa_from_nsp', REPO / 'scripts/build_ipa_from_nsp.py')
+        assert spec is not None and spec.loader is not None
         b = module_from_spec(spec); spec.loader.exec_module(b)
         g = game_profile()
         with tempfile.TemporaryDirectory(prefix='NRO rewrite contract ') as t:
@@ -368,22 +458,24 @@ class MacLauncherTests(unittest.TestCase):
             def rewrite(*params):
                 calls['rewrite'] += 1
                 self.fill_outputs(REPO, exefs, patched, env, g)
-            def make(cmd, run_env):
+            def make(repo, out, run_env, logs, game):
                 calls['make'] += 1
-                self.assertIn(f'GAME={g.id}', cmd)
-                self.assertEqual(run_env['DM_ROMFS'], str(romfs))
-                self.assertEqual(run_env['DM_WINDOW_SIZE'], '1600x762')
+                self.assertEqual(run_env['DM_GAME'], g.id)
+                return self.fake_host(repo,out,run_env,logs,game)
             def exec_host(path, argv, run_env):
                 calls['exec'] += 1
                 self.assertEqual(argv[1], str(patched))
+                self.assertEqual(run_env['DM_ROMFS'], str(romfs))
+                self.assertEqual(run_env['DM_WINDOW_SIZE'], '1600x762')
             with redirect_stdout(io.StringIO()):
-                self.assertEqual(run_mac.launch(plan, args, env, REPO, rewrite_call=rewrite, make_call=make, exec_call=exec_host), 0)
-                self.assertEqual(run_mac.launch(plan, args, env, REPO, rewrite_call=rewrite, make_call=make, exec_call=exec_host), 0)
+                self.assertEqual(run_mac.launch(plan, args, env, REPO, rewrite_call=rewrite, host_call=make, exec_call=exec_host), 0)
+                self.assertEqual(run_mac.launch(plan, args, env, REPO, rewrite_call=rewrite, host_call=make, exec_call=exec_host), 0)
             self.assertEqual(calls, {'rewrite': 1, 'make': 2, 'exec': 2})
 
     def test_failed_rewrite_preserves_old_output_and_does_not_launch(self):
         from importlib.util import spec_from_file_location, module_from_spec
         spec = spec_from_file_location('build_ipa_from_nsp', REPO / 'scripts/build_ipa_from_nsp.py')
+        assert spec is not None and spec.loader is not None
         b = module_from_spec(spec); spec.loader.exec_module(b)
         g = game_profile()
         with tempfile.TemporaryDirectory() as t:
@@ -406,7 +498,7 @@ class MacLauncherTests(unittest.TestCase):
             with self.assertRaises(run_mac.LaunchError), redirect_stdout(io.StringIO()):
                 run_mac.launch(plan, SimpleNamespace(check=False, windowed=False), {}, REPO,
                                rewrite_call=lambda _py, repo, source, out, env, logs, game, romfs: b.rewrite(fake_python, repo, source, out, env, logs, game, romfs),
-                               make_call=lambda *a: calls.append('make'), exec_call=lambda *a: calls.append('exec'))
+                               host_call=lambda *a: calls.append('make'), exec_call=lambda *a: calls.append('exec'))
             self.assertEqual(sentinel.read_bytes(), b'old-good-output')
             self.assertEqual(patched.with_name(patched.name + '.key').read_text(), key + '\n')
             self.assertEqual(calls, [])

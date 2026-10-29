@@ -112,6 +112,7 @@ static int g_pointer_rotate;
 static float g_rotate_last_x;
 static int g_presented_menu;
 static int g_presented_gameplay;
+static int g_presented_loadout;
 static uint64_t g_presented_menu_frame;
 static _Atomic uintptr_t g_presented_menu_root;
 static _Atomic uintptr_t g_presented_gameplay_root;
@@ -2982,10 +2983,9 @@ static int selector_pointer_screen_name(const char *name) {
 // MainScreen keeps its empty root shown during conversations. The heart HUD's
 // native InOut layer follows the game's gameplay/cinematic presentation even
 // across the gap when one Message page closes before the next one opens.
-static int selector_gameplay_hud_visible(uintptr_t root) {
-    static const char *path[] = {"N_All_00", "N_State_00", "Pa_HeartGauge_00", "N_InOut_00"};
+static int selector_hud_path_visible(uintptr_t root, const char *const *path, unsigned count) {
     uintptr_t pane = root;
-    for (unsigned i = 0; i < sizeof path / sizeof *path; i++) {
+    for (unsigned i = 0; i < count; i++) {
         uintptr_t sentinel = pane + 0x20, link = selector_read_ptr(pane, 0x28), found = 0;
         int n = 0;
         for (; link && link != sentinel && n < 64; n++) {
@@ -3005,6 +3005,14 @@ static int selector_gameplay_hud_visible(uintptr_t root) {
     }
     return pane_chain_visible((uint8_t *)pane) && pane_chain_alpha_visible((uint8_t *)pane);
 }
+static int selector_gameplay_hud_visible(uintptr_t root) {
+    static const char *const path[] = {"N_All_00", "N_State_00", "Pa_HeartGauge_00", "N_InOut_00"};
+    return selector_hud_path_visible(root, path, sizeof path / sizeof *path);
+}
+static int selector_loadout_visible(uintptr_t root) {
+    static const char *const path[] = {"N_All_00", "N_MainAll_00", "N_Pos_00"};
+    return selector_hud_path_visible(root, path, sizeof path / sizeof *path);
+}
 
 // Presentation is independent of cursor/input eligibility. Native
 // Screen::isVisible (main+F6E0D4) includes entering (1), shown (2) and
@@ -3017,7 +3025,7 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
     if (selector_range(registry, 0x48)) memcpy(&count, (const void *)(registry + 0x28), 4);
     uintptr_t screens = selector_read_ptr(registry, 0x30);
     uintptr_t flags = selector_read_ptr(registry, 0x40);
-    int presented = 0, gameplay = 0;
+    int presented = 0, gameplay = 0, loadout = 0;
     uintptr_t presented_root = 0;
     uintptr_t gameplay_root = 0;
     char presented_name[64] = {0};
@@ -3042,6 +3050,7 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
             uintptr_t state = selector_read_ptr(screen, 0x38);
             int input_owned = selector_range(state, 0x39) && (((const uint8_t *)state)[0x38] & 2);
             int root_visible = pane_chain_visible((uint8_t *)root);
+            if (!strcmp(name, "MainShortCut_00") && root_visible && selector_loadout_visible(root)) loadout = 1;
             if (!strcmp(name, "MainScreen_00") && mode == 2 && shown >= 0 &&
                 input_owned && root_visible &&
                 pane_chain_alpha_visible((uint8_t *)root) && selector_gameplay_hud_visible(root)) {
@@ -3069,11 +3078,12 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
     }
     pthread_mutex_lock(&g_menu_mu);
     int changed = g_presented_menu != presented || g_presented_menu_root != presented_root ||
-        g_presented_gameplay != gameplay;
+        g_presented_gameplay != gameplay || g_presented_loadout != loadout;
     g_presented_menu = presented;
     g_presented_menu_root = presented_root;
     g_presented_menu_frame = frame;
     g_presented_gameplay = gameplay;
+    g_presented_loadout = loadout;
     g_presented_gameplay_root = gameplay_root;
     pthread_mutex_unlock(&g_menu_mu);
     if (changed) {
@@ -5369,6 +5379,14 @@ int dm_botw_touch_controls_visible(void) {
     return visible;
 }
 
+int dm_botw_touch_loadout_visible(void) {
+    pthread_mutex_lock(&g_menu_mu);
+    uint64_t frame = menu_render_frame();
+    int visible = g_presented_loadout && frame >= g_presented_menu_frame && frame - g_presented_menu_frame <= 2;
+    pthread_mutex_unlock(&g_menu_mu);
+    return visible;
+}
+
 int dm_botw_touch_map_active(void) {
     int active;
     pthread_mutex_lock(&g_menu_mu);
@@ -6228,7 +6246,7 @@ void dm_botw_touch_menu_reset(void) {
     g_map_pan_active = 0; g_map_ax = g_map_ay = 0; g_map_ry = 0;
     notify = g_active_notified || g_presented_menu;
     g_presented_menu = 0; g_presented_menu_frame = 0; g_presented_menu_root = 0;
-    g_presented_gameplay = 0; g_presented_gameplay_root = 0;
+    g_presented_gameplay = 0; g_presented_gameplay_root = 0; g_presented_loadout = 0;
     atomic_store_explicit(&g_presentation_observed_frame, UINT64_MAX, memory_order_release);
     memset(&g_view, 0, sizeof g_view); g_view_valid = 0;
     g_map_published_pane = g_map_published_root = 0;
