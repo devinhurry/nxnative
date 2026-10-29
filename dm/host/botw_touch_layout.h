@@ -6,7 +6,7 @@
 #include <string.h>
 
 typedef struct { float x, y, scale; } dm_botw_control_transform;
-typedef struct { dm_botw_control_transform control[16]; float face_gap; } dm_botw_touch_layout;
+typedef struct { dm_botw_control_transform control[16]; float face_gap; int badges; } dm_botw_touch_layout;
 static inline const char *dm_botw_control_name(int id) {
     switch (id) {
         case 0: return "FACE"; case 4: return "STICK"; case 6: return "L";
@@ -16,7 +16,7 @@ static inline const char *dm_botw_control_name(int id) {
     }
 }
 static inline dm_botw_touch_layout dm_botw_layout_defaults(void) {
-    dm_botw_touch_layout layout = {.face_gap = 1};
+    dm_botw_touch_layout layout = {.face_gap = 1, .badges = 1};
     for (int i = 0; i < 16; i++) layout.control[i].scale = 1;
     return layout;
 }
@@ -37,6 +37,9 @@ static inline int dm_botw_layout_read(dm_botw_touch_layout *out) {
             if (!dm_botw_layout_number(key, f == 2 ? .5f : -.5f, f == 2 ? 1.5f : .5f, values[f])) return 0;
         }
     }
+    float badges = 1;
+    if (!dm_botw_layout_number("DM_BOTW_PAD_BADGES", 0, 1, &badges) || (badges != 0 && badges != 1)) return 0;
+    out->badges = (int)badges;
     return dm_botw_layout_number("DM_BOTW_PAD_FACE_GAP", .5f, 1.5f, &out->face_gap);
 }
 static inline dm_touchpad_rect dm_botw_layout_canvas(float width, float height) {
@@ -53,7 +56,7 @@ static inline dm_touchpad_rect dm_botw_layout_control(const dm_botw_touch_layout
         case 4: p = dm_touchpad_botw_stick_home(width,height,left,top,right,bottom);
             radius = dm_touchpad_botw_stick_radius(height); break;
         case 6: p = dm_touchpad_rune_button(width,height,left,top,right,bottom); radius = DM_TP_L_R*u; break;
-        case 7: case 9: p = dm_touchpad_right_shoulder(width,height,left,top,right,bottom,id==9); radius = (id==9?DM_TP_ZL_R:DM_TP_L_R)*u; break;
+        case 7: case 9: p = dm_touchpad_right_shoulder(width,height,left,top,right,bottom,id==9); radius = DM_TP_ZL_R*u; break;
         case 8: p = dm_touchpad_shield_stick_home(width,height,left,top,right,bottom); radius = dm_touchpad_botw_stick_radius(height); break;
         case 10: case 11: {
             dm_touchpad_rect r = dm_touchpad_botw_menu_rect(canvas.x,canvas.y,canvas.width,canvas.height,id==11);

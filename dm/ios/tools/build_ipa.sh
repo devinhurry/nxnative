@@ -77,7 +77,10 @@ else [ -n "$V" ] && ls "$MSL_IOS/b-$V" 2> /dev/null | grep -q '_b.metallib$' || 
 
 t "app: $DM_DISPLAY_NAME $DM_APP_VERSION ($DM_BUNDLE_ID), language $DM_LANG$([ $DM_SHOW_FPS = YES ] && echo ', frame-rate counter on')"
 t "generate Gen/ (host sources, embedded modules, tables)"
-rm -rf Gen && mkdir -p Gen/dm || die "mkdir Gen"
+rm -rf Gen && mkdir -p Gen/dm Gen/Localizations || die "mkdir Gen"
+if [ "$GAME" = 01007EF00011E000 ]; then
+  cp -R "$IOS_SOURCE/Sources/"*.lproj Gen/Localizations/ || die "copy BOTW launcher localizations"
+fi
 python3 tools/gen_build.py "$DM/host" Gen > Gen/dm.xcconfig || die "gen_build"
 F=$(python3 tools/gen_embed.py "$PATCHED" Gen/embed.S $MODS) || die "gen_embed"
 echo "OTHER_LDFLAGS = \$(inherited) \$(DM_FRAMEWORKS) $F" >> Gen/dm.xcconfig

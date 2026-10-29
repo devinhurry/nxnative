@@ -2,12 +2,18 @@
 import SwiftUI
 import Charts
 import DmTouchPad
+#if os(iOS)
+import UIKit
+#else
+import AppKit
+#endif
 
 struct BotwTouchSettingsView: View {
     @ObservedObject var m: LauncherModel
     var viewport = CGSize(width: 932, height: 430)
     var safeInsets = EdgeInsets()
     @State private var selected = BotwTouchControl.all[1]
+    @State private var copied = false
 
     private func value(_ key: String, fallback: Double = 0) -> Double {
         guard let row = m.settings.first(where: { $0.env == key }) else { return fallback }
@@ -24,6 +30,7 @@ struct BotwTouchSettingsView: View {
             }
         }
         result.face_gap = Float(value("DM_BOTW_PAD_FACE_GAP", fallback: 1))
+        result.badges = value("DM_BOTW_PAD_BADGES", fallback: 1) == 0 ? 0 : 1
         return result
     }
     private var canvas: dm_touchpad_rect { dm_botw_layout_canvas(Float(viewport.width), Float(viewport.height)) }
@@ -61,7 +68,7 @@ struct BotwTouchSettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Picker("Control", selection: $selected) {
-                        ForEach(BotwTouchControl.all) { Text($0.label).tag($0) }
+                        ForEach(BotwTouchControl.all) { Text(LocalizedStringKey($0.label)).tag($0) }
                     }.pickerStyle(.menu).accessibilityIdentifier("botw.touch.control")
                     ForEach(["X", "Y", "SCALE"], id: \.self) { field in
                         if let row = m.settings.first(where: { $0.env == selected.env(field) }) {
@@ -73,17 +80,37 @@ struct BotwTouchSettingsView: View {
                     }
                     Button("Restore this control") { m.reset(keys: selected.keys.union(selected.id == 0 ? ["DM_BOTW_PAD_FACE_GAP"] : [])) }
                     Divider()
+                    if let row = m.settings.first(where: { $0.env == "DM_BOTW_PAD_BADGES" }) { SettingRow(s: row, m: m) }
+                    Divider()
                     if let response = m.touchStickResponse {
                         Text("Left-stick response").font(.headline)
                         TouchStickPreview(response: response)
                         ForEach(m.rows(in: TouchStickResponse.section).filter { $0.env != "DM_BOTW_MOVE_SIZE" }) { SettingRow(s: $0, m: m) }
                     }
                     Button("Restore all touch defaults") { m.reset(keys: m.touchSettingsKeys) }
+                    Divider()
+                    Button(action: {
+                        #if os(iOS)
+                        UIPasteboard.general.string = m.touchSettingsExport
+                        #else
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(m.touchSettingsExport, forType: .string)
+                        #endif
+                        copied = true
+                    }) { Label(copied ? "Copied" : "Copy all parameters", systemImage: copied ? "checkmark" : "doc.on.doc") }
+                        .accessibilityIdentifier("botw.touch.copy")
+                    DisclosureGroup("Current parameters") {
+                        Text(m.touchSettingsExport).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                            .accessibilityIdentifier("botw.touch.parameters")
+                    }
+                    Text("Send these values to use this layout as the default. Offsets are fractions of the game UI area; positive X moves right and positive Y moves down.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }.padding(.vertical, 8)
             }.frame(width: 285)
         }
         .padding(16)
         .navigationTitle("Touch settings")
+        .onChange(of: m.values) { _, _ in copied = false }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -100,9 +127,9 @@ private struct BotwLayoutSlider: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack { Text(title); Spacer(); Text(String(format: "%.1f%%", binding.wrappedValue*100)).monospacedDigit().foregroundStyle(.secondary) }
+            HStack { Text(LocalizedStringKey(title)); Spacer(); Text(String(format: "%.3f (%.1f%%)", binding.wrappedValue, binding.wrappedValue*100)).monospacedDigit().foregroundStyle(.secondary) }
             Slider(value: binding, in: (row.min ?? 0)...(row.max ?? 1), step: row.step ?? 0.01)
-                .accessibilityLabel(title).accessibilityIdentifier(row.env)
+                .accessibilityLabel(Text(LocalizedStringKey(title))).accessibilityIdentifier(row.env)
         }.disabled(m.fixed.contains(row.env))
     }
 }
@@ -118,6 +145,29 @@ private struct BotwControlPreview: View {
     @State private var dragOrigin: CGPoint?
     @State private var scaleOrigin: Double?
     private var gold: Color { Color(red: 0.94, green: 0.88, blue: 0.70) }
+    private var badges: Bool { m.values["DM_BOTW_PAD_BADGES"] != "0" }
+    private func icon(_ name: String) -> Image? {
+        guard let path = Bundle.main.resourceURL?.appendingPathComponent("dm/touch_\(name.lowercased()).png").path else { return nil }
+        #if os(iOS)
+        return UIImage(contentsOfFile: path).map { Image(uiImage: $0) }
+        #else
+        return NSImage(contentsOfFile: path).map { Image(nsImage: $0) }
+        #endif
+    }
+    private func button(_ name: String, diameter: CGFloat) -> some View {
+        ZStack {
+            Circle().fill(Color(white: 0.35).opacity(0.2))
+                .overlay(Circle().strokeBorder(Color(white: 0.52).opacity(0.4), lineWidth: max(0.5, 1.8*previewScale)))
+            if let art = icon(name) { art.resizable().scaledToFit().frame(width: diameter*0.5, height: diameter*0.5) }
+            else { Text(name).font(.system(size: max(9,diameter*0.35))) }
+            if badges {
+                Circle().fill(Color(white: 0.2)).overlay(Circle().stroke(gold, lineWidth: max(0.5,previewScale)))
+                    .overlay(Text(name).font(.system(size: max(5,diameter*0.17))))
+                    .frame(width: diameter*0.3, height: diameter*0.3)
+                    .offset(x: diameter*0.353553, y: -diameter*0.353553)
+            }
+        }
+    }
     private func set(_ field: String, _ value: Double) {
         let key = control.env(field)
         guard !m.fixed.contains(key), let row = m.settings.first(where: { $0.env == key }) else { return }
@@ -129,10 +179,7 @@ private struct BotwControlPreview: View {
         let spacing: CGFloat = (rect.width / 2 - radius) * previewScale
         let position = CGPoint(x: index == 0 ? spacing : index == 3 ? -spacing : 0,
                                y: index == 1 ? spacing : index == 2 ? -spacing : 0)
-        let textSize: CGFloat = max(9, radius * previewScale * 0.7)
-        return Circle().fill(Color(white: 0.26).opacity(0.2))
-            .overlay(Circle().stroke(gold, lineWidth: 1))
-            .overlay(Text(["A","B","X","Y"][index]).font(.system(size: textSize)))
+        return button(["A","B","X","Y"][index], diameter: diameter)
             .frame(width: diameter, height: diameter)
             .offset(x: position.x, y: position.y)
     }
@@ -140,8 +187,10 @@ private struct BotwControlPreview: View {
         ZStack {
             if control.id == 0 {
                 ForEach(0..<4) { i in faceButton(i) }
+            } else if control.id == 6 || control.id == 7 || control.id == 9 {
+                button(control.key, diameter: rect.width*previewScale)
             } else {
-                Circle().fill(Color(white: 0.26).opacity(0.2)).overlay(Circle().stroke(gold.opacity(0.6), lineWidth: 1))
+                Circle().fill(Color(white: 0.35).opacity(0.2)).overlay(Circle().stroke(Color(white: 0.52).opacity(0.4), lineWidth: 1))
                 if control.id == 4 || control.id == 12 || control.id == 8 {
                     Image(systemName: control.id == 8 ? "shield" : control.id == 12 ? "dpad" : "circle")
                         .font(.system(size: min(rect.width,rect.height)*previewScale*0.4))
@@ -164,7 +213,7 @@ private struct BotwControlPreview: View {
             set("SCALE", scaleOrigin! * event.magnification)
         }.onEnded { _ in scaleOrigin = nil })
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(control.label).accessibilityAddTraits(.isButton)
+        .accessibilityLabel(Text(LocalizedStringKey(control.label))).accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("botw.touch.preview.\(control.key)")
         .accessibilityAction { selected = control }
     }
@@ -175,7 +224,7 @@ struct TouchStickPreview: View {
     @State private var travel = 0.2
 
     private var readout: String {
-        "Drag \(Int((travel * 100).rounded()))% → Stick \(Int((response.strength(at: travel) * 100).rounded()))%"
+        String(format: NSLocalizedString("Drag %d%% → Stick %d%%", comment: "Touch response preview"), Int((travel * 100).rounded()), Int((response.strength(at: travel) * 100).rounded()))
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {

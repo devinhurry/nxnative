@@ -15,11 +15,12 @@ static int map_region_valid;
 static int map_region_events;
 static int actions_reset_count;
 static int aspect_pane_calls;
+static int aspect_native = 1;
 static float map_region[4];
-int gate_obs_present(int id) { return id == OBS_BOTW_TOUCH_PANE || id == OBS_BOTW_TOUCH_MATRIX; }
+int gate_obs_present(int id) { return id == OBS_BOTW_TOUCH_PANE || id == OBS_BOTW_TOUCH_MATRIX || id == OBS_BOTW_UI_DRAW || id == OBS_BOTW_UI_DRAW_END; }
 void gate_obs_read_set(int id, void (*fn)(const uint64_t *)) { assert(id > 0 && id < OBS_MAX); test_gates[id] = fn; }
 void front_botw_touch_hud_mode_changed(void) {}
-int dm_aspect_native(void) { return 1; }
+int dm_aspect_native(void) { return aspect_native; }
 void dm_aspect_ui_pane(uint8_t *pane) { if (pane) aspect_pane_calls++; }
 void front_botw_rune_icon_changed(void) {}
 void dm_botw_touch_actions_reset(void) { actions_reset_count++; }
@@ -235,30 +236,16 @@ int main(void) {
     rune_picload[BOTW_TOUCH_FLAGS] = rune_icon[BOTW_TOUCH_FLAGS] = 1;
     guide_main[BOTW_TOUCH_FLAGS] = 1;
     guide_cross[BOTW_TOUCH_FLAGS] = guide_icon[BOTW_TOUCH_FLAGS] = 1;
+    uint8_t *rune_chain[] = {rune_root,rune_all,rune_mainall,rune_pos,rune_mainu,rune_pamainu,rune_innerall,rune_now,rune_picload,rune_icon};
+    for (unsigned i=0;i<sizeof rune_chain/sizeof *rune_chain;i++) rune_chain[i][BOTW_TOUCH_FLAGS+1] = 255;
     pane_size(rune_icon, 100, 80); matrix_translation(rune_icon, 100, 200);
     calculate_entry(rune_icon); calculated_matrix(rune_icon);
     pane_size(guide_icon, 46, 46); matrix_translation(guide_icon, 83, 167);
     calculate_entry(guide_icon); calculated_matrix(guide_icon);
-    float rune_rect[4], rune_exclusion[4], hidden_exclusion[4]; uint64_t rune_token, hidden_token;
-    assert(dm_botw_rune_icon_crop(rune_rect, rune_exclusion, &rune_token));
-    assert(fabsf(rune_rect[0] - 690) < .001f && fabsf(rune_rect[1] - 120) < .001f);
-    assert(fabsf(rune_rect[2] - 100) < .001f && fabsf(rune_rect[3] - 80) < .001f);
-    assert(fabsf(rune_exclusion[0] - 700) < .001f && fabsf(rune_exclusion[1] - 170) < .001f);
-    assert(fabsf(rune_exclusion[2] - 46) < .001f && fabsf(rune_exclusion[3] - 46) < .001f);
-    matrix_translation(guide_icon, 300, 300); calculated_matrix(guide_icon);
-    assert(dm_botw_rune_icon_crop(rune_rect, hidden_exclusion, &hidden_token));
-    assert(hidden_exclusion[0] == 0 && hidden_exclusion[1] == 0 && hidden_exclusion[2] == 0 && hidden_exclusion[3] == 0);
-    matrix_translation(guide_icon, 83, 167); calculated_matrix(guide_icon);
-    assert(dm_botw_rune_icon_crop(rune_rect, rune_exclusion, &rune_token));
-    guide_icon[BOTW_TOUCH_FLAGS] = 0; calculate_entry(guide_icon);
-    assert(dm_botw_rune_icon_crop(rune_rect, hidden_exclusion, &hidden_token));
-    assert(hidden_exclusion[0] == 0 && hidden_exclusion[1] == 0 && hidden_exclusion[2] == 0 && hidden_exclusion[3] == 0);
-    guide_icon[BOTW_TOUCH_FLAGS] = 1; calculated_matrix(guide_icon);
-    assert(dm_botw_rune_icon_crop(rune_rect, rune_exclusion, &rune_token));
+    uint64_t rune_token, animated_token;
+    assert(dm_botw_rune_icon_capture_token(&rune_token));
     matrix_translation(rune_icon, 101, 201); calculate_entry(rune_icon); calculated_matrix(rune_icon);
-    float animated_rect[4], animated_exclusion[4]; uint64_t animated_token;
-    assert(dm_botw_rune_icon_crop(animated_rect, animated_exclusion, &animated_token) && animated_token == rune_token);
-    assert(fabsf(animated_rect[0] - rune_rect[0] - 1) < .001f && fabsf(animated_rect[1] - rune_rect[1] + 1) < .001f);
+    assert(dm_botw_rune_icon_capture_token(&animated_token) && animated_token == rune_token);
     uint8_t alpha_pixels[20] = {255, 229, 137, 0, 200, 101, 50, 128, 17, 80, 240, 255,
                                 239, 103, 66, 85, 0xee, 0xee, 0xee, 0xee};
     dm_botw_rune_icon_premultiply_rgba(alpha_pixels, 4, 1, 20);
@@ -267,29 +254,16 @@ int main(void) {
     assert(alpha_pixels[8] == 17 && alpha_pixels[9] == 80 && alpha_pixels[10] == 240 && alpha_pixels[11] == 255);
     assert(alpha_pixels[12] == 80 && alpha_pixels[13] == 34 && alpha_pixels[14] == 22 && alpha_pixels[15] == 85);
     assert(alpha_pixels[16] == 0xee); // row padding is untouched
-    uint8_t masked_rune[64 * 64 * 4]; memset(masked_rune, 0xff, sizeof masked_rune);
-    const float rune_crop_fixture[4] = {61.8f, 55.8f, 48.4f, 48.4f};
-    const float guide_fixture[4] = {68.06f, 96.06f, 35.88f, 35.88f};
-    dm_botw_rune_icon_mask_guide(masked_rune, 64, 64, 64 * 4,
-                                  rune_crop_fixture, guide_fixture, 0, 0, 64, 64);
-    assert(masked_rune[(50 * 64 + 20) * 4 + 3] == 255); // rune glyph and gap above guide stay
-    assert(masked_rune[(59 * 64 + 20) * 4 + 3] == 0);   // authored D-pad UP overlap is removed
-    assert(masked_rune[(59 * 64 + 2) * 4 + 3] == 255);  // outside guide width stays intact
-    uint8_t no_overlap[sizeof masked_rune]; memset(no_overlap, 0xff, sizeof no_overlap);
-    const float unrelated_guide[4] = {200, 200, 46, 46};
-    dm_botw_rune_icon_mask_guide(no_overlap, 64, 64, 64 * 4,
-                                  rune_crop_fixture, unrelated_guide, 0, 0, 64, 64);
-    for (size_t i = 0; i < sizeof no_overlap; i++) assert(no_overlap[i] == 0xff);
     uint8_t rune_pixels[DM_BOTW_RUNE_ICON_SIDE * DM_BOTW_RUNE_ICON_SIDE * 4]; memset(rune_pixels, 7, sizeof rune_pixels);
     dm_botw_rune_icon_publish(animated_token, rune_pixels, DM_BOTW_RUNE_ICON_SIDE, DM_BOTW_RUNE_ICON_SIDE, DM_BOTW_RUNE_ICON_STRIDE);
     dm_botw_rune_icon_state rune_state; assert(dm_botw_rune_icon_snapshot(&rune_state));
     assert(rune_state.valid && rune_state.width == 64 && rune_state.height == 64 && rune_state.rgba[0] == 7);
     uint8_t rune_icon2[0x100] = {0}; pane_name(rune_icon2, "P_Icon_00");
     set_pane_parent(rune_icon2, rune_picload); pane_size(rune_icon2, 100, 80); matrix_translation(rune_icon2, 100, 200);
-    rune_icon2[BOTW_TOUCH_FLAGS] = 1;
+    rune_icon2[BOTW_TOUCH_FLAGS] = 1; rune_icon2[BOTW_TOUCH_FLAGS+1] = 255;
     calculate_entry(rune_icon2); calculated_matrix(rune_icon2);
-    float rune_rect2[4], rune_exclusion2[4]; uint64_t rune_token2;
-    assert(dm_botw_rune_icon_crop(rune_rect2, rune_exclusion2, &rune_token2) && rune_token2 != rune_token);
+    uint64_t rune_token2;
+    assert(dm_botw_rune_icon_capture_token(&rune_token2) && rune_token2 != rune_token);
     assert(dm_botw_rune_icon_snapshot(&rune_state) && !rune_state.valid);
     dm_botw_rune_icon_publish(rune_token, rune_pixels, DM_BOTW_RUNE_ICON_SIDE, DM_BOTW_RUNE_ICON_SIDE, DM_BOTW_RUNE_ICON_STRIDE);
     assert(dm_botw_rune_icon_snapshot(&rune_state) && !rune_state.valid);
@@ -297,13 +271,30 @@ int main(void) {
     assert(dm_botw_rune_icon_snapshot(&rune_state) && rune_state.valid);
     uint8_t unrelated_hidden_root[0x100] = {0}; pane_name(unrelated_hidden_root, "RootPane");
     calculate_entry(unrelated_hidden_root); // unrelated hidden layout root must not clear the live icon
-    float still_valid_rect[4], still_valid_exclusion[4]; uint64_t still_valid_token;
-    assert(dm_botw_rune_icon_crop(still_valid_rect, still_valid_exclusion, &still_valid_token) && still_valid_token == rune_token2);
+    uint64_t still_valid_token;
+    assert(dm_botw_rune_icon_capture_token(&still_valid_token) && still_valid_token == rune_token2);
     assert(dm_botw_rune_icon_snapshot(&rune_state) && rune_state.valid);
+    dm_botw_rune_icon_draw_begin(rune_icon2); assert(dm_botw_rune_icon_drawing());
+    dm_botw_rune_icon_draw_end(); assert(!dm_botw_rune_icon_drawing());
+    dm_botw_rune_icon_draw_begin(guide_icon); assert(!dm_botw_rune_icon_drawing());
+    // Mounted gameplay may fade only the rune while leaving equipment visible.
+    rune_now[BOTW_TOUCH_FLAGS+1] = 0;
+    calculate_entry(rune_now);
+    assert(dm_botw_rune_icon_snapshot(&rune_state) && !rune_state.valid);
+    dm_botw_rune_icon_draw_begin(rune_icon2); assert(!dm_botw_rune_icon_drawing());
+    rune_now[BOTW_TOUCH_FLAGS+1] = 255;
+    calculate_entry(rune_icon2); calculated_matrix(rune_icon2);
+    assert(dm_botw_rune_icon_capture_token(&rune_token2));
+    dm_botw_rune_icon_publish(rune_token2, rune_pixels, 64, 64, 256);
+    assert(dm_botw_rune_icon_snapshot(&rune_state) && rune_state.valid);
+    uint8_t transparent_rune[sizeof rune_pixels] = {0};
+    dm_botw_rune_icon_publish(rune_token2, transparent_rune, 64, 64, 256);
+    assert(dm_botw_rune_icon_snapshot(&rune_state) && !rune_state.valid);
+    dm_botw_rune_icon_publish(rune_token2, rune_pixels, 64, 64, 256);
     rune_now[BOTW_TOUCH_FLAGS] = 0;
     calculate_entry(rune_now); // clear before hidden ancestors can skip the child's matrix callback
     assert(dm_botw_rune_icon_snapshot(&rune_state) && !rune_state.valid);
-    assert(!dm_botw_rune_icon_crop(still_valid_rect, still_valid_exclusion, &still_valid_token));
+    assert(!dm_botw_rune_icon_capture_token(&still_valid_token));
     dm_botw_rune_icon_clear();
     dm_botw_rune_icon_publish(rune_token2, rune_pixels, DM_BOTW_RUNE_ICON_SIDE, DM_BOTW_RUNE_ICON_SIDE, DM_BOTW_RUNE_ICON_STRIDE);
     assert(dm_botw_rune_icon_snapshot(&rune_state) && !rune_state.valid && rune_state.rgba[0] == 0);
@@ -344,6 +335,15 @@ int main(void) {
     calculate_entry(other);
     assert(aspect_pane_calls == calls + 1);
     assert(!dm_botw_touch_hud_available() && !dm_botw_touch_hud_active());
+
+    // Rune DrawSelf observation remains installed when widescreen is off.
+    aspect_native = 0;
+    dm_botw_touch_hud_install();
+    assert(test_gates[OBS_BOTW_UI_DRAW] && test_gates[OBS_BOTW_UI_DRAW_END]);
+    uint64_t draw_regs[31] = {0};
+    test_gates[OBS_BOTW_UI_DRAW](draw_regs);
+    assert(!dm_botw_rune_icon_drawing());
+    test_gates[OBS_BOTW_UI_DRAW_END](draw_regs);
 
     puts("t_botw_touchhud: build gate, pane ancestry, transient transforms, map bounds, environment alignment, expanded-state fallback, and inactive restoration passed");
 }

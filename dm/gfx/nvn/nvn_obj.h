@@ -164,20 +164,29 @@ typedef struct { int32_t prim, itype, count, base_vertex, base_instance, instanc
 // records each mesh's draw into a scratch command buffer and reserves that many bytes per mesh for the model's prerecorded draws, in the heap its resource size table sizes:
 // at 0x50 bytes per recorded draw (0x30 now, with its END) three models needed one 4 KB page more than their table entry, and loading them crashed (main+0x155a7a4)
 // Instance counts are nonnegative. Their reserved sign bit carries the native
-// UI background scope without growing compact records or changing NVN's ABI.
+// UI scope without growing compact records or changing NVN's ABI. BOTW's rune
+// quad uses base-instance zero; INT32_MIN marks its isolated texture capture
+// and is restored to zero before the draw reaches any renderer.
 #define NVN_DRAW_UI_BACKGROUND 0x80000000u
+enum { NVN_UI_BACKGROUND = 1, NVN_UI_RUNE = 2 };
+static inline void draw_ui_scope(int32_t *instances, int32_t *base_instance, int32_t *scope) {
+    if (!((uint32_t)*instances & NVN_DRAW_UI_BACKGROUND)) return;
+    *instances &= 0x7fffffff;
+    *scope = *base_instance == INT32_MIN ? NVN_UI_RUNE : NVN_UI_BACKGROUND;
+    if (*scope == NVN_UI_RUNE) *base_instance = 0;
+}
 static inline const p_draw *draw_rec(const void *a, uint32_t size, p_draw *t) {
     const p_draw *d = a;
     if (size - 8 >= sizeof *t && !((uint32_t)d->instances & NVN_DRAW_UI_BACKGROUND)) return a;
     memset(t, 0, sizeof *t); memcpy(t, a, size - 8 < sizeof *t ? size - 8 : sizeof *t);
-    if ((uint32_t)t->instances & NVN_DRAW_UI_BACKGROUND) { t->instances &= 0x7fffffff; t->pad = 1; }
+    draw_ui_scope(&t->instances, &t->base_instance, &t->pad);
     return t;
 }
 static inline const p_draw_idx *draw_idx_rec(const void *a, uint32_t size, p_draw_idx *t) {
     const p_draw_idx *d = a;
     if (size - 8 >= sizeof *t && !((uint32_t)d->instances & NVN_DRAW_UI_BACKGROUND)) return a;
     memset(t, 0, sizeof *t); memcpy(t, a, size - 8 < sizeof *t ? size - 8 : sizeof *t);
-    if ((uint32_t)t->instances & NVN_DRAW_UI_BACKGROUND) { t->instances &= 0x7fffffff; t->pad = 1; }
+    draw_ui_scope(&t->instances, &t->base_instance, &t->pad);
     return t;
 }
 typedef struct { int32_t x, y, z; uint64_t caller, ind; } p_dispatch;   // caller: return address of the game call site (to locate the dispatcher); ind != 0: DispatchComputeIndirect, the group counts are read by the GPU from that address

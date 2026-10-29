@@ -9,6 +9,7 @@
 // Every implementation gets a compile-time signature check against the prototypes in nvn_protos.h (NVNboolean parameters are received as uint32_t, only the low 8 bits are looked at).
 // Environment switches: DM_NVN_FRAMES=N prints the call table per frame for the first N frames (default 3); DM_NVN_TSV=path writes the per-frame call table and timing to a TSV (DM_NVN_TSV_CALLS=0 writes timing only); DM_SLOWFRAME=1 writes only the per-frame breakdown of dropped frames to the log; DM_NVN_LOG=1 logs object creation.
 #include "../../host/hle.h"
+#include "../../host/botw_rune_icon.h"
 #include "nvn_protos.h"
 #include "nvn_count.h"
 #include "nvn_tex.h"
@@ -902,8 +903,14 @@ static void *rec(NVNcommandBuffer *c, uint32_t op, size_t payload) {
 // while there are usually only 1–2 in practice), and the empty tail took 40–50% of the command bytes per frame; the advanced stats page of the level 88 sorceress recorded 12.5 MB per frame, using up the game's own command memory pool (about 105 segments x 128 KB per frame)
 #define RECN(c, OP, T, ARR, N) ((T *)rec((c), (OP), offsetof(T, ARR) + sizeof(((T *)0)->ARR[0]) * (size_t)(N)))
 // Draws carry the indirect / multi-draw fields (ind onwards) only when they use them: a plain indexed draw record is 0x28 bytes instead of 0x40 (nvn_obj.h draw_rec)
-static void rec_draw(NVNcommandBuffer *c, p_draw d) { size_t n = d.ind || d.mdi_cnt ? sizeof d : offsetof(p_draw, ind); if (dm_aspect_ui_background_drawing()) d.instances |= NVN_DRAW_UI_BACKGROUND; memcpy(rec(c, OP_DRAW, n), &d, n); }
-static void rec_draw_idx(NVNcommandBuffer *c, p_draw_idx d) { size_t n = d.ind || d.mdi_cnt ? sizeof d : offsetof(p_draw_idx, ind); if (dm_aspect_ui_background_drawing()) d.instances |= NVN_DRAW_UI_BACKGROUND; memcpy(rec(c, OP_DRAW_IDX, n), &d, n); }
+static void rec_ui_scope(int32_t *instances, int32_t *base_instance) {
+    if (dm_botw_rune_icon_drawing() && !*base_instance) {
+        *instances |= NVN_DRAW_UI_BACKGROUND;
+        *base_instance = INT32_MIN; // unused by the native rune quad; restored before replay
+    } else if (dm_aspect_ui_background_drawing()) *instances |= NVN_DRAW_UI_BACKGROUND;
+}
+static void rec_draw(NVNcommandBuffer *c, p_draw d) { size_t n = d.ind || d.mdi_cnt ? sizeof d : offsetof(p_draw, ind); rec_ui_scope(&d.instances, &d.base_instance); memcpy(rec(c, OP_DRAW, n), &d, n); }
+static void rec_draw_idx(NVNcommandBuffer *c, p_draw_idx d) { size_t n = d.ind || d.mdi_cnt ? sizeof d : offsetof(p_draw_idx, ind); rec_ui_scope(&d.instances, &d.base_instance); memcpy(rec(c, OP_DRAW_IDX, n), &d, n); }
 static void copy_view(view_t *dst, uint8_t *has, const NVNtextureView *v) { *has = v != NULL; if (v) *dst = *(const view_t *)v; }
 // Records with textures snapshot the texture objects (0x80 bytes each, after the record struct) and replay reads the snapshots: an NVN command no longer depends on the API object once recorded, and the game may finalize, free or reuse it before submitting.
 // Unity (Engage) does so when it changes scenes; only the object pointer used to be recorded, and replay read other data (a texture 1869367126 high, a Metal assertion abort).

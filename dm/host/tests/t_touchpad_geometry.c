@@ -229,7 +229,15 @@ static void test_configurable_stick(void) {
 
 static void test_custom_layout(void) {
     dm_botw_touch_layout layout; assert(dm_botw_layout_read(&layout));
+    assert(layout.badges);
+    setenv("DM_BOTW_PAD_BADGES","0",1); assert(dm_botw_layout_read(&layout) && !layout.badges);
+    setenv("DM_BOTW_PAD_BADGES","0.5",1); assert(!dm_botw_layout_read(&layout));
+    unsetenv("DM_BOTW_PAD_BADGES"); assert(dm_botw_layout_read(&layout) && layout.badges);
     dm_touchpad_rect canvas=dm_botw_layout_canvas(932,430);
+    dm_touchpad_rect r=dm_botw_layout_control(&layout,7,932,430,0,0,0,0,canvas);
+    dm_touchpad_rect zr=dm_botw_layout_control(&layout,9,932,430,0,0,0,0,canvas);
+    nearf(r.width,zr.width,.001f);
+
     dm_touchpad_rect before=dm_botw_layout_control(&layout,0,932,430,0,0,0,0,canvas);
     setenv("DM_BOTW_PAD_FACE_X","-0.1",1); setenv("DM_BOTW_PAD_FACE_SCALE","0.8",1);
     setenv("DM_BOTW_PAD_FACE_GAP","1.2",1); setenv("DM_BOTW_PAD_R_Y","0.1",1);

@@ -26,7 +26,7 @@ private struct LauncherView: View {
                         }
                         Text((info("CFBundleDisplayName") as? String) ?? "Game")
                             .font(.title.weight(.bold)).multilineTextAlignment(.center)
-                        Text("Version \((info("CFBundleShortVersionString") as? String) ?? "")")
+                        Text(String(format: NSLocalizedString("Version %@", comment: "Game version"), (info("CFBundleShortVersionString") as? String) ?? ""))
                             .font(.callout).foregroundStyle(.secondary)
                         playButton
                     }
@@ -40,7 +40,7 @@ private struct LauncherView: View {
                             }
                         }
                         ForEach(m.sections.filter { !LauncherModel.isTouchSection($0) }, id: \.self) { section in
-                            Section(section) {
+                            Section(LocalizedStringKey(section)) {
                                 ForEach(m.rows(in: section)) { SettingRow(s: $0, m: m) }
                             }
                         }

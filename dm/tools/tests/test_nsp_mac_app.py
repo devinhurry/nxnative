@@ -193,6 +193,20 @@ class PackReuse(unittest.TestCase):
         self.assert_reused()
         self.assertEqual((partial / 'leave').read_text(), 'untouched')
 
+    def test_botw_localizations_are_scoped_and_invalidate_reuse(self):
+        strings = self.tmp / 'ios/Sources/zh-Hans.lproj/Localizable.strings'
+        strings.parent.mkdir(); strings.write_text('"Touch" = "localized";\n')
+        self.args.title_id = '01007EF00011E000'
+        self.pack(); self.assert_reused()
+        bundled = Path(self.args.out) / 'Contents/Resources/zh-Hans.lproj/Localizable.strings'
+        self.assertEqual(bundled.read_text(), strings.read_text())
+        strings.write_text('"Touch" = "updated";\n')
+        self.assert_repacked()
+        self.assertEqual(bundled.read_text(), strings.read_text())
+        self.args.title_id = TID
+        self.pack()
+        self.assertFalse(bundled.exists(), 'other games keep their existing launcher language')
+
     def test_each_selected_file_content_invalidates_even_with_same_stat(self):
         self.pack()
         names = ['dmhost', 'patched/main.patched.bin', 'patched/main.fixups.tsv', 'patched/main.gates.tsv', 'patched/main.cuts.tsv',
@@ -377,7 +391,7 @@ class App(unittest.TestCase):
         (t / 'cache/cas').mkdir()   # the Metal compile cache: not for the app
         for n in ('shader_map.tsv', 'pso_manifest.tsv', 'c1_full.tsv', 'game.tsv'): (t / 'profile' / n).write_text(n)
         (t / 'profile/shader_pairs.tsv').write_text('vertex-key\tpixel-key\n'); (t / 'profile/pso_pairs.tsv').write_text('other-vertex\tother-pixel\n')
-        for button in ('a', 'b', 'x', 'y', 'r', 'zr'):
+        for button in ('a', 'b', 'x', 'y', 'l', 'r', 'zr'):
             (t / f'profile/touch_{button}.png').write_bytes(button.encode())
         (t / 'font/nintendo_ext.ttf').write_bytes(b'ttf')
         (t / 'aoc/1/x').write_bytes(b'dlc')
@@ -417,8 +431,8 @@ class App(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in (c / 'MacOS').iterdir()), ['dmhost', 'nxnative'])
         self.assertEqual(sorted(p.name for p in (c / 'Resources/dm').iterdir()),
                          ['c1_full.tsv', 'env.txt', 'font', 'launcher.json', 'main.cuts.tsv', 'main.fixups.tsv', 'main.gates.tsv', 'main.obs.tsv', 'main.patched.bin', 'pso_manifest.tsv', 'pso_pairs.tsv',
-                          'shader_map.tsv', 'shader_pairs.tsv', 'touch_a.png', 'touch_b.png', 'touch_r.png', 'touch_x.png', 'touch_y.png', 'touch_zr.png'])   # the shader pairs: the pipeline prebuild's, without which hybrid draws have no stand-in
-        for button in ('a', 'b', 'x', 'y', 'r', 'zr'):
+                          'shader_map.tsv', 'shader_pairs.tsv', 'touch_a.png', 'touch_b.png', 'touch_l.png', 'touch_r.png', 'touch_x.png', 'touch_y.png', 'touch_zr.png'])   # the shader pairs: the pipeline prebuild's, without which hybrid draws have no stand-in
+        for button in ('a', 'b', 'x', 'y', 'l', 'r', 'zr'):
             self.assertEqual((c / f'Resources/dm/touch_{button}.png').read_bytes(), button.encode())
         self.assertEqual([p.name for p in (c / 'Resources/msl').iterdir()], ['b-0123456789ab'])   # the libraries only, not the compile cache
         self.assertEqual(sorted(p.name for p in (c / 'Resources/msl/b-0123456789ab').iterdir()), ['inputs.tsv', 'k_b.json', 'k_b.metallib'])

@@ -19,6 +19,8 @@ static void (*callback)(const uint64_t *);
 static void (*ui_callback)(const uint64_t *);
 static void (*screen_callback)(const uint64_t *);
 static void (*draw_callback)(const uint64_t *), (*draw_end_callback)(const uint64_t *);
+void dm_botw_rune_icon_draw_begin(uint8_t *pane) { (void)pane; }
+void dm_botw_rune_icon_draw_end(void) {}
 static int have_gate = 1;
 void gate_obs_read_set(int id, void (*fn)(const uint64_t *)) {
     if (id == OBS_ASPECT_PROJECTION) callback = fn;

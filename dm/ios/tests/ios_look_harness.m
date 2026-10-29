@@ -71,6 +71,7 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
 - (CAShapeLayer *)dm_testStickRingLayer;
 - (CAShapeLayer *)dm_testStickDirectionLayer;
 - (CAShapeLayer *)dm_testRuneBadgeLayer;
+- (CALayer *)dm_testRuneIconLayer;
 - (void)dm_testSetTouchFeedback:(UIImpactFeedbackGenerator *)feedback;
 - (void)botwRuneIconChanged;
 - (CGPoint)dm_testStickHome;
@@ -79,6 +80,8 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
 - (CGPoint)dm_testDropCenter:(int)button;
 - (void)dm_testBotwTouchActionChanged;
 - (void)dm_testPulseBotwL3;
+- (UILongPressGestureRecognizer *)dm_testRuneHoldGesture;
+- (void)runeLongPressed:(UILongPressGestureRecognizer *)recognizer;
 - (void)reset;
 - (void)padsChanged:(NSNotification *)note;
 - (void)deviceOrientationChanged;
@@ -110,6 +113,11 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
 @end
 @implementation RecognizedMenuTap
 - (UIGestureRecognizerState)state { return UIGestureRecognizerStateRecognized; }
+@end
+@interface BeganRuneHold : UILongPressGestureRecognizer
+@end
+@implementation BeganRuneHold
+- (UIGestureRecognizerState)state { return UIGestureRecognizerStateBegan; }
 @end
 
 static BOOL g_look_enabled = YES, g_look_held;
@@ -317,10 +325,18 @@ static void test_botw_button_artwork(DmGamepad *view) {
     g_botw_touchhud_available = YES;
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view setNeedsLayout]; [view layoutIfNeeded];
     CAShapeLayer *y = [view dm_testButtonLayer:3];
+    CALayer *fallback=[view dm_testRuneIconLayer];
+    CGRect lDisk=CGPathGetPathBoundingBox([view dm_testButtonLayer:6].path);
+    CHECK(fallback.contents && !fallback.hidden && fabs(fallback.frame.size.width-lDisk.size.width*.5)<.01,
+          "hidden native rune uses the packaged L icon at half button diameter");
+    CHECK([view dm_testButtonLayer:6].lineWidth==y.lineWidth,
+          "L and face buttons use the same exterior border width");
+    CHECK(fabs(CGPathGetPathBoundingBox([view dm_testButtonLayer:7].path).size.width-CGPathGetPathBoundingBox([view dm_testButtonLayer:9].path).size.width)<.01,
+          "R and ZR have the same default diameter");
     CALayer *icon = [view dm_testYIconLayer]; CAShapeLayer *badge = [view dm_testYBadge];
     CGRect button = CGPathGetBoundingBox(y.path), circle = CGPathGetBoundingBox(badge.path);
-    CHECK(gray_matches(y.fillColor,.30,.20) && !y.strokeColor &&
-          gray_matches([view dm_testButtonBorder:3].fillColor,.47,.40) && y.shadowOpacity == 0,
+    CHECK(gray_matches(y.fillColor,.35,.20) && !y.strokeColor &&
+          gray_matches([view dm_testButtonBorder:3].fillColor,.52,.40) && y.shadowOpacity == 0,
           "BOTW overrides the button fill, outline and shadow without changing ordinary defaults");
     CHECK(!icon.hidden && icon.contents && fabs(icon.frame.size.width-button.size.width*.5)<.01 &&
           fabs(icon.frame.size.height-button.size.height*.5)<.01,
@@ -461,8 +477,8 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
           "the L button hit region takes priority where it overlaps the shield-stick grab area");
     g_buttons=0; g_lx=g_ly=0;
     FakeTouch *lEdgeTouch=touch(lOverlapEdge.x,lOverlapEdge.y); began(view,lEdgeTouch);
-    CHECK((g_buttons&DM_BTN_L) && !(g_buttons&DM_BTN_ZL) && g_lx==0 && g_ly==0,
-          "touching the overlapping L edge presses L instead of capturing the floating ZL stick");
+    CHECK(!(g_buttons&(DM_BTN_L|DM_BTN_ZL|DM_BTN_UP)) && g_lx==0 && g_ly==0,
+          "the overlapping L edge reserves its tap/hold without activating a rune or capturing ZL");
     ended(view,lEdgeTouch,lOverlapEdge.x,lOverlapEdge.y);
 
     g_input_sets = g_pad_sets = 0; g_input_history[0] = g_input_history[1] = 0;
@@ -699,6 +715,58 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
     CHECK(![view dm_testL3GestureEnabled], "Tap layout disables L3 double-tap");
     CHECK(![view dm_testLeftStickOwnsPoint:stick], "Tap layout disables BOTW double-tap recognition");
     g_botw_touchhud_available = NO;
+}
+
+static void test_botw_rune_hold(DmGamepad *view) {
+    g_botw_touchhud_available=YES; g_botw_gameplay_ready=YES;
+    g_botw_touch_menu_active=g_botw_touch_menu_presented=NO; g_look_enabled=YES;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view reset];
+    CGPoint point=[view dm_testRuneButtonCenter];
+    UILongPressGestureRecognizer *hold=[view dm_testRuneHoldGesture];
+    BeganRuneHold *recognized=[BeganRuneHold new];
+    CHECK(hold && fabs(hold.minimumPressDuration-DM_TP_BOTW_RUNE_HOLD_SECONDS)<.001 &&
+          !hold.cancelsTouchesInView && !hold.delaysTouchesBegan && !hold.delaysTouchesEnded,
+          "BOTW L uses a native long-press recognizer without canceling or delaying other touch controls");
+    FakeTouch *tap=touch(point.x,point.y); g_input_sets=0;
+    CHECK([hold.delegate gestureRecognizer:hold shouldReceiveTouch:tap],"only the rune button accepts the hold gesture");
+    beganAt(view,tap,10); CHECK(!(g_buttons&(DM_BTN_L|DM_BTN_UP)),"L stays silent until tap versus hold is known");
+    endedAt(view,tap,point.x,point.y,10.1);
+    int presses=0; for (int i=0;i<g_input_sets;i++) presses+=(g_input_history[i]&DM_BTN_L)!=0;
+    CHECK(presses==1 && !(g_buttons&(DM_BTN_L|DM_BTN_UP)),"a short L tap publishes exactly one normal L press and releases");
+    tap=touch(point.x,point.y); began(view,tap); g_input_sets=0;
+    [view touchesCancelled:[NSSet setWithObject:tap] withEvent:nil];
+    BOOL activated=NO; for(int i=0;i<g_input_sets;i++) activated|=(g_input_history[i]&(DM_BTN_L|DM_BTN_UP))!=0;
+    CHECK(!activated,"canceling a pending rune tap activates neither L nor Up");
+    [view reset]; reset_look(); g_input_sets=0;
+    FakeTouch *selection=touch(point.x,point.y); beganAt(view,selection,20);
+    [view runeLongPressed:recognized];
+    CHECK((g_buttons&DM_BTN_UP) && !(g_buttons&DM_BTN_L) && !g_look_held,
+          "long L holds the native rune-selection Up key without activating the current rune");
+    int begins=g_begin_count; [view runeLongPressed:recognized];
+    CHECK(g_begin_count==begins,"holding the rune button does not start a camera gesture");
+    moved(view,selection,point.x+60,point.y);
+    CHECK((g_buttons&DM_BTN_UP) && !g_rx && !g_look_held,"moving the held rune finger keeps only the original Up direction, like the D-pad");
+    CGPoint camera=CGPointMake(view.bounds.size.width*.82,view.bounds.size.height*.38);
+    FakeTouch *drag=touch(camera.x,camera.y); beganAt(view,drag,20.4); moved(view,drag,camera.x+60,camera.y);
+    CHECK((g_buttons&DM_BTN_UP) && g_rx>0,"a separate right-side drag keeps its existing UI right-stick input while L holds Up");
+    endedAt(view,drag,camera.x+60,camera.y,20.7);
+    endedAt(view,selection,point.x+60,point.y,20.8);
+    activated=NO; for(int i=0;i<g_input_sets;i++) activated|=(g_input_history[i]&(DM_BTN_L|DM_BTN_RS))!=0;
+    CHECK(!activated && !(g_buttons&DM_BTN_UP) && !g_rx && !g_look_held,
+          "releasing rune selection stops Up and dragging without a stray L or R3");
+    selection=touch(point.x,point.y); began(view,selection); [view runeLongPressed:recognized]; [view reset];
+    CHECK(!(g_buttons&DM_BTN_UP) && !g_rx && (g_virtual_latch_cancel_mask&DM_BTN_UP),
+          "input reset releases a held selector and cancels an unread Up edge");
+    [view runeLongPressed:recognized]; CHECK(!(g_buttons&DM_BTN_UP),"a stale recognition cannot reopen the rune selector after reset");
+    ended(view,selection,point.x,point.y);
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES];
+    CHECK(![hold.delegate gestureRecognizer:hold shouldReceiveTouch:tap],"controller mode rejects the rune hold gesture");
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; g_botw_touchhud_available=NO; [view reset];
+    point=[view dm_testDropCenter:6]; tap=touch(point.x,point.y);
+    CHECK(![hold.delegate gestureRecognizer:hold shouldReceiveTouch:tap],"ordinary game controls reject the BOTW rune hold");
+    began(view,tap); CHECK(g_buttons&DM_BTN_L,"ordinary game L still presses immediately on touch-down");
+    ended(view,tap,point.x,point.y);
+    g_botw_touchhud_available=YES; [view reset];
 }
 
 static void test_botw_l3_timing(DmGamepad *view) {
@@ -1281,9 +1349,18 @@ static void test_botw_custom_layout(DmGamepad *original) {
     g_botw_touch_menu_active=g_botw_touch_menu_presented=NO;
     setenv("DM_BOTW_PAD_FACE_X","-0.1",1); setenv("DM_BOTW_PAD_FACE_SCALE","0.8",1);
     setenv("DM_BOTW_PAD_FACE_GAP","1.2",1); setenv("DM_BOTW_PAD_R_Y","0.1",1);
+    setenv("DM_BOTW_PAD_BADGES","0",1);
     DmGamepad *view=[[DmGamepad alloc] initWithFrame:CGRectMake(0,0,844,390)];
     [original.superview addSubview:view];
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view setNeedsLayout]; [view layoutIfNeeded];
+    const int badged[]={0,1,2,3,7,9};
+    for (unsigned i=0;i<sizeof badged/sizeof *badged;i++) {
+        int b=badged[i];
+        CHECK([view dm_testButtonBadge:b].hidden && [view dm_testButtonLabel:b].hidden && ![view dm_testButtonIcon:b].hidden,
+              "badge switch hides the small circle and letter while keeping the button icon");
+    }
+    CHECK([view dm_testRuneBadgeLayer].hidden && ![view dm_testRuneIconLayer].hidden,
+          "badge switch applies to L without hiding its rune or fallback");
     float canvas[4]; dm_aspect_touch_rect(844,390,canvas);
     CGFloat u=dm_touchpad_u(390); dm_touchpad_point base=dm_touchpad_face_center(844,390,view.safeAreaInsets.left,view.safeAreaInsets.top,view.safeAreaInsets.right,view.safeAreaInsets.bottom);
     CGPoint expected=CGPointMake(base.x-canvas[2]*.1+50*u*.8*1.2,base.y);
@@ -1296,7 +1373,7 @@ static void test_botw_custom_layout(DmGamepad *original) {
     disk=CGPathGetPathBoundingBox([view dm_testButtonLayer:0].path);
     CHECK(fabs(disk.size.width-54*u)<.01,"controller mode ignores the custom BOTW face scale");
     [view reset]; [view removeFromSuperview];
-    const char *keys[]={"DM_BOTW_PAD_FACE_X","DM_BOTW_PAD_FACE_SCALE","DM_BOTW_PAD_FACE_GAP","DM_BOTW_PAD_R_Y"};
+    const char *keys[]={"DM_BOTW_PAD_FACE_X","DM_BOTW_PAD_FACE_SCALE","DM_BOTW_PAD_FACE_GAP","DM_BOTW_PAD_R_Y","DM_BOTW_PAD_BADGES"};
     for(unsigned i=0;i<sizeof keys/sizeof *keys;i++) unsetenv(keys[i]);
 }
 
@@ -1304,6 +1381,7 @@ static void run_tests(DmGamepad *view) {
     test_dpad_art_visibility(view);
     test_botw_button_artwork(view);
     test_botw_virtual_buttons(view);
+    test_botw_rune_hold(view);
     test_botw_l3_timing(view);
     test_botw_stick_response(view);
     test_botw_stick_feedback(view);
