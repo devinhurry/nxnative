@@ -639,7 +639,11 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     BOOL oldValid = _botwMapValid, oldConsumed = _botwMapTapConsumed, oldInvalidAfterTap = _botwMapInvalidAfterTap;
     BOOL active = [self botwTouchControlsActive];
     if (!active) { _botwMapTapConsumed = NO; _botwMapInvalidAfterTap = NO; }
-    if (!valid || !active || !isfinite(x) || !isfinite(y) || !isfinite(width) || !isfinite(height) || width <= 0 || height <= 0) {
+    // Keep the native snapshot even while a menu hides gameplay controls.
+    // The restored map can publish before the menu-close notification, and
+    // unchanged bounds are not sent again. Hit testing still requires active
+    // BOTW controls in botwMapOwnsPoint:.
+    if (!valid || !isfinite(x) || !isfinite(y) || !isfinite(width) || !isfinite(height) || width <= 0 || height <= 0) {
         valid = NO; _botwMapRect = CGRectZero;
         if (active && _botwMapTapConsumed) _botwMapInvalidAfterTap = YES;
     } else {
