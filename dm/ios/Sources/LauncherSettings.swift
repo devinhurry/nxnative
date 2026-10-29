@@ -137,6 +137,16 @@ final class LauncherModel: ObservableObject {
     var touchSettingsKeys: Set<String> {
         Set(settings.filter { Self.isTouchSection($0.sectionTitle) }.map(\.env))
     }
+    // Export the same normalized values consumed by both gamepads, including
+    // defaults and locked values. No device-specific preview pixels are saved.
+    var touchSettingsExport: String {
+        settings.filter { Self.isTouchSection($0.sectionTitle) }.map { row in
+            let current = values[row.env] ?? row.def
+            let value = row.accepts(current) ? current : row.def
+            let text = row.kind == "range" ? String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), Double(value) ?? 0) : value
+            return "\(row.env)=\(text)"
+        }.joined(separator: "\n")
+    }
 
     var changed: Bool { settings.contains { !fixed.contains($0.env) && !$0.isDefault(values[$0.env] ?? $0.def) } }
 

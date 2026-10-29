@@ -32,6 +32,7 @@ typedef struct { float x, y, width, height; } dm_touchpad_rect;
 #define DM_TP_FULL 0.8f
 #define DM_TP_DEAD 0.1f
 #define DM_TP_BOTW_STICK_DEAD 0.07f
+#define DM_TP_BOTW_RUNE_HOLD_SECONDS 0.35
 #define DM_TP_LOW_X 231.0f
 #define DM_TP_LOW_Y 64.0f
 #define DM_TP_DPAD_R 48.0f

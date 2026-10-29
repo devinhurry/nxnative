@@ -1,4 +1,4 @@
-// Live BOTW rune icon cropped from the game's own transparent UI canvas.
+// Live BOTW rune icon copied from the native rune Picture's own texture.
 #pragma once
 #include <stdint.h>
 
@@ -15,12 +15,15 @@ typedef struct {
 
 // Safe from UI threads; copies a small fixed-size snapshot under a short lock.
 int dm_botw_rune_icon_snapshot(dm_botw_rune_icon_state *out);
+// DrawSelf scope, recorded with the NVN draw so replay can copy the isolated
+// rune source before it is composed with location names or other HUD layers.
+void dm_botw_rune_icon_draw_begin(uint8_t *pane);
+void dm_botw_rune_icon_draw_end(void);
+int dm_botw_rune_icon_drawing(void);
 
-// Used by the renderer to obtain the current icon's logical 1280x720 top-left
-// crop and invalidation token. No pane pointer escapes its native callback.
-// The renderer also receives the live rectangle of the adjacent native
-// cross-key guide; pixels inside it are excluded from the copied rune image.
-int dm_botw_rune_icon_crop(float rect[4], float exclusion[4], uint64_t *token);
+// Current native pane lifetime/visibility token. No guest pointer escapes its
+// callback; the renderer gets the rune source from the tagged NVN draw.
+int dm_botw_rune_icon_capture_token(uint64_t *token);
 
 // Renderer completion publication. The token rejects callbacks that completed
 // after the pane was hidden, the mode changed, or the pane was rebuilt.
@@ -29,12 +32,4 @@ void dm_botw_rune_icon_publish(uint64_t token, const uint8_t *rgba,
 // Convert straight RGBA8 readback pixels to premultiplied RGBA8 in place.
 void dm_botw_rune_icon_premultiply_rgba(uint8_t *rgba, uint32_t width,
                                         uint32_t height, uint32_t stride);
-// Clear only output samples whose logical canvas centers overlap the live
-// authored D-pad guide rectangle. Letterboxed pixels outside image_rect stay
-// transparent; crop/exclusion are top-left logical 1280x720 rectangles.
-void dm_botw_rune_icon_mask_guide(uint8_t *rgba, uint32_t width,
-                                  uint32_t height, uint32_t stride,
-                                  const float crop[4], const float exclusion[4],
-                                  uint32_t image_x, uint32_t image_y,
-                                  uint32_t image_width, uint32_t image_height);
 void dm_botw_rune_icon_clear(void);

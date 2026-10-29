@@ -244,7 +244,7 @@ static void pads_start(void) {
     dm_motion_pro_start(pro_devices_changed);
 }
 
-enum { PREVIEW_NONE, PREVIEW_STICK, PREVIEW_DPAD, PREVIEW_FACE, PREVIEW_BUTTON, PREVIEW_LOOK, PREVIEW_GAME, PREVIEW_SHIELD, PREVIEW_MENU };
+enum { PREVIEW_NONE, PREVIEW_STICK, PREVIEW_DPAD, PREVIEW_FACE, PREVIEW_BUTTON, PREVIEW_LOOK, PREVIEW_GAME, PREVIEW_SHIELD, PREVIEW_MENU, PREVIEW_RUNE };
 @interface DmTouchPreviewView : NSView
 - (void)setPreviewActive:(BOOL)active;
 - (void)setMapRegionValid:(BOOL)valid x:(float)x y:(float)y width:(float)width height:(float)height;
@@ -310,6 +310,8 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     NSImage *_runeIcon, *_buttonIcons[12];
     uint64_t _runeIconGeneration;
     BOOL _runeIconValid;
+    NSTimer *_runeHoldTimer;
+    BOOL _runeSelecting;
 }
 - (instancetype)initWithFrame:(NSRect)frame {
     if ((self = [super initWithFrame:frame])) {
@@ -443,10 +445,11 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
         dm_touchpad_point c = {keys[i].right ? w - keys[i].x * u : keys[i].x * u, keys[i].y * u};
         if (_active && (keys[i].bit == 9 || keys[i].bit == 7))
             c = [self layoutCenter:keys[i].bit];
+        float radius = _active ? [self layoutRect:keys[i].bit].width*.5f : keys[i].r*u;
         float hit_scale = _active && (keys[i].bit == 9 || keys[i].bit == 7) ? DM_TP_SHOULDER_HIT_SCALE : 1.35f;
-        if (_active && (keys[i].bit == 9 || keys[i].bit == 7) &&
-            dm_botw_button_badge_contains(CGPointMake(p.x,p.y),CGPointMake(c.x,c.y),keys[i].r*u*[self layoutScale:keys[i].bit])) return keys[i].bit;
-        if (preview_distance(NSMakePoint(p.x, p.y), NSMakePoint(c.x, c.y)) < keys[i].r * u * [self layoutScale:keys[i].bit] * hit_scale) return keys[i].bit;
+        if (_active && _touchLayout.badges && (keys[i].bit == 9 || keys[i].bit == 7) &&
+            dm_botw_button_badge_contains(CGPointMake(p.x,p.y),CGPointMake(c.x,c.y),radius)) return keys[i].bit;
+        if (preview_distance(NSMakePoint(p.x, p.y), NSMakePoint(c.x, c.y)) < radius * hit_scale) return keys[i].bit;
     }
     float pillY = DM_TP_PILL_Y * u;
     float minusX = w * .5f - DM_TP_PILL_DX * u, plusX = w * .5f + DM_TP_PILL_DX * u;
@@ -470,7 +473,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     dm_touchpad_point c = [self faceCenter]; float u = self.u;
     if (_active) for (int b=0;b<4;b++) {
         dm_touchpad_point button = [self facePosition:b];
-        if (dm_botw_button_badge_contains(CGPointMake(p.x,p.y),CGPointMake(button.x,button.y),self.faceRadius)) return 1ull << b;
+        if (_touchLayout.badges && dm_botw_button_badge_contains(CGPointMake(p.x,p.y),CGPointMake(button.x,button.y),self.faceRadius)) return 1ull << b;
     }
     return dm_touchpad_face_buttons(p.x, p.y, c.x, c.y, self.faceGap, self.faceRadius * 1.25f);
 }
@@ -506,6 +509,13 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     dm_touch t = {0, fminf(fmaxf((p.x-r[0])/r[2], 0), .999f), fminf(fmaxf((p.y-r[1])/r[3], 0), .999f)};
     dm_touch_set(&t, 1);
 }
+- (void)beginRuneSelection:(NSTimer *)timer {
+    if (timer != _runeHoldTimer) return;
+    _runeHoldTimer = nil;
+    if (!_hasTouch || _owner != PREVIEW_RUNE || !_active || !dm_botw_touch_controls_visible()) return;
+    _runeSelecting = YES; _held |= DM_BTN_UP;
+    [self publishButtons];
+}
 - (void)mouseDown:(NSEvent *)e {
     dm_touchpad_point p = [self topPoint:e];
     _down = _last = NSMakePoint(p.x, p.y); _hasTouch = YES; _held = _cancelPending; _owner = PREVIEW_NONE;
@@ -522,7 +532,13 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     int b = [self buttonAtTop:p];
     // The L hit circle slightly overlaps the shield stick's grab radius; keep
     // the explicit L button's touch-down ownership ahead of shield capture.
-    if (_active && b == 6) { _lookTapPending = NO; _owner = PREVIEW_BUTTON; _button = b; _held |= 1ull << b; [self publishButtons]; return; }
+    if (_active && b == 6) {
+        _lookTapPending = NO; _owner = PREVIEW_RUNE; _runeSelecting = NO;
+        // Keep L silent until release so a hold opens the rune selector without activating a rune.
+        _runeHoldTimer = [NSTimer timerWithTimeInterval:DM_TP_BOTW_RUNE_HOLD_SECONDS target:self selector:@selector(beginRuneSelection:) userInfo:nil repeats:NO];
+        [NSRunLoop.mainRunLoop addTimer:_runeHoldTimer forMode:NSRunLoopCommonModes];
+        [self publishButtons]; return;
+    }
     if (_active) {
         dm_touchpad_point sh = [self shieldHome];
         if (hypotf(p.x-sh.x,p.y-sh.y) <= self.shieldRadius*DM_TP_STICK_GRAB) {
@@ -575,6 +591,11 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
 - (void)mouseUp:(NSEvent *)e {
     if (!_hasTouch) return;
     dm_touchpad_point release = [self topPoint:e];
+    if (_owner == PREVIEW_RUNE) {
+        [_runeHoldTimer invalidate]; _runeHoldTimer = nil;
+        if (!_runeSelecting) { g_preview_buttons |= DM_BTN_L; push(); g_preview_buttons &= ~DM_BTN_L; push(); }
+        _runeSelecting = NO;
+    }
     if (_owner == PREVIEW_MENU && _menuPointerActive) {
         [self sendBotwMenuPointer:DM_BOTW_MENU_END point:release];
         _menuPointerActive=NO; _owner=PREVIEW_NONE; _hasTouch=NO; _held=_cancelPending;
@@ -623,6 +644,10 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     g_preview_lx = g_preview_ly = 0; g_preview_buttons = _cancelPending; push(); [self setNeedsDisplay:YES];
 }
 - (void)cancelInput {
+    uint64_t cancelMask = DM_BTN_LS | DM_BTN_RS | DM_BTN_MINUS;
+    if (_owner == PREVIEW_RUNE) cancelMask |= DM_BTN_L | DM_BTN_UP;
+    [_runeHoldTimer invalidate]; _runeHoldTimer = nil;
+    _runeSelecting = NO;
     dm_touchpad_point noPoint = {0};
     if (_menuPointerActive) [self sendBotwMenuPointer:DM_BOTW_MENU_CANCEL point:noPoint];
     _menuPointerActive = NO;
@@ -632,7 +657,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     _lookTapPending = NO; _stickTapEnd = 0; _stickTapGap = INFINITY; _stickUsed = NO;
     _owner = PREVIEW_NONE; _hasTouch = NO; _held = 0; _cancelPending = _cancelLatched = 0;
     g_preview_lx = g_preview_ly = 0; g_preview_buttons = 0;
-    dm_input_cancel_virtual_latch(DM_BTN_LS | DM_BTN_RS | DM_BTN_MINUS); push();
+    dm_input_cancel_virtual_latch(cancelMask); push();
 }
 - (void)botwTouchActionChanged {
     if (!_active) return;
@@ -643,7 +668,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
 }
 - (void)drawCircle:(NSPoint)c radius:(float)r fill:(float)alpha label:(NSString *)label {
     NSRect rect = NSMakeRect(c.x-r, c.y-r, 2*r, 2*r);
-    [[NSColor colorWithWhite:alpha >= .45 ? .35 : DM_BOTW_BUTTON_GRAY alpha:DM_BOTW_BUTTON_ALPHA] setFill];
+    [[NSColor colorWithWhite:alpha >= .45 ? .40 : DM_BOTW_BUTTON_GRAY alpha:DM_BOTW_BUTTON_ALPHA] setFill];
     [[NSColor colorWithWhite:DM_BOTW_STROKE_GRAY alpha:DM_BOTW_STROKE_ALPHA] setStroke];
     preview_fill_outlined_circle(rect, 1.5*DM_BOTW_STROKE_WIDTH_SCALE);
     if (label.length) {
@@ -656,13 +681,14 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
         _buttonIcons[button] = [[NSImage alloc] initWithContentsOfFile:dm_botw_touch_button_icon_path(button)];
     [_buttonIcons[button] drawInRect:NSMakeRect(center.x-radius*.5,center.y-radius*.5,radius,radius)
         fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
+    if (!_touchLayout.badges) return;
     CGFloat h=self.bounds.size.height;
     CGRect top=dm_botw_button_badge_rect(CGPointMake(center.x,h-center.y),radius);
     NSRect badge=NSMakeRect(top.origin.x,h-CGRectGetMaxY(top),top.size.width,top.size.height);
     [[NSColor colorWithWhite:.20 alpha:1] setFill];
     NSColor *gold=[NSColor colorWithRed:.94 green:.88 blue:.70 alpha:1]; [gold setStroke];
     preview_fill_outlined_circle(badge,1.15*self.u*DM_BOTW_STROKE_WIDTH_SCALE);
-    static NSString *const names[]={@"A",@"B",@"X",@"Y",nil,nil,nil,@"R",nil,@"ZR"};
+    static NSString *const names[]={@"A",@"B",@"X",@"Y",nil,nil,@"L",@"R",nil,@"ZR"};
     NSDictionary *attrs=@{NSFontAttributeName:[NSFont systemFontOfSize:9*self.u weight:NSFontWeightSemibold],NSForegroundColorAttributeName:gold};
     NSSize size=[names[button] sizeWithAttributes:attrs];
     [names[button] drawAtPoint:NSMakePoint(NSMidX(badge)-size.width*.5,NSMidY(badge)-size.height*.5) withAttributes:attrs];
@@ -702,14 +728,15 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
         if (_active && (keys[i].bit == 9 || keys[i].bit == 7))
             c = [self layoutCenter:keys[i].bit];
         if (_active && keys[i].bit == 6) {
-            NSPoint center=preview_from_top(c.x,c.y,h); float radius=keys[i].r*u*[self layoutScale:keys[i].bit];
+            NSPoint center=preview_from_top(c.x,c.y,h); float radius=_active ? [self layoutRect:keys[i].bit].width*.5f : keys[i].r*u;
             NSRect button=NSMakeRect(center.x-radius,center.y-radius,2*radius,2*radius);
             [[NSColor colorWithWhite:DM_BOTW_BUTTON_GRAY alpha:DM_BOTW_BUTTON_ALPHA] setFill];
             [[NSColor colorWithWhite:DM_BOTW_STROKE_GRAY alpha:DM_BOTW_STROKE_ALPHA] setStroke];
-            preview_fill_outlined_circle(button,2*u*DM_BOTW_STROKE_WIDTH_SCALE);
+            preview_fill_outlined_circle(button,1.5*DM_BOTW_STROKE_WIDTH_SCALE);
             if (_runeIconValid) {
                 NSRect imageRect=NSMakeRect(center.x-.68*radius,center.y-.68*radius,1.36*radius,1.36*radius);
                 [_runeIcon drawInRect:imageRect fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
+                if (_touchLayout.badges) {
                 float br=.30f*radius; NSPoint badge=NSMakePoint(center.x+M_SQRT1_2*radius,center.y+M_SQRT1_2*radius);
                 NSRect badgeRect=NSMakeRect(badge.x-br,badge.y-br,2*br,2*br);
                 [[NSColor colorWithWhite:.20 alpha:1] setFill];
@@ -718,12 +745,12 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
                 NSDictionary *badgeAttrs=@{NSFontAttributeName:[NSFont systemFontOfSize:9*u weight:NSFontWeightSemibold],NSForegroundColorAttributeName:[NSColor colorWithRed:.94 green:.88 blue:.70 alpha:1]};
                 NSSize badgeLabel=[keys[i].name sizeWithAttributes:badgeAttrs];
                 [keys[i].name drawAtPoint:NSMakePoint(badge.x-badgeLabel.width/2,badge.y-badgeLabel.height/2) withAttributes:badgeAttrs];
+                }
             } else {
-                NSDictionary *a=@{NSFontAttributeName:[NSFont systemFontOfSize:11*u weight:NSFontWeightMedium],NSForegroundColorAttributeName:[NSColor colorWithWhite:1 alpha:.75]};
-                NSSize s=[keys[i].name sizeWithAttributes:a]; [keys[i].name drawAtPoint:NSMakePoint(center.x-s.width/2,center.y-s.height/2) withAttributes:a];
+                [self drawButtonIcon:6 center:center radius:radius];
             }
         } else {
-            NSPoint center=preview_from_top(c.x,c.y,h); float radius=keys[i].r*u*[self layoutScale:keys[i].bit];
+            NSPoint center=preview_from_top(c.x,c.y,h); float radius=_active ? [self layoutRect:keys[i].bit].width*.5f : keys[i].r*u;
             BOOL icon = keys[i].bit == 7 || keys[i].bit == 9;
             [self drawCircle:center radius:radius fill:(_held & (1ull<<keys[i].bit))?.48:.15 label:icon ? @"" : keys[i].name];
             if (icon) [self drawButtonIcon:keys[i].bit center:center radius:radius];
@@ -735,8 +762,9 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
             NSBezierPath *ring=[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(boundary.x-cancelRadius,boundary.y-cancelRadius,2*cancelRadius,2*cancelRadius)];
             ring.lineWidth=1.5*u; [ring stroke];
             NSDictionary *cueAttrs=@{NSFontAttributeName:[NSFont systemFontOfSize:9*u weight:NSFontWeightMedium],NSForegroundColorAttributeName:[NSColor colorWithRed:.94 green:.88 blue:.70 alpha:.9]};
-            NSSize cueSize=[@"Cancel" sizeWithAttributes:cueAttrs];
-            [@"Cancel" drawAtPoint:NSMakePoint(boundary.x-cueSize.width/2,boundary.y+cancelRadius+2*u) withAttributes:cueAttrs];
+            NSString *cue=NSLocalizedString(@"Cancel", nil);
+            NSSize cueSize=[cue sizeWithAttributes:cueAttrs];
+            [cue drawAtPoint:NSMakePoint(boundary.x-cueSize.width/2,boundary.y+cancelRadius+2*u) withAttributes:cueAttrs];
         }
     }
     if (_active) {
@@ -768,7 +796,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
         }
         float x=w*.5f+(b==10?1:-1)*DM_TP_PILL_DX*u;
         NSRect r=NSMakeRect(x-DM_TP_PILL_W*u*.5f,h-py-DM_TP_PILL_H*u*.5f,DM_TP_PILL_W*u,DM_TP_PILL_H*u);
-        [[NSColor colorWithWhite:(_held&(1ull<<b))?.35:DM_BOTW_BUTTON_GRAY alpha:DM_BOTW_BUTTON_ALPHA] setFill]; [[NSColor colorWithWhite:DM_BOTW_STROKE_GRAY alpha:DM_BOTW_STROKE_ALPHA] setStroke];
+        [[NSColor colorWithWhite:(_held&(1ull<<b))?.40:DM_BOTW_BUTTON_GRAY alpha:DM_BOTW_BUTTON_ALPHA] setFill]; [[NSColor colorWithWhite:DM_BOTW_STROKE_GRAY alpha:DM_BOTW_STROKE_ALPHA] setStroke];
         NSBezierPath *p=[NSBezierPath bezierPathWithRoundedRect:r xRadius:7 yRadius:7]; [p fill]; [p stroke];
         NSString *name=b==10?@"+":@"−"; NSDictionary *a=@{NSFontAttributeName:[NSFont systemFontOfSize:11],NSForegroundColorAttributeName:[NSColor colorWithWhite:1 alpha:.75]};
         NSSize s=[name sizeWithAttributes:a]; [name drawAtPoint:NSMakePoint(x-s.width/2,h-py-s.height/2) withAttributes:a];

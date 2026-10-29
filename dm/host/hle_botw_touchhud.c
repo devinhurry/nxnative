@@ -22,15 +22,9 @@ static struct {
     float x, y, home_x, home_y, map_dx, map_dy, map_rect[4];
     int cut_bounds_valid, sibling_bounds_valid, sensor_bounds_valid;
     float cut_right, cut_top;
-    int rune_crop_valid;
-    float rune_crop[4];
-    int rune_guide_known, rune_exclusion_valid;
-    float rune_exclusion[4];
+    int rune_valid;
     uint64_t rune_token;
-    uintptr_t rune_pane;
-    uintptr_t rune_chain[10];
-    uintptr_t rune_exclusion_root;
-    uintptr_t rune_guide_chain[7];
+    uintptr_t rune_pane, rune_chain[10];
 } g_touchhud;
 static dm_botw_rune_icon_state g_rune_icon;
 static _Atomic int g_touchhud_active;
@@ -40,6 +34,7 @@ static _Atomic int g_touchhud_map_collapsed;
 static _Atomic(uintptr_t) g_touchhud_map_root;
 static module_t *g_touchhud_main;
 static dm_botw_touch_layout g_touch_layout;
+static _Thread_local int g_rune_drawing;
 static uint8_t *pane_parent(uint8_t *pane);
 static int visible_to_root(uint8_t *pane);
 static int transform_bounds(uint8_t *pane, float *left, float *bottom, float *right, float *top);
@@ -84,17 +79,11 @@ int dm_botw_rune_icon_snapshot(dm_botw_rune_icon_state *out) {
     return 1;
 }
 
-int dm_botw_rune_icon_crop(float rect[4], float exclusion[4], uint64_t *token) {
-    if (!rect || !exclusion || !token) return 0;
+int dm_botw_rune_icon_capture_token(uint64_t *token) {
+    if (!token) return 0;
     pthread_mutex_lock(&g_touchhud_mu);
-    int valid = g_touchhud.active && g_touchhud.rune_crop_valid && g_touchhud.rune_guide_known &&
-                g_touchhud.rune_chain[9] && g_touchhud.rune_exclusion_root == g_touchhud.rune_chain[9];
-    if (valid) {
-        memcpy(rect, g_touchhud.rune_crop, sizeof g_touchhud.rune_crop);
-        if (g_touchhud.rune_exclusion_valid) memcpy(exclusion, g_touchhud.rune_exclusion, sizeof g_touchhud.rune_exclusion);
-        else memset(exclusion, 0, sizeof g_touchhud.rune_exclusion);
-        *token = g_touchhud.rune_token;
-    }
+    int valid = g_touchhud.active && g_touchhud.rune_valid;
+    if (valid) *token = g_touchhud.rune_token;
     pthread_mutex_unlock(&g_touchhud_mu);
     return valid;
 }
@@ -102,15 +91,11 @@ int dm_botw_rune_icon_crop(float rect[4], float exclusion[4], uint64_t *token) {
 void dm_botw_rune_icon_clear(void) {
     int changed = 0;
     pthread_mutex_lock(&g_touchhud_mu);
-    if (g_touchhud.rune_crop_valid || g_touchhud.rune_guide_known || g_touchhud.rune_exclusion_valid ||
-        g_rune_icon.valid || g_touchhud.rune_pane) {
-        g_touchhud.rune_crop_valid = 0;
-        g_touchhud.rune_guide_known = g_touchhud.rune_exclusion_valid = 0;
-        g_touchhud.rune_exclusion_root = 0;
+    if (g_touchhud.rune_valid || g_rune_icon.valid || g_touchhud.rune_pane) {
+        g_touchhud.rune_valid = 0;
         g_touchhud.rune_token++;
         g_touchhud.rune_pane = 0;
         memset(g_touchhud.rune_chain, 0, sizeof g_touchhud.rune_chain);
-        memset(g_touchhud.rune_guide_chain, 0, sizeof g_touchhud.rune_guide_chain);
         if (g_rune_icon.valid) g_rune_icon.generation++;
         g_rune_icon.valid = 0;
         g_rune_icon.width = g_rune_icon.height = g_rune_icon.stride = 0;
@@ -134,10 +119,12 @@ void dm_botw_rune_icon_publish(uint64_t token, const uint8_t *rgba,
                                uint32_t width, uint32_t height, uint32_t stride) {
     if (!rgba || width != DM_BOTW_RUNE_ICON_SIDE || height != DM_BOTW_RUNE_ICON_SIDE ||
         stride != DM_BOTW_RUNE_ICON_STRIDE) return;
-    int changed = 0;
+    int changed = 0, visible = 0;
+    for (size_t i = 3; i < sizeof g_rune_icon.rgba; i += 4) if (rgba[i]) { visible = 1; break; }
     pthread_mutex_lock(&g_touchhud_mu);
-    if (g_touchhud.active && g_touchhud.rune_crop_valid && token == g_touchhud.rune_token) {
-        if (!g_rune_icon.valid || memcmp(g_rune_icon.rgba, rgba, sizeof g_rune_icon.rgba)) {
+    if (g_touchhud.active && g_touchhud.rune_valid && token == g_touchhud.rune_token) {
+        if (!visible) changed = rune_icon_clear_pixels_locked();
+        else if (!g_rune_icon.valid || memcmp(g_rune_icon.rgba, rgba, sizeof g_rune_icon.rgba)) {
             memcpy(g_rune_icon.rgba, rgba, sizeof g_rune_icon.rgba);
             g_rune_icon.valid = 1;
             g_rune_icon.width = width;
@@ -162,26 +149,6 @@ void dm_botw_rune_icon_premultiply_rgba(uint8_t *rgba, uint32_t width,
             p[0] = (uint8_t)((p[0] * alpha + 127u) / 255u);
             p[1] = (uint8_t)((p[1] * alpha + 127u) / 255u);
             p[2] = (uint8_t)((p[2] * alpha + 127u) / 255u);
-        }
-    }
-}
-
-void dm_botw_rune_icon_mask_guide(uint8_t *rgba, uint32_t width, uint32_t height,
-                                  uint32_t stride, const float crop[4],
-                                  const float exclusion[4], uint32_t image_x,
-                                  uint32_t image_y, uint32_t image_width,
-                                  uint32_t image_height) {
-    if (!rgba || !crop || !exclusion || !image_width || !image_height ||
-        (uint64_t)stride < (uint64_t)width * 4u || image_x > width || image_y > height ||
-        image_width > width - image_x || image_height > height - image_y) return;
-    for (uint32_t y = 0; y < image_height; y++) {
-        double canvas_y = crop[1] + ((double)y + .5) * crop[3] / image_height;
-        if (canvas_y < exclusion[1] || canvas_y >= exclusion[1] + exclusion[3]) continue;
-        uint8_t *row = rgba + (size_t)(image_y + y) * stride + (size_t)image_x * 4;
-        for (uint32_t x = 0; x < image_width; x++) {
-            double canvas_x = crop[0] + ((double)x + .5) * crop[2] / image_width;
-            if (canvas_x >= exclusion[0] && canvas_x < exclusion[0] + exclusion[2])
-                memset(row + (size_t)x * 4, 0, 4);
         }
     }
 }
@@ -265,23 +232,11 @@ static const char *const g_rune_chain_names[10] = {
     "P_Icon_00", "N_PicLoad_00", "Pa_IconNow_00", "N_All_00", "Pa_MainU_00",
     "N_MainU_00", "N_Pos_00", "N_MainAll_00", "N_All_00", "RootPane"
 };
-static const char *const g_rune_guide_chain_names[7] = {
-    "P_GuideIcon_00", "Pa_IconCross_00", "N_MainGuide_00", "N_Pos_00",
-    "N_MainAll_00", "N_All_00", "RootPane"
-};
-static int rune_guide_chain_collect(uint8_t *pane, uintptr_t chain[7], int require_visible) {
-    uint8_t *p = pane;
-    for (size_t i = 0; i < 7; i++) {
-        if (!pane_named(p, g_rune_guide_chain_names[i]) || (require_visible && !pane_visible(p))) return 0;
-        chain[i] = (uintptr_t)p;
-        if (i + 1 < 7) p = pane_parent(p);
-    }
-    return 1;
-}
 static int rune_chain_collect(uint8_t *pane, uintptr_t chain[10], int require_visible) {
     uint8_t *p = pane;
     for (size_t i = 0; i < 10; i++) {
-        if (!pane_named(p, g_rune_chain_names[i]) || (require_visible && !pane_visible(p))) return 0;
+        if (!pane_named(p, g_rune_chain_names[i]) ||
+            (require_visible && (!pane_visible(p) || !p[BOTW_TOUCH_FLAGS + 1]))) return 0;
         chain[i] = (uintptr_t)p;
         if (i + 1 < 10) p = pane_parent(p);
     }
@@ -290,9 +245,15 @@ static int rune_chain_collect(uint8_t *pane, uintptr_t chain[10], int require_vi
 static int main_shortcut_rune_pane(uint8_t *pane) {
     uintptr_t chain[10]; return rune_chain_collect(pane, chain, 0);
 }
-static int main_shortcut_rune_guide_pane(uint8_t *pane) {
-    uintptr_t chain[7]; return rune_guide_chain_collect(pane, chain, 0);
+void dm_botw_rune_icon_draw_begin(uint8_t *pane) {
+    uintptr_t chain[10];
+    g_rune_drawing = atomic_load_explicit(&g_touchhud_active, memory_order_acquire) &&
+                     rune_chain_collect(pane, chain, 1);
 }
+void dm_botw_rune_icon_draw_end(void) { g_rune_drawing = 0; }
+int dm_botw_rune_icon_drawing(void) { return g_rune_drawing; }
+static void rune_draw_begin(const uint64_t *regs) { dm_botw_rune_icon_draw_begin((uint8_t *)(uintptr_t)regs[21]); }
+static void rune_draw_end(const uint64_t *regs) { (void)regs; dm_botw_rune_icon_draw_end(); }
 static int rune_chain_entry_hidden(uint8_t *pane) {
     int member = 0;
     pthread_mutex_lock(&g_touchhud_mu);
@@ -300,94 +261,7 @@ static int rune_chain_entry_hidden(uint8_t *pane) {
         member = 1; break;
     }
     pthread_mutex_unlock(&g_touchhud_mu);
-    return member && !pane_visible(pane);
-}
-static int rune_guide_chain_entry_hidden(uint8_t *pane) {
-    int member = 0;
-    pthread_mutex_lock(&g_touchhud_mu);
-    for (size_t i = 0; i < 7; i++) if (g_touchhud.rune_guide_chain[i] && g_touchhud.rune_guide_chain[i] == (uintptr_t)pane) {
-        member = 1; break;
-    }
-    pthread_mutex_unlock(&g_touchhud_mu);
-    return member && !pane_visible(pane);
-}
-static void rune_guide_record(uint8_t *pane) {
-    uintptr_t chain[7] = {0};
-    int chain_valid = atomic_load_explicit(&g_touchhud_active, memory_order_acquire) &&
-                      rune_guide_chain_collect(pane, chain, 0);
-    int visible = chain_valid;
-    int hidden = 0;
-    for (size_t i = 0; visible && i < 7; i++) {
-        if (!pane_visible((uint8_t *)chain[i])) { visible = 0; hidden = 1; }
-    }
-    float rect[4] = {0};
-    if (visible) {
-        float left, bottom, right, top;
-        visible = transform_bounds(pane, &left, &bottom, &right, &top);
-        if (visible) {
-            rect[0] = left + 640.0f;
-            rect[1] = 360.0f - top;
-            rect[2] = right - left;
-            rect[3] = top - bottom;
-            visible = isfinite(rect[0]) && isfinite(rect[1]) && isfinite(rect[2]) && isfinite(rect[3]) &&
-                      rect[2] > 0 && rect[3] > 0;
-        }
-    } else if (chain_valid && !hidden) {
-        // A visible guide with unusable geometry cannot safely describe an
-        // exclusion region, so wait for its next valid matrix calculation.
-        chain_valid = 0;
-    }
-    pthread_mutex_lock(&g_touchhud_mu);
-    if (visible) {
-        int chain_changed = memcmp(g_touchhud.rune_guide_chain, chain, sizeof chain) != 0;
-        int root_changed = g_touchhud.rune_exclusion_root != chain[6];
-        int was_known = g_touchhud.rune_guide_known;
-        int was_excluded = g_touchhud.rune_exclusion_valid;
-        g_touchhud.rune_exclusion_root = chain[6];
-        g_touchhud.rune_guide_known = 1;
-        int intersects = g_touchhud.rune_crop_valid && g_touchhud.rune_chain[9] == chain[6] &&
-                         rect[0] < g_touchhud.rune_crop[0] + g_touchhud.rune_crop[2] &&
-                         rect[0] + rect[2] > g_touchhud.rune_crop[0] &&
-                         rect[1] < g_touchhud.rune_crop[1] + g_touchhud.rune_crop[3] &&
-                         rect[1] + rect[3] > g_touchhud.rune_crop[1];
-        int changed = root_changed || !was_known || was_excluded != intersects;
-        g_touchhud.rune_exclusion_valid = intersects;
-        if (intersects) memcpy(g_touchhud.rune_exclusion, rect, sizeof rect);
-        memcpy(g_touchhud.rune_guide_chain, chain, sizeof chain);
-        if (changed || chain_changed) {
-            g_touchhud.rune_token++;
-        }
-    } else {
-        int was_known = g_touchhud.rune_guide_known;
-        int was_excluded = g_touchhud.rune_exclusion_valid;
-        uintptr_t root = chain_valid ? chain[6] : 0;
-        memset(g_touchhud.rune_guide_chain, 0, sizeof g_touchhud.rune_guide_chain);
-        if (hidden && root) {
-            memcpy(g_touchhud.rune_guide_chain, chain, sizeof chain);
-            g_touchhud.rune_exclusion_root = root;
-            g_touchhud.rune_guide_known = 1;
-        } else {
-            g_touchhud.rune_guide_known = 0;
-            g_touchhud.rune_exclusion_root = 0;
-        }
-        g_touchhud.rune_exclusion_valid = 0;
-        if (was_excluded || (was_known && !g_touchhud.rune_guide_known)) {
-            g_touchhud.rune_token++;
-        }
-    }
-    pthread_mutex_unlock(&g_touchhud_mu);
-}
-static void rune_guide_hide_entry(uint8_t *pane) {
-    int member = 0;
-    pthread_mutex_lock(&g_touchhud_mu);
-    for (size_t i = 0; i < 7; i++) if (g_touchhud.rune_guide_chain[i] == (uintptr_t)pane) {
-        member = 1; break;
-    }
-    if (member && g_touchhud.rune_exclusion_valid) {
-        g_touchhud.rune_exclusion_valid = 0;
-        g_touchhud.rune_token++;
-    }
-    pthread_mutex_unlock(&g_touchhud_mu);
+    return member && (!pane_visible(pane) || !pane[BOTW_TOUCH_FLAGS + 1]);
 }
 static void rune_icon_record(uint8_t *pane) {
     uintptr_t chain[10];
@@ -396,39 +270,19 @@ static void rune_icon_record(uint8_t *pane) {
         dm_botw_rune_icon_clear();
         return;
     }
-    float left, bottom, right, top;
-    if (!transform_bounds(pane, &left, &bottom, &right, &top)) {
-        dm_botw_rune_icon_clear();
-        return;
-    }
-    float rect[4] = {left + 640.0f, 360.0f - top, right - left, top - bottom};
-    int identity_changed = 0, bounds_changed = 0, notify = 0;
+    int notify = 0;
     pthread_mutex_lock(&g_touchhud_mu);
-    identity_changed = g_touchhud.rune_pane != (uintptr_t)pane || !g_touchhud.rune_crop_valid;
-    bounds_changed = !g_touchhud.rune_crop_valid ||
-        fabsf(g_touchhud.rune_crop[0] - rect[0]) > .25f || fabsf(g_touchhud.rune_crop[1] - rect[1]) > .25f ||
-        fabsf(g_touchhud.rune_crop[2] - rect[2]) > .25f || fabsf(g_touchhud.rune_crop[3] - rect[3]) > .25f;
-    if (bounds_changed) {
-        memcpy(g_touchhud.rune_crop, rect, sizeof rect);
-        g_touchhud.rune_crop_valid = 1;
-    }
-    if (identity_changed) {
-        // Tokens guard native pane lifetime/visibility, not its animated
-        // matrix. The crop is refreshed every Calculate; bumping the token on
-        // each small animation step would reject every asynchronous GPU copy.
+    if (g_touchhud.rune_pane != (uintptr_t)pane || !g_touchhud.rune_valid) {
+        // Lifetime/visibility owns the token; layout animations do not affect
+        // the isolated source texture and must not reject an in-flight copy.
+        g_touchhud.rune_valid = 1;
         g_touchhud.rune_token++;
         g_touchhud.rune_pane = (uintptr_t)pane;
         memcpy(g_touchhud.rune_chain, chain, sizeof chain);
-        if (g_touchhud.rune_exclusion_root != chain[9]) {
-            g_touchhud.rune_guide_known = 0;
-            g_touchhud.rune_exclusion_valid = 0;
-            g_touchhud.rune_exclusion_root = 0;
-            memset(g_touchhud.rune_guide_chain, 0, sizeof g_touchhud.rune_guide_chain);
-        }
         notify = rune_icon_clear_pixels_locked();
     }
     pthread_mutex_unlock(&g_touchhud_mu);
-    if (identity_changed && notify) front_botw_rune_icon_changed();
+    if (notify) front_botw_rune_icon_changed();
 }
 
 static void invalidate_map_rect(void) {
@@ -530,8 +384,6 @@ static void botw_touchhud_pane(const uint64_t *regs) {
     // the duplicate from the live pre-calculate callback while the chain is safe.
     if (atomic_load_explicit(&g_touchhud_active, memory_order_acquire) && rune_chain_entry_hidden(pane))
         dm_botw_rune_icon_clear();
-    if (atomic_load_explicit(&g_touchhud_active, memory_order_acquire) && rune_guide_chain_entry_hidden(pane))
-        rune_guide_hide_entry(pane);
     if (pane_named(pane, "RootPane") && (uintptr_t)pane == atomic_load(&g_touchhud_map_root) &&
         !pane_visible(pane)) {
         atomic_store_explicit(&g_touchhud_map_collapsed, 0, memory_order_release);
@@ -604,10 +456,6 @@ static void botw_touchhud_matrix(const uint64_t *regs) {
     int active = atomic_load_explicit(&g_touchhud_active, memory_order_acquire);
     if (active && main_shortcut_rune_pane(pane)) {
         rune_icon_record(pane);
-        return;
-    }
-    if (active && main_shortcut_rune_guide_pane(pane)) {
-        rune_guide_record(pane);
         return;
     }
     int collapsed = atomic_load_explicit(&g_touchhud_map_collapsed, memory_order_acquire);
@@ -694,6 +542,12 @@ void dm_botw_touch_hud_install(void) {
         die("[RED] BOTW touch HUD: pane calculation gates missing; rewrite main with the current patches.py");
     gate_obs_read_set(OBS_BOTW_TOUCH_PANE, botw_touchhud_pane);
     gate_obs_read_set(OBS_BOTW_TOUCH_MATRIX, botw_touchhud_matrix);
+    if (!dm_aspect_native()) {
+        if (!gate_obs_present(OBS_BOTW_UI_DRAW) || !gate_obs_present(OBS_BOTW_UI_DRAW_END))
+            die("[RED] BOTW touch HUD: rune draw gates missing; rewrite main with the current patches.py");
+        gate_obs_read_set(OBS_BOTW_UI_DRAW, rune_draw_begin);
+        gate_obs_read_set(OBS_BOTW_UI_DRAW_END, rune_draw_end);
+    }
     atomic_store_explicit(&g_touchhud_available, touch, memory_order_release);
     if (touch) front_botw_touch_hud_mode_changed();
     LOG("BOTW UI: pane probes installed for build %s (touch HUD %s; native aspect %s)",

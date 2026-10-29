@@ -5,9 +5,9 @@
 #include <math.h>
 #include <stdlib.h>
 
-#define DM_BOTW_BUTTON_GRAY .30
+#define DM_BOTW_BUTTON_GRAY .35
 #define DM_BOTW_BUTTON_ALPHA .20
-#define DM_BOTW_STROKE_GRAY .47
+#define DM_BOTW_STROKE_GRAY .52
 #define DM_BOTW_STROKE_ALPHA .40
 #define DM_BOTW_STROKE_WIDTH_SCALE 1.2
 #define DM_BOTW_STICK_RING_WIDTH (1.5 * DM_BOTW_STROKE_WIDTH_SCALE)
@@ -47,7 +47,7 @@ static inline CGPathRef dm_botw_outer_border_path(CGPathRef fill, CGFloat width)
 
 static inline NSString *dm_botw_touch_button_icon_path(int button) {
     static NSString *const files[] = {@"touch_a.png", @"touch_b.png", @"touch_x.png", @"touch_y.png",
-        nil, nil, nil, @"touch_r.png", nil, @"touch_zr.png"};
+        nil, nil, @"touch_l.png", @"touch_r.png", nil, @"touch_zr.png"};
     if (button < 0 || button >= sizeof files / sizeof *files || !files[button]) return nil;
     const char *map = getenv("DM_NVN_SHMAP");
     NSString *folder = map && *map ? [[NSString stringWithUTF8String:map] stringByDeletingLastPathComponent] :

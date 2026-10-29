@@ -5,11 +5,10 @@ __attribute__((weak)) _Atomic uint64_t dm_present_ns;   // when the last present
 __attribute__((weak)) int dm_guest_as_contains(uintptr_t address) { (void)address; return 0; }   // no guest address space (hle_bigstack.c)
 // BOTW touch-HUD hooks are inert in graphics unit tests unless a test supplies
 // its own definitions; linking nvn_mtl.m still compiles these gated paths.
+__attribute__((weak)) int dm_botw_rune_icon_drawing(void) { return 0; }
 __attribute__((weak)) int dm_botw_touch_hud_active(void) { return 0; }
 __attribute__((weak)) int dm_aspect_ui_background_drawing(void) { return 0; }
-__attribute__((weak)) int dm_botw_rune_icon_crop(float rect[4], float exclusion[4], uint64_t *token) {
-    (void)rect; (void)exclusion; (void)token; return 0;
-}
+__attribute__((weak)) int dm_botw_rune_icon_capture_token(uint64_t *token) { (void)token; return 0; }
 __attribute__((weak)) void dm_botw_rune_icon_publish(uint64_t token, const uint8_t *rgba,
                                                       uint32_t width, uint32_t height, uint32_t stride) {
     (void)token; (void)rgba; (void)width; (void)height; (void)stride;
@@ -18,12 +17,5 @@ __attribute__((weak)) void dm_botw_rune_icon_premultiply_rgba(uint8_t *rgba, uin
                                                                uint32_t height, uint32_t stride) {
     (void)rgba; (void)width; (void)height; (void)stride;
 }
-__attribute__((weak)) void dm_botw_rune_icon_mask_guide(uint8_t *rgba, uint32_t width,
-                                                         uint32_t height, uint32_t stride,
-                                                         const float crop[4], const float exclusion[4],
-                                                         uint32_t image_x, uint32_t image_y,
-                                                         uint32_t image_width, uint32_t image_height) {
-    (void)rgba; (void)width; (void)height; (void)stride; (void)crop; (void)exclusion;
-    (void)image_x; (void)image_y; (void)image_width; (void)image_height;
-}
+
 __attribute__((weak)) void dm_vi_layer_crop(int c[4]) { c[0] = c[1] = c[2] = c[3] = 0; }   // no vi layer crop (hle_vi.c), read by hle_nvn's present

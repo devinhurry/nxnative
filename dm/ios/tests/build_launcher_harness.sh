@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 WORK="$1"
 APP="$WORK/BOTWLauncherTest.app"
 mkdir -p "$APP/dm" "$WORK/metadata"
+cp -R "$ROOT/dm/ios/Sources/"*.lproj "$APP/"
 cat > "$APP/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

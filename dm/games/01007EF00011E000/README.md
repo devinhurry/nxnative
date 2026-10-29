@@ -60,14 +60,14 @@ directions; the Mac map backend zoomed in/out through the same host pinch API.
 Whole-window dialogue taps, inventory preview rotation/category arrows/recipe
 Close, map sensor/stamps and Game Over retry also passed on the Mac. The
 merged graphics runtime uses the matching 1.9.0 shader package. BOTW touch
-artwork overrides the ordinary pad style: no button shadows, 30% gray at 20%
-opacity and a 47% gray outline, with 20% thicker strokes. A/B/X/Y/R/ZR are
+artwork overrides the ordinary pad style: no button shadows, 35% gray at 20%
+opacity and a 52% gray outline, with 20% thicker strokes. A/B/X/Y/R/ZR are
 round and use the six supplied 240-pixel icons at half the button diameter.
 Every action label sits in a 20% gray, gold-outlined badge on the upper-right
 edge, half overlapping the main circle. The outer half of each badge presses
 the same button; face-button sliding remains available.
 Mac preview and UIKit rendering passed; controller/non-BOTW UIKit checks
-restore the ordinary artwork. The six `touch_*.png` assets are packaged beside the profile
+restore the ordinary artwork. The seven `touch_*.png` assets are packaged beside the profile
 tables. ZL shows a shield and four directional arrows without an idle background;
 holding reveals an unfilled ring and dragging moves a direction arrow just outside its
 perimeter while the center stays at touch-down. Mac and UIKit share the vector
@@ -78,7 +78,7 @@ stick gesture that leaves its configured deadzone resets the L3 tap sequence,
 even if it returns to its origin. Holds and release-only movement cannot seed
 a double tap. `inventory-touch-20261025/run36-goddess-buttons/ios/` verifies
 these paths, all six round icon buttons, palette values and ordinary-mode
-restoration with zero UIKit failures. Mac packaging tests cover all six assets.
+restoration with zero UIKit failures. Mac packaging tests cover all seven assets, including the default L icon.
 `inventory-touch-20261025/run23/ios-shield/` records the rendered idle/drag states
 and passing input/release checks. The movement stick now rests 10 frontend points
 up/right of its ordinary home. Its idle artwork is a white circle with four inner
@@ -95,7 +95,30 @@ of the circle diameter. Its position does not depend on minimap visibility,
 including a cold start inside a shrine. Without the minimap, Minus appears
 directly below Plus. Their shared Mac/UIKit geometry and glyph paths keep
 drawing and hit areas aligned. The L rune badge shares
-Y's opaque gray fill and gold outline.
+Y's opaque gray fill and gold outline. L now uses the same exterior border width
+as XYAB, and R/ZR share the same base diameter. When the native rune is hidden
+(including mounted gameplay), L uses `touch_l.png` from the supplied artwork.
+The rune provider reads the native rune Picture's own source texture, tagged
+inside its build-checked DrawSelf scope and copied asynchronously before HUD
+composition. Location names and the adjacent D-pad guide never enter that
+source; the former canvas crop/guide mask has been removed. Inherited native
+alpha and visibility invalidate the provider, and lifetime tokens reject late
+GPU copies. The compact NVN draw records keep their original size and restore
+the native instance/base-instance values before rendering.
+In BOTW touch gameplay, L now distinguishes a tap from a hold. A tap sends one
+normal L press on release; a 350 ms hold sends held D-pad Up without activating
+the current rune. Keep L held and use the existing right-side drag with another
+finger to choose; the L finger stays Up-only, matching the D-pad. Releasing L
+releases Up to accept the native selection. Reset or
+a controller/menu transition clears the hold and any unread Up edge. Controller,
+ordinary-game and temporary menu-pad L input keep their original handling.
+`rune-hold-20261029/ios/` checks tap/hold ownership, selection dragging, release,
+cancellation, stale callbacks and scope with zero failures in 32 look sessions.
+Mac gameplay verifies that a real mouse hold opens the native selector, native
+right-stick input selects Magnesis from Remote Bomb, and release updates both
+rune icons without activating the rune. That runtime retains the validated
+graphics base; the current merged host also compiles. Physical iPhone
+recognition remains for device acceptance.
 By default, BOTW touch movement and ZL sticks use a 7% deadzone. Above 430 frontend
 points of viewport height, their base outer-ring diameter is 140 points;
 at or below 430, their previous size scaling remains. Movement defaults to 80%
@@ -124,8 +147,22 @@ sliders. Play saves choices using the existing launcher preferences; environment
 or file overrides remain locked. Layout/response settings apply only in BOTW
 touch mode. ZL keeps its linear movement response. The geometry tests and UIKit
 harness check custom drawing/hit alignment and controller-mode isolation; settings
-storage tests check save/reopen/reset. Current evidence lives in
+storage tests check save/reopen/reset and exact parameter export. The editor
+shows raw decimal values and offers **Copy all parameters**, suitable for
+sharing new defaults. **Corner button labels** can hide the small circles on
+all seven action buttons while preserving their icons and input. English and
+Simplified Chinese launcher resources cover both fixed and generated setting
+labels/notes. Current evidence lives in
 `touch-settings-20261029/`; physical iPhone comfort remains for user acceptance.
+`touch-polish-20261029/` verifies the supplied `riding-horse` save: mounted
+loadout remains visible, L shows the default artwork, and dismount restores the
+current rune from its isolated source. The focused UIKit harness passes with
+zero failures in 32 sessions, including badge-off artwork, fallback L, matching
+border widths, R/ZR size and ordinary-mode restoration. The current merged Mac
+host builds; native gameplay uses the retained matching graphics base, and the
+full regression remains blocked by the existing translator/lock mismatch.
+Physical iPhone acceptance remains separate.
+
 The production launcher is also compiled separately for simulator UI checks:
 `run34/ui-custom-curve.png` records an interactive custom curve, and
 `run34/ui-reset-applied.png` records restored stick defaults with the unrelated

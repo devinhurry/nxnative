@@ -13,7 +13,8 @@ targets:
     platform: iOS
     sources:
       - path: Sources
-        excludes: [Info.plist]  # generated per project under Gen/, so games never share the generated plist
+        excludes: [Info.plist, en.lproj, zh-Hans.lproj]  # per-game plist and localizations are staged under Gen/
+      - path: Gen/Localizations
       - path: Gen/embed.S
       - path: Gen/dm          # Rewriter tables (*.fixups.tsv / gates / cuts / obs) + shader map / c1 list / warm-up list
         type: folder
@@ -29,6 +30,7 @@ targets:
     info:
       path: Gen/Info.plist
       properties:
+        CFBundleDevelopmentRegion: en
         CFBundleDisplayName: ${DM_DISPLAY_NAME}   # the game name in the base NSP (set by build_ipa.sh)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleShortVersionString: $(MARKETING_VERSION)

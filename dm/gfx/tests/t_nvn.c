@@ -3,7 +3,8 @@
 #include "../nvn/hle_nvn.c"
 uint64_t g_t0_ns;   // process start time from host main.c (used by hle_nvn's per-frame @t_s); unit test stub
 _Atomic uint64_t dm_present_ns;   // when the last present was made (hle_thread.c, DM_HITCH_DUMP); unit test stub
-static int test_ui_background;
+static int test_ui_background, test_ui_rune;
+int dm_botw_rune_icon_drawing(void) { return test_ui_rune; }
 int dm_aspect_ui_background_drawing(void) { return test_ui_background; }
 #include "../tex/nvn_deswizzle.h"
 #include <time.h>
@@ -284,6 +285,18 @@ int main(void) {
         EXPECT("background tag keeps compact array record size", 0x28, P(nvnCommandBufferGetCommandMemoryUsed)(&c2));
         EXPECT("array background preserves first/count/instances", 1, ad->pad == 1 && ad->first == 2 && ad->count == 6 && ad->instances == 1);
         test_ui_background = 0;
+        test_ui_rune = 1;
+        P(nvnCommandBufferAddCommandMemory)(&c2, &mp, 0, sizeof m); P(nvnCommandBufferBeginRecording)(&c2);
+        P(nvnCommandBufferDrawElementsBaseVertex)(&c2, NVN_DRAW_PRIMITIVE_TRIANGLES, NVN_INDEX_TYPE_UNSIGNED_SHORT, 6, 0x10000, 0);
+        P(nvnCommandBufferEndRecording)(&c2); memcpy(&rh, m, sizeof rh);
+        d = draw_idx_rec(m + 8, rh.size, &dt);
+        EXPECT("rune scope keeps compact indexed draw size and native arguments", 1, P(nvnCommandBufferGetCommandMemoryUsed)(&c2)==0x30 && d->pad==NVN_UI_RUNE && d->base_instance==0 && d->instances==1 && d->count==6);
+        P(nvnCommandBufferAddCommandMemory)(&c2, &mp, 0, sizeof m); P(nvnCommandBufferBeginRecording)(&c2);
+        P(nvnCommandBufferDrawArrays)(&c2, NVN_DRAW_PRIMITIVE_TRIANGLES, 0, 6);
+        P(nvnCommandBufferEndRecording)(&c2); memcpy(&rh, m, sizeof rh);
+        ad = draw_rec(m + 8, rh.size, &array_draw);
+        EXPECT("rune scope keeps compact array draw size and native arguments", 1, P(nvnCommandBufferGetCommandMemoryUsed)(&c2)==0x28 && ad->pad==NVN_UI_RUNE && ad->base_instance==0 && ad->instances==1);
+        test_ui_rune = 0;
         P(nvnCommandBufferAddCommandMemory)(&c2, &mp, 0, sizeof m); P(nvnCommandBufferBeginRecording)(&c2); NVNcommandHandle he = P(nvnCommandBufferEndRecording)(&c2);
         memcpy(&rh, m, sizeof rh);
         EXPECT("empty recording: its END only", 8, P(nvnCommandBufferGetCommandMemoryUsed)(&c2));

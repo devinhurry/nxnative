@@ -31,6 +31,9 @@ import Foundation
         expect(abs(m.touchStickResponse!.strength(at: 0.375) - 0.5) < 1e-6, "adjusted curve preview responds to all movement parameters")
         m.values["DM_BOTW_PAD_FACE_X"] = "-0.100"; m.values["DM_BOTW_PAD_FACE_GAP"] = "1.200"
         m.values["DM_RENDER_SCALE"] = "1.00"   // the slider's format of the default
+        m.values["DM_BOTW_PAD_BADGES"] = "0"
+        let exported = m.touchSettingsExport
+        expect(exported.contains("DM_BOTW_PAD_FACE_X=-0.100") && exported.contains("DM_BOTW_PAD_FACE_GAP=1.200") && exported.contains("DM_BOTW_PAD_BADGES=0") && exported.contains("DM_BOTW_MOVE_CURVE=1.000") && !exported.contains("DM_FPS_TARGET"), "touch export contains exact adjusted runtime values without unrelated settings")
         m.apply()
         expect(d.string(forKey: "launcher.DM_PRESENT_SNAP") == nil, "a value equal to the default is not stored (and an old one is dropped)")
         expect(d.string(forKey: "launcher.DM_RENDER_SCALE") == nil && d.string(forKey: "launcher.DM_OPMODE") == nil && d.string(forKey: "launcher.DM_FPS_HOLD") == nil, "defaults are not stored")
@@ -40,6 +43,7 @@ import Foundation
         let reopened = LauncherModel(file.settings, defaults: d)
         expect(reopened.values["DM_BOTW_MOVE_DEADZONE"] == "0.15" && reopened.values["DM_BOTW_MOVE_SIZE"] == "1.25" && String(cString: getenv("DM_BOTW_MOVE_CURVE")) == "1.00", "Play persists stick settings, reopening restores them, and runtime receives them")
         expect(reopened.values["DM_BOTW_PAD_FACE_X"] == "-0.100" && reopened.values["DM_BOTW_PAD_FACE_GAP"] == "1.200", "layout group offset and spacing persist alongside response settings")
+        expect(reopened.values["DM_BOTW_PAD_BADGES"] == "0", "corner badge switch persists")
         expect(!file.settings.contains { $0.env.hasPrefix("DM_BOTW_PAD_PLUS") || $0.env.hasPrefix("DM_BOTW_PAD_MINUS") }, "plus and minus remain fixed")
         reopened.reset(keys: TouchStickResponse.keys)
         expect(!reopened.touchStickChanged && reopened.values["DM_BOTW_MOVE_DEADZONE"] == "0.07" && reopened.values["DM_BOTW_MOVE_SIZE"] == "0.8", "left-stick reset restores the entire group")

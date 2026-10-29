@@ -8745,8 +8745,7 @@ static int lc_keeps(uint32_t op) {
 // Transform font/layout draws at the final UI canvas. Offscreen captures keep their original
 // coordinates; sampled GPU screen pictures already carry screen coordinates. The profile identifies font/layout shaders.
 static uint64_t g_ui_tex;
-static int g_ui_tex_tid;
-static _Atomic uint64_t g_rune_canvas_serial;
+static _Atomic uint64_t g_rune_source_serial;
 static uint64_t g_rune_last_capture_frame;
 static _Atomic int g_rune_capture_pending;
 static void ui_aspect_scale(double *ux, double *uy) {
@@ -8759,19 +8758,13 @@ static void ui_aspect_scale(double *ux, double *uy) {
 static int ui_squeeze_scale(NvProg *pr, double *ux, double *uy, int background) {
     g_ui_layout_draw = 0;
     *ux = *uy = 1;
-    // Identify the canvas only at its final composite draw. BOTW's rune capture
-    // also needs this at 16:9, but other games keep the original aspect-only path.
+    // Identify the canvas only at its final composite draw.
     int canvas_shader = pr->sh[1] && *DM_GAME_ASPECT_CANVAS && !strncmp(pr->sh[1]->key, DM_GAME_ASPECT_CANVAS, 16);
     int canvas_present_target = canvas_shader && R.rt.n > 0 && R.rt.color[0] && xv_present(R.rt.color[0]->serial);
-    int botw_canvas = canvas_present_target && !strcmp(DM_GAME_ID, "01007EF00011E000");
-    int track_rune_canvas = botw_canvas && !dm_aspect_native() && dm_botw_touch_hud_active();
-    if (canvas_present_target && (dm_aspect_native() || track_rune_canvas)) {
+    if (canvas_present_target && dm_aspect_native()) {
         int tid = (int)(S.tex[1][0] & 0xfffff);
         if (tid > 0 && tid < g_ntreg && g_treg[tid].ok) {
             uint64_t serial = g_treg[tid].t.serial;
-            if (atomic_exchange_explicit(&g_rune_canvas_serial, serial, memory_order_acq_rel) != serial)
-                g_rune_last_capture_frame = 0;
-            g_ui_tex_tid = tid;
             g_ui_tex = serial;
         } else if (dm_aspect_native()) {
             // Preserve the original failure for a native-aspect UI composite
@@ -8803,19 +8796,15 @@ static int ui_squeeze_scale(NvProg *pr, double *ux, double *uy, int background) 
 }
 
 static NSUInteger rune_align_row(NSUInteger n) { return (n + 255u) & ~(NSUInteger)255u; }
-typedef struct { float crop[4], exclusion[4]; } rune_capture_geometry_t;
 static void rune_capture_completed(id<MTLBuffer> buffer, NSUInteger row_bytes, NSUInteger crop_w, NSUInteger crop_h,
-                                   MTLPixelFormat format, double display_aspect, rune_capture_geometry_t geometry,
+                                   MTLPixelFormat format, double display_aspect,
                                    uint64_t token,
                                    uint64_t source_serial) {
     void *pool = objc_autoreleasePoolPush();
-    if (source_serial == atomic_load_explicit(&g_rune_canvas_serial, memory_order_acquire)) {
+    if (source_serial == atomic_load_explicit(&g_rune_source_serial, memory_order_acquire)) {
         const uint8_t *src = buffer.contents;
         uint8_t out[DM_BOTW_RUNE_ICON_SIDE * DM_BOTW_RUNE_ICON_SIDE * 4] = {0};
-        // The source UI canvas is horizontally squeezed for wide output, while
-        // the final present stretches it back. Fit the provider image to the
-        // pane's original logical aspect so the copied glyph matches the
-        // on-screen shape instead of preserving the intermediate canvas ratio.
+        // Fit the native source to the fixed provider image without distortion.
         if (!isfinite(display_aspect) || display_aspect <= 0) display_aspect = (double)crop_w / crop_h;
         NSUInteger out_w, out_h;
         if (display_aspect >= 1) {
@@ -8841,12 +8830,7 @@ static void rune_capture_completed(id<MTLBuffer> buffer, NSUInteger row_bytes, N
                 d[0] = p[2]; d[1] = p[1]; d[2] = p[0]; d[3] = p[3];
             } else memcpy(d, p, 4);
         }
-        dm_botw_rune_icon_mask_guide(out, DM_BOTW_RUNE_ICON_SIDE,
-                                     DM_BOTW_RUNE_ICON_SIDE, DM_BOTW_RUNE_ICON_STRIDE,
-                                     geometry.crop, geometry.exclusion, (uint32_t)ox,
-                                     (uint32_t)oy, (uint32_t)out_w, (uint32_t)out_h);
-        // Canvas readback is straight RGBA; remove undefined RGB under zero
-        // alpha before the provider is filtered by CoreGraphics/CoreAnimation.
+        // Read from the rune's isolated source, before any other HUD is drawn.
         dm_botw_rune_icon_premultiply_rgba(out, DM_BOTW_RUNE_ICON_SIDE,
                                             DM_BOTW_RUNE_ICON_SIDE,
                                             DM_BOTW_RUNE_ICON_STRIDE);
@@ -8857,21 +8841,21 @@ static void rune_capture_completed(id<MTLBuffer> buffer, NSUInteger row_bytes, N
     objc_autoreleasePoolPop(pool);
 }
 
-// Called only on the BOTW canvas-composite draw. It copies a small pane-sized
-// rectangle in the same MTL4 command stream, then converts/publishes after GPU
-// completion. No GPU wait or full-frame readback occurs.
+// Called only for the native rune Picture draw, tagged while recording its
+// DrawSelf. Copy its own source texture before it meets the rest of the HUD.
+// The GPU copy and completion publish are asynchronous.
 static void botw_rune_capture(void) {
     if (strcmp(DM_GAME_ID, "01007EF00011E000")) return;
-    if (g_ui_tex_tid <= 0 || g_ui_tex_tid >= g_ntreg || !g_treg[g_ui_tex_tid].ok || g_treg[g_ui_tex_tid].t.serial != g_ui_tex) return;
-    float rect[4], exclusion[4]; uint64_t token;
-    if (!dm_botw_rune_icon_crop(rect, exclusion, &token)) return;
+    int tid = (int)(S.tex[1][0] & 0xfffff);
+    if (tid <= 0 || tid >= g_ntreg || !g_treg[tid].ok) return;
+    uint64_t token;
+    if (!dm_botw_rune_icon_capture_token(&token)) return;
     uint64_t frame = atomic_load_explicit(&g_cur_frame, memory_order_relaxed);
     if (g_rune_last_capture_frame && frame - g_rune_last_capture_frame < 8) return;
     if (atomic_exchange_explicit(&g_rune_capture_pending, 1, memory_order_acq_rel)) return;
-    tex_t *source = &g_treg[g_ui_tex_tid].t;
+    tex_t *source = &g_treg[tid].t;
     id<MTLTexture> texture = tex_mtl(source);
-    if (!texture || texture.width < 320 || texture.height < 180 ||
-        fabs((double)texture.width / texture.height - 16.0 / 9.0) > .03) {
+    if (!texture || !texture.width || !texture.height || texture.width > 512 || texture.height > 512) {
         atomic_store_explicit(&g_rune_capture_pending, 0, memory_order_release); return;
     }
     MTLPixelFormat pf = texture.pixelFormat;
@@ -8883,45 +8867,19 @@ static void botw_rune_capture(void) {
             MLOG("BOTW rune icon capture skipped unsupported UI pixel format %lu", (unsigned long)pf);
         atomic_store_explicit(&g_rune_capture_pending, 0, memory_order_release); return;
     }
-    double sx = (double)texture.width / 1280.0, sy = (double)texture.height / 720.0, sux, suy;
-    ui_aspect_scale(&sux, &suy);
-    double px0 = rect[0] * sx, px1 = (rect[0] + rect[2]) * sx;
-    double py0 = rect[1] * sy, py1 = (rect[1] + rect[3]) * sy;
-    // UI layout draws use the same center-based viewport compensation as the
-    // normal path; capture the resulting canvas-space pixels, not pre-squeeze
-    // layout coordinates. At 16:9 sux/suy are one and this is unchanged.
-    px0 = texture.width * .5 + (px0 - texture.width * .5) / sux;
-    px1 = texture.width * .5 + (px1 - texture.width * .5) / sux;
-    py0 = texture.height * .5 + (py0 - texture.height * .5) / suy;
-    py1 = texture.height * .5 + (py1 - texture.height * .5) / suy;
-    long x0 = (long)floor(px0), y0 = (long)floor(py0);
-    long x1 = (long)ceil(px1), y1 = (long)ceil(py1);
-    x0 = MAX(0, MIN(x0, (long)texture.width)); y0 = MAX(0, MIN(y0, (long)texture.height));
-    x1 = MAX(0, MIN(x1, (long)texture.width)); y1 = MAX(0, MIN(y1, (long)texture.height));
-    if (x1 <= x0 || y1 <= y0 || x1 - x0 > 512 || y1 - y0 > 512) {
-        atomic_store_explicit(&g_rune_capture_pending, 0, memory_order_release); return;
-    }
-    NSUInteger w = (NSUInteger)(x1 - x0), h = (NSUInteger)(y1 - y0), row = rune_align_row(w * 4);
-    long copy_y = y0;
+    NSUInteger w = texture.width, h = texture.height, row = rune_align_row(w * 4);
     id<MTLBuffer> buffer = [g_dev newBufferWithLength:row * h options:MTLResourceStorageModeShared];
     if (!buffer) { atomic_store_explicit(&g_rune_capture_pending, 0, memory_order_release); return; }
     res_add(buffer); // Metal 4 command buffers require copy destinations in the committed residency set
     g_rune_last_capture_frame = frame;
-    uint64_t source_serial = g_ui_tex;
+    uint64_t source_serial = source->serial;
+    atomic_store_explicit(&g_rune_source_serial, source_serial, memory_order_release);
     id<MTL4ComputeCommandEncoder> encoder = blit();
-    enc_b_copy_texture_buffer(encoder, texture, 0, 0, MTLOriginMake(x0, copy_y, 0), MTLSizeMake(w, h, 1), buffer, 0, row, row * h);
+    enc_b_copy_texture_buffer(encoder, texture, 0, 0, MTLOriginMake(0, 0, 0), MTLSizeMake(w, h, 1), buffer, 0, row, row * h);
     g_wr_epoch++; g_mdx_epoch++; g_gp_copies++;
-    double display_aspect = rect[2] / rect[3];
-    rune_capture_geometry_t geometry = {0};
-    // Use the exact copied pixel rectangle, mapped back through the same
-    // viewport squeeze above. This keeps the mask aligned at crop edges when
-    // floor/ceil adds a border pixel, including ultrawide canvas output.
-    geometry.crop[0] = (float)(640.0 + ((double)x0 - texture.width * .5) * sux / sx);
-    geometry.crop[1] = (float)(360.0 + ((double)y0 - texture.height * .5) * suy / sy);
-    geometry.crop[2] = (float)((double)w * sux / sx);
-    geometry.crop[3] = (float)((double)h * suy / sy);
-    memcpy(geometry.exclusion, exclusion, sizeof exclusion);
-    [g_commit_blocks addObject:^{ rune_capture_completed(buffer, row, w, h, pf, display_aspect, geometry, token, source_serial); }];
+    double display_aspect = (double)w / h;
+    [g_commit_blocks addObject:^{ rune_capture_completed(buffer, row, w, h, pf, display_aspect, token, source_serial); }];
+
 }
 static void dispatch(const p_dispatch *dp);
 // ---------- Compute dispatches moved ahead of the render pass they would split (DM_NVN_CS_HOIST) ----------
@@ -9110,11 +9068,9 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
         g_fz_fallback++; rp_end(); }
     fb_prepare(pr);   // same-pass feedback sampling: copy the snapshot first (see fb_prepare)
     // Resolving a newly sampled picture can upload it or end the current pass. Do this before opening/binding the encoder.
-    double sux = 1, suy = 1; int sq = ui_squeeze_scale(pr, &sux, &suy, dw ? dw->pad : di ? di->pad : 0);
-    int botw_canvas_draw = !strcmp(DM_GAME_ID, "01007EF00011E000") && pr->sh[1] &&
-                           *DM_GAME_ASPECT_CANVAS && !strncmp(pr->sh[1]->key, DM_GAME_ASPECT_CANVAS, 16);
-    int canvas_present_target = botw_canvas_draw && R.rt.n > 0 && R.rt.color[0] && xv_present(R.rt.color[0]->serial);
-    if (canvas_present_target && dm_botw_touch_hud_active()) botw_rune_capture();
+    double sux = 1, suy = 1; int ui_scope = dw ? dw->pad : di ? di->pad : 0;
+    int sq = ui_squeeze_scale(pr, &sux, &suy, ui_scope == NVN_UI_BACKGROUND);
+    if (ui_scope == NVN_UI_RUNE && dm_botw_touch_hud_active()) botw_rune_capture();
     if (R.has_sc && !g_enc && !S.rast_discard) {
         NSUInteger tw0 = 0, th0 = 0; rt_dims(&tw0, &th0);
         long x0 = R.sc.x < 0 ? 0 : R.sc.x, y0 = R.sc.y < 0 ? 0 : R.sc.y, x1 = (long)R.sc.x + R.sc.w, y1 = (long)R.sc.y + R.sc.h;

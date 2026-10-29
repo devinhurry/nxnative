@@ -2,6 +2,7 @@
 // guest thread, before the matrix is calculated. UI content remains centered at
 // 16:9; native full-width background panes can extend to the display edges.
 #include "hle.h"
+#include "botw_rune_icon.h"
 #include <ctype.h>
 #include <math.h>
 #include <search.h>
@@ -169,8 +170,9 @@ static void aspect_ui_draw(const uint64_t *regs) {
     // x21 is Pane::Draw's saved this across the DrawSelf virtual call.
     g_ui_background_drawing = dm_aspect_ratio() > GAME_ASPECT &&
         aspect_ui_background_pane((uint8_t *)(uintptr_t)regs[21]);
+    dm_botw_rune_icon_draw_begin((uint8_t *)(uintptr_t)regs[21]);
 }
-static void aspect_ui_draw_end(const uint64_t *regs) { (void)regs; g_ui_background_drawing = 0; }
+static void aspect_ui_draw_end(const uint64_t *regs) { (void)regs; g_ui_background_drawing = 0; dm_botw_rune_icon_draw_end(); }
 void dm_aspect_ui_pane(uint8_t *pane) {
     if (!pane || strcmp(DM_GAME_ID, "01007EF00011E000") || !dm_aspect_native()) return;
     int title_shade = aspect_ui_title_shade(pane);
