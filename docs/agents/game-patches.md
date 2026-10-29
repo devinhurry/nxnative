@@ -505,7 +505,7 @@ Every piece of code that runs for one game and not the others: the rewriter's pa
   - render scale stub (the launcher offers DM_RENDER_SCALE)
   - host [hle_botw_touch_actions.c:11](../../dm/host/hle_botw_touch_actions.c#L11): build check
   - host [hle_botw_touch_menu.c:19](../../dm/host/hle_botw_touch_menu.c#L19): build check
-  - host [hle_botw_touchhud.c:17](../../dm/host/hle_botw_touchhud.c#L17): build check
+  - host [hle_botw_touchhud.c:18](../../dm/host/hle_botw_touchhud.c#L18): build check
 
 ### The Legend of Zelda: Link's Awakening
 

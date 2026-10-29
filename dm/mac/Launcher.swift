@@ -15,6 +15,7 @@ struct LauncherView: View {
     let fit: (CGFloat) -> Void
     @AppStorage("window.show") private var show = true
     @AppStorage("window.advanced") private var advanced = false
+    @State private var showTouchSettings = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,6 +30,9 @@ struct LauncherView: View {
             .padding([.horizontal, .top], 20)
             Form {
                 settingSections(basic: true)
+                if m.touchStickResponse != nil {
+                    Section("Touch") { Button("Touch settings") { showTouchSettings = true } }
+                }
                 Section {
                     DisclosureGroup("Advanced settings", isExpanded: $advanced) {}
                 }
@@ -57,10 +61,16 @@ struct LauncherView: View {
             .padding(20)
         }
         .frame(minWidth: 520, idealWidth: 560)
+        .sheet(isPresented: $showTouchSettings) {
+            NavigationStack {
+                BotwTouchSettingsView(m: m)
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { showTouchSettings = false } } }
+            }.frame(width: 1000, height: 620)
+        }
     }
 
     @ViewBuilder private func settingSections(basic: Bool) -> some View {
-        ForEach(m.sections(basic: basic), id: \.self) { section in
+        ForEach(m.sections(basic: basic).filter { !LauncherModel.isTouchSection($0) }, id: \.self) { section in
             let rows = m.rows(in: section, basic: basic)
             if !rows.isEmpty {
                 Section(section) {

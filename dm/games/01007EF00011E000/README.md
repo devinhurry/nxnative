@@ -97,11 +97,11 @@ directly below Plus. Their shared Mac/UIKit geometry and glyph paths keep
 drawing and hit areas aligned. The L rune badge shares
 Y's opaque gray fill and gold outline.
 By default, BOTW touch movement and ZL sticks use a 7% deadzone. Above 430 frontend
-points of viewport height, both outer rings have a fixed 140-point diameter;
-at or below 430, their previous size scaling remains. Full movement defaults to
-80% of the radius. Movement uses a continuous radial 0.7-power curve after
-the deadzone: 20% radius produces about 30% stick output instead of 18%, and
-40% produces about 57% instead of 45%. This raises short-drag output without
+points of viewport height, their base outer-ring diameter is 140 points;
+at or below 430, their previous size scaling remains. Movement defaults to 80%
+of that size, reaches full output at 70% of its radius, and uses a continuous
+radial 0.3-power curve after the deadzone: 20% radius produces about 62% stick
+output and 40% produces about 82%. This raises short-drag output without
 a time-based ramp; ZL keeps its linear response. The overshoot sprint gesture,
 double-arrow indication, threshold haptics and native Dash observation have
 been removed. The ordinary B button retains its native behavior. Controller
@@ -113,18 +113,19 @@ native input/cancel checks pass, UIKit reports zero failures in 31 look
 sessions, and the rewritten modules have no Dash observation. The matching
 Mac preview reaches gameplay and is registered for quick launch; physical
 iPhone movement feel remains for user acceptance.
-The iOS launcher now offers [Touch left stick](../../../docs/settings.md#touch-left-stick)
-before Play: movement deadzone (0–30%), curve exponent (0.30–2.00), full-travel
-point (35–100%) and whole-stick size (60–150%). Choices save on Play; the live
-curve previews their output, and Restore left-stick defaults resets only this
-group. `DM_BOTW_MOVE_DEADZONE`, `DM_BOTW_MOVE_CURVE`, `DM_BOTW_MOVE_FULL` and
-`DM_BOTW_MOVE_SIZE` also configure Mac touch preview. Parameters are read when
-the gamepad is constructed, after the iOS launcher applies them. The movement
-radius controls its artwork, hit region and axis scaling together; ZL keeps
-its own unscaled radius and linear response. Native geometry/settings tests
-and the UIKit harness in `inventory-touch-20261025/run34/` verify defaults,
-custom values, restore behavior and controller/ordinary-mode isolation;
-physical iPhone comfort remains for user acceptance.
+The iOS and packaged Mac launchers offer a separate [Touch settings](../../../docs/settings.md#touch-left-stick)
+page before Play. The shared native geometry powers its draggable, pinch-resizable
+layout preview and the real drawing/hit regions. XYAB moves/scales as one group,
+with separate spacing; the D-pad equipment group moves/scales together. Movement,
+ZL, L, R and ZR adjust independently; +/- stay fixed. Controls also have offset
+and size sliders, per-control restore and restore-all-touch defaults. The movement
+response chart retains deadzone (0–30%), curve (0.30–2.00) and full-travel (35–100%)
+sliders. Play saves choices using the existing launcher preferences; environment
+or file overrides remain locked. Layout/response settings apply only in BOTW
+touch mode. ZL keeps its linear movement response. The geometry tests and UIKit
+harness check custom drawing/hit alignment and controller-mode isolation; settings
+storage tests check save/reopen/reset. Current evidence lives in
+`touch-settings-20261029/`; physical iPhone comfort remains for user acceptance.
 The production launcher is also compiled separately for simulator UI checks:
 `run34/ui-custom-curve.png` records an interactive custom curve, and
 `run34/ui-reset-applied.png` records restored stick defaults with the unrelated

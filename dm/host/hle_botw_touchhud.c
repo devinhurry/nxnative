@@ -7,6 +7,7 @@
 #include "botw_touch_actions.h"
 #include "botw_touch_menu.h"
 #include "touchpad_geometry.h"
+#include "botw_touch_layout.h"
 #include <math.h>
 #include <stdatomic.h>
 #include <TargetConditionals.h>
@@ -38,6 +39,7 @@ static _Atomic int g_touchhud_available;
 static _Atomic int g_touchhud_map_collapsed;
 static _Atomic(uintptr_t) g_touchhud_map_root;
 static module_t *g_touchhud_main;
+static dm_botw_touch_layout g_touch_layout;
 static uint8_t *pane_parent(uint8_t *pane);
 static int visible_to_root(uint8_t *pane);
 static int transform_bounds(uint8_t *pane, float *left, float *bottom, float *right, float *top);
@@ -623,6 +625,16 @@ static void botw_touchhud_matrix(const uint64_t *regs) {
             float dx = x * 1280.0f - 640.0f + 554.0f;
             float dy = 360.0f - y * 720.0f - 246.0f;
             tx += dx; ty += dy;
+            float scale = g_touch_layout.control[12].scale;
+            if (scale != 1) {
+                // Scale the equipment group about its relocated center.
+                for (int row = 0; row < 2; row++) for (int col = 0; col < 3; col++) {
+                    float value; size_t off = BOTW_TOUCH_MATRIX + row*16 + col*4;
+                    memcpy(&value,pane+off,4); value *= scale; memcpy(pane+off,&value,4);
+                }
+                float cx=x*1280-640, cy=360-y*720;
+                tx=cx+(tx-cx)*scale; ty=cy+(ty-cy)*scale;
+            }
             memcpy(pane + BOTW_TOUCH_MATRIX + 0x0c, &tx, sizeof tx);
             memcpy(pane + BOTW_TOUCH_MATRIX + 0x1c, &ty, sizeof ty);
         }
@@ -672,6 +684,7 @@ void dm_botw_touch_hud_install(void) {
 #endif
     if (!touch && !dm_aspect_native()) return;
     if (strcmp(DM_GAME_ID, "01007EF00011E000")) return;
+    if (!dm_botw_layout_read(&g_touch_layout)) die("[RED] invalid BOTW touch layout setting");
     if (strcmp(dm_main_build(), BOTW_BUILD)) {
         LOG("BOTW touch HUD: disabled for main build %s (requires %s)", dm_main_build(), BOTW_BUILD);
         return;

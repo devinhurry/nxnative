@@ -79,20 +79,24 @@ A controller's vibration weaker than this stays off, and the rest is spread over
 
 ## Touch left stick
 
-Breath of the Wild has a **Touch left stick** section on the screen before **Play**. It changes only the touch movement stick. ZL, physical controllers and other games keep their existing behavior.
+Breath of the Wild has a **Touch settings** button on the screen before **Play**. It opens a separate page with a layout preview and left-stick response controls. These settings apply only to BOTW touch mode; physical controllers and other games keep their existing behavior.
+
+Select a control in the preview or the control picker. Drag it to move, pinch to resize, or use the offset and size sliders. XYAB moves and scales as one group, with a separate **Button spacing** slider. The D-pad and its equipment icons move and scale as one group. Left stick, shield stick, Rune (L), R and ZR adjust separately. **+** and **−** stay fixed. Offsets are fractions of the centered game UI canvas, so they adapt to different screen sizes.
+
+**Restore this control** resets the selected group's position and size, including XYAB spacing when selected. **Restore all touch defaults** also resets the left-stick response. Both leave frame rate and graphics settings alone.
 
 | Setting | Default | Range | Effect |
 |---|---|---|---|
 | Deadzone | 7% | 0–30% | Small drags within this fraction of the radius produce no movement. |
-| Response curve | 0.70 | 0.30–2.00 | Below 1 makes short drags stronger; 1 is linear; above 1 makes them gentler. |
-| Full movement at | 80% | 35–100% | How far to drag, as a fraction of the radius, to reach maximum stick strength. |
-| Stick size | 100% | 60–150% | Scales the whole stick: its center artwork, outer ring and drag range. |
+| Response curve | 0.30 | 0.30–2.00 | Below 1 makes short drags stronger; 1 is linear; above 1 makes them gentler. |
+| Full movement at | 70% | 35–100% | How far to drag, as a fraction of the radius, to reach maximum stick strength. |
+| Stick size | 80% | 60–150% | Scales the whole stick: its center artwork, outer ring and drag range. |
 
-The curve updates as you adjust the sliders. Drag across it to see the stick strength at each finger distance. **Restore left-stick defaults** resets just these four settings and leaves frame rate, graphics and other choices alone. Tap **Play** to save your choices for the next start. A value fixed by an env file stays fixed, including when restoring defaults.
+The curve updates as you adjust the sliders. Drag across it to see the stick strength at each finger distance. Tap **Play** to save your choices for the next start. A value fixed by an env file stays fixed, including when restoring defaults.
 
 Size at 100% keeps the existing dimensions: a 140-point outer diameter when the viewport is taller than 430 points, with the existing scaling on shorter screens. These settings do not add an overshoot sprint gesture; B keeps its ordinary action.
 
-On the Mac, touch preview uses the same parameters through `DM_BOTW_MOVE_DEADZONE`, `DM_BOTW_MOVE_CURVE`, `DM_BOTW_MOVE_FULL` and `DM_BOTW_MOVE_SIZE` in `env.txt` or the launch environment. Fractions are written as decimals: for example, `DM_BOTW_MOVE_DEADZONE=0.07` means 7%. Packaged Mac apps expose these parameters in Advanced settings; the raw host uses the launch environment.
+On the Mac, touch preview uses the same parameters through `DM_BOTW_MOVE_DEADZONE`, `DM_BOTW_MOVE_CURVE`, `DM_BOTW_MOVE_FULL` and `DM_BOTW_MOVE_SIZE` in `env.txt` or the launch environment. Fractions are written as decimals: for example, `DM_BOTW_MOVE_DEADZONE=0.07` means 7%. Packaged Mac apps expose the same Touch settings page; the raw host uses the launch environment. Layout variables use `DM_BOTW_PAD_<CONTROL>_X`, `_Y` and `_SCALE`, where `<CONTROL>` is `FACE`, `DPAD`, `ZL`, `L`, `R` or `ZR`. Movement uses `DM_BOTW_PAD_STICK_X` / `_Y` and the existing `DM_BOTW_MOVE_SIZE`. `DM_BOTW_PAD_FACE_GAP` controls XYAB spacing.
 
 If a BOTW menu does not respond to direct touch on iPhone, **double-tap with three fingers** to reveal the original full virtual gamepad for that menu visit. It sends ordinary buttons and UI right-stick input. Leaving menus restores the normal touch layout; a controller connection or input reset also ends the temporary override. It is not saved. The gesture is reserved while automatic controls are hidden, so ordinary three-finger combat combinations keep working.
 

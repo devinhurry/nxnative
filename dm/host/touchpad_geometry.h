@@ -257,7 +257,7 @@ static inline void dm_touchpad_stick_axis(float dx, float dy, float radius,
 typedef struct { float deadzone, curve, full, size; } dm_touchpad_stick_response;
 
 static inline dm_touchpad_stick_response dm_touchpad_botw_move_defaults(void) {
-    return (dm_touchpad_stick_response){DM_TP_BOTW_STICK_DEAD, .7f, DM_TP_FULL, 1};
+    return (dm_touchpad_stick_response){DM_TP_BOTW_STICK_DEAD, .3f, .7f, .8f};
 }
 
 static inline void dm_touchpad_stick_axis_with_response(float dx, float dy, float radius,

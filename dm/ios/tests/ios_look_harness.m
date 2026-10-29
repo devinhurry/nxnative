@@ -757,10 +757,12 @@ static void test_botw_stick_response(DmGamepad *view) {
         view.bounds=CGRectMake(0,0,844,heights[i]);
         [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view setNeedsLayout]; [view layoutIfNeeded];
         CGFloat radius=dm_touchpad_botw_stick_radius(heights[i]);
-        CHECK(fabs(CGPathGetPathBoundingBox([view dm_testStickRingLayer].path).size.width-2*radius)<.01 &&
+        CHECK(fabs(CGPathGetPathBoundingBox([view dm_testStickRingLayer].path).size.width-2*radius*.8)<.01 &&
               fabs(CGPathGetPathBoundingBox([view dm_testShieldRingLayer].path).size.width-2*radius)<.01,
-              "BOTW movement and ZL rings share the requested diameter on short and tall canvases");
+              "BOTW movement uses eighty-percent size while ZL keeps its independent diameter");
+        CGFloat baseRadius=radius;
         for (int shield=0;shield<2;shield++) {
+            radius=baseRadius*(shield ? 1 : .8);
             CGPoint home=shield ? [view dm_testShieldHome] : [view dm_testStickHome];
             FakeTouch *t=touch(home.x,home.y); began(view,t);
             moved(view,t,home.x+radius*.06,home.y);
@@ -770,7 +772,7 @@ static void test_botw_stick_response(DmGamepad *view) {
                   "both BOTW sticks respond before ten percent, preserving ZL while moving");
             moved(view,t,home.x+radius*.2,home.y);
             CHECK(shield ? g_lx>DM_STICK_MAX*.17 && g_lx<DM_STICK_MAX*.19 :
-                           g_lx>DM_STICK_MAX*.29 && g_lx<DM_STICK_MAX*.31,
+                           g_lx>DM_STICK_MAX*.62 && g_lx<DM_STICK_MAX*.63,
                   "only BOTW movement gets the stronger short-drag response; ZL stays linear");
             moved(view,t,home.x+radius*.8,home.y);
             CHECK(g_lx==DM_STICK_MAX && !(g_buttons&DM_BTN_B),
@@ -806,7 +808,7 @@ static void test_botw_stick_feedback(DmGamepad *view) {
           gray_matches(((CAShapeLayer *)graph.sublayers.firstObject).fillColor,1,.15),
           "idle left stick has only a white circle and four arrows at fifteen percent opacity");
     CGPoint start=CGPointMake(home.x+3,home.y+2);
-    CGFloat radius=dm_touchpad_botw_stick_radius(view.bounds.size.height);
+    CGFloat radius=dm_touchpad_botw_stick_radius(view.bounds.size.height)*dm_touchpad_botw_move_defaults().size;
     FakeTouch *stick=touch(start.x,start.y); began(view,stick);
     NSUInteger grip=feedback.count;
     moved(view,stick,start.x+radius*1.1,start.y);
@@ -1274,6 +1276,30 @@ static void test_botw_tunable_stick(DmGamepad *original) {
     ended(view,t,home.x,home.y); [view reset]; [view removeFromSuperview];
 }
 
+static void test_botw_custom_layout(DmGamepad *original) {
+    g_botw_touchhud_available=YES; g_botw_gameplay_ready=YES;
+    g_botw_touch_menu_active=g_botw_touch_menu_presented=NO;
+    setenv("DM_BOTW_PAD_FACE_X","-0.1",1); setenv("DM_BOTW_PAD_FACE_SCALE","0.8",1);
+    setenv("DM_BOTW_PAD_FACE_GAP","1.2",1); setenv("DM_BOTW_PAD_R_Y","0.1",1);
+    DmGamepad *view=[[DmGamepad alloc] initWithFrame:CGRectMake(0,0,844,390)];
+    [original.superview addSubview:view];
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view setNeedsLayout]; [view layoutIfNeeded];
+    float canvas[4]; dm_aspect_touch_rect(844,390,canvas);
+    CGFloat u=dm_touchpad_u(390); dm_touchpad_point base=dm_touchpad_face_center(844,390,view.safeAreaInsets.left,view.safeAreaInsets.top,view.safeAreaInsets.right,view.safeAreaInsets.bottom);
+    CGPoint expected=CGPointMake(base.x-canvas[2]*.1+50*u*.8*1.2,base.y);
+    CGRect disk=CGPathGetPathBoundingBox([view dm_testButtonLayer:0].path);
+    CHECK(fabs(CGRectGetMidX(disk)-expected.x)<.01 && fabs(CGRectGetMidY(disk)-expected.y)<.01 && fabs(disk.size.width-54*u*.8)<.01,
+          "group offset, scale and gap all reach the actual A drawing");
+    FakeTouch *t=touch(expected.x,expected.y); began(view,t);
+    CHECK((g_buttons&DM_BTN_A) && !(g_buttons&(DM_BTN_B|DM_BTN_X|DM_BTN_Y)),"adjusted face drawing and real input hit testing agree"); ended(view,t,expected.x,expected.y);
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES]; [view setNeedsLayout]; [view layoutIfNeeded];
+    disk=CGPathGetPathBoundingBox([view dm_testButtonLayer:0].path);
+    CHECK(fabs(disk.size.width-54*u)<.01,"controller mode ignores the custom BOTW face scale");
+    [view reset]; [view removeFromSuperview];
+    const char *keys[]={"DM_BOTW_PAD_FACE_X","DM_BOTW_PAD_FACE_SCALE","DM_BOTW_PAD_FACE_GAP","DM_BOTW_PAD_R_Y"};
+    for(unsigned i=0;i<sizeof keys/sizeof *keys;i++) unsetenv(keys[i]);
+}
+
 static void run_tests(DmGamepad *view) {
     test_dpad_art_visibility(view);
     test_botw_button_artwork(view);
@@ -1306,6 +1332,7 @@ static void run_tests(DmGamepad *view) {
         reset_look(); g_look_enabled = YES;
         test_botw_manual_menu_pad(view);
         test_botw_tunable_stick(view);
+        test_botw_custom_layout(view);
         NSString *report = [NSString stringWithFormat:@"UIKit handler regression: %d failures; %d look BEGIN sessions\n", g_failures, g_begin_count];
         printf("%s", report.UTF8String);
         fflush(stdout); fflush(stderr);

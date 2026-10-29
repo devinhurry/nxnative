@@ -92,6 +92,24 @@ int main(void) {
     calculated_matrix(target);
     expect_translation(target, -275, -216);
 
+    // A resized D-pad scales its native equipment artwork about the touch center.
+    g_touch_layout.control[12].scale = 1.25f;
+    matrix_translation(target, -509, 210);
+    calculate_entry(target);
+    calculated_matrix(target);
+    expect_translation(target, -263.75f, -225);
+    float basis; memcpy(&basis, target + BOTW_TOUCH_MATRIX, sizeof basis);
+    assert(fabsf(basis - 1.25f) < .001f);
+    dm_botw_touch_hud_publish(0, .25f, .75f);
+    assert(actions_reset_count == 1);
+    matrix_translation(target, -509, 210);
+    calculate_entry(target);
+    calculated_matrix(target);
+    expect_translation(target, -509, 210);
+    memcpy(&basis, target + BOTW_TOUCH_MATRIX, sizeof basis);
+    assert(basis == 1);
+    g_touch_layout.control[12].scale = 1;
+
     // A recreated MainShortCut layout with a new pane address replaces the retained target.
     uint8_t root2[0x100] = {0}, all2[0x100] = {0}, target2[0x100] = {0};
     pane_name(root2, "RootPane"); pane_name(all2, "N_All_00"); pane_name(target2, "N_MainAll_00");
@@ -292,12 +310,12 @@ int main(void) {
 
     // Controller connect / non-3D mode publishes inactive and restores a fresh native matrix.
     dm_botw_touch_hud_publish(0, 0.25f, 0.75f);
-    assert(actions_reset_count == 1);
+    assert(actions_reset_count == 2);
     dm_botw_touch_hud_publish(0, 0.25f, 0.75f);
-    assert(actions_reset_count == 1); // repeated inactive publications do not reset on every Npad poll
+    assert(actions_reset_count == 2); // repeated inactive publications do not reset on every Npad poll
     dm_botw_touch_hud_publish(1, 0.5f, 0.5f);
     dm_botw_touch_hud_publish(0, 0.5f, 0.5f);
-    assert(actions_reset_count == 2); // each active-to-inactive transition clears once
+    assert(actions_reset_count == 3); // each active-to-inactive transition clears once
     matrix_translation(target2, -509, 210);
     calculate_entry(target2);
     assert(target2[BOTW_TOUCH_FLAGS] & BOTW_TOUCH_DIRTY);
