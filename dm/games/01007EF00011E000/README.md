@@ -357,7 +357,18 @@ The production source compiles for iPhone arm64. Evidence is in
 The top heart group keeps its authored corner padding against the full game
 view. Landscape's horizontal safe inset, intended for the notch at mid-height,
 no longer adds an extra gap to those topmost hearts; map and button safe-area
-geometry is unchanged. Physical iPhone edge placement remains for acceptance.
+geometry now follows the right-edge rule below. Physical iPhone edge placement remains for acceptance.
+
+**Right HUD edge padding (2026-10-30).** The minimap/environment cluster and
+adjacent +/- controls use the game's authored right-corner padding against the
+actual game picture. Landscape's extra right safe inset is no longer added on
+top of that padding; it previously left another notch-width gap beside Plus on
+iPhone. This is display geometry, independent of touch/controller input. The
+map-to-Plus gap, fixed Plus position when the map is hidden, button size and
+shared drawing/hit geometry are unchanged. Explicit aspect-ratio bars still
+bound the HUD to the game picture. Native tests cover both landscape safe-inset
+arrangements and both input modes; 160 graphics checks pass. Evidence is in
+`touch-top-right-inset-20261030/`; physical iPhone appearance remains pending.
 Native HUD/menu tests and the UIKit harness cover restoration with uncalculated
 siblings, loadout hiding/restoration and control-mode isolation. Evidence is in
 `touch-hud-refinements-20261029/`; its gameplay capture uses the retained
@@ -448,7 +459,7 @@ Validation: aspect/background restoration and menu/HUD regressions pass; 173 NVN
 - It finalizes its transient render targets before every submit and builds them again the next frame, which the storage-takeover rule guards with a 16-submission window (`alias_take_over`).
 - Windowed on the Mac with `present_now`'s residency commit: its title, 60 fps, no GPU error.
 
-**Gameplay edge HUD and loading fills (2026-10-29, resolved on Mac).** The native heart container moves toward the left display edge, preserving the spacing of full and partial hearts. The collapsed minimap and its sensor, noise, temperature, time and weather panes move together toward the right edge. Touch mode retains its upper-right map layout; ordinary input retains the lower-right layout. Hearts retain native padding against the full display; the map cluster additionally respects the horizontal safe area. Touch map bounds and the adjacent plus/minus buttons use the same HUD rectangle. Expanding the Slate restores its native centered position; returning to 16:9 restores all original positions without accumulating offsets. The HUD draw scope fixes [target-clamped scissors](../../../docs/reference/rendering.md#edge-anchored-ui-keeps-open-scissor-edges) without opening menu clips.
+**Gameplay edge HUD and loading fills (2026-10-29, resolved on Mac).** The native heart container moves toward the left display edge, preserving the spacing of full and partial hearts. The collapsed minimap and its sensor, noise, temperature, time and weather panes move together toward the right edge. Touch mode retains its upper-right map layout; ordinary input retains the lower-right layout. Hearts retain native padding against the full display; the map cluster uses its authored right-corner padding independently of input mode. Touch map bounds and the adjacent plus/minus buttons use the same HUD rectangle. Expanding the Slate restores its native centered position; returning to 16:9 restores all original positions without accumulating offsets. The HUD draw scope fixes [target-clamped scissors](../../../docs/reference/rendering.md#edge-anchored-ui-keeps-open-scissor-edges) without opening menu clips.
 
 **Resolved: minimap disappeared in very wide windows (2026-10-29).**
 The D-pad center is published relative to the centered 16:9 UI canvas. At 32:9,

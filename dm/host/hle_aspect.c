@@ -12,7 +12,7 @@ static pthread_once_t g_config_once = PTHREAD_ONCE_INIT;
 static int g_on;
 static float g_custom;
 static _Atomic float g_screen = 16.0f / 9.0f;
-static _Atomic float g_hud_safe_left, g_hud_safe_right;
+static _Atomic float g_hud_safe_left;
 static module_t *g_main;
 static uint64_t g_single_off, g_proj_off, g_vt_off, g_field_off, g_dirty_off;
 static unsigned g_ui_reg; static uint64_t g_ui_source, g_ui_projection, g_ui_fovy;
@@ -55,11 +55,13 @@ void dm_aspect_touch_rect(float w, float h, float rect[4]) {
     rect[0] = (w - cw) / 2; rect[1] = (h - ch) / 2; rect[2] = cw; rect[3] = ch;
 }
 
-// Extra logical space beside the centered UI, retaining native HUD padding
-// and respecting the game view's safe area. Menus still use touch_rect.
+// Extra logical space beside the centered UI. The right HUD already has its
+// authored corner padding; adding the landscape safe inset leaves another
+// notch-width gap. This display rule is independent of the input mode.
+// The left side retains its safe inset. Menus still use touch_rect.
 float dm_aspect_hud_offset(int right) {
     float extra = fmaxf(0, 360 * dm_aspect_ratio() - 640);
-    float safe = atomic_load(right ? &g_hud_safe_right : &g_hud_safe_left);
+    float safe = right ? 0 : atomic_load(&g_hud_safe_left);
     return fmaxf(0, extra - safe);
 }
 void dm_aspect_set_safe_area(float w, float h, float left, float right) {
@@ -68,7 +70,6 @@ void dm_aspect_set_safe_area(float w, float h, float left, float right) {
     float frame_width = dm_aspect_native() ? fminf(w, h * dm_aspect_ratio()) : canvas[2];
     float bar = (w - frame_width) * .5f, scale = 720 / canvas[3];
     atomic_store(&g_hud_safe_left, fmaxf(0, left - bar) * scale);
-    atomic_store(&g_hud_safe_right, fmaxf(0, right - bar) * scale);
 }
 void dm_aspect_hud_rect(float w, float h, float rect[4]) {
     dm_aspect_touch_rect(w, h, rect);
