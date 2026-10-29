@@ -3,7 +3,8 @@
 #include "../nvn/hle_nvn.c"
 uint64_t g_t0_ns;   // process start time from host main.c (used by hle_nvn's per-frame @t_s); unit test stub
 _Atomic uint64_t dm_present_ns;   // when the last present was made (hle_thread.c, DM_HITCH_DUMP); unit test stub
-static int test_ui_background, test_ui_rune;
+static int test_ui_background, test_ui_rune, test_ui_hud;
+int dm_aspect_ui_hud_drawing(void) { return test_ui_hud; }
 int dm_botw_rune_icon_drawing(void) { return test_ui_rune; }
 int dm_aspect_ui_background_drawing(void) { return test_ui_background; }
 #include "../tex/nvn_deswizzle.h"
@@ -297,6 +298,13 @@ int main(void) {
         ad = draw_rec(m + 8, rh.size, &array_draw);
         EXPECT("rune scope keeps compact array draw size and native arguments", 1, P(nvnCommandBufferGetCommandMemoryUsed)(&c2)==0x28 && ad->pad==NVN_UI_RUNE && ad->base_instance==0 && ad->instances==1);
         test_ui_rune = 0;
+        test_ui_hud = 1;
+        P(nvnCommandBufferAddCommandMemory)(&c2, &mp, 0, sizeof m); P(nvnCommandBufferBeginRecording)(&c2);
+        P(nvnCommandBufferDrawArrays)(&c2, NVN_DRAW_PRIMITIVE_TRIANGLES, 0, 6);
+        P(nvnCommandBufferEndRecording)(&c2); memcpy(&rh, m, sizeof rh);
+        ad = draw_rec(m + 8, rh.size, &array_draw);
+        EXPECT("edge HUD scope preserves compact draw size and native arguments", 1, P(nvnCommandBufferGetCommandMemoryUsed)(&c2)==0x28 && ad->pad==NVN_UI_HUD && ad->base_instance==0 && ad->instances==1);
+        test_ui_hud = 0;
         P(nvnCommandBufferAddCommandMemory)(&c2, &mp, 0, sizeof m); P(nvnCommandBufferBeginRecording)(&c2); NVNcommandHandle he = P(nvnCommandBufferEndRecording)(&c2);
         memcpy(&rh, m, sizeof rh);
         EXPECT("empty recording: its END only", 8, P(nvnCommandBufferGetCommandMemoryUsed)(&c2));

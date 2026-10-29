@@ -7,7 +7,7 @@ This is the active progress tracker. Update it after each verified feature or ne
 ## Scope and acceptance rules
 
 - Menu touch changes are BOTW touch mode only. Physical controllers and other games retain their existing input behavior.
-- BOTW widescreen backgrounds are a separate rendering feature for both touch and controller modes. Foreground content and touch targets stay centered at 16:9; other games retain their existing rendering.
+- BOTW widescreen backgrounds and gameplay heart/map edge anchors are a separate rendering feature for both touch and controller modes. Menu foreground content and its touch targets stay centered at 16:9; other games retain their existing rendering.
 - Complete menu touch interaction; preserve the existing movement, combat and rune controls.
 - Use the game's live controls, geometry, list state and native selection entry points. A distant item must select directly, without walking through intermediate items with direction inputs.
 - Both the icon and text of a button hint should respond. Movement and zoom hints map to gestures.
@@ -31,6 +31,7 @@ Mac milestones refer to their recorded runtime evidence. The latest 2026-10-28 r
 | Inventory category carousel, model rotation and recipe Close | Mac verified | Both visible carousel arrows switch categories. Dragging the native Rotate region turns the preview model and release stops rotation. The recipe's Close label returns to the item list. |
 | System menu entries | Mac verified | Options opens directly; the load sequence also passed. |
 | Map taps and stamp popup | Mac verified | Correct pointer position; both the B icon and Back text dismiss the stamp popup. |
+| Shrine apparatus Quit/Cancel | User verified; native regression passed | The prompt-only `SousaGuide_00` owner now publishes its native B glyph and label while the gameplay HUD is hidden. Ordinary gameplay hints stay passive. Reproduced with a copy of `Shrine-console`; original save preserved. Evidence: `shrine-console-touch-20261029/` in the NSP work folder. |
 | Map/Runes header hints | Mac verified | L/R hints use their final rendered positions. R opens the empty album; its Back text returns to gameplay without a cursor selection. AppHome prompts are published from live guide/header panes even when BoxCursor updates stop. |
 | Startup and loading controls | Mac and UIKit verified | Gameplay controls start hidden and require a fresh, shown, input-enabled MainScreen HUD. Title and loading keep the Mac preview in menu routing; gameplay alone restores the artwork. Physical-controller and non-BOTW routing remain unchanged. |
 | Non-modal gameplay tips | Code corrected; user acceptance pending | The shared screen classification excludes `MessageTipsRunTime_00` and `MessageTipsPauseMenu_00` from modal visibility and touch-menu routing. Headshot/shield-surf corner notifications should keep the gamepad visible; centered tutorials still hide it. The user will verify these events in-game. |
@@ -68,6 +69,7 @@ Mac milestones refer to their recorded runtime evidence. The latest 2026-10-28 r
 | Game Over and retry | Mac verified | On the disposable save, native bomb damage reaches Game Over. Direct Quit opens its confirmation, Cancel returns to the retry list, and Continue reloads gameplay. Controls stay hidden through defeat/loading and return with the gameplay HUD. |
 | Complete merged Mac graphics runtime | Mac verified | Correct-package shaders restore the title, loading, menus and gameplay. The wrong-package build is rejected before translation; see the shader reference linked below. |
 | Physical iPhone/controller transitions | Pending hardware acceptance | UIKit checks cover mode transitions, gesture cancellation and pinch in both directions. No physical iPhone or connected-controller gameplay test was performed. |
+| Widescreen gameplay hearts/map and loading backgrounds | Mac verified; hardware acceptance pending | Hearts move left; collapsed map/environment move right, retaining upper-right touch and lower-right ordinary layouts. Edge map/plus taps, Slate expansion/return, and 21:10 to 16:9 restoration passed. Loading cream/black fills cover the display. Evidence: `widescreen-hud-loading-20261029/` in the NSP work folder. Captures use retained compatible graphics; the current merged host compiles, while full regress preparation is blocked by the existing translator lock mismatch. |
 
 ## Next work
 

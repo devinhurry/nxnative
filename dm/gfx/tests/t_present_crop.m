@@ -286,5 +286,20 @@ int main(void) { @autoreleasepool {
     g_ui_clip_x = 1; g_ui_clip_bias = 0;
     ui_projection_copy(0, projection, corrected, sizeof corrected);
     EXPECT("16:9 projection remains byte-identical", 1, !memcmp(projection, corrected, sizeof projection));
+    long left=1080,right=1280; double squeeze=(21.0/10)/(16.0/9);
+    ui_scissor_x(&left,&right,1280,squeeze,1,NVN_UI_HUD);
+    EXPECT("right-edge HUD preserves its clamped open edge",1280,right);
+    EXPECT("right-edge HUD keeps its interior clip at the corrected position",1012,left);
+    left=0;right=200;ui_scissor_x(&left,&right,1280,squeeze,1,NVN_UI_HUD);
+    EXPECT("left-edge HUD preserves its clamped open edge",0,left);
+    EXPECT("left-edge HUD keeps its interior clip at the corrected position",268,right);
+    left=1080;right=1280;ui_scissor_x(&left,&right,1280,squeeze,1,0);
+    EXPECT("menus retain the centered right clip",1182,right);
+    left=120;right=1160;ui_scissor_x(&left,&right,1280,squeeze,1,NVN_UI_HUD);
+    EXPECT("HUD interior clip remains bounded",1,left>120 && right<1160);
+    left=0;right=1280;ui_scissor_x(&left,&right,1280,squeeze,1,NVN_UI_BACKGROUND);
+    EXPECT("full backgrounds retain both open edges",1,left==0 && right==1280);
+    left=40;right=1200;ui_scissor_x(&left,&right,1280,1,1,NVN_UI_HUD);
+    EXPECT("16:9 HUD scissor stays unchanged",1,left==40 && right==1200);
     printf("== %d checks, %d failed ==\n",cases,failed);return failed!=0;
 } }

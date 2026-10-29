@@ -179,7 +179,7 @@ static inline dm_touchpad_rect dm_touchpad_botw_menu_rect(float canvas_x, float 
                                                            float canvas_width, float canvas_height,
                                                            int minus) {
     float size = DM_TP_BOTW_MENU_SIZE * canvas_height / 720.0f;
-    return (dm_touchpad_rect){canvas_x + (1280.0f - DM_TP_BOTW_MAP_RIGHT_INSET) * canvas_width / 1280.0f + DM_TP_BOTW_MENU_GAP,
+    return (dm_touchpad_rect){canvas_x + canvas_width - DM_TP_BOTW_MAP_RIGHT_INSET * canvas_height / 720.0f + DM_TP_BOTW_MENU_GAP,
         canvas_y + (360.0f - DM_TP_BOTW_MAP_TOP) * canvas_height / 720.0f + DM_TP_BOTW_MENU_Y_OFFSET +
             (minus ? size + DM_TP_BOTW_MENU_GAP : 0), size, size};
 }

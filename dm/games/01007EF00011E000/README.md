@@ -259,6 +259,22 @@ opening a prompt while reusing its transform. Closing/hidden/stale owners
 still cannot emit. Mac pointer checks continued the tutorial from blank body
 padding and emitted native X from the shrine's Skip text.
 
+**Resolved: shrine apparatus Cancel was not touchable (2026-10-29).**
+The console's Move/Cancel row belongs to `SousaGuide_00`, a prompt-only
+operation screen with no BoxCursor selection. It was excluded from cursorless
+prompt discovery, although its native B glyph and label were already observed.
+The shared prompt path now accepts this live, input-enabled owner when the
+native gameplay HUD is hidden. Ordinary gameplay hints remain passive, so
+they cannot hide or intercept the combat pad. The existing native group,
+visibility, root, freshness and controller-mode checks remain in effect.
+The failure was reproduced on a disposable copy of
+`~/Desktop/botw-saves/Shrine-console`; native B worked while touching Cancel
+did nothing. The user verified the fix works. Native regression checks cover
+both ends of the glyph/label touch region and rejection while the gameplay
+HUD is shown. The current merged Mac host compiles; test runtime paths and
+logs are in `shrine-console-touch-20261029/`, with the compatibility graphics
+boundary described under Rendering. No original save files were changed.
+
 **Corner-tip control visibility (2026-10-29; device acceptance pending).**
 `MessageTipsRunTime_00` and `MessageTipsPauseMenu_00` are non-modal corner
 notifications. The former's layout contains the upper-right text/window and
@@ -375,7 +391,7 @@ Used at `DM_FPS_TARGET=0` and for the interval the framework keeps while the VFR
 
 ## Rendering
 
-**Native widescreen UI backgrounds (2026-10-28).** Widescreen is independent of touch/controller mode. Foreground content and touch coordinates retain the centered 16:9 layout; full-width native background Pictures and Windows extend to the display edges. Windows retain their own corner sizes, and title illustrations use proportional cover sizing. Returning to 16:9 restores native dimensions without accumulating scale.
+**Native widescreen UI backgrounds (2026-10-28).** Widescreen is independent of touch/controller mode. Menu foreground content and touch coordinates retain the centered 16:9 layout; full-width native background Pictures and Windows extend to the display edges. Windows retain their own corner sizes, and title illustrations use proportional cover sizing. Returning to 16:9 restores native dimensions without accumulating scale.
 
 The former viewport squeeze also clipped backgrounds at the 16:9 boundary. The registered ui2d shaders now correct clip x in a replay-time copy of their projection/clip-offset uniforms (Maxwell c3/c13, NVN UBO slots 0/10), before clipping. Guest buffers and shader libraries are unchanged. Main's build-checked `Pane::DrawSelf` scope (OBS39/40, x21 pane) marks background draws; only those draws may keep a full-display scissor. Foreground scissors remain centered, so offscreen neighboring panels cannot leak into the side margins. The tag uses a reserved instance-count bit in host command records, preserving compact draw sizes and decoded instance counts. Rewrite main with the current profile before running a new host.
 
@@ -392,6 +408,12 @@ Validation: aspect/background restoration and menu/HUD regressions pass; 173 NVN
 - The game keeps NVN's GL depth mode. It has an `RG8_UI2F` vertex attribute (converted on the CPU, `vconv_i2f`). 101 compute and 4 vertex shaders read the driver segment `c0`; they render the same since compute `c0` carries the dispatch size.
 - It finalizes its transient render targets before every submit and builds them again the next frame, which the storage-takeover rule guards with a 16-submission window (`alias_take_over`).
 - Windowed on the Mac with `present_now`'s residency commit: its title, 60 fps, no GPU error.
+
+**Gameplay edge HUD and loading fills (2026-10-29, resolved on Mac).** The native heart container moves toward the left display edge, preserving the spacing of full and partial hearts. The collapsed minimap and its sensor, noise, temperature, time and weather panes move together toward the right edge. Touch mode retains its upper-right map layout; ordinary input retains the lower-right layout. These anchors use the native HUD padding inside the device's horizontal safe area. Touch map bounds and the adjacent plus/minus buttons use the same HUD rectangle. Expanding the Slate restores its native centered position; returning to 16:9 restores all original positions without accumulating offsets. The HUD draw scope fixes [target-clamped scissors](../../../docs/reference/rendering.md#edge-anchored-ui-keeps-open-scissor-edges) without opening menu clips.
+
+The loading screen's upper cream background is `P_Capture_00` under `N_LogoInOut_00`, a 1280x275 flat capture picture. Only that background widens; its text, status icons and logo keep their proportions. The lower black background already uses the full-display background path. Both now fill a wide display.
+
+Validation: Mac 21:10 touch and ordinary-input gameplay, map expansion/return, edge-area map/plus taps, and resizing to 16:9 and back passed. Aspect/safe-area/restoration and touch-HUD checks pass, with 176 NVN recording checks, 155 graphics checks and zero UIKit handler failures. Evidence is in `widescreen-hud-loading-20261029/` in the NSP work folder. Runtime captures use the retained graphics base and shader chain described above; the current merged host compiles. `regress.py check --games 01007EF00011E000` stops before boot on the existing translator `xlate_source` lock mismatch, including its HEAD baseline. No shader-chain tools changed. Physical iPhone and an actual connected controller remain unverified.
 
 ### Upscaling (current)
 
@@ -497,6 +519,7 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 
 ## Found on this game
 
+- **Resolved: widescreen minimap clipped at the old 16:9 edge:** [Edge-anchored UI keeps open scissor edges](../../../docs/reference/rendering.md#edge-anchored-ui-keeps-open-scissor-edges).
 - **Resolved: black Mac title and scene after the shader-chain update.** A manual shader build mixed an older package with the newer profile. Package records are now identity-checked before translation; [Shader package records match profile keys](../../../docs/reference/shaders.md#shader-package-records-match-profile-keys).
 - **Resolved build guard and cache isolation; rendering cause open:** [Tested tools and compiler-specific shader caches](../../../docs/reference/shaders.md#tested-tools-and-compiler-specific-shader-caches).
 

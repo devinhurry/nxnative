@@ -907,6 +907,9 @@ static void rec_ui_scope(int32_t *instances, int32_t *base_instance) {
     if (dm_botw_rune_icon_drawing() && !*base_instance) {
         *instances |= NVN_DRAW_UI_BACKGROUND;
         *base_instance = INT32_MIN; // unused by the native rune quad; restored before replay
+    } else if (dm_aspect_ui_hud_drawing() && !*base_instance) {
+        *instances |= NVN_DRAW_UI_BACKGROUND;
+        *base_instance = INT32_MIN+1;
     } else if (dm_aspect_ui_background_drawing()) *instances |= NVN_DRAW_UI_BACKGROUND;
 }
 static void rec_draw(NVNcommandBuffer *c, p_draw d) { size_t n = d.ind || d.mdi_cnt ? sizeof d : offsetof(p_draw, ind); rec_ui_scope(&d.instances, &d.base_instance); memcpy(rec(c, OP_DRAW, n), &d, n); }

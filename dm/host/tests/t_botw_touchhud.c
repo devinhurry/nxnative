@@ -21,6 +21,8 @@ int gate_obs_present(int id) { return id == OBS_BOTW_TOUCH_PANE || id == OBS_BOT
 void gate_obs_read_set(int id, void (*fn)(const uint64_t *)) { assert(id > 0 && id < OBS_MAX); test_gates[id] = fn; }
 void front_botw_touch_hud_mode_changed(void) {}
 int dm_aspect_native(void) { return aspect_native; }
+static float hud_offset[2];
+float dm_aspect_hud_offset(int right) { return hud_offset[!!right]; }
 void dm_aspect_ui_pane(uint8_t *pane) { if (pane) aspect_pane_calls++; }
 void front_botw_rune_icon_changed(void) {}
 void dm_botw_touch_actions_reset(void) { actions_reset_count++; }
@@ -165,6 +167,17 @@ int main(void) {
     assert(fabsf((315.0f - 257.0f) - 58.0f) < .001f); // gauges retain their native offset from the map
     assert(355.0f + 280.0f * .5f < 640.0f); // linked gauge content fits; Pa_Sensor's extra width is padding
     assert(fabsf((473.0f + 166.0f * .5f) - 556.0f) < .001f);
+    // A wider safe HUD canvas moves the whole touch map cluster and publishes
+    // its hit bounds in that same canvas, independently of centered menus.
+    hud_offset[0]=76; hud_offset[1]=96;
+    scaled_matrix(cut,1,510,-240); calculate_entry(cut); calculated_matrix(cut);
+    expect_translation(cut,569,257);
+    assert(fabsf(map_region[0]-(486.f+640+76)/1452)<.001f && fabsf(map_region[2]-166.f/1452)<.001f);
+    matrix_translation(status,392,-182); calculate_entry(status); calculated_matrix(status);
+    expect_translation(status,451,315);
+    hud_offset[0]=hud_offset[1]=0;
+    scaled_matrix(cut,1,510,-240); calculate_entry(cut); calculated_matrix(cut);
+    expect_translation(cut,473,257);
     int map_events_before_tap = map_region_events;
     dm_botw_touch_hud_map_tapped();
     assert(!map_region_valid && map_region_events == map_events_before_tap + 1);

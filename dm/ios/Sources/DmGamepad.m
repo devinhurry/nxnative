@@ -513,7 +513,8 @@ static BOOL botwTouchHudSupported(void) { return dm_botw_touch_hud_available(); 
 static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPointMake(right ? CGRectGetMaxX(s) - dx : CGRectGetMinX(s) + dx, y); }
 - (CGRect)botwLayoutRect:(int)control {
     UIEdgeInsets i = self.safeAreaInsets; float canvas[4];
-    dm_aspect_touch_rect(self.bounds.size.width,self.bounds.size.height,canvas);
+    if (control == B_PLUS || control == B_MINUS) dm_aspect_hud_rect(self.bounds.size.width,self.bounds.size.height,canvas);
+    else dm_aspect_touch_rect(self.bounds.size.width,self.bounds.size.height,canvas);
     dm_touchpad_rect r = dm_botw_layout_control(&_touchLayout,control,self.bounds.size.width,self.bounds.size.height,
         i.left,i.top,i.right,i.bottom,(dm_touchpad_rect){canvas[0],canvas[1],canvas[2],canvas[3]});
     return CGRectMake(r.x,r.y,r.width,r.height);
@@ -669,7 +670,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
 }
 - (BOOL)botwMapOwnsPoint:(CGPoint)p {
     if (![self botwTouchControlsActive] || !_botwMapValid) return NO;
-    float rect[4]; dm_aspect_touch_rect((float)self.bounds.size.width, (float)self.bounds.size.height, rect);
+    float rect[4]; dm_aspect_hud_rect((float)self.bounds.size.width, (float)self.bounds.size.height, rect);
     if (rect[2] <= 0 || rect[3] <= 0) return NO;
     CGPoint normalized = CGPointMake((p.x - rect[0]) / rect[2], (p.y - rect[1]) / rect[3]);
     return CGRectContainsPoint(_botwMapRect, normalized);

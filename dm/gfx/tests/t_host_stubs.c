@@ -6,7 +6,10 @@ __attribute__((weak)) int dm_guest_as_contains(uintptr_t address) { (void)addres
 // BOTW touch-HUD hooks are inert in graphics unit tests unless a test supplies
 // its own definitions; linking nvn_mtl.m still compiles these gated paths.
 __attribute__((weak)) int dm_botw_rune_icon_drawing(void) { return 0; }
+__attribute__((weak)) void dm_botw_rune_icon_draw_begin(uint8_t *pane) { (void)pane; }
+__attribute__((weak)) void dm_botw_rune_icon_draw_end(void) {}
 __attribute__((weak)) int dm_botw_touch_hud_active(void) { return 0; }
+__attribute__((weak)) int dm_aspect_ui_hud_drawing(void) { return 0; }
 __attribute__((weak)) int dm_aspect_ui_background_drawing(void) { return 0; }
 __attribute__((weak)) int dm_botw_rune_icon_capture_token(uint64_t *token) { (void)token; return 0; }
 __attribute__((weak)) void dm_botw_rune_icon_publish(uint64_t token, const uint8_t *rgba,

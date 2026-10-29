@@ -4231,9 +4231,20 @@ static int selector_cursorless_prompt_view(uintptr_t manager, uint64_t frame,
         uintptr_t state = selector_read_ptr(screen, 0x38);
         if (!selector_range(state, 0x39) || !(((const uint8_t *)state)[0x38] & 2)) continue;
         char name[64];
-        if (!selector_screen_name(screen, name) || !selector_pointer_screen_name(name) ||
+        if (!selector_screen_name(screen, name)) continue;
+        int control_guide = !strcmp(name, "SousaGuide_00");
+        if ((!selector_pointer_screen_name(name) && !control_guide) ||
             selector_name_prefix(name, "AppMap") || !strcmp(name, "AppTool_00") ||
             !strcmp(name, "AppAlbum_00") || !strcmp(name, "AppSystemWindow_00")) continue;
+        if (control_guide) {
+            // Apparatus Cancel belongs to this prompt-only operation screen.
+            // Its ordinary gameplay hints must not hide or intercept the pad.
+            pthread_mutex_lock(&g_menu_mu);
+            int owns_surface = !g_presented_gameplay && frame >= g_presented_menu_frame &&
+                frame - g_presented_menu_frame <= 2;
+            pthread_mutex_unlock(&g_menu_mu);
+            if (!owns_surface) continue;
+        }
         // Cutscenes disable the menu input-group mask while Skip_00 still
         // owns its visible X prompt. Its shown screen and live glyph establish
         // that action independently; other menus retain their group checks.

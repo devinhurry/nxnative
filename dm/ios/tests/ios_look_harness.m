@@ -214,6 +214,7 @@ void dm_touch_set(const dm_touch *touches, int count) {
     if (count > 0 && touches) g_last_touch = touches[0];
 }
 void dm_aspect_touch_rect(float w, float h, float rect[4]) { rect[0] = rect[1] = 0; rect[2] = w; rect[3] = h; }
+void dm_aspect_hud_rect(float w, float h, float rect[4]) { dm_aspect_touch_rect(w,h,rect); }
 void dm_motion_set(int p, const float acc[3], const float rot[3]) { (void)p; (void)acc; (void)rot; }
 void dm_motion_clear(int p) { (void)p; }
 void dm_motion_set_switch(int p, const float acc[3], const float rot[3]) { (void)p; (void)acc; (void)rot; }
