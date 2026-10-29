@@ -405,7 +405,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
 - (dm_touchpad_point)shieldHome { return [self layoutCenter:8]; }
 - (dm_touchpad_point)runeButton { return [self layoutCenter:6]; }
 - (dm_touchpad_rect)menuKeyRect:(int)button {
-    float rect[4]; dm_aspect_touch_rect((float)self.bounds.size.width, (float)self.bounds.size.height, rect);
+    float rect[4]; dm_aspect_hud_rect((float)self.bounds.size.width, (float)self.bounds.size.height, rect);
     return dm_touchpad_botw_menu_rect(rect[0], rect[1], rect[2], rect[3], button == 11);
 }
 - (dm_touchpad_point)faceCenter { if (_active) return [self layoutCenter:0]; return dm_touchpad_face_center(self.bounds.size.width, self.bounds.size.height, 0, 0, 0, 0); }
@@ -415,7 +415,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
 - (float)shieldRadius { return dm_touchpad_botw_stick_radius(self.bounds.size.height)*[self layoutScale:8]; }
 - (BOOL)mapOwnsTop:(dm_touchpad_point)p {
     if (!_mapValid) return NO;
-    float content[4]; dm_aspect_touch_rect((float)self.bounds.size.width, (float)self.bounds.size.height, content);
+    float content[4]; dm_aspect_hud_rect((float)self.bounds.size.width, (float)self.bounds.size.height, content);
     if (content[2] <= 0 || content[3] <= 0) return NO;
     float x = (p.x - content[0]) / content[2], y = (p.y - content[1]) / content[3];
     return x >= _mapRect.x && x < _mapRect.x + _mapRect.width && y >= _mapRect.y && y < _mapRect.y + _mapRect.height;
@@ -850,6 +850,7 @@ static void preview_refresh(void) {
     }
     _lookSize = s; _hasLookSize = YES;
     dm_aspect_set_display((float)(s.width / s.height));
+    dm_aspect_set_safe_area(s.width, s.height, 0, 0);
     [self fitDrawable];
     preview_refresh();
 }

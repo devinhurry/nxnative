@@ -21,6 +21,8 @@ static void (*screen_callback)(const uint64_t *);
 static void (*draw_callback)(const uint64_t *), (*draw_end_callback)(const uint64_t *);
 void dm_botw_rune_icon_draw_begin(uint8_t *pane) { (void)pane; }
 void dm_botw_rune_icon_draw_end(void) {}
+static int test_touch_active;
+int dm_botw_touch_hud_active(void) { return test_touch_active; }
 static int have_gate = 1;
 void gate_obs_read_set(int id, void (*fn)(const uint64_t *)) {
     if (id == OBS_ASPECT_PROJECTION) callback = fn;
@@ -30,6 +32,61 @@ void gate_obs_read_set(int id, void (*fn)(const uint64_t *)) {
     else { assert(id == OBS_ASPECT_WORLD_PROJECTION); screen_callback = fn; }
 }
 int gate_obs_present(int id) { return (id == OBS_ASPECT_PROJECTION || id == OBS_ASPECT_UI_CAMERA || id == OBS_ASPECT_WORLD_PROJECTION || id == OBS_BOTW_UI_DRAW || id == OBS_BOTW_UI_DRAW_END) && have_gate && !(id == OBS_ASPECT_UI_CAMERA && have_gate == 2) && !(id == OBS_ASPECT_WORLD_PROJECTION && have_gate == 3); }
+static void pane_init(uint8_t *p, const char *name, float x, float w, float h) {
+    memset(p,0,0x100); strcpy((char *)p+0xb8,name);
+    *(float *)(p+0x30)=x; *(float *)(p+0x50)=w; *(float *)(p+0x54)=h;
+}
+static void pane_child(uint8_t *parent, uint8_t *child) {
+    uint8_t *next=*(uint8_t **)(parent+0x28);
+    *(uint8_t **)(child+0x10)=next?next:parent+0x20;
+    *(uint8_t **)(child+0x18)=parent; *(uint8_t **)(parent+0x28)=child+8;
+}
+static void test_edge_hud(void) {
+    uint8_t root[0x100],all[0x100],state[0x100],heart[0x100],glyph[0x100],sensor[0x100];
+    pane_init(root,"RootPane",0,1280,720); pane_init(all,"N_All_00",0,30,30); pane_child(root,all);
+    pane_init(state,"N_State_00",0,40,40); pane_child(all,state);
+    pane_init(heart,"Pa_HeartGauge_00",-434,312,50); pane_child(state,heart);
+    pane_init(glyph,"P_Heart_00",20,32,32); pane_child(heart,glyph);
+    pane_init(sensor,"Pa_Sensor_00",392,582,78); pane_child(all,sensor);
+    dm_aspect_set_display(21.f/10); dm_aspect_set_safe_area(1512,720,0,0);
+    for (int i=0;i<20;i++) { dm_aspect_ui_pane(heart); dm_aspect_ui_pane(sensor); }
+    assert(fabsf(*(float *)(heart+0x30)+550)<.001f && *(float *)(heart+0x50)==312);
+    assert(fabsf(*(float *)(sensor+0x30)-508)<.001f && *(float *)(sensor+0x50)==582);
+    dm_aspect_ui_pane(glyph); assert(*(float *)(glyph+0x30)==20 && *(float *)(glyph+0x50)==32);
+    uint64_t regs[31]={0}; regs[21]=(uintptr_t)glyph; draw_callback(regs);
+    assert(dm_aspect_ui_hud_drawing() && !dm_aspect_ui_background_drawing());
+    draw_end_callback(regs); assert(!dm_aspect_ui_hud_drawing());
+    test_touch_active=1; dm_aspect_ui_pane(sensor); assert(*(float *)(sensor+0x30)==392);
+    test_touch_active=0; dm_aspect_ui_pane(sensor); assert(fabsf(*(float *)(sensor+0x30)-508)<.001f);
+    uint8_t map[0x100],inout[0x100],ornaments[0x100],cut[0x100],sibling[0x100],picture[0x100];
+    pane_init(map,"RootPane",0,1280,720); pane_init(inout,"N_InOut_00",0,30,30); pane_child(map,inout);
+    pane_init(ornaments,"N_InOut_01",0,30,30); pane_child(map,ornaments);
+    pane_init(cut,"N_Cut_00",0,166,166); pane_child(inout,cut);
+    pane_init(sibling,"N_Cut_01",0,1500,1500); pane_child(inout,sibling);
+    pane_init(picture,"P_MapCapture_00",0,192,192); pane_child(sibling,picture);
+    dm_aspect_ui_pane(inout); dm_aspect_ui_pane(ornaments);
+    assert(fabsf(*(float *)(inout+0x30)-116)<.001f && fabsf(*(float *)(ornaments+0x30)-116)<.001f);
+    regs[21]=(uintptr_t)picture; draw_callback(regs); assert(dm_aspect_ui_hud_drawing()); draw_end_callback(regs);
+    *(float *)(cut+0x50)=1500; *(float *)(cut+0x54)=720;
+    dm_aspect_ui_pane(inout); dm_aspect_ui_pane(ornaments);
+    assert(*(float *)(inout+0x30)==0 && *(float *)(ornaments+0x30)==0);
+    draw_callback(regs); assert(!dm_aspect_ui_hud_drawing()); draw_end_callback(regs);
+    dm_aspect_set_safe_area(1512,720,40,20); dm_aspect_ui_pane(heart); dm_aspect_ui_pane(sensor);
+    assert(fabsf(*(float *)(heart+0x30)+510)<.001f && fabsf(*(float *)(sensor+0x30)-488)<.001f);
+    float rect[4]; dm_aspect_hud_rect(1512,720,rect);
+    assert(fabsf(rect[0]-40)<.001f && fabsf(rect[2]-1452)<.001f && rect[1]==0 && rect[3]==720);
+    dm_aspect_touch_rect(1512,720,rect); assert(fabsf(rect[0]-116)<.001f && rect[2]==1280);
+    dm_aspect_set_display(GAME_ASPECT); dm_aspect_ui_pane(heart); dm_aspect_ui_pane(sensor);
+    assert(*(float *)(heart+0x30)==-434 && *(float *)(sensor+0x30)==392);
+    dm_aspect_set_safe_area(1280,720,0,0);
+    uint8_t fade[0x100],logo[0x100],upper[0x100];
+    pane_init(fade,"RootPane",0,1280,720); pane_init(logo,"N_LogoInOut_00",0,30,40); pane_child(fade,logo);
+    pane_init(upper,"P_Capture_00",0,1280,275); pane_child(logo,upper);
+    dm_aspect_set_display(21.f/10); dm_aspect_ui_pane(upper);
+    assert(fabsf(*(float *)(upper+0x50)-1512)<.001f && *(float *)(upper+0x54)==275);
+    regs[21]=(uintptr_t)upper; draw_callback(regs); assert(dm_aspect_ui_background_drawing()); draw_end_callback(regs);
+    dm_aspect_set_display(GAME_ASPECT); dm_aspect_ui_pane(upper); assert(*(float *)(upper+0x50)==1280);
+}
 static void failure(const char *value, int bad_build, int stale) {
     pid_t pid = fork(); assert(pid >= 0);
     if (!pid) {
@@ -182,5 +239,6 @@ int main(void) {
     assert(*(float *)(art + 0x50) == 1000 && *(float *)(art + 0x54) == 709);
     float hit[4]; dm_aspect_touch_rect(1008, 480, hit);
     assert(fabsf(hit[0] - 77.3333f) < 0.001f && fabsf(hit[2] - 853.3333f) < 0.001f);
+    test_edge_hud();
     free(g_mod[0].base); puts("aspect: camera, centered content/hit regions and independent fullscreen backgrounds passed");
 }

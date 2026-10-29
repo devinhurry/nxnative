@@ -535,6 +535,13 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Fix:** the replay keeps the compute program apart (`S.cprog` in `nvn_mtl.m`, and `g_pp_cprog` in the pass analysis).
 - **Found on:** [Hyrule Warriors: Age of Calamity](../../dm/games/01002B00111A2000/README.md): the game interleaves dispatches and draws; its intro movie's NV12 → RGB draw was dropped and the movie played black under its "+ Skip" prompt.
 
+### Edge-anchored UI keeps open scissor edges
+
+- **Symptom:** a widescreen HUD moves toward the screen edge, but the minimap is cut off at the old centered 16:9 boundary.
+- **Cause:** native ui2d clamps a pane's scissor to its original render target before NVN records it. Applying the centered UI correction to that clamped edge recreates the old boundary even after the pane moves outward.
+- **Fix:** carry the build-checked native HUD DrawSelf scope through compact draw records. For those draws, preserve each target-clamped horizontal edge independently and transform interior clip boundaries with the UI projection. Full-display backgrounds retain both open edges; menu clips stay centered. Restore the original instance count and base instance when decoding the scope marker.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#rendering). Other games do not publish this HUD scope.
+
 ### Instanced array draws
 
 - Instanced array draws (`DrawArraysInstanced`) carry instance count and base instance in the `OP_DRAW` record.

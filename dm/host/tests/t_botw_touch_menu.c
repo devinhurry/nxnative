@@ -739,6 +739,66 @@ static void test_cursorless_help_prompts(void) {
     dm_botw_touch_menu_reset();
 }
 
+static void test_apparatus_cancel_prompt(void) {
+    dm_botw_touch_menu_reset(); init_selector_fixture();
+    current_guest_frame = 9200; dm_botw_touch_menu_test_set_render_frame(9200);
+    dm_botw_touch_menu_test_set_generic_selector(1, (uintptr_t)mock_native_group,
+                                               (uintptr_t)mock_native_shown);
+    mock_guest_start = (uintptr_t)native_panes; mock_guest_size = sizeof native_panes;
+    uint8_t mask[0x20] = {0}; mask[0x14] = 1 << 2;
+    put_ptr(selector.registry + 0xb18, (uintptr_t)mask);
+    put_ptr(selector.manager + 0x48, 0);
+    strcpy((char *)selector.screen + 0x200, "SousaGuide_00");
+    selector.screen[0xfe] = 2; selector.state[0x38] = 2;
+    uint8_t *root = fake_pane(80, "RootPane", -1, 1280, 720, 0, 0);
+    put_ptr(selector.screen + 0x30, (uintptr_t)selector.apphome_wrapper);
+    put_ptr(selector.apphome_wrapper + 0x18, (uintptr_t)root);
+    fake_pane(81, "N_Align_00", 80, 1044, 40, 0, -318);
+    fake_pane(82, "Pa_Guide_00", 81, 298, 40, 0, -318);
+    uint8_t *inout = fake_pane(83, "N_InOut_00", 82, 30, 40, 80, -318);
+    uint8_t *icon = fake_pane(84, "T_Icon_00", 83, 34, 34, 80, -318);
+    uint8_t *label = fake_pane(85, "T_Guide_00", 83, 120, 24, 60, -318);
+    link_child(inout, icon); link_child(inout, label);
+    uint16_t glyph = 0xe041; memcpy(icon + 0xf0, &glyph, 2);
+    put_ptr(icon + 0xe0, (uintptr_t)(icon + 0xf0));
+    generic_back_prompt_observe(icon, 1); generic_back_prompt_observe(label, 1);
+    selector_publish_menu_presentation((uintptr_t)selector.manager, 9200);
+    dm_botw_touch_menu_view guide = {0};
+    assert(selector_cursorless_prompt_view((uintptr_t)selector.manager, 9200,
+        (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &guide));
+    assert(guide.back_valid && guide.prompt_owner_root == (uintptr_t)root);
+    dm_botw_touch_menu_test_publish(&guide);
+    tap(guide.back[0] + .005f, guide.back[1] + guide.back[3] * .5f);
+    assert(sample(9200) == DM_BTN_B); // label side of the shared prompt
+    sample(9201);
+    current_guest_frame = 9202; dm_botw_touch_menu_test_set_render_frame(9202);
+    guide.render_frame = guide.prompt_owner_frame = 9202;
+    dm_botw_touch_menu_test_publish(&guide);
+    tap(guide.back[0] + guide.back[2] - .005f, guide.back[1] + guide.back[3] * .5f);
+    assert(sample(9202) == DM_BTN_B); // glyph side
+    sample(9203);
+    // This same screen must remain a passive hint when the gameplay HUD is shown.
+    uint8_t *game = fake_pane(86, "RootPane", -1, 1280, 720, 0, 0);
+    fake_pane(87, "N_All_00", 86, 0, 0, 0, 0);
+    fake_pane(88, "N_State_00", 87, 0, 0, 0, 0);
+    fake_pane(89, "Pa_HeartGauge_00", 88, 0, 0, 0, 0);
+    fake_pane(90, "N_InOut_00", 89, 0, 0, 0, 0);
+    for (int i = 86; i < 90; i++) link_child(native_panes[i].bytes, native_panes[i + 1].bytes);
+    strcpy((char *)selector.map_screen + 0xa0, "MainScreen_00");
+    selector.map_screen[0xfe] = 2; selector.map_state[0x38] = 2;
+    put_ptr(selector.map_screen + 0x38, (uintptr_t)selector.map_state);
+    put_ptr(selector.map_screen + 0x30, (uintptr_t)selector.map_owner);
+    put_ptr(selector.map_owner + 0x18, (uintptr_t)game);
+    selector.screen_list[1] = (uintptr_t)selector.map_screen;
+    uint32_t count = 2; memcpy(selector.registry + 0x28, &count, 4);
+    selector_publish_menu_presentation((uintptr_t)selector.manager, 9202);
+    assert(g_presented_gameplay && !g_presented_menu);
+    assert(!selector_cursorless_prompt_view((uintptr_t)selector.manager, 9202,
+        (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &guide));
+    mock_guest_start = 0; mock_guest_size = 0;
+    dm_botw_touch_menu_reset();
+}
+
 static void test_shop_category_touch(void) {
     dm_botw_touch_menu_reset(); init_selector_fixture();
     current_guest_frame = 5200; dm_botw_touch_menu_test_set_render_frame(5200);
@@ -3323,6 +3383,7 @@ int main(void) {
     test_inventory_category_touch_cells();
     test_shop_grid_paging();
     test_cursorless_help_prompts();
+    test_apparatus_cancel_prompt();
     test_shop_category_touch();
     test_cutscene_skip_prompt();
     test_inventory_preview_rotation();

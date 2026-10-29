@@ -6452,6 +6452,15 @@ static void ui_projection_copy(int reg, const float *source, float *out, size_t 
         for (int i = 0; i < 4; i++) out[i] = source[i] * g_ui_clip_x + source[12 + i] * g_ui_clip_bias;
     else if (reg == 10 && size >= 4) out[0] = source[0] * g_ui_clip_x;
 }
+static void ui_scissor_x(long *x0, long *x1, long width, double squeeze, int projection, int scope) {
+    // Native ui2d clamps scissor edges to its 16:9 target before calling NVN.
+    // Edge-anchored HUD can cross either edge independently. Preserve those
+    // open edges; partial interior clips still follow the corrected projection.
+    int left_open = projection && *x0 <= 0 && (scope == NVN_UI_HUD || (scope == NVN_UI_BACKGROUND && *x1 >= width));
+    int right_open = projection && *x1 >= width && (scope == NVN_UI_HUD || (scope == NVN_UI_BACKGROUND && *x0 <= 0));
+    *x0 = left_open ? 0 : (long)floor(width / 2.0 + (*x0 - width / 2.0) / squeeze);
+    *x1 = right_open ? width : (long)ceil(width / 2.0 + (*x1 - width / 2.0) / squeeze);
+}
 // A handle read from a uniform buffer names IDs of the pools bound when the draw runs: as bound handles are moved at recording (hle_nvn.c bind_handles), these take the bases here (0 = none)
 static int ubo_tex_id(uint32_t h) { int t = (int)(h & 0xfffff); return t ? t + S.tex_base : 0; }
 static int ubo_samp_id(uint32_t h) { int s = (int)(h >> 20); return s ? s + S.samp_base : 0; }
@@ -9155,10 +9164,7 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
         long x0 = R.sc.x < 0 ? 0 : R.sc.x, y0 = R.sc.y <= 0 ? 0 : R.sc.y, x1 = (long)R.sc.x + R.sc.w, y1 = (long)R.sc.y + R.sc.h;
         if (x1 > (long)tw) x1 = tw; if (y1 > (long)th) y1 = th;
         if (sq) {
-            int full_bleed = ui_projection && (dw ? dw->pad : di ? di->pad : 0);
-            if (!full_bleed || x0 > 0 || x1 < (long)tw) {
-                x0 = (long)floor(tw / 2.0 + (x0 - tw / 2.0) / sux); x1 = (long)ceil(tw / 2.0 + (x1 - tw / 2.0) / sux);
-            }
+            ui_scissor_x(&x0, &x1, (long)tw, sux, ui_projection, ui_scope);
             y0 = (long)floor(th / 2.0 + (y0 - th / 2.0) / suy); y1 = (long)ceil(th / 2.0 + (y1 - th / 2.0) / suy);
             if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0; if (x1 > (long)tw) x1 = tw; if (y1 > (long)th) y1 = th;
         }

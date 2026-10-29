@@ -335,7 +335,7 @@ static int touchhud_update_cluster_delta(void) {
     pthread_mutex_lock(&g_touchhud_mu);
     int valid = g_touchhud.cut_bounds_valid && g_touchhud.sibling_bounds_valid && g_touchhud.sensor_bounds_valid;
     if (valid) {
-        g_touchhud.map_dx = 640.0f - DM_TP_BOTW_MAP_RIGHT_INSET - g_touchhud.cut_right;
+        g_touchhud.map_dx = 640.0f + dm_aspect_hud_offset(1) - DM_TP_BOTW_MAP_RIGHT_INSET - g_touchhud.cut_right;
         g_touchhud.map_dy = DM_TP_BOTW_MAP_TOP - g_touchhud.cut_top;
         g_touchhud.delta_valid = 1;
     }
@@ -357,8 +357,9 @@ static void publish_map_rect(uint8_t *pane) {
         invalidate_map_rect();
         return;
     }
-    float x0 = fmaxf(0, (left + 640.0f) / 1280.0f);
-    float x1 = fminf(1, (right + 640.0f) / 1280.0f);
+    float edge_left = dm_aspect_hud_offset(0), hud_width = 1280 + edge_left + dm_aspect_hud_offset(1);
+    float x0 = fmaxf(0, (left + 640.0f + edge_left) / hud_width);
+    float x1 = fminf(1, (right + 640.0f + edge_left) / hud_width);
     float y0 = fmaxf(0, (360.0f - top) / 720.0f);
     float y1 = fminf(1, (360.0f - bottom) / 720.0f);
     if (x1 <= x0 || y1 <= y0) { invalidate_map_rect(); return; }

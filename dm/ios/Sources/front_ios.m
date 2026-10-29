@@ -42,6 +42,7 @@ static UILabel *front_ios_fps_label(void);
     CAMetalLayer *l = (CAMetalLayer *)self.layer;
     l.drawableSize = CGSizeMake(self.bounds.size.width * l.contentsScale, self.bounds.size.height * l.contentsScale);
     if (l.drawableSize.width > 0 && l.drawableSize.height > 0) dm_aspect_set_display((float)(l.drawableSize.width / l.drawableSize.height));
+    dm_aspect_set_safe_area(self.bounds.size.width, self.bounds.size.height, self.safeAreaInsets.left, self.safeAreaInsets.right);
 }
 @end
 

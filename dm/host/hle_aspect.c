@@ -12,6 +12,7 @@ static pthread_once_t g_config_once = PTHREAD_ONCE_INIT;
 static int g_on;
 static float g_custom;
 static _Atomic float g_screen = 16.0f / 9.0f;
+static _Atomic float g_hud_safe_left, g_hud_safe_right;
 static module_t *g_main;
 static uint64_t g_single_off, g_proj_off, g_vt_off, g_field_off, g_dirty_off;
 static unsigned g_ui_reg; static uint64_t g_ui_source, g_ui_projection, g_ui_fovy;
@@ -52,6 +53,28 @@ void dm_aspect_touch_rect(float w, float h, float rect[4]) {
     if (cr > 0) { if (cw / ch > cr) cw = ch * cr; else ch = cw / cr; }
     if (cw / ch > GAME_ASPECT) cw = ch * GAME_ASPECT; else ch = cw / GAME_ASPECT;
     rect[0] = (w - cw) / 2; rect[1] = (h - ch) / 2; rect[2] = cw; rect[3] = ch;
+}
+
+// Extra logical space beside the centered UI, retaining native HUD padding
+// and respecting the game view's safe area. Menus still use touch_rect.
+float dm_aspect_hud_offset(int right) {
+    float extra = fmaxf(0, 360 * dm_aspect_ratio() - 640);
+    float safe = atomic_load(right ? &g_hud_safe_right : &g_hud_safe_left);
+    return fmaxf(0, extra - safe);
+}
+void dm_aspect_set_safe_area(float w, float h, float left, float right) {
+    if (!isfinite(w) || !isfinite(h) || !isfinite(left) || !isfinite(right) || w <= 0 || h <= 0) return;
+    float canvas[4]; dm_aspect_touch_rect(w, h, canvas);
+    float frame_width = dm_aspect_native() ? fminf(w, h * dm_aspect_ratio()) : canvas[2];
+    float bar = (w - frame_width) * .5f, scale = 720 / canvas[3];
+    atomic_store(&g_hud_safe_left, fmaxf(0, left - bar) * scale);
+    atomic_store(&g_hud_safe_right, fmaxf(0, right - bar) * scale);
+}
+void dm_aspect_hud_rect(float w, float h, float rect[4]) {
+    dm_aspect_touch_rect(w, h, rect);
+    float scale = rect[3] / 720, left = dm_aspect_hud_offset(0) * scale;
+    rect[0] -= left;
+    rect[2] += left + dm_aspect_hud_offset(1) * scale;
 }
 
 static void aspect_apply_projection(uint8_t *proj) {
@@ -122,6 +145,52 @@ static int aspect_ui_background(const char *name) {
 static int aspect_ui_named(const uint8_t *pane, const char *name) {
     return pane && !strncmp((const char *)pane + 0xb8, name, 16);
 }
+// Read only live native lists while inside Pane's build-checked callbacks.
+static uint8_t *aspect_ui_parent(uint8_t *pane) { return pane ? *(uint8_t **)(pane + 0x18) : NULL; }
+static uint8_t *aspect_ui_child(uint8_t *parent, const char *name) {
+    if (!parent) return NULL;
+    uint8_t *sentinel = parent + 0x20, *link = *(uint8_t **)(parent + 0x28);
+    for (int i = 0; link && link != sentinel && i < 64; i++) {
+        uint8_t *child = link - 8;
+        if (aspect_ui_parent(child) != parent) return NULL;
+        if (aspect_ui_named(child, name)) return child;
+        link = *(uint8_t **)(child + 0x10);
+    }
+    return NULL;
+}
+static uint8_t *aspect_ui_map_cut(uint8_t *pane) {
+    if (!aspect_ui_named(pane, "N_InOut_00") && !aspect_ui_named(pane, "N_InOut_01")) return NULL;
+    uint8_t *root = aspect_ui_parent(pane);
+    if (!aspect_ui_named(root, "RootPane")) return NULL;
+    uint8_t *inout = aspect_ui_child(root, "N_InOut_00");
+    if (!aspect_ui_child(inout, "N_Cut_01")) return NULL;
+    return aspect_ui_child(inout, "N_Cut_00");
+}
+static int aspect_ui_map_collapsed(uint8_t *cut) {
+    if (!cut) return 0;
+    float size[2]; memcpy(size, cut + 0x50, sizeof size);
+    return fabsf(size[0] - 166) < 2 && fabsf(size[1] - 166) < 2;
+}
+// Move containers once so full/partial hearts and every map ornament retain
+// their authored spacing. Map identity stays known while the Slate is open,
+// allowing its native position to be restored immediately on expansion.
+static int aspect_ui_hud_anchor(uint8_t *pane) {
+    uint8_t *parent = aspect_ui_parent(pane), *all = aspect_ui_parent(parent);
+    if (aspect_ui_named(pane, "Pa_HeartGauge_00") && aspect_ui_named(parent, "N_State_00") &&
+        aspect_ui_named(all, "N_All_00") && aspect_ui_named(aspect_ui_parent(all), "RootPane")) return -1;
+    if (aspect_ui_named(parent, "N_All_00") && aspect_ui_named(all, "RootPane")) {
+        const char *names[] = {"Pa_Sensor_00", "Pa_SoundGauge_00", "Pa_TempMeter_00", "Pa_Weather_00", "Pa_Time_00"};
+        for (unsigned i=0;i<sizeof names/sizeof *names;i++) if (aspect_ui_named(pane,names[i])) return 1;
+    }
+    return aspect_ui_map_cut(pane) ? 2 : 0;
+}
+static int aspect_ui_hud_pane(uint8_t *pane) {
+    for (int i=0; pane && i<64; i++,pane=aspect_ui_parent(pane)) {
+        int anchor=aspect_ui_hud_anchor(pane);
+        if (anchor && (anchor!=2 || aspect_ui_map_collapsed(aspect_ui_map_cut(pane)))) return 1;
+    }
+    return 0;
+}
 static int aspect_ui_title_shade(uint8_t *pane) {
     if (!pane || !(aspect_ui_named(pane, "FBLayout_00") || aspect_ui_named(pane, "FBLayout_01") ||
                    aspect_ui_named(pane, "FBLayout_02") || aspect_ui_named(pane, "FBLayout_03"))) return 0;
@@ -157,6 +226,13 @@ static int aspect_ui_title_art(uint8_t *pane) {
 }
 static int aspect_ui_background_pane(uint8_t *pane) {
     if (aspect_ui_title_shade(pane) || aspect_ui_title_art(pane)) return 1;
+    // Fade_00's upper cream panel is a flat capture picture. Its status icons
+    // and tip text are separate panes and keep their native proportions.
+    if (aspect_ui_named(pane, "P_Capture_00") && aspect_ui_named(aspect_ui_parent(pane), "N_LogoInOut_00") &&
+        aspect_ui_named(aspect_ui_parent(aspect_ui_parent(pane)), "RootPane")) {
+        float size[2]; memcpy(size, pane + 0x50, sizeof size);
+        if (size[0] >= 1280 && fabsf(size[1] - 275) < .01f) return 1;
+    }
     if (!pane || !aspect_ui_background((char *)pane + 0xb8)) return 0;
     float width, height;
     memcpy(&width, pane + 0x50, 4); memcpy(&height, pane + 0x54, 4);
@@ -164,24 +240,27 @@ static int aspect_ui_background_pane(uint8_t *pane) {
     uintptr_t child; memcpy(&child, pane + 0x28, sizeof child);
     return !child || child == (uintptr_t)pane + 0x20;
 }
-static _Thread_local int g_ui_background_drawing;
+static _Thread_local int g_ui_background_drawing, g_ui_hud_drawing;
 int dm_aspect_ui_background_drawing(void) { return g_ui_background_drawing; }
+int dm_aspect_ui_hud_drawing(void) { return g_ui_hud_drawing; }
 static void aspect_ui_draw(const uint64_t *regs) {
     // x21 is Pane::Draw's saved this across the DrawSelf virtual call.
     g_ui_background_drawing = dm_aspect_ratio() > GAME_ASPECT &&
         aspect_ui_background_pane((uint8_t *)(uintptr_t)regs[21]);
+    g_ui_hud_drawing = dm_aspect_ratio() > GAME_ASPECT && aspect_ui_hud_pane((uint8_t *)(uintptr_t)regs[21]);
     dm_botw_rune_icon_draw_begin((uint8_t *)(uintptr_t)regs[21]);
 }
-static void aspect_ui_draw_end(const uint64_t *regs) { (void)regs; g_ui_background_drawing = 0; dm_botw_rune_icon_draw_end(); }
+static void aspect_ui_draw_end(const uint64_t *regs) { (void)regs; g_ui_background_drawing = g_ui_hud_drawing = 0; dm_botw_rune_icon_draw_end(); }
 void dm_aspect_ui_pane(uint8_t *pane) {
     if (!pane || strcmp(DM_GAME_ID, "01007EF00011E000") || !dm_aspect_native()) return;
+    int hud = aspect_ui_hud_anchor(pane);
     int title_shade = aspect_ui_title_shade(pane);
     int title_right = title_shade && (aspect_ui_named(pane, "FBLayout_02") || aspect_ui_named(pane, "FBLayout_03"));
     if (title_shade && !title_right) return;
     int title_art = aspect_ui_title_art(pane);
     if (title_art == 2) return;
     // A background must not resize a container that owns foreground content.
-    if (!aspect_ui_background_pane(pane)) return;
+    if (!hud && !aspect_ui_background_pane(pane)) return;
     float width, height, x, y;
     memcpy(&width, pane + 0x50, 4); memcpy(&height, pane + 0x54, 4);
     memcpy(&x, pane + 0x30, 4); memcpy(&y, pane + 0x34, 4);
@@ -208,14 +287,18 @@ void dm_aspect_ui_pane(uint8_t *pane) {
     if (height != entry->written_height) entry->native_height = height;
     if (x != entry->written_x) entry->native_x = x;
     if (y != entry->written_y) entry->native_y = y;
-    entry->written_width = entry->native_width * wide;
+    entry->written_width = entry->native_width * (hud ? 1 : wide);
     // Title illustrations cover the display without distorting their artwork;
     // flat fills and Windows extend horizontally with their edge sizes intact.
-    int cover = title_art == 1;
+    int cover = !hud && title_art == 1;
     entry->written_height = entry->native_height * (cover ? wide : 1);
     entry->written_x = entry->native_x;
     entry->written_y = entry->native_y;
     if (cover) { entry->written_x *= wide; entry->written_y *= wide; }
+    if (hud == -1) entry->written_x -= dm_aspect_hud_offset(0);
+    else if (hud && !dm_botw_touch_hud_active() &&
+             (hud != 2 || aspect_ui_map_collapsed(aspect_ui_map_cut(pane))))
+        entry->written_x += dm_aspect_hud_offset(1);
     if (title_right) {
         // The native origin is the right edge. Extending width and moving that
         // edge together preserves the seam with the unchanged left panel.
@@ -224,10 +307,10 @@ void dm_aspect_ui_pane(uint8_t *pane) {
         entry->written_x += margin;
     }
     if (width != entry->written_width || height != entry->written_height ||
-        ((title_right || cover) && x != entry->written_x) || (cover && y != entry->written_y)) {
+        ((hud || title_right || cover) && x != entry->written_x) || (cover && y != entry->written_y)) {
         memcpy(pane + 0x50, &entry->written_width, 4);
         memcpy(pane + 0x54, &entry->written_height, 4);
-        if (title_right || cover) memcpy(pane + 0x30, &entry->written_x, 4);
+        if (hud || title_right || cover) memcpy(pane + 0x30, &entry->written_x, 4);
         if (cover) memcpy(pane + 0x34, &entry->written_y, 4);
         pane[0x58] |= 0x10;
     }
