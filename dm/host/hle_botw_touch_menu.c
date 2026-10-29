@@ -103,6 +103,7 @@ typedef struct {
 static generic_hit_t g_generic_hits[DM_BOTW_MENU_MAX_GENERIC_TARGETS];
 static generic_hit_t g_generic_alt_hits[DM_BOTW_MENU_MAX_GENERIC_TARGETS];
 static generic_hit_t g_generic_texts[DM_BOTW_MENU_MAX_GENERIC_TARGETS];
+static generic_hit_t g_generic_photos[DM_BOTW_MENU_MAX_GENERIC_TARGETS];
 static generic_back_prompt_t g_generic_back_prompts[32];
 static pthread_mutex_t g_generic_hits_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_menu_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -820,6 +821,7 @@ static uint8_t *native_message_arrow_part(uint8_t *pane, const char *name) {
 }
 
 static generic_hit_t *generic_geometry_cache(int kind) {
+    if (kind == 3) return g_generic_photos;
     return kind == 1 ? g_generic_texts : kind == 2 ? g_generic_alt_hits : g_generic_hits;
 }
 
@@ -850,7 +852,7 @@ static void generic_geometry_observe(uint8_t *pane, int after_matrix, int kind) 
     uint8_t *parent = *(uint8_t **)(pane + PANE_PARENT);
     uint8_t *root = ancestor_named(pane, "RootPane");
     int text = kind == 1;
-    if (text && pane_private_capture_branch(pane)) return;
+    if ((text || kind == 3) && pane_private_capture_branch(pane)) return;
     generic_hit_t *cache = generic_geometry_cache(kind);
     uint64_t frame = dm_guest_frame();
     pthread_mutex_lock(&g_generic_hits_mu);
@@ -1610,11 +1612,13 @@ static void observe_native_pane(uint8_t *pane, int after_matrix) {
     int hit_tier = native_hit_pane_tier(name);
     if (hit_tier == 1) generic_hit_observe(pane, after_matrix);
     else if (hit_tier == 2) generic_alt_hit_observe(pane, after_matrix);
+    // Viewer photos are gesture surfaces; keep them out of the selectable
+    // entry cache, where a normal A confirmation would mean Delete.
+    if (!strcmp(name, "B_Photo_00")) generic_geometry_observe(pane, after_matrix, 3);
     if (!strncmp(name, "T_Btn", 5) || !strcmp(name, "T_Num_00")) generic_text_observe(pane, after_matrix);
     if (!strcmp(name, "Pa_PageTips_00") ||
         !strcmp(name, "N_Cut_00") ||
-        ((!strcmp(name, "Pa_ArrowL_00") || !strcmp(name, "Pa_ArrowR_00")) &&
-         ancestor_named(pane, "N_Cat_01")) ||
+        !strcmp(name, "Pa_ArrowL_00") || !strcmp(name, "Pa_ArrowR_00") ||
         ((!strcmp(name, "P_ArrowL_00") || !strcmp(name, "P_ArrowR_00")) &&
          (ancestor_named(pane, "Pa_ArrowU_00") || ancestor_named(pane, "Pa_ArrowD_00"))))
         generic_hit_observe(pane, after_matrix);
@@ -2349,6 +2353,7 @@ static int menu_view_has_visible_region(const dm_botw_touch_menu_view *view) {
     if (view->map_visible)
         return view->map[2] > 0 && view->map[3] > 0 && rect_intersects_canvas(view->map);
     if (view->generic_mode) {
+        if (view->carousel_valid && view->clip_valid && rect_intersects_canvas(view->clip)) return 1;
         if (view->back_valid && rect_intersects_canvas(view->back)) return 1;
         for (int i = 0; view->list_category_widget && i < view->category_count; i++)
             if (rect_intersects_canvas(view->categories[i])) return 1;
@@ -2959,6 +2964,11 @@ static int selector_corner_tip_screen_name(const char *name) {
     return !strcmp(name, "MessageTipsRunTime_00") || !strcmp(name, "MessageTipsPauseMenu_00");
 }
 
+static int selector_apphome_page_screen_name(const char *name) {
+    return selector_name_prefix(name, "AppMap") || !strcmp(name, "AppTool_00") ||
+        !strcmp(name, "AppAlbum_00") || !strcmp(name, "AppPictureBook_00");
+}
+
 static int selector_pointer_screen_name(const char *name) {
     // Runtime tips are non-modal corner notifications, unlike MessageTips_00's
     // full tutorial. Their Message prefix must not hide or intercept the pad.
@@ -2972,7 +2982,7 @@ static int selector_pointer_screen_name(const char *name) {
     // Inventory modal screens (for example the full-health Eat/Cancel prompt)
     // have their own native entries, outside the main PauseMenu screen.
     return selector_name_prefix(name, "PauseMenu") || !strcmp(name, "Title_00") ||
-        !strcmp(name, "AppHome_00") || !strcmp(name, "AppTool_00") || !strcmp(name, "AppAlbum_00") || selector_name_prefix(name, "AppMap") ||
+        !strcmp(name, "AppHome_00") || selector_apphome_page_screen_name(name) ||
         selector_name_prefix(name, "SystemWindow") || selector_name_prefix(name, "GameOver") ||
         selector_name_prefix(name, "ShopBtnList") || selector_name_prefix(name, "Message") ||
         !strcmp(name, "AppSystemWindow_00") || !strcmp(name, "OptionWindow_00") ||
@@ -3068,8 +3078,7 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
                 // menu closes, while MainScreen's HUD can still be shown.
                 // It blocks gameplay artwork but supplies no touch targets.
                 (selector_pointer_screen_name(name) || !strcmp(name, "Fade_00")) &&
-                !selector_name_prefix(name, "AppMap") && strcmp(name, "AppTool_00") &&
-                strcmp(name, "AppAlbum_00") && strcmp(name, "AppSystemWindow_00")) {
+                !selector_apphome_page_screen_name(name) && strcmp(name, "AppSystemWindow_00")) {
                 presented = 1;
                 presented_root = root;
                 memcpy(presented_name, name, sizeof presented_name);
@@ -3261,12 +3270,13 @@ static uintptr_t selector_list_category_descriptor(uintptr_t widget, int categor
     memcpy(&count, (const void *)(widget + 0x288), 4);
     memcpy(&limit, (const void *)(widget + 0x2a8), 4);
     uintptr_t array = selector_read_ptr(widget, 0x290);
-    if ((count != 4 && count != 7) || limit != count || (uint32_t)category >= count ||
+    if ((count != 4 && count != 5 && count != 7) || limit != count || (uint32_t)category >= count ||
         !selector_range(array, count * sizeof(uintptr_t))) return 0;
     uintptr_t descriptor = selector_read_ptr(array, (size_t)category * sizeof(uintptr_t));
     if (!selector_range(descriptor, 0x38e) || selector_read_ptr(descriptor, 8) != widget) return 0;
     char path[64] = {0};
-    snprintf(path, sizeof path, count == 4 ? "Pa_Quest_00/Pa_ChallengeCategory_%02d" : "Pa_CategoryS_%02d", category);
+    snprintf(path, sizeof path, count == 4 ? "Pa_Quest_00/Pa_ChallengeCategory_%02d" :
+             count == 5 ? "Pa_ChallengeCategory_%02d" : "Pa_CategoryS_%02d", category);
     if (memcmp((const void *)(descriptor + 0x19c), path, strlen(path) + 1)) return 0;
     int32_t native_id = -1, pages = 0;
     memcpy(&native_id, (const void *)(descriptor + 0x2f0), 4);
@@ -3880,6 +3890,52 @@ static int selector_focus_list_scroll(uintptr_t manager, uintptr_t screen, uintp
 // Derive the swipe surface and arrows from that live grid's own layout.
 static void selector_grid_carousel_to_view(dm_botw_touch_menu_view *view, uint64_t frame) {
     uintptr_t cut = 0;
+    char screen_name[64] = {0};
+    int slate = selector_screen_name(view->generic_screen, screen_name) &&
+        (!strcmp(screen_name, "AppAlbum_00") || !strcmp(screen_name, "AppPictureBook_00"));
+    // Slate grids have Pa_Page_* lists, rather than the inventory's 4x5 cut.
+    // The current native page defines the swipe surface even when nearly
+    // empty; local arrow parts supply native paging.
+    if (slate && view->generic_count) {
+        uintptr_t page = 0;
+        for (int i = 0; i < view->generic_count; i++) {
+            const dm_botw_touch_menu_target *target = &view->generic_targets[i];
+            uintptr_t root = 0;
+            if (!selector_pane_visible_alpha(target->pane, &root) || root != view->generic_root) continue;
+            if (!selector_ancestor_named(target->pane, "N_List_01") &&
+                !selector_ancestor_named(target->pane, "N_List_00") &&
+                !selector_ancestor_named(target->pane, "N_Open_00")) continue;
+            for (uintptr_t pane = target->pane; pane && pane != root; pane = selector_pane_parent(pane)) {
+                char name[17]; float rect[4], x, y;
+                if (!selector_pane_name(pane, name) || strncmp(name, "Pa_Page_", 8)) continue;
+                memcpy(&x, (void *)(pane + PANE_MATRIX + 0xc), 4);
+                memcpy(&y, (void *)(pane + PANE_MATRIX + 0x1c), 4);
+                native_rect_from_pane((uint8_t *)pane, x, y, rect);
+                if (!point_in_rect(.5f, .5f, rect)) break;
+                if (page && page != pane) return;
+                page = pane; memcpy(view->clip, rect, sizeof view->clip);
+                break;
+            }
+        }
+        view->carousel_valid = view->clip_valid = page != 0;
+    }
+    if (slate && !strcmp(screen_name, "AppAlbum_00") && !view->generic_count) {
+        generic_hit_t photos[DM_BOTW_MENU_MAX_GENERIC_TARGETS];
+        int count = generic_geometry_snapshot(g_generic_photos, photos, frame), matches = 0;
+        for (int i = 0; i < count; i++) {
+            char name[17];
+            if (!photos[i].usable || photos[i].root != view->generic_root ||
+                !selector_pane_name(photos[i].pane, name) || strcmp(name, "B_Photo_00") ||
+                !point_in_rect(.5f, .5f, photos[i].rect)) continue;
+            memcpy(view->clip, photos[i].rect, sizeof view->clip); matches++;
+        }
+        view->carousel_valid = view->clip_valid = matches == 1;
+        view->carousel_buttons = view->carousel_valid;
+        if (view->carousel_valid) {
+            view->generic_key |= UINT64_C(1) << 63;
+            view->page_key = view->generic_key;
+        }
+    }
     for (int i = 0; i < view->generic_count; i++) {
         uintptr_t pane = view->generic_targets[i].pane;
         for (int depth = 0; pane && depth < PANE_PATH_DEPTH; depth++) {
@@ -3894,7 +3950,7 @@ static void selector_grid_carousel_to_view(dm_botw_touch_menu_view *view, uint64
             pane = selector_pane_parent(pane);
         }
     }
-    if (!cut) return;
+    if (!cut && !view->carousel_valid) return;
     generic_hit_t hits[DM_BOTW_MENU_MAX_GENERIC_TARGETS];
     int count = generic_hit_snapshot(hits, frame);
     for (int i = 0; i < count; i++) {
@@ -3909,7 +3965,7 @@ static void selector_grid_carousel_to_view(dm_botw_touch_menu_view *view, uint64
         char name[17];
         if (!selector_pane_name(hit->pane, name) ||
             (strcmp(name, "Pa_ArrowL_00") && strcmp(name, "Pa_ArrowR_00")) ||
-            !selector_ancestor_named(hit->pane, "N_Cat_01")) continue;
+            (!slate && !selector_ancestor_named(hit->pane, "N_Cat_01"))) continue;
         int side = !strcmp(name, "Pa_ArrowR_00");
         view->inventory_arrow_valid[side] = 1;
         memcpy(view->inventory_arrows[side], hit->rect, sizeof view->inventory_arrows[side]);
@@ -3982,7 +4038,7 @@ static void selector_publish_generic_view(uintptr_t manager, uintptr_t screen, i
                 menu_add_action(&view, button, native.footer_actions[i]);
             }
         }
-        if (!strcmp(screen_name, "AppTool_00") || !strcmp(screen_name, "AppAlbum_00")) {
+        if (selector_apphome_page_screen_name(screen_name) && !selector_name_prefix(screen_name, "AppMap")) {
             uintptr_t apphome_screen = 0, apphome_root = 0;
             if (selector_apphome_owner_active(manager, group, native_screen_shown,
                                               native_group_getter, &apphome_screen,
@@ -4244,8 +4300,7 @@ static int selector_cursorless_prompt_view(uintptr_t manager, uint64_t frame,
         if (!selector_screen_name(screen, name)) continue;
         int control_guide = !strcmp(name, "SousaGuide_00");
         if ((!selector_pointer_screen_name(name) && !control_guide) ||
-            selector_name_prefix(name, "AppMap") || !strcmp(name, "AppTool_00") ||
-            !strcmp(name, "AppAlbum_00") || !strcmp(name, "AppSystemWindow_00")) continue;
+            selector_apphome_page_screen_name(name) || !strcmp(name, "AppSystemWindow_00")) continue;
         if (control_guide) {
             // Apparatus Cancel belongs to this prompt-only operation screen.
             // Its ordinary gameplay hints must not hide or intercept the pad.
@@ -5742,6 +5797,7 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
         g_target_valid = 1; g_target_index = -2; g_target_popup = 0;
         g_target_generic = g_view.generic_mode;
         g_target_axis = page_direction * DM_STICK_MAX;
+        g_target_button_bits = g_view.carousel_buttons ? (page_direction > 0 ? DM_BTN_RIGHT : DM_BTN_LEFT) : 0;
         g_target_page_key = g_view.page_key; g_target_popup_key = g_view.popup_key;
         g_target_screen = g_view.generic_screen; g_target_root = g_view.generic_root;
         g_confirm_pending = 0; g_pointer_dragged = 0;
@@ -6205,7 +6261,10 @@ int dm_botw_touch_menu_apply(uint64_t *buttons, int32_t axes[4], uint64_t frame)
             menu_clear_queue_locked();
         }
     } else if (g_target_index < 0) {
-        if (g_target_index == -2 || g_target_index == -5) {
+        if (g_target_index == -2 && g_target_button_bits) {
+            if (!(*buttons & g_target_button_bits)) emit = g_target_button_bits;
+            menu_clear_queue_locked();
+        } else if (g_target_index == -2 || g_target_index == -5) {
             axes[2] = g_target_axis; axes[3] = 0;
             g_apply_output_axis_valid = 1; g_apply_output_rx = g_target_axis;
             g_release_pending = g_axis_release_pending = 1;
@@ -6267,6 +6326,7 @@ void dm_botw_touch_menu_reset(void) {
     memset(g_generic_hits, 0, sizeof g_generic_hits);
     memset(g_generic_alt_hits, 0, sizeof g_generic_alt_hits);
     memset(g_generic_texts, 0, sizeof g_generic_texts);
+    memset(g_generic_photos, 0, sizeof g_generic_photos);
     memset(g_generic_back_prompts, 0, sizeof g_generic_back_prompts);
     pthread_mutex_unlock(&g_generic_hits_mu);
     pthread_mutex_lock(&g_list_widget_observations_mu);

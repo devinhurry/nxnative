@@ -189,7 +189,7 @@ the UIKit harness passed with zero failures in 31 look sessions.
 `inventory-touch-20261025/run24/ios-final/` records zero UIKit failures, including
 controller/non-BOTW restoration and haptic call counts. Mac gameplay confirmed
 the artwork, map spacing, Plus and return to gameplay. Physical vibration has
-not been checked. Other shop layouts, populated album, physical-controller and iPhone checks
+not been checked. Other shop layouts, user-photo files, registered Compendium details, physical-controller and iPhone checks
 remain open; see the tracker for evidence and scope.
 
 BOTW button borders lie entirely outside their unchanged background paths, with
@@ -369,6 +369,25 @@ shared drawing/hit geometry are unchanged. Explicit aspect-ratio bars still
 bound the HUD to the game picture. Native tests cover both landscape safe-inset
 arrangements and both input modes; 160 graphics checks pass. Evidence is in
 `touch-top-right-inset-20261030/`; physical iPhone appearance remains pending.
+
+**Album and Hyrule Compendium touch (2026-10-30).** `AppPictureBook_00`
+was missing from the Slate page family; its retained layout could not own
+touch targets or inherit AppHome's native guide/header. It now shares that
+ownership path with Album and Runes. Its five-category widget uses the
+existing validated list setter with its actual descriptor paths and page
+counts. Album and Compendium swipes derive their surface from the live native
+`Pa_Page_*`, including sparse pages. The large-photo viewer's `B_Photo_00`
+is observed separately as a gesture surface: native direction buttons page
+photos, while a photo-body tap never triggers the native A/Delete action.
+Viewer and grid identities differ to reject gestures crossing a transition;
+Back, Delete and header actions retain the viewer's current identity too.
+The supplied `After-dialogue-map-not-clickable` save is copied to scratch;
+its stock photos and Compendium categories/paging provide Mac acceptance.
+It omits user-photo JPEGs and has no registered Compendium entries, leaving
+those file/detail operations for further acceptance. Native regression checks
+and production iPhone arm64 compilation pass. Evidence is in
+`minimap-album-compendium-20261030/`; physical iPhone retesting remains pending.
+
 Native HUD/menu tests and the UIKit harness cover restoration with uncalculated
 siblings, loadout hiding/restoration and control-mode isolation. Evidence is in
 `touch-hud-refinements-20261029/`; its gameplay capture uses the retained
@@ -476,6 +495,24 @@ recording checks and 160 passing graphics checks, including safe-edge clips.
 Evidence is in `ultrawide-minimap-20261029/`. Gameplay uses the retained graphics
 base and matching shaders; the current merged host compiles separately.
 Physical iPhone acceptance remains pending.
+
+**Resolved: minimap blur flashed adjacent HUD after Inventory (2026-10-30).**
+The return animation copies a 192x192 region of the UI framebuffer for its
+blur. The collapsed map had moved at GPU replay for widescreen, but this
+capture still sampled its old native rectangle, including temperature/noise
+graphics. The copy shader `17dccd27ad609e8b` now receives a replay-time UV
+snapshot following that same map projection. A recorded map draw must match
+the current frame, source canvas and clipped source rectangle; full-frame,
+unrelated-menu and 16:9 copies keep their original uniforms. Capture projection
+also participates in the argument-cache identity, so an ordinary copy cannot
+reuse its corrected snapshot. Guest uniforms and shader libraries are unchanged.
+The before/after texture dumps locate the contamination before blur; eight
+21:10 return frames show the corrected map. All 168 graphics checks pass,
+including source-edge alignment and unchanged unrelated copies. Evidence is in
+`minimap-album-compendium-20261030/` (`probe-contact.png`, `fixed-contact.png`).
+Mac gameplay uses the retained compatible graphics base; the complete current
+host compiles separately. Full regression preparation stops on the unchanged
+HEAD baseline Metal compiler/lock mismatch. Physical iPhone remains unverified.
 
 The loading screen's upper cream background is `P_Capture_00` under `N_LogoInOut_00`, a 1280x275 panel with an animated projected texture. Its complete native draw now stretches with the display, preserving texture/clip alignment throughout the wipe; see [Projected fullscreen fills](../../../docs/reference/rendering.md#projected-fullscreen-fills-keep-texture-and-clip-coordinates-together). Text, status icons and logo keep their proportions. The lower black background already uses the full-display background path. Both fill a wide display.
 

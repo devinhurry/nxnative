@@ -83,6 +83,7 @@ typedef struct {
     dm_botw_touch_menu_target generic_targets[DM_BOTW_MENU_MAX_GENERIC_TARGETS];
     int inventory_visible;
     int carousel_valid; // A live generic item grid with the native horizontal pager.
+    int carousel_buttons; // Full-size photo viewer uses native direction buttons.
     int inventory_rotate_visible; // Native exclusive character-preview mode.
     int inventory_arrow_valid[2];
     float inventory_arrows[2][4]; // Live previous/next carousel arrows.

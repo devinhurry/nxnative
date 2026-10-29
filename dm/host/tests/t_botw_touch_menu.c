@@ -418,6 +418,25 @@ static void test_quest_category_touch(void) {
     categories.category_count = 0; categories.list_category_widget = 0;
     selector_list_categories_to_view((uintptr_t)selector.screen, (uintptr_t)root, 5003, &categories);
     assert(!categories.category_count && !categories.list_category_widget);
+    // The Compendium uses the same category widget with five bindings,
+    // no Quest prefix, and multiple pages in each category.
+    uint8_t book_descriptors[5][0x398] = {{0}};
+    uintptr_t book_array[5]; uint32_t five = 5, pages = 4;
+    memcpy(widget + 0x288, &five, 4); memcpy(widget + 0x2a8, &five, 4);
+    put_ptr(widget + 0x290, (uintptr_t)book_array);
+    for (int i = 0; i < 5; i++) {
+        book_array[i] = (uintptr_t)book_descriptors[i];
+        put_ptr(book_descriptors[i] + 8, (uintptr_t)widget);
+        snprintf((char *)book_descriptors[i] + 0x19c, 64, "Pa_ChallengeCategory_%02d", i);
+        memcpy(book_descriptors[i] + 0x2f0, &i, 4);
+        memcpy(book_descriptors[i] + 0x2f4, &pages, 4);
+        assert(selector_list_category_descriptor((uintptr_t)widget, i));
+    }
+    categories.category_count = 0; categories.list_category_widget = 0;
+    selector_list_categories_to_view((uintptr_t)selector.screen, (uintptr_t)root, 5000, &categories);
+    assert(categories.category_count == 4 && categories.list_category_widget == (uintptr_t)widget);
+    memcpy(widget + 0x288, &four, 4); memcpy(widget + 0x2a8, &four, 4);
+    put_ptr(widget + 0x290, (uintptr_t)array);
     // Vertical drags use the same native page setter on the row-owning
     // widget and never confirm a row or emit virtual directional input.
     uint8_t row_descriptor[0x50] = {0};
@@ -962,6 +981,71 @@ static void test_shop_grid_paging(void) {
     selector_grid_carousel_to_view(&stale,7100);
     assert(!stale.carousel_valid); // hidden grid ancestry invalidates cached geometry
     mock_guest_start = 0; mock_guest_size = 0;
+    dm_botw_touch_menu_reset();
+}
+
+static void test_slate_paging(void) {
+    dm_botw_touch_menu_reset(); init_selector_fixture();
+    current_guest_frame = 7200; dm_botw_touch_menu_test_set_render_frame(7200);
+    uint8_t *root = fake_pane(100,"RootPane",-1,1280,720,0,0);
+    uint8_t *list = fake_pane(101,"N_Open_00",100,30,40,0,0);
+    fake_pane(102,"Pa_Page_00",101,1000,500,0,0);
+    fake_pane(103,"Pa_Btn_00",102,200,120,0,0);
+    uint8_t *hit = fake_pane(104,"B_Hit_00",103,200,120,0,0);
+    uint8_t *right = fake_pane(105,"Pa_ArrowR_00",100,50,84,560,0);
+    observe_native_pane(right,1);
+    dm_botw_touch_menu_view page = {0};
+    page.generic_mode = page.generic_count = 1;
+    page.generic_screen = (uintptr_t)selector.screen; page.generic_root = (uintptr_t)root;
+    page.generic_key = page.page_key = page.render_frame = 7200;
+    page.generic_targets[0].pane = (uintptr_t)hit;
+    set_rect(page.generic_targets[0].rect,.2f,.2f,.6f,.6f);
+    const char *screens[] = {"AppAlbum_00", "AppPictureBook_00"};
+    for (int i=0;i<2;i++) {
+        strcpy((char *)selector.screen+0x200,screens[i]);
+        strcpy((char *)list+PANE_NAME,i ? "N_List_01" : "N_Open_00");
+        dm_botw_touch_menu_view live = page;
+        selector_grid_carousel_to_view(&live,7200);
+        assert(live.carousel_valid && live.inventory_arrow_valid[1]);
+        dm_botw_touch_menu_test_publish(&live);
+        dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN,.7f,.5f);
+        dm_botw_touch_menu_pointer(DM_BOTW_MENU_END,.3f,.5f);
+        int32_t axes[4]={0}; uint64_t buttons=0;
+        assert(sample_axes(7200,axes,&buttons) && axes[2]==DM_STICK_MAX && !buttons);
+        sample(7201);
+        live=page; live.generic_root++;
+        selector_grid_carousel_to_view(&live,7200);
+        assert(!live.carousel_valid); // a covered page cannot borrow this grid
+    }
+    strcpy((char *)selector.screen+0x200,"AppAlbum_00");
+    fake_pane(106,"Pa_Photo_01",100,800,450,0,0);
+    uint8_t *photo=fake_pane(107,"B_Photo_00",106,800,450,0,0);
+    observe_native_pane(photo,1);
+    page.generic_count=0;
+    selector_grid_carousel_to_view(&page,7200);
+    assert(page.carousel_valid && page.carousel_buttons && page.inventory_arrow_valid[1]);
+    dm_botw_touch_menu_test_publish(&page);
+    tap(.5f,.5f);
+    assert(!sample(7200)); // touching a photo must never trigger Delete/A
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN,.7f,.5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END,.3f,.5f);
+    assert(sample(7201)==DM_BTN_RIGHT && !sample(7202));
+    // Viewer paging has a different identity from the grid, but local Back,
+    // Delete and the inherited Slate header must retain that same identity.
+    page.back_valid=1; set_rect(page.back,.65f,.9f,.15f,.08f);
+    page.footer_action_count=2;
+    page.footer_action_buttons[0]=DM_BTN_A; set_rect(page.footer_actions[0],.82f,.9f,.12f,.08f);
+    page.footer_action_buttons[1]=DM_BTN_R; set_rect(page.footer_actions[1],.6f,.02f,.2f,.08f);
+    dm_botw_touch_menu_test_publish(&page);
+    tap(.72f,.94f);
+    assert(sample(7203)==DM_BTN_B && !sample(7204));
+    tap(.88f,.94f);
+    assert(sample(7205)==DM_BTN_A && !sample(7206));
+    tap(.7f,.06f);
+    assert(sample(7207)==DM_BTN_R && !sample(7208));
+    page.carousel_valid=page.clip_valid=0;
+    selector_grid_carousel_to_view(&page,7203);
+    assert(!page.carousel_valid); // expired viewer geometry cannot accept a swipe
     dm_botw_touch_menu_reset();
 }
 
@@ -1927,6 +2011,17 @@ int main(void) {
     dm_botw_touch_menu_test_snapshot(&generic_view);
     assert(generic_view.generic_count == 2);
     assert(generic_view.generic_targets[1].entry == (uintptr_t)selector.entry2);
+    strcpy((char *)selector.screen + 0x200, previous_screen_name);
+    // Slate photo/compendium cells use the same native entry ownership and
+    // direct-selection path as other menus, including their local prompts.
+    const char *slate_pages[] = {"AppAlbum_00", "AppPictureBook_00"};
+    for (unsigned page = 0; page < sizeof slate_pages / sizeof *slate_pages; page++) {
+        strcpy((char *)selector.screen + 0x200, slate_pages[page]);
+        selector_tick();
+        dm_botw_touch_menu_test_snapshot(&generic_view);
+        assert(generic_view.generic_count == 2 && generic_view.back_valid);
+        assert(generic_view.generic_targets[1].entry == (uintptr_t)selector.entry2);
+    }
     strcpy((char *)selector.screen + 0x200, previous_screen_name);
     // AppMap's stamp box names a part's touch bounds B_Btn_00 (its stamp list
     // buttons) instead of B_Hit_00. The fallback tier must resolve the same
@@ -3396,6 +3491,7 @@ int main(void) {
     test_inline_holding_prompts();
     test_inventory_category_touch_cells();
     test_shop_grid_paging();
+    test_slate_paging();
     test_cursorless_help_prompts();
     test_apparatus_cancel_prompt();
     test_shop_category_touch();

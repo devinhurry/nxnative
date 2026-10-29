@@ -1,6 +1,6 @@
 # BOTW menu touch progress
 
-Updated: 2026-10-29 (Asia/Shanghai).
+Updated: 2026-10-30 (Asia/Shanghai).
 
 This is the active progress tracker. Update it after each verified feature or new failure. `HANDOFF.md` is historical context, not the current status.
 
@@ -16,7 +16,7 @@ This is the active progress tracker. Update it after each verified feature or ne
 
 ## Coverage
 
-Mac milestones refer to their recorded runtime evidence. The latest 2026-10-28 runtime uses the retained `371ad45` graphics base with current menu/background changes and matching chain `07b0ea547435`; the newly merged host compiles, but its complete shader chain remains unvalidated. Physical iPhone and controller-connection acceptance remain separate from the Mac and UIKit checks.
+Mac milestones refer to their recorded runtime evidence. The latest 2026-10-30 runtime uses the retained `371ad45` graphics base with current menu/HUD changes and matching chain `07b0ea547435`; the complete current host compiles, but rebuilding its shaders stops at the baseline Metal compiler/lock mismatch. Physical iPhone and controller-connection acceptance remain separate from the Mac and UIKit checks.
 
 | Surface | Status | Evidence or remaining work |
 | --- | --- | --- |
@@ -63,7 +63,8 @@ Mac milestones refer to their recorded runtime evidence. The latest 2026-10-28 r
 | Terminal and special dialogue bodies | Tower Mac verified; shared native tests pass | Identify rendered text-output roles and their sibling windows across native Message screens, independent of event/container names or instance suffixes. The supplied tower save verifies body and blank-padding taps across activation, scanning and map extraction, followed by gameplay. Existing choice/quantity ownership and hidden/stale/private-capture rejection remain covered. Uses the current menu adapter on the compatible pre-merge graphics host; merged host compilation passes, full merged graphics/iPhone acceptance remains pending. Evidence: `tower-dialogue-20261028/`. |
 | Dialogue choices | Mac verified | Direct buy/sell/Good-bye, quantity confirmation and cancellation choices work with Beedle. Domidak/Prissen's two-option conversation also selects its requested branch directly and advances across speaker changes. Other conditional NPC layouts remain unverified. |
 | Shops, buy/sell and quantity | Beedle Mac verified | Direct purchase rows use the shared native list setter with the independently validated shop receiver class. Numeric Message fields expose their live number and +/- controls even when the registered hit pane is offscreen. Quantity increment/decrement, All-of-them, cancellation, actual sale and two-item purchase passed. A chosen count is confirmed through the blank area of its number-selection button, outside the number field and arrows; the dialogue body does not accept it, and each arrow responds over a finger-sized strip outwards from the box rather than over the native pad-cursor part alone. Sell-grid left/right paging and page-arrow touch also passed; quantity dialogs block background paging. Other shop layouts remain unverified. |
-| Album/photo operations | Deferred by user | Thumbnail selection, viewing, paging, delete confirmation and Back. |
+| Album thumbnails and photo viewer | Mac selection/paging/Back verified; photo-file operations partly pending | Distant thumbnails select directly. Grid swipes work in both directions, including a sparse page; large-photo swipes and local arrows use the viewer's native direction buttons. Photo-body taps never become Delete. Footer/header actions share the viewer identity. The supplied unlocked save has the 12 stock photos but omits its user-photo JPEG files, so loading and deleting user photos cannot yet be fully verified. Evidence: `minimap-album-compendium-20261030/`. |
+| Hyrule Compendium | Mac category/paging/Back verified; registered-entry details pending | `AppPictureBook_00` now shares Slate input ownership and header/footer routing. Its five categories select through the validated native list setter; grid swipes use the native pager. The supplied save has no registered entries to verify detail content. Evidence: `minimap-album-compendium-20261030/`. |
 | Ability Controls list and details | Mac verified | Direct final-row selection, native previous arrow, forward vertical swipe and Cancel back to the list. Cursorless pages resolve one live native owner and reject hidden, stale, ambiguous or input-disabled owners. |
 | Save selection list swipe | Mac verified | Swiping upward reveals the bottom save, swiping downward restores the top. Shares native focus-and-scroll with Options; a swipe never confirms a load. Tapping after a swipe still opens the selected save's confirmation. |
 | iPhone gameplay layout after menus/loading | UIKit verified; physical iPhone pending | Reapply child-layer visibility whenever menu mode changes. Restore the BOTW shield stick and hidden ZL/L3/R3, rather than merely showing the ordinary gamepad's parent layer. |
@@ -78,10 +79,11 @@ Mac milestones refer to their recorded runtime evidence. The latest 2026-10-28 r
 | Loading projected background | Mac verified | Fullscreen stretch keeps the animated texture and panel in the same native coordinates. The 21:10 wipe and stable cream phase have no extra right-edge fringe; foreground text remains centered. See the [rendering finding](reference/rendering.md#projected-fullscreen-fills-keep-texture-and-clip-coordinates-together). |
 | iPhone heart edge padding | Geometry verified; hardware pending | Top hearts retain native corner padding against the display edge rather than adding the whole landscape safe inset. |
 | Right HUD / Plus edge padding | Native geometry and 160 graphics checks passed; physical iPhone pending | Map/environment and adjacent +/- use authored right-corner padding without an added landscape safe inset. Edge space is independent of touch/controller input; both modes and both landscape inset arrangements are covered. Map-to-Plus spacing, drawing/hit alignment and explicit aspect bars remain intact. Evidence: `touch-top-right-inset-20261030/`. |
+| Minimap flash after Inventory | Mac frame sequence verified; physical iPhone pending | The return animation's native blur copied the old 16:9 framebuffer rectangle after the map had moved. Its replayed capture now follows the map projection, excluding adjacent temperature/noise graphics. Same-frame canvas/clip checks leave other captures unchanged. Eight recorded return frames are clean; 168 graphics checks pass. Evidence: `minimap-album-compendium-20261030/`, `probe-contact.png` before and `fixed-contact.png` after. |
 
 ## Next work
 
-1. Album/photo work remains deferred at the user's request. Horse registration/naming and specialized vendors need their corresponding game state; these conditional layouts are not claimed as runtime verified.
+1. Album user-photo loading/deletion needs a save including its photo files; Compendium details need a registered entry. Horse registration/naming and specialized vendors need their corresponding game state; these conditional layouts are not claimed as runtime verified.
 2. Physical iPhone/controller transitions require hardware acceptance. The user-provided `save-yizhan` slot is copied to external scratch for tests; the original is preserved.
 
 ## Evidence
@@ -177,7 +179,7 @@ The holding guide uses several numbered labels/glyphs under one `Pa_HaveNum_00`,
 
 The user's small-target report was traced to the native 32x32 `B_Hit_00` glyph bounds. Touch now uses up to twice the glyph width/height, capped to the nearest category-center spacing and the owned item-list clip. The tested seven-category layout yields 58x58 cells, about 3.3 times the original area. The original pane identities and native category setter remain in use; quest categories, controller input and other games retain their existing handling.
 
-`run-v7.log`, `category-cell-debug.txt`, `category-shield-blank-area.png` and `category-food-blank-area.png` record the expanded native rectangles and actual off-icon selection. The Shield tap was at screenshot (480,284), above/right of its glyph; the Food tap at (740,357), below/right. `unit-category-cells-final.log` covers separated neighboring targets, item-list clipping during actual view publication and leaving pointer-menu categories unchanged. Album/photo work is deferred by the user.
+`run-v7.log`, `category-cell-debug.txt`, `category-shield-blank-area.png` and `category-food-blank-area.png` record the expanded native rectangles and actual off-icon selection. The Shield tap was at screenshot (480,284), above/right of its glyph; the Food tap at (740,357), below/right. `unit-category-cells-final.log` covers separated neighboring targets, item-list clipping during actual view publication and leaving pointer-menu categories unchanged. Album/photo work was deferred at that checkpoint; current coverage is tracked above.
 
 The final clipped-cell host also passed startup/loading and the off-icon Food tap in `run-v8.log`. These changes are included in the newer help/fade runtime registered for the recorded Mac runtime below.
 
