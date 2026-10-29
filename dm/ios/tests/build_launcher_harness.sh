@@ -28,8 +28,8 @@ PLIST
 GFXAPI=nvn python3 "$ROOT/dm/games/settings.py" 01007EF00011E000 "$WORK/metadata" "$WORK/control.nacp" "$APP/dm/launcher.json"
 SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
 xcrun --sdk iphonesimulator swiftc -swift-version 5 -parse-as-library -target arm64-apple-ios26.0-simulator \
-    -sdk "$SDK" -module-cache-path "$WORK/module-cache" -o "$APP/BOTWLauncherTest" \
-    "$ROOT/dm/ios/Sources/LauncherRow.swift" "$ROOT/dm/ios/Sources/LauncherSettings.swift" "$ROOT/dm/ios/Sources/Launcher.swift" "$ROOT/dm/ios/tests/launcher_ui_harness.swift"
+    -sdk "$SDK" -I "$ROOT/dm/host" -module-cache-path "$WORK/module-cache" -o "$APP/BOTWLauncherTest" \
+    "$ROOT/dm/ios/Sources/LauncherRow.swift" "$ROOT/dm/ios/Sources/LauncherSettings.swift" "$ROOT/dm/ios/Sources/BotwTouchSettings.swift" "$ROOT/dm/ios/Sources/Launcher.swift" "$ROOT/dm/ios/tests/launcher_ui_harness.swift"
 plutil -lint "$APP/Info.plist"
 codesign --force --sign - "$APP"
 echo "Simulator app: $APP"

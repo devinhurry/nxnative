@@ -1,116 +1,74 @@
 // Launcher: the settings screen shown before the game starts (front_ios.m dm_show_launcher). Its settings come from the app's dm/launcher.json, which build_ipa.sh writes for this game
 // from dm/games/settings.tsv (dm/games/settings.py): each sets an environment variable the host reads when the game starts. A variable an env file set (Documents/env.txt, the bundle's
-// dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. All settings share one screen, grouped by section (rows: LauncherRow.swift). Choices that differ from the game's default are kept
+// dm/env.txt; main.m lists them in DM_ENV_FILE_KEYS) is shown but kept. Settings are grouped by section (rows: LauncherRow.swift); BOTW touch controls have a separate editor. Choices that differ from the game's default are kept
 // in UserDefaults; Reset to tested defaults shows the defaults, and Play then forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once with the saved choices; DM_SAVED_CHOICES=0 ignores them (and keeps them)
 import SwiftUI
-import Charts
 import UIKit
 import os
 
 private func info(_ key: String) -> Any? { Bundle.main.object(forInfoDictionaryKey: key) }
 
-private struct TouchStickPreview: View {
-    let response: TouchStickResponse
-    @State private var travel = 0.2
-
-    private var readout: String {
-        "Drag \(Int((travel * 100).rounded()))% → Stick \(Int((response.strength(at: travel) * 100).rounded()))%"
-    }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(readout).monospacedDigit().font(.callout)
-            Chart {
-                RuleMark(x: .value("Deadzone", response.deadzone * 100))
-                    .foregroundStyle(.secondary).lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                RuleMark(x: .value("Full movement", response.full * 100))
-                    .foregroundStyle(.secondary).lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                ForEach(0...100, id: \.self) { i in
-                    LineMark(x: .value("Finger travel", Double(i)), y: .value("Stick strength", response.strength(at: Double(i) / 100) * 100))
-                        .foregroundStyle(Color.accentColor)
-                }
-                PointMark(x: .value("Finger travel", travel * 100), y: .value("Stick strength", response.strength(at: travel) * 100))
-                    .foregroundStyle(Color.white).symbolSize(45)
-            }
-            .chartXScale(domain: 0...100).chartYScale(domain: 0...100)
-            .chartXAxis { AxisMarks(values: [0, 25, 50, 75, 100]) }
-            .chartYAxis { AxisMarks(values: [0, 50, 100]) }
-            .chartXAxisLabel("Finger travel (%)")
-            .chartYAxisLabel("Stick strength (%)")
-            .chartOverlay { proxy in
-                GeometryReader { geometry in
-                    Rectangle().fill(.clear).contentShape(Rectangle())
-                        .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { event in
-                            guard let frame = proxy.plotFrame,
-                                  let x: Double = proxy.value(atX: event.location.x - geometry[frame].minX) else { return }
-                            travel = min(max(x / 100, 0), 1)
-                        })
-                }
-            }
-            .frame(height: 150)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Left-stick response preview")
-            .accessibilityValue(readout)
-            .accessibilityAdjustableAction { direction in
-                travel = min(max(travel + (direction == .increment ? 0.05 : -0.05), 0), 1)
-            }
-            Text("Drag across the chart to preview. Applies to BOTW touch movement. Saved when you tap Play.")
-                .font(.footnote).foregroundStyle(.secondary)
-        }
-    }
-}
-
 private struct LauncherView: View {
     @ObservedObject var m: LauncherModel
     let play: () -> Void
+    @State private var showTouchSettings = false
     @State private var memory = os_proc_available_memory()
 
     var body: some View {
-        GeometryReader { geometry in
-            HStack(spacing: 0) {
-                VStack(spacing: 16) {
-                    if let icon = appIcon() {
-                        Image(uiImage: icon).resizable().frame(width: 96, height: 96)
-                            .clipShape(RoundedRectangle(cornerRadius: 22))
-                            .accessibilityHidden(true)
+        NavigationStack {
+            GeometryReader { geometry in
+                HStack(spacing: 0) {
+                    VStack(spacing: 16) {
+                        if let icon = appIcon() {
+                            Image(uiImage: icon).resizable().frame(width: 96, height: 96)
+                                .clipShape(RoundedRectangle(cornerRadius: 22))
+                                .accessibilityHidden(true)
+                        }
+                        Text((info("CFBundleDisplayName") as? String) ?? "Game")
+                            .font(.title.weight(.bold)).multilineTextAlignment(.center)
+                        Text("Version \((info("CFBundleShortVersionString") as? String) ?? "")")
+                            .font(.callout).foregroundStyle(.secondary)
+                        playButton
                     }
-                    Text((info("CFBundleDisplayName") as? String) ?? "Game")
-                        .font(.title.weight(.bold)).multilineTextAlignment(.center)
-                    Text("Version \((info("CFBundleShortVersionString") as? String) ?? "")")
-                        .font(.callout).foregroundStyle(.secondary)
-                    playButton
-                }
-                .padding(16)
-                .frame(width: geometry.size.width / 3, height: geometry.size.height)
-                List {
-                    ForEach(m.sections, id: \.self) { section in
-                        Section(section) {
-                            if section == TouchStickResponse.section, let response = m.touchStickResponse {
-                                TouchStickPreview(response: response)
+                    .padding(16)
+                    .frame(width: geometry.size.width / 3, height: geometry.size.height)
+                    List {
+                        if m.touchStickResponse != nil {
+                            Section("Touch") {
+                                Button("Touch settings") { showTouchSettings = true }
+                                    .accessibilityIdentifier("botw.touch.settings")
                             }
-                            ForEach(m.rows(in: section)) { SettingRow(s: $0, m: m) }
-                            if section == TouchStickResponse.section {
-                                Button("Restore left-stick defaults") { m.reset(keys: TouchStickResponse.keys) }
-                                    .disabled(!m.touchStickChanged)
+                        }
+                        ForEach(m.sections.filter { !LauncherModel.isTouchSection($0) }, id: \.self) { section in
+                            Section(section) {
+                                ForEach(m.rows(in: section)) { SettingRow(s: $0, m: m) }
+                            }
+                        }
+                        Section {
+                            Button("Reset to tested defaults") { m.reset() }
+                                .disabled(!m.changed)
+                        } footer: {
+                            Text("Brings back all settings this game was tested with.")
+                        }
+                        Section {
+                            HStack {
+                                Text("Memory available")
+                                Spacer()
+                                Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
                             }
                         }
                     }
-                    Section {
-                        Button("Reset to tested defaults") { m.reset() }
-                            .disabled(!m.changed)
-                    } footer: {
-                        Text("Brings back all settings this game was tested with.")
-                    }
-                    Section {
-                        HStack {
-                            Text("Memory available")
-                            Spacer()
-                            Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
-                        }
-                    }
+                    .listStyle(.insetGrouped)
+                    .contentMargins(.horizontal, 12, for: .scrollContent)
+                    .frame(width: geometry.size.width * 2 / 3)
                 }
-                .listStyle(.insetGrouped)
-                .contentMargins(.horizontal, 12, for: .scrollContent)
-                .frame(width: geometry.size.width * 2 / 3)
+                .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(isPresented: $showTouchSettings) {
+                    BotwTouchSettingsView(m: m,
+                        viewport: CGSize(width: geometry.size.width + geometry.safeAreaInsets.leading + geometry.safeAreaInsets.trailing,
+                                         height: geometry.size.height + geometry.safeAreaInsets.top + geometry.safeAreaInsets.bottom),
+                        safeInsets: geometry.safeAreaInsets)
+                }
             }
         }
         .preferredColorScheme(.dark)

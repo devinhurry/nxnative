@@ -1,0 +1,4 @@
+module DmTouchPad {
+    header "botw_touch_layout.h"
+    export *
+}

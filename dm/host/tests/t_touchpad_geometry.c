@@ -1,5 +1,6 @@
 #include "../touchpad_geometry.h"
 #include "../botw_stick_settings.h"
+#include "../botw_touch_layout.h"
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -82,9 +83,9 @@ static void test_stick_shaping(void) {
         dm_touchpad_botw_move_axis(radius*.06f,0,radius,&x,&y);
         assert(!x && !y);
         dm_touchpad_botw_move_axis(radius*.2f,0,radius,&x,&y);
-        assert(x > DM_STICK_MAX*.29f && x < DM_STICK_MAX*.31f && !y);
+        assert(x > DM_STICK_MAX*.62f && x < DM_STICK_MAX*.63f && !y);
         dm_touchpad_botw_move_axis(radius*.4f,0,radius,&x,&y);
-        assert(x > DM_STICK_MAX*.57f && x < DM_STICK_MAX*.59f && !y);
+        assert(x > DM_STICK_MAX*.82f && x < DM_STICK_MAX*.83f && !y);
         dm_touchpad_botw_move_axis(radius*.8f,0,radius,&x,&y);
         assert(x == DM_STICK_MAX && !y);
         dm_touchpad_botw_move_axis(radius*1.3f,0,radius,&x,&y);
@@ -187,8 +188,8 @@ static void test_configurable_stick(void) {
     for (int i=0;i<4;i++) unsetenv(keys[i]);
     dm_touchpad_stick_response response;
     assert(!dm_botw_stick_settings_read(&response));
-    nearf(response.deadzone,.07f,1e-6f); nearf(response.curve,.7f,1e-6f);
-    nearf(response.full,.8f,1e-6f); nearf(response.size,1,1e-6f);
+    nearf(response.deadzone,.07f,1e-6f); nearf(response.curve,.3f,1e-6f);
+    nearf(response.full,.7f,1e-6f); nearf(response.size,.8f,1e-6f);
     setenv(keys[0],"0.15",1); setenv(keys[1],"1.00",1);
     setenv(keys[2],"0.60",1); setenv(keys[3],"1.25",1);
     assert(!dm_botw_stick_settings_read(&response));
@@ -226,8 +227,29 @@ static void test_configurable_stick(void) {
     }
 }
 
+static void test_custom_layout(void) {
+    dm_botw_touch_layout layout; assert(dm_botw_layout_read(&layout));
+    dm_touchpad_rect canvas=dm_botw_layout_canvas(932,430);
+    dm_touchpad_rect before=dm_botw_layout_control(&layout,0,932,430,0,0,0,0,canvas);
+    setenv("DM_BOTW_PAD_FACE_X","-0.1",1); setenv("DM_BOTW_PAD_FACE_SCALE","0.8",1);
+    setenv("DM_BOTW_PAD_FACE_GAP","1.2",1); setenv("DM_BOTW_PAD_R_Y","0.1",1);
+    assert(dm_botw_layout_read(&layout));
+    dm_touchpad_rect after=dm_botw_layout_control(&layout,0,932,430,0,0,0,0,canvas);
+    nearf(after.x+after.width/2,before.x+before.width/2-canvas.width*.1f,.001f);
+    nearf(after.width,2*(27+50*1.2f)*.8f,.001f);
+    dm_touchpad_rect shoulder=dm_botw_layout_control(&layout,7,932,430,0,0,0,0,canvas);
+    dm_touchpad_point native=dm_touchpad_right_shoulder(932,430,0,0,0,0,0);
+    nearf(shoulder.x+shoulder.width/2,native.x,.001f);
+    nearf(shoulder.y+shoulder.height/2,native.y+43,.001f);
+    setenv("DM_BOTW_PAD_FACE_SCALE","nan",1); assert(!dm_botw_layout_read(&layout));
+    const char *keys[]={"DM_BOTW_PAD_FACE_X","DM_BOTW_PAD_FACE_SCALE","DM_BOTW_PAD_FACE_GAP","DM_BOTW_PAD_R_Y"};
+    for(unsigned i=0;i<sizeof keys/sizeof *keys;i++) unsetenv(keys[i]);
+    assert(dm_botw_layout_read(&layout));
+}
+
 int main(void) {
     test_configurable_stick();
+    test_custom_layout();
     test_directional_ownership();
     test_stick_shaping();
     test_safe_insets_and_resize();

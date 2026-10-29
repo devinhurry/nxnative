@@ -51,6 +51,21 @@ struct TouchStickResponse {
     }
 }
 
+struct BotwTouchControl: Identifiable, Hashable {
+    let id: Int
+    let key, label: String
+    static let all: [Self] = [
+        .init(id: 0, key: "FACE", label: "XYAB"), .init(id: 4, key: "STICK", label: "Left stick"),
+        .init(id: 8, key: "ZL", label: "Shield stick"), .init(id: 6, key: "L", label: "Rune (L)"),
+        .init(id: 7, key: "R", label: "R"), .init(id: 9, key: "ZR", label: "ZR"),
+        .init(id: 12, key: "DPAD", label: "D-pad")
+    ]
+    func env(_ field: String) -> String {
+        id == 4 && field == "SCALE" ? "DM_BOTW_MOVE_SIZE" : "DM_BOTW_PAD_\(key)_\(field)"
+    }
+    var keys: Set<String> { Set([env("X"), env("Y"), env("SCALE")]) }
+}
+
 final class LauncherModel: ObservableObject {
     let settings: [Setting]
     let fixed: Set<String>      // set by an env file or by the launch environment: shown, not changed
@@ -115,6 +130,12 @@ final class LauncherModel: ObservableObject {
         guard let deadzone = number("DM_BOTW_MOVE_DEADZONE"), let curve = number("DM_BOTW_MOVE_CURVE"),
               let full = number("DM_BOTW_MOVE_FULL"), let size = number("DM_BOTW_MOVE_SIZE") else { return nil }
         return TouchStickResponse(deadzone: deadzone, curve: curve, full: full, size: size)
+    }
+    static func isTouchSection(_ section: String) -> Bool {
+        section == TouchStickResponse.section || section == "Touch layout"
+    }
+    var touchSettingsKeys: Set<String> {
+        Set(settings.filter { Self.isTouchSection($0.sectionTitle) }.map(\.env))
     }
 
     var changed: Bool { settings.contains { !fixed.contains($0.env) && !$0.isDefault(values[$0.env] ?? $0.def) } }
