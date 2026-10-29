@@ -308,7 +308,7 @@ int main(void) { @autoreleasepool {
     EXPECT("32:9 map clip moves to the right edge without leaving native clip space",1,left==1161 && right==1244);
     dm_aspect_set_safe_area(2560,720,0,40);
     left=1042;right=1208;ui_scissor_x(&left,&right,1280,2,1,NVN_UI_MAP);
-    EXPECT("32:9 map clip retains its width and respects the safe edge",1,left==1141 && right==1224);
+    EXPECT("32:9 map clip uses authored right padding without an extra landscape inset",1,left==1161 && right==1244);
     dm_aspect_set_display(16.f/9); dm_aspect_set_safe_area(1280,720,0,0);
     left=1042;right=1208;ui_scissor_x(&left,&right,1280,1,0,NVN_UI_MAP);
     EXPECT("map clip restores its native position at 16:9",1,left==1042 && right==1208);

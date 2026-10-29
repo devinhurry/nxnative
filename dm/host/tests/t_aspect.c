@@ -13,6 +13,7 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include "../touchpad_geometry.h"
 static module_t test_modules[8];
 module_t *g_mod = test_modules; int g_nmod = 1;
 static void (*callback)(const uint64_t *);
@@ -40,6 +41,26 @@ static void pane_child(uint8_t *parent, uint8_t *child) {
     uint8_t *next=*(uint8_t **)(parent+0x28);
     *(uint8_t **)(child+0x10)=next?next:parent+0x20;
     *(uint8_t **)(child+0x18)=parent; *(uint8_t **)(parent+0x28)=child+8;
+}
+static void test_right_hud_padding(void) {
+    const float w=932, h=430, insets[][2]={{0,62},{62,0},{62,62}};
+    dm_aspect_set_display(w/h);
+    for(unsigned i=0;i<sizeof insets/sizeof *insets;i++) {
+        dm_aspect_set_safe_area(w,h,insets[i][0],insets[i][1]);
+        for(int touch=0;touch<2;touch++) {
+            test_touch_active=touch;
+            float rect[4]; dm_aspect_hud_rect(w,h,rect);
+            assert(fabsf(rect[0]+rect[2]-w)<.001f);
+            dm_touchpad_rect plus=dm_touchpad_botw_menu_rect(rect[0],rect[1],rect[2],rect[3],0);
+            float padding=(DM_TP_BOTW_MAP_RIGHT_INSET-DM_TP_BOTW_MENU_SIZE)*rect[3]/720-DM_TP_BOTW_MENU_GAP;
+            assert(fabsf(w-plus.x-plus.width-padding)<.001f);
+        }
+    }
+    // Explicit aspect bars still bound the HUD to the actual game picture.
+    g_custom=21.f/10; dm_aspect_set_safe_area(w,h,62,62);
+    float rect[4]; dm_aspect_hud_rect(w,h,rect);
+    assert(fabsf(rect[0]+rect[2]-(w+h*g_custom)*.5f)<.001f);
+    g_custom=0; test_touch_active=0;
 }
 static void test_edge_hud(void) {
     uint8_t root[0x100],all[0x100],state[0x100],heart[0x100],glyph[0x100],sensor[0x100];
@@ -72,9 +93,9 @@ static void test_edge_hud(void) {
     assert(*(float *)(inout+0x30)==0 && *(float *)(ornaments+0x30)==0);
     draw_callback(regs); assert(!dm_aspect_ui_hud_drawing()); draw_end_callback(regs);
     dm_aspect_set_safe_area(1512,720,40,20); dm_aspect_ui_pane(heart); dm_aspect_ui_pane(sensor);
-    assert(fabsf(*(float *)(heart+0x30)+550)<.001f && fabsf(*(float *)(sensor+0x30)-488)<.001f);
+    assert(fabsf(*(float *)(heart+0x30)+550)<.001f && fabsf(*(float *)(sensor+0x30)-508)<.001f);
     float rect[4]; dm_aspect_hud_rect(1512,720,rect);
-    assert(fabsf(rect[0]-40)<.001f && fabsf(rect[2]-1452)<.001f && rect[1]==0 && rect[3]==720);
+    assert(fabsf(rect[0]-40)<.001f && fabsf(rect[2]-1472)<.001f && rect[1]==0 && rect[3]==720);
     dm_aspect_touch_rect(1512,720,rect); assert(fabsf(rect[0]-116)<.001f && rect[2]==1280);
     dm_aspect_set_display(GAME_ASPECT); dm_aspect_ui_pane(heart); dm_aspect_ui_pane(sensor);
     assert(*(float *)(heart+0x30)==-434 && *(float *)(sensor+0x30)==392);
@@ -239,6 +260,7 @@ int main(void) {
     assert(*(float *)(art + 0x50) == 1000 && *(float *)(art + 0x54) == 709);
     float hit[4]; dm_aspect_touch_rect(1008, 480, hit);
     assert(fabsf(hit[0] - 77.3333f) < 0.001f && fabsf(hit[2] - 853.3333f) < 0.001f);
+    test_right_hud_padding();
     test_edge_hud();
     free(g_mod[0].base); puts("aspect: camera, centered content/hit regions and independent fullscreen backgrounds passed");
 }
