@@ -6447,10 +6447,36 @@ static uint32_t ubo_handle(int stage, int reg, int off) { uint32_t h; ubo_read(s
 // for the clip-x offset (NVN UBO slots 0 and 10). Correct clip x before clipping, keeping a full-sized
 // viewport: a narrowed viewport also clips native full-bleed backgrounds.
 static double g_ui_clip_x = 1, g_ui_clip_bias;
+static double g_ui_copy_x = 1, g_ui_copy_bias;
 static int g_ui_layout_draw;
+static struct {
+    uint64_t frame, canvas;
+    float rect[4];
+    double x, bias;
+} g_ui_map_capture;
+// The native framebuffer-copy shader expresses its UV center as cb5.zw
+// times cb6.xy. Map blur reads back a clipped piece of the UI canvas, so its
+// sampling rectangle must follow the same affine as the map already drawn.
+static int ui_capture_projection(float *cb, const float rect[4], double x, double bias) {
+    float c = cosf(cb[26]), s = sinf(cb[26]);
+    float cx = .5f + (cb[22]*c-cb[23]*s)*cb[24];
+    float cy = .5f + (cb[22]*s+cb[23]*c)*cb[25];
+    float rx = .5f*(fabsf(c)+fabsf(s))*fabsf(cb[24]);
+    float ry = .5f*(fabsf(c)+fabsf(s))*fabsf(cb[25]);
+    const float pixel = 1.f/720;
+    if (!isfinite(cx) || !isfinite(cy) || !isfinite(rx) || !isfinite(ry) ||
+        cb[24] == 0 || x <= 0 || x == 1 ||
+        cx-rx < rect[0]-pixel || cx+rx > rect[2]+pixel ||
+        cy-ry < rect[1]-pixel || cy+ry > rect[3]+pixel) return 0;
+    double delta = bias/(2*cb[24]*x);
+    cb[22] += delta*c; cb[23] -= delta*s; cb[24] *= x;
+    return 1;
+}
 static void ui_projection_copy(int reg, const float *source, float *out, size_t size) {
     if (out != source) memcpy(out, source, size);
-    if (reg == 0 && size >= 64)
+    if (reg == 0 && size >= 112 && g_ui_copy_x != 1)
+        ui_capture_projection(out, g_ui_map_capture.rect, g_ui_copy_x, g_ui_copy_bias);
+    else if (reg == 0 && size >= 64)
         for (int i = 0; i < 4; i++) out[i] = source[i] * g_ui_clip_x + source[12 + i] * g_ui_clip_bias;
     else if (reg == 10 && size >= 4) out[0] = source[0] * g_ui_clip_x;
 }
@@ -6474,10 +6500,12 @@ static uint64_t g_geo_bind[5];
 static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex);
 static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex) { AP_B; int r = encode_args_(en, sh, nvn_stage, metal_vertex); AP_E(3); return r; }
 static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex) {
+    double ui_key_x = g_ui_copy_x != 1 ? g_ui_copy_x : g_ui_clip_x;
+    double ui_key_bias = g_ui_copy_x != 1 ? g_ui_copy_bias : g_ui_clip_bias;
     if (!sh->ae) return 1;
     args_sync_dirty();
     if (!passdump() && !g_args_dirty[nvn_stage] && sh->ab_buf && sh->ab_pass == g_pass.serial && nvn_stage != 5 && !(sh->rf.drv_read[0] && sh->ab_binst != g_draw_binst) &&
-        (nvn_stage != 0 || (sh->ab_ui_clip_x == g_ui_clip_x && sh->ab_ui_clip_bias == g_ui_clip_bias))) {
+        (nvn_stage != 0 || (sh->ab_ui_clip_x == ui_key_x && sh->ab_ui_clip_bias == ui_key_bias))) {
         bind_args(en, nvn_stage, metal_vertex, sh->ab_buf, sh->ab_gpu, sh->ab_off, sh->rf.abi);
         g_stat_args_reuse++;
         return 1;
@@ -6515,7 +6543,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
                     FILE *f = fopen(p, "wb"); if (f) { fwrite((const void *)u->addr, 1, u->size, f); fclose(f); } else RED_ONCE(41, "CBDUMP cannot write %s", p);
                 }
             }
-            if (nvn_stage == 0 && (g_ui_clip_x != 1 || g_ui_clip_bias != 0) && (reg == 0 || reg == 10)) {
+            if (nvn_stage == 0 && (g_ui_clip_x != 1 || g_ui_clip_bias != 0 || g_ui_copy_x != 1) && (reg == 0 || reg == 10)) {
                 // Read the replay-time uniform snapshot, including queued inline
                 // updates. Keep the guest buffer and the shader libraries intact.
                 id<MTLBuffer> corrected; size_t off = arena_alloc((size_t)ul, &corrected);
@@ -6717,7 +6745,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
     memcpy((uint8_t *)ab.contents + off, slots, arg_len);
     bind_args(en, nvn_stage, metal_vertex, ab, g_cur_arena->gpu + off, off, sh->rf.abi);
     sh->ab_buf = ab; sh->ab_gpu = g_cur_arena->gpu + off; sh->ab_off = off; sh->ab_pass = g_pass.serial; sh->ab_binst = g_draw_binst; g_args_dirty[nvn_stage] = 0;
-    sh->ab_ui_clip_x = g_ui_clip_x; sh->ab_ui_clip_bias = g_ui_clip_bias;
+    sh->ab_ui_clip_x = ui_key_x; sh->ab_ui_clip_bias = ui_key_bias;
     g_stat_args_enc++;
     return 1;
 }
@@ -9013,6 +9041,7 @@ static void draw_(const p_draw *dw, const p_draw_idx *di);
 static void draw(const p_draw *dw, const p_draw_idx *di) { cp_stamp start = cp_begin(); draw_(dw, di); cp_end(5, start); }
 static void draw_(const p_draw *dw, const p_draw_idx *di) {
     g_ui_clip_x = 1; g_ui_clip_bias = 0;
+    g_ui_copy_x = 1; g_ui_copy_bias = 0;
     g_draw_binst = (uint32_t)(dw ? dw->base_instance : di ? di->base_instance : 0);   // c0 + 0x644 of the stages that read the driver segment (encode_args)
     if (passdump()) { NvProg *p = g_geo_program ? g_geo_program : S.prog ? prog_get(S.prog) : nil;
         PD("j %llu draw-entry vs=%s fs=%s gs=%s prim=%d count=%d instances=%d indexed=%d indirect=%#llx discard=%d feedback=%d", g_stat_pass + !g_enc,
@@ -9086,6 +9115,19 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
     // Resolving a newly sampled picture can upload it or end the current pass. Do this before opening/binding the encoder.
     double sux = 1, suy = 1; int ui_scope = dw ? dw->pad : di ? di->pad : 0;
     int sq = ui_squeeze_scale(pr, &sux, &suy, ui_scope);
+    if (g_ui_map_capture.frame == atomic_load(&g_cur_frame) && g_ui_map_capture.canvas &&
+        R.rt.n > 0 && R.rt.color[0] && R.rt.color[0]->serial != g_ui_map_capture.canvas &&
+        pr->sh[0] && !strncmp(pr->sh[0]->key, "17dccd27ad609e8b", 16)) {
+        int tid = (int)(S.tex[1][0] & 0xfffff);
+        if (tid > 0 && tid < g_ntreg && g_treg[tid].ok &&
+            g_treg[tid].t.serial == g_ui_map_capture.canvas) {
+            float cb[28]; ubo_read(0, 0, 0, sizeof cb, cb);
+            if (ui_capture_projection(cb, g_ui_map_capture.rect, g_ui_map_capture.x, g_ui_map_capture.bias)) {
+                g_ui_copy_x = g_ui_map_capture.x; g_ui_copy_bias = g_ui_map_capture.bias;
+                g_args_dirty[0] = 1;
+            }
+        }
+    }
     if (ui_scope == NVN_UI_RUNE && dm_botw_touch_hud_active()) botw_rune_capture();
     if (R.has_sc && !g_enc && !S.rast_discard) {
         NSUInteger tw0 = 0, th0 = 0; rt_dims(&tw0, &th0);
@@ -9153,6 +9195,17 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
     NSUInteger tw = g_pass.tw, th = g_pass.th;
     int ui_projection = g_ui_layout_draw && sq && sux > 1;
     g_ui_clip_x = ui_projection ? 1 / sux : 1; g_ui_clip_bias = 0;
+    if (ui_projection && ui_scope == NVN_UI_MAP && R.has_sc &&
+        R.sc.w > 0 && R.sc.h > 0 && (R.sc.w < tw || R.sc.h < th)) {
+        g_ui_map_capture.frame = atomic_load(&g_cur_frame);
+        g_ui_map_capture.canvas = R.rt.color[0]->serial;
+        g_ui_map_capture.rect[0] = fmaxf(0, (float)R.sc.x/tw);
+        g_ui_map_capture.rect[1] = fmaxf(0, (float)R.sc.y/th);
+        g_ui_map_capture.rect[2] = fminf(1, (float)(R.sc.x+R.sc.w)/tw);
+        g_ui_map_capture.rect[3] = fminf(1, (float)(R.sc.y+R.sc.h)/th);
+        g_ui_map_capture.x = 1/sux;
+        g_ui_map_capture.bias = dm_aspect_hud_offset(1)/(640*sux);
+    }
     // A corrected bank is a value snapshot, whereas an ordinary argument block
     // points at the game's live uniforms. Refresh the snapshot for every draw.
     if (ui_projection) g_args_dirty[0] = 1;

@@ -312,5 +312,23 @@ int main(void) { @autoreleasepool {
     dm_aspect_set_display(16.f/9); dm_aspect_set_safe_area(1280,720,0,0);
     left=1042;right=1208;ui_scissor_x(&left,&right,1280,1,0,NVN_UI_MAP);
     EXPECT("map clip restores its native position at 16:9",1,left==1042 && right==1208);
+    // Captured return-animation data: a 192x192 read of the map at (485,257).
+    // Its old left edge also reads the adjacent temperature/noise HUD.
+    float copy[28]={0}, old_copy[28], bounds[4]={.79f,0,.97f,.4f};
+    copy[22]=485.f/192;copy[23]=-257.f/192;copy[24]=192.f/1280;copy[25]=192.f/720;
+    memcpy(old_copy,copy,sizeof copy);
+    double scale=1/((21.0/10)/(16.0/9)), bias=116/(640*((21.0/10)/(16.0/9)));
+    EXPECT("map framebuffer read follows its rendered projection",1,ui_capture_projection(copy,bounds,scale,bias));
+    double u0=.5+(old_copy[22]-.5)*old_copy[24], u1=.5+(old_copy[22]+.5)*old_copy[24];
+    EXPECT("blur reads corrected map left edge",lround((.5+(u0-.5)*scale+bias/2)*100000),lround((.5+(copy[22]-.5)*copy[24])*100000));
+    EXPECT("blur reads corrected map right edge",lround((.5+(u1-.5)*scale+bias/2)*100000),lround((.5+(copy[22]+.5)*copy[24])*100000));
+    EXPECT("capture y stays native",1,copy[23]==old_copy[23] && copy[25]==old_copy[25]);
+    memcpy(copy,old_copy,sizeof copy);
+    EXPECT("16:9 capture stays unchanged",0,ui_capture_projection(copy,bounds,1,0));
+    EXPECT("16:9 capture bank stays byte-identical",1,!memcmp(copy,old_copy,sizeof copy));
+    copy[22]=copy[23]=0;copy[24]=copy[25]=1;
+    memcpy(old_copy,copy,sizeof copy);
+    EXPECT("full-frame and other-menu copies do not borrow map correction",0,ui_capture_projection(copy,bounds,scale,bias));
+    EXPECT("unrelated copy stays byte-identical",1,!memcmp(copy,old_copy,sizeof copy));
     printf("== %d checks, %d failed ==\n",cases,failed);return failed!=0;
 } }
