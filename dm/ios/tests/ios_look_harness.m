@@ -749,6 +749,36 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
     g_botw_touchhud_available = NO;
 }
 
+static void test_botw_map_menu_return(DmGamepad *view) {
+    g_botw_touchhud_available=YES; g_botw_gameplay_ready=YES;
+    g_botw_touch_menu_active=g_botw_touch_menu_presented=NO;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view reset];
+    CGPoint map=CGPointMake(view.bounds.size.width*.36,view.bounds.size.height*.20);
+    for(int sourceFirst=0;sourceFirst<2;sourceFirst++) {
+        g_botw_touch_menu_presented=YES; [view refreshBotwTouchMenuMode];
+        [view dm_testSetBotwMapRectValid:NO x:0 y:0 width:0 height:0];
+        if(sourceFirst) g_botw_touch_menu_presented=NO;
+        // The host publishes only changed rectangles. This one notification
+        // arrives before the frontend has left its inventory/menu mode.
+        [view dm_testSetBotwMapRectValid:YES x:.05 y:.16 width:.36 height:.40];
+        CHECK(![view dm_testBotwMapOwnsPoint:map] && [view dm_testControlsHidden],
+              "a map update during a menu cannot activate hidden gameplay controls");
+        g_botw_touch_menu_presented=NO; [view refreshBotwTouchMenuMode]; [view layoutIfNeeded];
+        CHECK([view dm_testBotwMapOwnsPoint:map] && [view dm_testMinusArtworkHidden],
+              "inventory return restores the map hit and hides Minus without a second native publication");
+        g_input_sets=0; FakeTouch *t=touch(map.x,map.y); began(view,t); ended(view,t,map.x,map.y);
+        int presses=0; for(int i=0;i<g_input_sets;i++) presses+=(g_input_history[i]&DM_BTN_MINUS)!=0;
+        CHECK(presses==1,"the restored minimap tap publishes exactly one native Minus press");
+    }
+    g_botw_touch_menu_presented=YES; [view refreshBotwTouchMenuMode];
+    [view dm_testSetBotwMapRectValid:YES x:.05 y:.16 width:.36 height:.40];
+    [view dm_testSetBotwMapRectValid:NO x:0 y:0 width:0 height:0];
+    g_botw_touch_menu_presented=NO; [view refreshBotwTouchMenuMode]; [view layoutIfNeeded];
+    CHECK(![view dm_testBotwMapOwnsPoint:map] && ![view dm_testMinusArtworkHidden],
+          "a later native invalidation keeps map taps disabled and Minus available after return");
+    [view reset];
+}
+
 static void test_botw_rune_press(DmGamepad *view) {
     g_botw_touchhud_available=YES; g_botw_gameplay_ready=YES;
     g_botw_touch_menu_active=g_botw_touch_menu_presented=NO;
@@ -1393,6 +1423,7 @@ static void run_tests(DmGamepad *view) {
     test_dpad_art_visibility(view);
     test_botw_button_artwork(view);
     test_botw_virtual_buttons(view);
+    test_botw_map_menu_return(view);
     test_botw_rune_press(view);
     test_botw_l3_timing(view);
     test_botw_stick_response(view);

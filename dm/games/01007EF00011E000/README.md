@@ -340,6 +340,20 @@ Native loadout visibility hides this fallback again; menus, controllers and
 other games retain their input behavior. The launcher names its editor
 "BOTW touch settings", localized to Chinese.
 
+**Resolved: iPhone minimap lost its hit region after Inventory (2026-10-30).**
+The native map can publish its restored bounds before UIKit receives the menu
+closing update. UIKit discarded that valid rectangle while its menu mode was
+still active; the host sends only changed bounds, so returning to gameplay
+could leave a visible map without a hit region and with standalone Minus.
+Mac preview already retained this update independently of menu mode. UIKit now
+retains the native rectangle too, while map hit testing still requires active
+BOTW gameplay controls. A real native invalidation still clears the rectangle,
+including hidden shrine maps. The focused handler regression reproduces both
+callback orders before the fix and passes after it, including a real map tap,
+no input while controls are hidden, and invalidation before menu return.
+The production source compiles for iPhone arm64. Evidence is in
+`ios-map-return-20261030/`; physical iPhone retesting remains pending.
+
 The top heart group keeps its authored corner padding against the full game
 view. Landscape's horizontal safe inset, intended for the notch at mid-height,
 no longer adds an extra gap to those topmost hearts; map and button safe-area
