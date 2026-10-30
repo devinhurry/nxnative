@@ -25,16 +25,61 @@ separate from the acceptance results below.
 
 ## Coverage
 
+### Album swipe and Camera control follow-up (2026-10-30)
+
+Album full-photo navigation had a confirmed boundary bug: the shared carousel
+handler required the release point inside the photo as well as the touch-down.
+It now retains the photo's gesture ownership after an in-bounds start, including
+release outside either edge. The native arrow-availability checks, outside-start
+rejection, cancellation and menu-owner checks remain in place. The saved-photo
+Mac run reproduces both old failures, then verifies photo 2 to 3 and back from
+opposite edges after the fix. Native focused checks cover both directions and
+the rejected cases.
+
+Camera viewfinder gamepad presentation is separate from native-menu ownership.
+The pad is shown alongside the touch camera; visible controls own their touches,
+and free space and native footer hints retain touch input. The Camera-only face
+hit rule avoids stealing those hints through invisible gameplay grab padding.
+The native viewfinder requires live Capture/Quit prompts and no selectable
+confirmation rows. Losing that eligibility notifies the frontend even when the
+screen/root stays AppCamera, clears pending camera input, and hides the pad.
+The native Mac window was checked through viewfinder, Save/Delete confirmation
+and discard return. UIKit also checks held-button/stick release, reentry,
+native A/B/X/Minus hint taps, and physical-controller suppression.
+
+R/ZR no longer add a UI haptic on release. Press and each cancel-circle crossing
+retain feedback; release outside still requests cancellation. UIKit's feedback
+spy checks inside/outside release and both crossing directions. The final UIKit
+run has zero failures across 33 look sessions. Mac source builds and the native
+menu checks pass; physical iPhone tactile acceptance remains separate.
+
+BOTW movement-stick touch-down, movement, release and L3 double-tap are silent.
+Camera-area double-tap still emits R3 without a haptic. Face/shoulder presses
+and the ZL shield-stick grip retain feedback; other games keep their stick
+feedback. The focused `haptic-silent-manual-pad/` run records these checks.
+
+The [implementation checklist](botw-touch-implementation.md) now includes the
+Camera coexistence requirement. Evidence is in
+`ui-implementation-20261030/album-regression-current/` and
+`ui-coverage-20261030/camera-footer-harness-final/`. The native run uses current
+menu code with retained compatible graphics; its source/host hashes and the
+frontend snapshot boundary are recorded in `verification-followup.json`.
+The current Mac host build, 184-file iOS compile check, native menu checks and
+19 documentation/inventory checks pass. Full regression selected BOTW only
+because the behavior is limited to its touch adapter; it remains blocked before
+baseline comparison by the existing Metal compiler/lock mismatch. The retained
+report is `album-regression-current/regress/report.md`.
+
 Mac milestones refer to their recorded runtime evidence. The latest 2026-10-30 runtime uses the retained `371ad45` graphics base with current menu/HUD changes and matching chain `07b0ea547435`; the complete current host compiles, but rebuilding its shaders stops at the baseline Metal compiler/lock mismatch. Physical iPhone and controller-connection acceptance remain separate from the Mac and UIKit checks.
 
 ### Implementation inventory completion (2026-10-30)
 
 The [implementation checklist](botw-touch-implementation.md) now classifies all
 339 layouts from the supplied base/update and both DLCs: 89 top-level layouts
-and 250 reusable components. Its 51 screen/state/action groups contain 46
+and 250 reusable components. Its 52 screen/state/action groups contain 47
 implemented interactions and five explicitly noninteractive groups. There are
 no identified partial or missing implementations. Verification remains separate:
-22 groups have game-state evidence, six have handler-test evidence, and 18
+25 groups have game-state evidence, five have handler-test evidence, and 17
 remain unverified or blocked by their required game state. These counts do not
 claim every conditional variant or physical iPhone was tested.
 
@@ -54,7 +99,8 @@ native owners. Mac preview now supports accumulated trackpad scrolling and
 map/camera magnification. BOTW touch keyboards enforce the supplied length
 bounds without changing other games or controller-mode input dialogs.
 
-Final-source evidence is in `01007EF00011E000-work/ui-implementation-20261030/`.
+The earlier `6f0d536` checkpoint evidence is in
+`01007EF00011E000-work/ui-implementation-20261030/`.
 Four replay routes passed 28 steps (24 touches and four setup keys): Title/load,
 Inventory/System/DLC/Map/Album/Compendium, Hero's Path, and Camera/Album/Capture/Quit.
 Capture opened its native Save/Delete choices; Delete discarded the unsaved
@@ -114,7 +160,7 @@ source builds above are separate evidence.
 | Rune L immediate press | UIKit verified; Mac compiled; physical iPhone pending | Rune-style L uses the ordinary held-button path: touch-down sends L immediately, finger-up/cancel releases it, and holding does not substitute D-pad Up. Reset clears held/unread L. Its hit area keeps priority over the shield stick. D-pad rune selection, controller input and other games retain their original behavior. Evidence: `rune-immediate-20261029/`. |
 | Pre-game touch settings and layout | Native/UIKit and Mac editor verified; physical iPhone gesture feel pending | Separate Touch settings page in iOS and packaged Mac launchers. Preview drag/pinch and sliders move/scale XYAB together (with separate spacing), D-pad equipment together, and movement/ZL/L/R/ZR separately; +/- stay fixed. Defaults are 7% deadzone, 0.30 curve, 71% full travel and 80% movement-stick size. Play saves choices; per-control and all-touch restore preserve unrelated settings. Shared geometry drives preview, drawing and input. Evidence: `touch-settings-20261029/` records live Mac preview drag, spacing/scale, save/reopen/restore; zero UIKit failures in 31 sessions; storage, geometry/HUD and packaging checks. The merged host builds; full game regression stops at the existing translator/lock mismatch before boot. |
 | Touch settings sharing, labels and L artwork | UIKit verified; fixed L Mac artwork verified; physical iPhone pending | Exact decimal readouts and Copy all parameters export every normalized runtime value. Optional corner-letter circles cover L/R/ZR/XYAB; fixed/generated launcher text has English and Simplified Chinese resources. L now always uses the packaged L icon, independently of the native rune and HUD text. The touch editor hides its navigation bar and keeps a compact Back button; its simulator launcher compiles. Evidence: `touch-polish-20261029/` for export/localization, `touch-hud-interactions-20261030/` for static L and title removal. |
-| Touch defaults and shoulder cancel guides | Native/UIKit verified; Mac compiled; physical haptic feel pending | All 26 supplied defaults are shared by runtime and Restore defaults, including badge-off. R/ZR emit one haptic when crossing either direction over the cancel circle and one on outside-release cancellation. Movement on the same side adds none; cancellation still requires outside release. Guides disappear at finger-up even while native acknowledgement is pending. Evidence: `touch-defaults-cancel-20261029/` and the updated zero-failure UIKit checks in `touch-hud-interactions-20261030/`. |
+| Touch defaults and shoulder cancel guides | Native/UIKit verified; Mac compiled; physical haptic feel pending | All 26 supplied defaults are shared by runtime and Restore defaults, including badge-off. R/ZR emit one haptic when crossing either direction over the cancel circle; release adds no pulse. Movement on the same side adds none; cancellation still requires outside release. Guides disappear at finger-up even while native acknowledgement is pending. Evidence: `touch-defaults-cancel-20261029/` and the updated zero-failure UIKit checks in `touch-hud-interactions-20261030/`. |
 | Quick rune/weapon swipe direction | Native/UIKit and live Mac input direction verified; gesture feel pending | Touch stick axes and relative deltas reverse only while the live native quick strip is open. Scene look and controller axes keep their direction. Mac touch preview now supplies the virtual right stick needed by native UI, matching UIKit. The live Mac rightward drag outputs -32767; the automated drag's mouse-up trace still had a zero native Npad sample, so visible selection and feel remain for manual acceptance. Evidence: `touch-hud-interactions-20261030/`. |
 | Hero's Path | Mac entry/exit and native direction-guide checks verified; physical iPhone pending | With both DLCs mounted, touch X enters playback, Back returns to the regular map, and a second Back restores gameplay. The live AppHome direction-key guides establish this mode; the map's private capture source stays visible in both modes and is not an input-state signal. Controller and other-game gates are unchanged. Evidence: `ui-coverage-20261030/`. |
 | Minimap below right-corner messages | Native ordering and live Mac dispatch verified; corner-tip visual acceptance pending | The collapsed map's ScreenMgr draw receiver moves to the start of its layer, preserving every other screen's order and the input registry. Live dispatch changes slot 2 to the actual AppMap receiver from slot 42. Expanded maps and inactive touch mode retain native ordering. Requires current rewritten main with OBS41. Evidence: `touch-hud-interactions-20261030/`. |

@@ -647,7 +647,9 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
 
     DmFeedbackSpy *cancelFeedback=[[DmFeedbackSpy alloc] initWithStyle:UIImpactFeedbackStyleLight];
     [view dm_testSetTouchFeedback:cancelFeedback];
-    CGPoint shoulder=[view dm_testDropCenter:7]; FakeTouch *trigger=touch(shoulder.x,shoulder.y); began(view,trigger);
+    CGPoint shoulder=[view dm_testDropCenter:7]; NSUInteger beforePress=cancelFeedback.count;
+    FakeTouch *trigger=touch(shoulder.x,shoulder.y); began(view,trigger);
+    CHECK(cancelFeedback.count==beforePress+1,"R touch-down keeps its press haptic");
     [view layoutIfNeeded];
     CHECK(![view dm_testCancelGuideHidden], "R shows its cancel guide while a finger owns it");
     NSUInteger pressedFeedback=cancelFeedback.count;
@@ -668,12 +670,12 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
     [view layoutIfNeeded];
     CHECK(g_botw_cancel_requested==DM_BTN_R && (g_buttons&DM_BTN_R),
           "an outside release requests native cancel even when no move event crossed the boundary");
-    CHECK([view dm_testCancelGuideHidden] && cancelFeedback.count==pressedFeedback+1,
-          "R outside release hides the guide and pulses once while native cancellation is still pending");
+    CHECK([view dm_testCancelGuideHidden] && cancelFeedback.count==pressedFeedback,
+          "R outside release hides the guide without a release haptic");
     g_botw_cancel_complete=DM_BTN_R; [view dm_testBotwTouchActionChanged];
     CHECK(!(g_buttons&DM_BTN_R),
           "native cancel acknowledgement releases R while its touch remains latched");
-    CHECK(cancelFeedback.count==pressedFeedback+1,"native cancel acknowledgement adds no duplicate haptic");
+    CHECK(cancelFeedback.count==pressedFeedback,"native cancel acknowledgement adds no haptic");
     g_botw_cancel_complete=0; g_botw_cancel_requested=0;
     FakeTouch *cancelledOutside=touch(shoulder.x,shoulder.y); began(view,cancelledOutside);
     pressedFeedback=cancelFeedback.count;
@@ -690,11 +692,17 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
     [view layoutIfNeeded];
     CHECK(g_botw_cancel_requested==DM_BTN_ZR && (g_buttons&DM_BTN_ZR),
           "lifting before the first native sample keeps the canceled ZR published for acknowledgement");
-    CHECK([view dm_testCancelGuideHidden] && cancelFeedback.count==pressedFeedback+1,
-          "ZR outside release immediately hides the guide and pulses once before native acknowledgement");
+    CHECK([view dm_testCancelGuideHidden] && cancelFeedback.count==pressedFeedback,
+          "ZR outside release immediately hides the guide without a release haptic");
     g_botw_cancel_complete=DM_BTN_ZR; [view dm_testBotwTouchActionChanged];
     CHECK(!(g_buttons&DM_BTN_ZR), "an acknowledgement after finger-up releases the retained ZR source");
     g_botw_cancel_complete=0; g_botw_cancel_requested=0;
+    FakeTouch *insideLift=touch(zrCenter.x,zrCenter.y); beforePress=cancelFeedback.count;
+    began(view,insideLift); NSUInteger insidePress=cancelFeedback.count;
+    CHECK(insidePress==beforePress+1,"ZR touch-down keeps its press haptic");
+    ended(view,insideLift,zrCenter.x+20,zrCenter.y);
+    CHECK(cancelFeedback.count==insidePress && !(g_buttons&DM_BTN_ZR),
+          "in-radius ZR release clears the button without an extra haptic");
 
     CGPoint rCenter=[view dm_testDropCenter:7], zrCenter2=[view dm_testDropCenter:9];
     FakeTouch *r2=touch(rCenter.x,rCenter.y), *zr2=touch(zrCenter2.x,zrCenter2.y);
@@ -938,6 +946,18 @@ static void test_botw_stick_feedback(DmGamepad *view) {
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view setNeedsLayout]; [view layoutIfNeeded];
     DmFeedbackSpy *feedback=[[DmFeedbackSpy alloc] initWithStyle:UIImpactFeedbackStyleLight];
     [view dm_testSetTouchFeedback:feedback];
+    CGPoint face=[view facePos:0]; NSUInteger beforeButton=feedback.count;
+    FakeTouch *button=touch(face.x,face.y); began(view,button);
+    CHECK(feedback.count==beforeButton+1 && (g_buttons&DM_BTN_A),
+          "BOTW face-button press keeps its touch haptic");
+    ended(view,button,face.x,face.y);
+    CHECK(feedback.count==beforeButton+1,"BOTW face-button release adds no haptic");
+    CGPoint shieldHome=[view dm_testShieldHome]; beforeButton=feedback.count;
+    FakeTouch *shield=touch(shieldHome.x,shieldHome.y); began(view,shield);
+    CHECK(feedback.count==beforeButton+1 && (g_buttons&DM_BTN_ZL),
+          "BOTW shield-stick grab keeps its ZL press haptic");
+    ended(view,shield,shieldHome.x,shieldHome.y);
+    CHECK(feedback.count==beforeButton+1,"BOTW shield-stick release adds no haptic");
     UIEdgeInsets insets=view.safeAreaInsets;
     dm_touchpad_point original=dm_touchpad_stick_home(view.bounds.size.width,view.bounds.size.height,
         insets.left,insets.top,insets.right,insets.bottom);
@@ -951,7 +971,10 @@ static void test_botw_stick_feedback(DmGamepad *view) {
           "idle left stick has only a white circle and four arrows at fifteen percent opacity");
     CGPoint start=CGPointMake(home.x+3,home.y+2);
     CGFloat radius=dm_touchpad_botw_stick_radius(view.bounds.size.height)*dm_touchpad_botw_move_defaults().size;
+    NSUInteger beforeStickGrab=feedback.count;
     FakeTouch *stick=touch(start.x,start.y); began(view,stick);
+    CHECK(feedback.count==beforeStickGrab,
+          "BOTW movement-stick grab is silent while button feedback remains enabled");
     NSUInteger grip=feedback.count;
     moved(view,stick,start.x+radius*1.1,start.y);
     CHECK(feedback.count==grip,"ordinary stick movement adds no haptic pulses");
@@ -986,7 +1009,10 @@ static void test_botw_stick_feedback(DmGamepad *view) {
     FakeTouch *first=touch(camera.x,camera.y); beganAt(view,first,6.0); endedAt(view,first,camera.x,camera.y,6.08);
     FakeTouch *second=touch(camera.x,camera.y); beganAt(view,second,6.20); endedAt(view,second,camera.x,camera.y,6.28);
     BOOL r3=NO; for (int i=0;i<g_input_sets;i++) r3|=(g_input_history[i]&DM_BTN_RS)!=0;
-    CHECK(feedback.count==1 && r3,"camera double tap still emits R3 with one haptic");
+    CHECK(feedback.count==0 && r3,"camera double tap emits R3 without a touch haptic");
+    g_input_sets=0; [view dm_testPulseBotwL3];
+    BOOL l3=NO; for (int i=0;i<g_input_sets;i++) l3|=(g_input_history[i]&DM_BTN_LS)!=0;
+    CHECK(l3 && feedback.count==0,"movement-stick L3 pulse remains silent");
     [view reset]; g_botw_touchhud_available=NO;
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view layoutIfNeeded]; feedback.count=0;
     FakeTouch *ordinary=touch(camera.x,camera.y); beganAt(view,ordinary,7.0); endedAt(view,ordinary,camera.x,camera.y,7.08);
@@ -1071,6 +1097,68 @@ static void test_botw_inventory_pointer(DmGamepad *view) {
     g_menu_pointer_count = g_pinch_count = g_camera_pose_count = g_camera_pose_modifier_count = 0;
     g_camera_pose_modifier = 0;
     g_botw_touch_camera_active = YES;
+    [view refreshBotwTouchMenuMode]; [view layoutIfNeeded];
+    CHECK(![view dm_testControlsHidden],
+          "live AppCamera keeps the normal virtual gamepad artwork visible behind native hints");
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES]; [view layoutIfNeeded];
+    CHECK([view dm_testControlsHidden],
+          "a connected physical controller suppresses the AppCamera touch gamepad");
+    int controllerPointerCount = g_menu_pointer_count, controllerTouchSets = g_touch_sets;
+    primary = touch(422,195); began(view,primary); ended(view,primary,422,195);
+    CHECK(g_menu_pointer_count == controllerPointerCount && g_touch_sets > controllerTouchSets,
+          "controller mode sends touch through its existing game-touch path instead of camera gestures");
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view layoutIfNeeded];
+    CHECK(![view dm_testControlsHidden],
+          "disconnecting the controller restores controls for the safe AppCamera viewfinder");
+    CGPoint faceA = [view facePos:0]; FakeTouch *gamepadTap = touch(faceA.x,faceA.y);
+    int menuBeforeControl = g_menu_pointer_count; began(view,gamepadTap);
+    CHECK((g_buttons & DM_BTN_A) && g_menu_pointer_count == menuBeforeControl,
+          "AppCamera hit routing gives a gamepad control first refusal over the camera pointer");
+    ended(view,gamepadTap,faceA.x,faceA.y);
+    const CGPoint nativeFooter[] = {{.8615,.945},{.772,.945},{.670,.945},{.5605,.945}};
+    const char *footerNames[] = {"A","B","X","Minus"};
+    float picture[4]; dm_aspect_touch_rect((float)view.bounds.size.width,
+        (float)view.bounds.size.height,picture);
+    for (unsigned i=0;i<sizeof nativeFooter/sizeof nativeFooter[0];i++) {
+        CGPoint p = CGPointMake(picture[0]+nativeFooter[i].x*picture[2],
+                                picture[1]+nativeFooter[i].y*picture[3]);
+        int before = g_menu_pointer_count; FakeTouch *footer = touch(p.x,p.y); began(view,footer);
+        BOOL nativeOwns = g_menu_pointer_count==before+1 &&
+            g_menu_pointer_events[before].phase==DM_BOTW_MENU_BEGIN && !g_buttons;
+        ended(view,footer,p.x,p.y);
+        char message[128]; snprintf(message,sizeof message,
+            "AppCamera %s footer label remains a native touch target",footerNames[i]);
+        CHECK(nativeOwns && g_menu_pointer_count==before+2 &&
+              g_menu_pointer_events[before+1].phase==DM_BOTW_MENU_END,message);
+    }
+    menuBeforeControl = g_menu_pointer_count;
+    primary = touch(422,195); began(view,primary); ended(view,primary,422,195);
+    CHECK(g_menu_pointer_count == menuBeforeControl+2 &&
+          g_menu_pointer_events[menuBeforeControl].phase == DM_BOTW_MENU_BEGIN &&
+          g_menu_pointer_events[menuBeforeControl+1].phase == DM_BOTW_MENU_END,
+          "unclaimed AppCamera touch area retains native pointer framing input");
+    g_botw_touch_camera_active = NO; [view refreshBotwTouchMenuMode]; [view layoutIfNeeded];
+    CHECK([view dm_testControlsHidden],
+          "captured-photo modal owner hides the gamepad while native menu input remains available");
+    menuBeforeControl = g_menu_pointer_count;
+    primary = touch(422,195); began(view,primary); ended(view,primary,422,195);
+    CHECK(g_menu_pointer_count == menuBeforeControl+2,
+          "captured-photo modal continues to receive native pointer input");
+    g_botw_touch_camera_active = YES; [view refreshBotwTouchMenuMode];
+    CGPoint stickHome=[view dm_testStickHome], heldFace=[view facePos:0];
+    FakeTouch *heldButton=touch(heldFace.x,heldFace.y), *heldStick=touch(stickHome.x,stickHome.y);
+    began(view,heldButton); began(view,heldStick); moved(view,heldStick,stickHome.x+80,stickHome.y);
+    CHECK((g_buttons&DM_BTN_A) && g_lx!=0,
+          "AppCamera permits simultaneous virtual button and stick input");
+    g_botw_touch_camera_active=NO; [view refreshBotwTouchMenuMode];
+    CHECK(!(g_buttons&DM_BTN_A) && g_lx==0 && [view dm_testControlsHidden],
+          "viewfinder-to-photo-modal transition cancels held controls and hides the gamepad");
+    g_botw_touch_camera_active=YES; [view refreshBotwTouchMenuMode]; [view layoutIfNeeded];
+    CHECK(![view dm_testControlsHidden] && [view dm_testZLArtworkHidden] &&
+          [view dm_testL3ArtworkHidden] && [view dm_testR3ArtworkHidden],
+          "returning to AppCamera restores the BOTW control artwork");
+    ended(view,heldButton,heldFace.x,heldFace.y); ended(view,heldStick,stickHome.x+80,stickHome.y);
+    g_menu_pointer_count = 0;
     primary = touch(422,195); secondary = touch(600,195);
     FakeTouch *modifier = touch(510,300);
     began(view,primary); began(view,secondary); began(view,modifier);
@@ -1430,10 +1518,20 @@ static void test_botw_manual_menu_pad(DmGamepad *view) {
     [view revealBotwMenuPad:[RecognizedMenuTap new]];
     [view touchesCancelled:three withEvent:event];
     [view setNeedsLayout]; [view layoutIfNeeded];
-    CHECK([view dm_testManualMenuPad] && ![view dm_testControlsHidden] &&
-          ![view dm_testL3ArtworkHidden] && ![view dm_testR3ArtworkHidden] &&
+    CHECK([view dm_testManualMenuPad],"recognized backup gesture activates the temporary menu pad");
+    CHECK(![view dm_testControlsHidden],"the temporary menu pad is visible");
+    CHECK(![view dm_testL3ArtworkHidden] && ![view dm_testR3ArtworkHidden] &&
           ![view dm_testZLArtworkHidden] && [view dm_testSwapHidden],
-          "recognized backup gesture shows the complete original pad without the layout switcher");
+          "the temporary menu pad shows its full controls without the layout switcher");
+    DmFeedbackSpy *manualStickFeedback=[[DmFeedbackSpy alloc] initWithStyle:UIImpactFeedbackStyleLight];
+    [view dm_testSetTouchFeedback:manualStickFeedback];
+    CGPoint manualStickHome=[view dm_testStickHome];
+    FakeTouch *manualStick=touch(manualStickHome.x,manualStickHome.y);
+    began(view,manualStick);
+    CHECK(manualStickFeedback.count==0,
+          "BOTW temporary manual-menu movement-stick grab is also silent");
+    ended(view,manualStick,manualStickHome.x,manualStickHome.y);
+    [view dm_testSetTouchFeedback:nil];
     reset_look(); g_look_enabled=YES; pointerCount=g_menu_pointer_count;
     CGRect zlBounds=CGPathGetPathBoundingBox([view dm_testButtonLayer:8].path);
     CGPoint a=[view facePos:0], zl=CGPointMake(CGRectGetMidX(zlBounds),CGRectGetMidY(zlBounds));

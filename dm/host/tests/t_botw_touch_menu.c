@@ -64,7 +64,8 @@ void gate_obs_result_set(int id, uint64_t (*fn)(const uint64_t *regs)) {
 int dm_guest_as_contains(uintptr_t address) {
     return mock_guest_size && address >= mock_guest_start && address - mock_guest_start < mock_guest_size;
 }
-void front_botw_touch_menu_changed(void) {}
+static unsigned mock_menu_change_notifications;
+void front_botw_touch_menu_changed(void) { mock_menu_change_notifications++; }
 uint64_t dm_nvn_frame_count(void) { return 0; }
 static int mock_touch_sets;
 void dm_touch_set(const dm_touch *t, int n) { (void)t; if (n > 0) mock_touch_sets++; }
@@ -732,11 +733,29 @@ static void test_cursorless_help_prompts(void) {
     int camera_shutter = -1;
     for (int i = 0; i < camera.footer_action_count; i++)
         if (camera.footer_action_buttons[i] == DM_BTN_A) camera_shutter = i;
-    assert(camera_shutter >= 0);
+    assert(camera_shutter >= 0 && camera.back_valid);
     dm_botw_touch_menu_test_publish(&camera);
     assert(dm_botw_touch_camera_active());
-    dm_botw_touch_menu_pinch(1.2f);
+    unsigned camera_notice_count = mock_menu_change_notifications;
     uint64_t camera_buttons = 0; int32_t camera_axes[4] = {0};
+    dm_botw_touch_camera_pose(.5f, .5f);
+    dm_botw_touch_camera_pose_modifier(1);
+    dm_botw_touch_menu_pinch(1.2f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .5f, .5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .6f, .4f);
+    dm_botw_touch_menu_view camera_confirmation = camera;
+    camera_confirmation.generic_count = 2;
+    camera_confirmation.footer_action_count = 0;
+    dm_botw_touch_menu_test_publish(&camera_confirmation);
+    assert(!dm_botw_touch_camera_active());
+    assert(mock_menu_change_notifications == camera_notice_count + 1);
+    memset(camera_axes, 0, sizeof camera_axes); camera_buttons = 0;
+    dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8993);
+    assert(!camera_buttons && !camera_axes[0] && !camera_axes[1] && !camera_axes[2] && !camera_axes[3]);
+    dm_botw_touch_menu_test_publish(&camera);
+    assert(dm_botw_touch_camera_active());
+    assert(mock_menu_change_notifications == camera_notice_count + 2);
+    dm_botw_touch_menu_pinch(1.2f);
     assert(dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8994));
     assert(camera_buttons == DM_BTN_UP && camera_axes[1] == 0); // native camera zoom is D-pad up
     dm_botw_touch_menu_pinch(0.0f);
@@ -1204,25 +1223,52 @@ static void test_slate_paging(void) {
     page.generic_count=0;
     selector_grid_carousel_to_view(&page,7200);
     assert(page.carousel_valid && page.carousel_buttons && page.inventory_arrow_valid[1]);
+    page.clip_valid = 1; set_rect(page.clip,.22f,.22f,.56f,.56f);
+    page.inventory_arrow_valid[0] = 1;
     dm_botw_touch_menu_test_publish(&page);
     tap(.5f,.5f);
     assert(!sample(7200)); // touching a photo must never trigger Delete/A
     dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN,.7f,.5f);
     dm_botw_touch_menu_pointer(DM_BOTW_MENU_END,.3f,.5f);
     assert(sample(7201)==DM_BTN_RIGHT && !sample(7202));
+    page.render_frame = 7203;
+    dm_botw_touch_menu_test_publish(&page);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN,.25f,.5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE,.19f,.5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END,.14f,.5f);
+    assert(sample(7203)==DM_BTN_RIGHT && !sample(7204)); // left-edge swipe may end outside the photo
+    page.render_frame = 7205;
+    dm_botw_touch_menu_test_publish(&page);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN,.75f,.5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE,.81f,.5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END,.86f,.5f);
+    assert(sample(7205)==DM_BTN_LEFT && !sample(7206)); // right-edge swipe may end outside the photo
+    page.render_frame = 7207;
+    dm_botw_touch_menu_test_publish(&page);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN,.14f,.5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE,.20f,.5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END,.25f,.5f);
+    assert(!sample(7207)); // a gesture that begins outside cannot enter and claim the photo
+    page.render_frame = 7208;
+    dm_botw_touch_menu_test_publish(&page);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN,.25f,.5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE,.19f,.5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_CANCEL,.14f,.5f);
+    assert(!sample(7208)); // cancellation releases the gesture without paging
     // Viewer paging has a different identity from the grid, but local Back,
     // Delete and the inherited Slate header must retain that same identity.
+    page.render_frame = 7210;
     page.back_valid=1; set_rect(page.back,.65f,.9f,.15f,.08f);
     page.footer_action_count=2;
     page.footer_action_buttons[0]=DM_BTN_A; set_rect(page.footer_actions[0],.82f,.9f,.12f,.08f);
     page.footer_action_buttons[1]=DM_BTN_R; set_rect(page.footer_actions[1],.6f,.02f,.2f,.08f);
     dm_botw_touch_menu_test_publish(&page);
     tap(.72f,.94f);
-    assert(sample(7203)==DM_BTN_B && !sample(7204));
+    assert(sample(7210)==DM_BTN_B && !sample(7211));
     tap(.88f,.94f);
-    assert(sample(7205)==DM_BTN_A && !sample(7206));
+    assert(sample(7212)==DM_BTN_A && !sample(7213));
     tap(.7f,.06f);
-    assert(sample(7207)==DM_BTN_R && !sample(7208));
+    assert(sample(7214)==DM_BTN_R && !sample(7215));
     page.carousel_valid=page.clip_valid=0;
     selector_grid_carousel_to_view(&page,7203);
     assert(!page.carousel_valid); // expired viewer geometry cannot accept a swipe

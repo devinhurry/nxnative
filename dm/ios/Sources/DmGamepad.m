@@ -278,6 +278,7 @@ void front_botw_touch_menu_changed(void) {
     NSTimeInterval _leftStickDownTime; BOOL _leftStickUsed;
     CGRect _botwMapRect; BOOL _botwMapValid, _botwMapTapConsumed, _botwMapInvalidAfterTap;
     BOOL _botwMenuMode, _botwMenuPointerActive, _botwMapGestureSuppressed;
+    BOOL _botwCameraPadVisible;
     UITouch *_botwMenuTouch; CGPoint _botwMenuLast, _botwMenuLastNorm;
     UITouch *_botwMapPinchTouch, *_botwCameraModifierTouch; CGFloat _botwMapPinchStart;
     dm_botw_camera_gesture _botwCameraGesture;
@@ -418,7 +419,8 @@ static BOOL botwTouchHudSupported(void) { return dm_botw_touch_hud_available(); 
         if (l == 2 && dm_opmode() != 0) l = 0;   // Tap only in handheld mode (env.txt's DM_OPMODE may have changed it)
         _full = l == 1; _tap = l == 2;
         _botwMenuMode = !dm_botw_touch_controls_visible();
-        _controls.hidden = _botwMenuMode;
+        _botwCameraPadVisible = _botwMenuMode && dm_botw_touch_camera_active();
+        _controls.hidden = _botwMenuMode && !_botwCameraPadVisible && !_manualMenuPad;
         [self applyLayout];
         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
         [nc addObserver:self selector:@selector(padsChanged:) name:GCControllerDidConnectNotification object:nil];
@@ -566,7 +568,10 @@ static BOOL isClick(int b) { return b == B_LS || b == B_RS; }
 - (CGPoint)swapCenter { CGRect s = self.safe; return CGPointMake(CGRectGetMidX(s), CGRectGetMinY(s) + K_PILL_Y * self.u); }
 
 static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); }
-- (BOOL)botwTouchControlsActive { return botwTouchHudSupported() && _full && !_tap && !_padOff && !_botwMenuMode && !atomic_load(&g_any_controller_connected); }
+- (BOOL)botwTouchControlsActive {
+    return botwTouchHudSupported() && _full && !_tap && !_padOff &&
+        (!_botwMenuMode || _botwCameraPadVisible) && !atomic_load(&g_any_controller_connected);
+}
 - (BOOL)botwMenuDpadActive { return botwTouchHudSupported() && _full && !_tap && !_padOff && _botwMenuMode && !_manualMenuPad && !atomic_load(&g_any_controller_connected) && dm_botw_touch_menu_dpad_visible(); }
 
 - (void)sendBotwMenuPointer:(int)phase point:(CGPoint)p {
@@ -627,16 +632,21 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
 }
 - (void)refreshBotwTouchMenuMode {
     BOOL active = !atomic_load(&g_any_controller_connected) && !dm_botw_touch_controls_visible();
-    if (_botwMenuMode == active) {
+    BOOL cameraPadVisible = active && botwTouchHudSupported() && _full && !_tap && !_padOff &&
+        !atomic_load(&g_any_controller_connected) && dm_botw_touch_camera_active();
+    BOOL cameraPadChanged = _botwCameraPadVisible != cameraPadVisible;
+    if (_botwMenuMode == active && !cameraPadChanged) {
         if (!_menuDpad.hidden && ![self botwMenuDpadActive]) {
             for (UITouch *t in _owner.keyEnumerator.allObjects)
                 if (([_owner objectForKey:t].unsignedLongLongValue & 0xff) == C_DPAD) [_owner removeObjectForKey:t];
             [self recompute];
         }
         _menuDpad.hidden = ![self botwMenuDpadActive];
+        _controls.hidden = _padOff || (_botwMenuMode && !_botwCameraPadVisible && !_manualMenuPad);
         [self setNeedsLayout];
         return;
     }
+    _botwCameraPadVisible = cameraPadVisible;
     [self reset];
     if (botwTouchHudSupported()) dm_input_cancel_virtual_latch(0xffffull);
     _botwMenuMode = active;
@@ -644,7 +654,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     // Menu mode participates in every BOTW button's visibility predicate.
     // Restore those child layers as well as the parent after loading/menus.
     [self applyLayout];
-    _controls.hidden = _padOff || _botwMenuMode;
+    _controls.hidden = _padOff || (_botwMenuMode && !_botwCameraPadVisible && !_manualMenuPad);
     [self setNeedsLayout];
 }
 - (void)clearBotwRuneIcon {
@@ -844,7 +854,8 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     }
     BOOL changed = face != _faceBits || dpad != _dpadBits || btn != _btnBits || swap != _swapHeld;
     uint64_t pressed = (face | dpad | btn) & ~(_faceBits | _dpadBits | _btnBits);
-    unsigned gripping = (_stick[0] ? 1u : 0) | (_stick[1] && ![self botwTouchControlsActive] ? 2u : 0);
+    unsigned gripping = (_stick[0] && !botwTouchHudSupported() ? 1u : 0) |
+        (_stick[1] && ![self botwTouchControlsActive] ? 2u : 0);
     if (pressed || (swap && !_swapHeld) || (gripping & ~_hapticSticks)) {
         [self emitTouchFeedback];
     }
@@ -924,7 +935,6 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
                     (float)_botwLookTapPoint.x, (float)_botwLookTapPoint.y, (float)_lookDown.x, (float)_lookDown.y, (float)u)) {
                 _botwLookTapPending = NO;
                 [self pulseBotwTouchButton:B_RS];
-                [self emitTouchFeedback];
             } else {
                 _botwLookTapPending = YES; _botwLookTapTime = t.timestamp; _botwLookTapPoint = _lookDown;
             }
@@ -967,7 +977,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     if (ts.count > 1) _botwLookTapPending = NO;
     BOOL game = NO;
     for (UITouch *t in ts) {
-        if (_botwMenuMode && !_manualMenuPad) {
+        if (_botwMenuMode && !_manualMenuPad && !_botwCameraPadVisible) {
             if ([self botwMenuDpadActive]) {
                 CGPoint p=[t locationInView:self];
                 uint64_t direction = dist(p,self.dpadCenter)<=self.dpadR*K_DPAD_GRAB ? [self dpadAt:p] : 0;
@@ -1033,7 +1043,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
             [_owner setObject:@(C_STICK) forKey:t]; _stick[0] = t; _stickNow[0] = p; _lCentre = p; _leftAxisTouch = t;
             _leftStickDownTime = t.timestamp; _leftStickUsed = NO; continue;
         }
-        if ([self botwMapOwnsPoint:p]) {
+        if (!_botwCameraPadVisible && [self botwMapOwnsPoint:p]) {
             _botwLookTapPending = NO;
             [_owner setObject:@(C_BOTW_MAP) forKey:t];
             dm_botw_touch_hud_map_tapped();
@@ -1045,9 +1055,49 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         if (_tap) { _botwLookTapPending = NO; game |= [self gameBegin:t]; continue; }
         // Choose the nearest control in its grab radius, then route the open right half to relative look or the native right stick.
         CGFloat best = 1; int kind = C_NONE, idx = 0;
-        CGFloat f = dist(p, self.faceCenter) / (self.faceGap + self.faceR * 1.6); if (f <= best) { best = f; kind = C_FACE; }
+        if (_botwCameraPadVisible) {
+            for (int b = B_A; b <= B_Y; b++) {
+                CGPoint center = [self facePos:b];
+                CGFloat faceHit = dist(p, center) / (self.faceR * 1.25);
+                if (_touchLayout.badges && dm_botw_button_badge_contains(CGPointMake(p.x,p.y),
+                        CGPointMake(center.x,center.y),self.faceR)) faceHit = fmin(faceHit, .5);
+                if (faceHit <= best) { best = faceHit; kind = C_FACE; }
+            }
+        } else {
+            CGFloat f = dist(p, self.faceCenter) / (self.faceGap + self.faceR * 1.6);
+            if (f <= best) { best = f; kind = C_FACE; }
+        }
         if (_full) { CGFloat d = dist(p, self.dpadCenter) / (self.dpadR * K_DPAD_GRAB); if (d < best) { best = d; kind = C_DPAD; } }
         if (!_stick[0]) { CGFloat sl = dist(p, self.stickHome) / ([self stickR:0] * K_STICK_GRAB); if (sl < best) { best = sl; kind = C_STICK; } }
+        if ([self botwTouchControlsActive] && _botwCameraPadVisible &&
+            kind != C_FACE && kind != C_DPAD && kind != C_STICK) {
+            _botwLookTapPending = NO;
+            if (_botwCameraGesture.active && !_botwCameraModifierTouch) {
+                _botwCameraModifierTouch = t;
+                [_owner setObject:@(C_MENU_EXTRA) forKey:t];
+                dm_botw_touch_camera_pose_modifier(_botwCameraGesture.kind == DM_BOTW_CAMERA_GESTURE_POSE);
+            } else if (_botwMenuTouch && !_botwMapPinchTouch && !_botwMapGestureSuppressed) {
+                _botwMapPinchTouch = t;
+                [_owner setObject:@(C_MENU_EXTRA) forKey:t];
+                _botwMapGestureSuppressed = YES;
+                CGPoint a = [_botwMenuTouch locationInView:self], b = [t locationInView:self];
+                _botwMapPinchStart = fmax(1.0, dist(a, b));
+                CGPoint middle = CGPointMake((a.x + b.x) * .5, (a.y + b.y) * .5);
+                dm_botw_camera_gesture_begin(&_botwCameraGesture, (float)middle.x,
+                    (float)middle.y, (float)_botwMapPinchStart);
+                if (_botwMenuPointerActive) {
+                    [self sendBotwMenuPointer:DM_BOTW_MENU_CANCEL point:_botwMenuLast];
+                    _botwMenuPointerActive = NO;
+                }
+            } else if (!_botwMenuTouch && !_botwMapGestureSuppressed) {
+                _botwMenuTouch = t; _botwMenuLast = p; _botwMenuPointerActive = YES;
+                [_owner setObject:@(C_MENU) forKey:t];
+                [self sendBotwMenuPointer:DM_BOTW_MENU_BEGIN point:p];
+            } else {
+                [_owner setObject:@(C_MENU_EXTRA) forKey:t];
+            }
+            continue;
+        }
         if (kind == C_NONE && _full && [self inRightArea:p]) {
             if (dm_look_enabled() && !_manualMenuPad) { [self beginLook:t at:p]; continue; }
             if (!_stick[1]) { kind = C_STICK; idx = 1; _rCentre = p; }
@@ -1151,13 +1201,12 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
             // the guide belongs to the finger and ends on this release.
             [self setNeedsLayout];
             uint64_t bit = 1ull << (v >> 8);
-            _botwCancelOutside &= ~bit;
             CGPoint p = [t locationInView:self], center = [self dropCenter:(int)(v >> 8)];
             if (ended && dm_botw_touch_actions_available() && !((_botwCancelPending | _botwCancelLatched) & bit) &&
                 dm_touchpad_cancel_outside((float)p.x, (float)p.y, (float)center.x, (float)center.y, DM_TP_CANCEL_RADIUS * self.u * [self botwLayoutScale:(int)(v >> 8)])) {
                 _botwCancelLatched |= bit; _botwCancelPending |= bit; dm_botw_touch_cancel_trigger(bit);
-                [self emitTouchFeedback];
             }
+            _botwCancelOutside &= ~bit;
             if (_botwCancelPending & bit) {
                 if (dm_botw_touch_cancel_complete(bit)) { _botwCancelPending &= ~bit; _botwCancelLatched &= ~bit; }
             } else _botwCancelLatched &= ~bit;
@@ -1196,7 +1245,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     BOOL hadManualPad = _manualMenuPad;
     _manualMenuPad = NO; _menuPadChord = nil;
     if (hadManualPad) {
-        _controls.hidden = _padOff || _botwMenuMode;
+        _controls.hidden = _padOff || (_botwMenuMode && !_botwCameraPadVisible && !_manualMenuPad);
         [self setNeedsLayout];
     }
     [self cancelBotwMenuPointer];
@@ -1578,7 +1627,7 @@ static void read_pad(GCExtendedGamepad *g) {
     [self publishTouchHudForController:anyConnected];
     if (!any || !motion) dm_motion_clear(0);   // the phone's gyro (if on) takes over from its next sample
     if (!any) { dm_haptics_apple_controller(0, nil); pthread_mutex_lock(&g_mu); g_pad_btn = 0; g_pad_lx = g_pad_ly = g_pad_rx = g_pad_ry = 0; pthread_mutex_unlock(&g_mu); publish(); }
-    dispatch_async(dispatch_get_main_queue(), ^{ self->_padOff = any; self->_controls.hidden = any || self->_botwMenuMode; [self reset]; [self applyLayout]; [self refreshBotwTouchMenuMode]; [self setNeedsLayout]; });
+    dispatch_async(dispatch_get_main_queue(), ^{ self->_padOff = any; self->_controls.hidden = any || (self->_botwMenuMode && !self->_botwCameraPadVisible && !self->_manualMenuPad); [self reset]; [self applyLayout]; [self refreshBotwTouchMenuMode]; [self setNeedsLayout]; });
 }
 @end
 

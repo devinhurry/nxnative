@@ -90,7 +90,7 @@
     "layouts": 339,
     "reusable_components": 250,
     "top_level_layouts": 89,
-    "requirements": 51,
+    "requirements": 52,
     "control_types": 5,
     "interaction_surface_types": 3
   },
@@ -561,13 +561,46 @@
           "file": "dm/host/hle_botw_touch_menu.c",
           "function": "selector_grid_carousel_to_view",
           "why": "Publishes grid/page/carousel targets."
+        },
+        {
+          "file": "dm/host/hle_botw_touch_menu.c",
+          "function": "dm_botw_touch_menu_pointer",
+          "why": "Routes the viewer swipe from its active clip and accepts an endpoint outside the clip after a valid in-bounds start."
         }
       ],
-      "verification_status": "not_run",
-      "verification_reason": "Shared native hit/focus/action path is present; the remaining conditional screen states have no independent end-to-end run evidence.",
-      "implementation_status_reason": "A complete shared or screen-specific code path is present; verification status separately records whether this exact guest state has been exercised.",
-      "verification_evidence": [],
-      "verification_level": "none"
+      "verification_status": "passed",
+      "verification_reason": "Post-fix Mac guest replay on saved photo 01/48 passed: photo 2 advanced to photo 3 on an in-bounds left-edge swipe ending outside (.25,.5→.14,.5), then returned to photo 2 on an in-bounds right-edge swipe ending outside (.75,.5→.86,.5). The focused handler test also rejects outside-origin gestures and preserves cancellation. The earlier intermittent edge failure is resolved for these observed cases.",
+      "implementation_status_reason": "Album thumbnail selection and the viewer carousel route through live native targets; full-photo swipes now require an in-bounds start but may end outside the photo clip, while outside-origin gestures and unavailable native paging arrows remain rejected.",
+      "verification_evidence": [
+        {
+          "file": "dm/host/tests/t_botw_touch_menu.c",
+          "function": "test_slate_paging",
+          "why": "Covers left/right edge swipes ending outside, outside-origin rejection, and cancel behavior."
+        }
+      ],
+      "verification_level": "game_state",
+      "verification_artifacts": [
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/ui-implementation-20261030/album-regression-current/runtime-postfix.json",
+          "why": "Mac guest route record identifies the active Album photo and post-fix left/right edge swipe transitions."
+        },
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/ui-implementation-20261030/album-regression-current/run-postfix.log",
+          "why": "Retained post-fix guest run log for Album edge swipe verification."
+        },
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/ui-implementation-20261030/album-regression-current/postfix-photo-middle-before-swipes.png",
+          "why": "Guest photo state before the two edge swipes."
+        },
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/ui-implementation-20261030/album-regression-current/postfix-photo-after-left-edge-swipe.png",
+          "why": "Guest state after the left-edge swipe advances to the next photo."
+        },
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/ui-implementation-20261030/album-regression-current/postfix-photo-after-right-edge-swipe.png",
+          "why": "Guest state after the right-edge swipe returns to the previous photo."
+        }
+      ]
     },
     {
       "id": "applet.picture_book",
@@ -661,8 +694,8 @@
         }
       ],
       "verification_status": "passed",
-      "verification_reason": "Focused tests cover native prompt dispatch, framing, zoom, pose+ZL, physical input preservation, gesture classification, release, and owner cancellation. UIKit harness reported zero failures; no live AppCamera guest session was available.",
-      "implementation_status_reason": "All enumerated AppCamera actions, including the ZL modifier for additional self-portrait poses, are wired through owner-scoped native touch paths on Mac and iOS.",
+      "verification_reason": "Existing camera actions retain their route and in-game evidence; coexistence is now observed in the Mac native window through viewfinder, same-owner capture modal, and discard back to viewfinder. UIKit handler runs cover touch ownership, footer hint routing, controller suppression, and cleanup. No AppKit frontend harness was run.",
+      "implementation_status_reason": "All enumerated AppCamera actions plus the newly required touch-gamepad/menu coexistence state have concrete owner-scoped platform handlers.",
       "verification_evidence": [
         {
           "file": "dm/host/tests/t_botw_touch_menu.c",
@@ -673,6 +706,21 @@
           "file": "dm/host/tests/t_botw_touch_trackpad.c",
           "function": "main",
           "why": "23/23 checks cover platform-neutral pose/zoom gesture classification and release."
+        },
+        {
+          "file": "dm/ios/tests/ios_look_harness.m",
+          "function": "test_botw_inventory_pointer",
+          "why": "Covers camera gamepad/menu coexistence, active-input cleanup on modal owner change, controls visibility, and reentry."
+        },
+        {
+          "file": "dm/ios/tests/ios_look_harness.m",
+          "function": "test_botw_inventory_pointer",
+          "why": "Covers the camera controls/menu coexistence touch path and owner transition cleanup."
+        },
+        {
+          "file": "dm/ios/tests/ios_look_harness.m",
+          "function": "test_botw_virtual_buttons",
+          "why": "Covers native AppCamera footer label hits without stealing ordinary virtual A."
         }
       ],
       "actions": [
@@ -682,9 +730,20 @@
         "camera.album",
         "camera.framing_focus",
         "camera.zoom",
-        "camera.selfie_pose"
+        "camera.selfie_pose",
+        "camera.gamepad_menu_coexistence"
       ],
-      "verification_level": "handler_test"
+      "verification_level": "game_state",
+      "verification_artifacts": [
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/ui-coverage-20261030/camera-controls-harness-6/details.log",
+          "why": "UIKit handler run reports zero failures and 33 look BEGIN sessions, including controller suppression/restore."
+        },
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/ui-coverage-20261030/camera-footer-harness-final/details.log",
+          "why": "Final UIKit footer run reports zero failures."
+        }
+      ]
     },
     {
       "id": "applet.dungeon",
@@ -1729,6 +1788,66 @@
         }
       ],
       "verification_level": "handler_test"
+    },
+    {
+      "id": "camera.gamepad_menu_coexistence",
+      "screen": "AppCamera_00",
+      "state": "Camera viewfinder menu active with BOTW touch controls requested",
+      "action": "Show and allow touch-gamepad controls while preserving touch access to the native AppCamera menu; keep each touch assigned to its chosen control or menu owner through end/cancel.",
+      "implementation_status": "implemented",
+      "implementation_status_reason": "iOS and Mac now separate safe-viewfinder control presentation from the AppCamera menu owner. Touches are assigned to gamepad controls or the native menu on begin and retain that owner through the gesture; controls hide and active output clears when the camera owner changes to the capture modal.",
+      "implementation_evidence": [
+        {
+          "file": "dm/ios/Sources/DmGamepad.m",
+          "function": "refreshBotwTouchMenuMode",
+          "why": "Tracks safe-camera gamepad presentation separately from menu mode and clears active owners/output on camera-owner changes."
+        },
+        {
+          "file": "dm/ios/Sources/DmGamepad.m",
+          "function": "touchesBegan:",
+          "why": "Routes eligible gamepad hits first and sends remaining safe-camera touches to the native AppCamera pointer/gesture path."
+        },
+        {
+          "file": "dm/host/front_mac.m",
+          "function": "setBotwMenuActive:",
+          "why": "Tracks camera-control presentation while retaining the menu routing mode."
+        },
+        {
+          "file": "dm/host/front_mac.m",
+          "function": "mouseDown:",
+          "why": "Routes control hits before forwarding free-area touches to the native menu."
+        },
+        {
+          "file": "dm/host/front_mac.m",
+          "function": "drawRect:",
+          "why": "Draws controls only while the safe AppCamera viewfinder owner is active."
+        }
+      ],
+      "verification_status": "passed",
+      "verification_reason": "Mac native-window observation confirmed the touch gamepad is visible in the AppCamera viewfinder; a native MENU_A capture opens the same-owner Save/Delete modal and hides the gamepad, and Delete returns to the viewfinder with the gamepad visible again. UIKit harnesses separately verify gamepad A hits versus menu free-area pointer routing, modal owner cleanup/reentry, controller suppression, and visible A/B/X/Minus guide taps without stealing normal virtual A. No Mac AppKit harness was run.",
+      "verification_evidence": [
+        {
+          "file": "dm/ios/tests/ios_look_harness.m",
+          "function": "test_botw_inventory_pointer",
+          "why": "Exercises AppCamera controls and menu touch coexistence, modal owner loss cleanup, controller gating, and viewfinder reentry."
+        },
+        {
+          "file": "dm/ios/tests/ios_look_harness.m",
+          "function": "test_botw_virtual_buttons",
+          "why": "Exercises native AppCamera prompt-label touches and confirms ordinary virtual A retains priority."
+        }
+      ],
+      "verification_level": "game_state",
+      "verification_artifacts": [
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/ui-coverage-20261030/camera-controls-harness-6/details.log",
+          "why": "UIKit handler run reports zero failures and 33 look BEGIN sessions, including controller suppression/restore."
+        },
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/ui-coverage-20261030/camera-footer-harness-final/details.log",
+          "why": "Final UIKit footer run reports zero failures; A/B/X/Minus hint-label taps route to the native menu without stealing a real virtual A hit."
+        }
+      ]
     },
     {
       "id": "cutscene.skip",
