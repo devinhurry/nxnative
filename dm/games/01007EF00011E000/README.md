@@ -11,8 +11,32 @@ The real `main`, `subsdk0` and `sdk` rewrite and cache-freshness check passed
 on 2026-10-27; the subsequent full Mac shader/host build reaches gameplay.
 
 BOTW touch-menu coverage and remaining runtime validation are tracked in
-[Menu touch progress](../../../docs/botw-menu-touch-progress.md). The current
-Mac checks cover direct quest selection, category changes and paging, and
+[Menu touch progress](../../../docs/botw-menu-touch-progress.md). The
+[resource inventory and semantic regression workflow](../../../docs/botw-ui-coverage.md)
+adds a generated gap report; resource existence and screen recognition alone do
+not establish touch acceptance. The resource census includes both installed
+DLCs; their files add no BFLYT layouts or BFLAN animations.
+
+[Touch implementation checklist](../../../docs/botw-touch-implementation.md)
+accounts for every scanned layout and its required screen/state/action group.
+The editable `touch_ui_inventory.json` records implementation evidence and
+verification independently; `dm/tools/botw_touch_progress.py --require-complete`
+rejects any remaining partial/missing implementation. Referenced layout names
+are NUL-terminated strings, unlike fixed-width 24-byte native pane names; the
+resource scanner preserves both so long component references resolve exactly.
+
+Resolved: Hero's Path was inferred from a private map-capture part, which stays
+shown on the regular map, and its long name exceeded the 16-byte trace label.
+HUD path lookup now compares complete 24-byte native names. Map direction-pad
+visibility follows both native horizontal/vertical direction-key guides
+(`E064`/`E065`) in the fresh, matching AppHome footer, after the existing shown,
+input-owned parent proof. It does not use the dormant capture source as a mode
+signal. Touch X, Back to the regular map and Back to gameplay pass with both
+DLCs mounted. The automated routes and evidence are described in the progress
+tracker; iPhone acceptance remains pending.
+
+The current Mac checks cover direct quest
+selection, category changes and paging, and
 Options adjustments and list swipes, stable control visibility during menu
 animations, direct map dragging, and Beedle dialogue/buy/sell/quantity flows.
 A shop quantity is accepted through the blank area of its number-selection
@@ -611,6 +635,15 @@ Every kind of cold start also shows the game's own 130–220 ms frames every 9�
 On this Mac the background prewarm also ends before the save loads, so the step changes the first minute only where the prewarm is slower than the way into play: a slower device, fewer cores, a longer list, a player who skips through the title. Frames over 25 ms without pipeline work (20–71 per run) are the game's own and vary with the machine's other load.
 
 ## Mac routes
+
+### AppCamera touch gestures
+
+In BOTW touch mode, drag with one finger to frame the shot and pinch to zoom.
+In selfie mode, move two fingers together to change Link's pose without changing
+zoom. On Mac, use Option-drag or Shift plus a two-finger trackpad scroll for the
+pose gesture. Hold a third finger during an iOS pose gesture to add the native
+ZL modifier; on Mac, hold Shift during Option-drag or Option during Shift-scroll.
+The native X prompt switches between selfie and landscape modes.
 
 ### Final synchronization and pass validation (2026-10-26, current)
 

@@ -1,6 +1,7 @@
 // swkbd unit test (takes seconds): lay out a ShowKeyboardArg by hand following the SDK layout, have swkbd_show write back the String, and all expected bytes are computed by hand.
 // Build and run: cd dm/host/tests && clang -O1 -I.. -o /tmp/t_swkbd t_swkbd.c ../hle_swkbd.c && /tmp/t_swkbd
 #include "../hle.h"
+#include "../front.h"
 #include <stdio.h>
 
 Result swkbd_show(void *out, const void *arg, int (*input)(const char *, const char *, const char *, const char *, int, char *, int));
@@ -40,6 +41,13 @@ void guest_clock_freeze_for(int reason, int on) { (void)reason; (void)on; }   //
 int main(void) {
     unsetenv("DM_KBD");
     static const uint16_t hero[] = {'H', 'e', 'r', 'o'};
+
+    printf("0 touch-mode keyboard bounds are gated to BOTW touch mode\n");
+    CHECK(front_text_input_length_valid(0, 2, 4, 1), "new BOTW-only min/max gate rejected non-BOTW text");
+    CHECK(front_text_input_length_valid(1, 2, 4, 2) && front_text_input_length_valid(1, 2, 4, 4),
+          "BOTW touch mode rejects a valid min/max boundary");
+    CHECK(!front_text_input_length_valid(1, 2, 4, 1) && !front_text_input_length_valid(1, 2, 4, 5),
+          "BOTW touch mode accepts text outside min/max bounds");
 
     printf("1 OK, UTF-8 output (what the game actually uses)\n");
     mkarg(1, 16, hero, 4); g_ret = 1; g_reply = "Ünï\xE5\x90\x8D";   // reply with a CJK character (U+540D, UTF-8 escaped)

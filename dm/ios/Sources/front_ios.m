@@ -187,21 +187,38 @@ void *front_metal_layer(void) { return (__bridge void *)g_layer; }
 void front_run(void (*guest)(void)) { guest(); }   // Already on main.m's big-stack thread
 
 // Software keyboard: show a UIAlertController on the main thread, the calling thread waits for the result
+extern int g_swkbd_min_chars;
 int front_text_input(const char *title, const char *sub, const char *guide, const char *initial, int max_chars, char *out, int out_cap) {
-    (void)max_chars;
     if (!g_layer) return -1;
     __block int r = 0; __block NSString *text = nil;
     dispatch_semaphore_t done = dispatch_semaphore_create(0);
-    NSString *t = title && *title ? @(title) : @"", *m = [NSString stringWithFormat:@"%s%s%s", sub ? sub : "", sub && *sub && guide && *guide ? "\n" : "", guide ? guide : ""];
+    BOOL botw_touch_mode = dm_botw_touch_hud_active();
+    int min_chars = botw_touch_mode && g_swkbd_min_chars > 0 ? g_swkbd_min_chars : 0;
+    int input_max_chars = botw_touch_mode ? max_chars : 0;
+    NSString *t = title && *title ? @(title) : @"", *m = [NSString stringWithFormat:@"%s%s%s%s%s", sub ? sub : "", sub && *sub && guide && *guide ? "\n" : "", guide ? guide : "",
+        min_chars ? [NSString stringWithFormat:@"\nAt least %d characters are required.", min_chars].UTF8String : "",
+        input_max_chars > 0 ? [NSString stringWithFormat:@"\nNo more than %d characters are allowed.", input_max_chars].UTF8String : ""];
     NSString *init = initial ? @(initial) : @"", *ph = guide ? @(guide) : @"";
+    __block id textObserver = nil;
     dispatch_async(dispatch_get_main_queue(), ^{
         UIAlertController *ac = [UIAlertController alertControllerWithTitle:t message:m preferredStyle:UIAlertControllerStyleAlert];
         [ac addTextFieldWithConfigurationHandler:^(UITextField *f) { f.text = init; f.placeholder = ph; }];
-        [ac addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) { (void)x; r = 1; text = ac.textFields.firstObject.text; dispatch_semaphore_signal(done); }]];
-        [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(UIAlertAction *x) { (void)x; dispatch_semaphore_signal(done); }]];
+        UITextField *field = ac.textFields.firstObject;
+        UIAlertAction *ok = [UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) {
+            (void)x; r = 1; text = field.text; if (textObserver) [NSNotificationCenter.defaultCenter removeObserver:textObserver]; dispatch_semaphore_signal(done);
+        }];
+        ok.enabled = front_text_input_length_valid(botw_touch_mode, min_chars, input_max_chars, init.length);
+        [ac addAction:ok];
+        [ac addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:^(UIAlertAction *x) {
+            (void)x; if (textObserver) [NSNotificationCenter.defaultCenter removeObserver:textObserver]; dispatch_semaphore_signal(done);
+        }]];
+        textObserver = [NSNotificationCenter.defaultCenter addObserverForName:UITextFieldTextDidChangeNotification object:field queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+            (void)note;
+            ok.enabled = front_text_input_length_valid(botw_touch_mode, min_chars, input_max_chars, field.text.length);
+        }];
         UIViewController *vc = nil;
         for (UIScene *s in UIApplication.sharedApplication.connectedScenes) if ([s isKindOfClass:UIWindowScene.class]) for (UIWindow *w in ((UIWindowScene *)s).windows) if (w.isKeyWindow) vc = w.rootViewController;
-        if (!vc) { dispatch_semaphore_signal(done); return; }
+        if (!vc) { if (textObserver) [NSNotificationCenter.defaultCenter removeObserver:textObserver]; dispatch_semaphore_signal(done); return; }
         [vc presentViewController:ac animated:YES completion:nil];
     });
     // The guest clock keeps running meanwhile, as on the Switch (hle_swkbd.c): a freeze here as well stopped Octopath Traveler 0's frame loop for as long as the box was up and made its sound stutter

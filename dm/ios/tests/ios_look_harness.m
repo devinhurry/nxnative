@@ -147,9 +147,16 @@ static BOOL g_botw_quick_select;
 static BOOL g_botw_hero_path;
 static BOOL g_force_controls_hidden;
 static BOOL g_botw_touch_map_active;
+static BOOL g_botw_touch_camera_active;
 typedef struct { int phase; float x, y; } menu_pointer_event;
 static menu_pointer_event g_menu_pointer_events[64];
 static int g_menu_pointer_count;
+typedef struct { float x, y; } camera_pose_event;
+static camera_pose_event g_camera_pose_events[64];
+static int g_camera_pose_count;
+static int g_camera_pose_modifier;
+static int g_camera_pose_modifier_events[32];
+static int g_camera_pose_modifier_count;
 
 int dm_look_enabled(void) { return g_look_enabled; }
 int dm_botw_touch_hud_available(void) { return g_botw_touchhud_available; }
@@ -163,6 +170,16 @@ int dm_botw_touch_controls_visible(void) {
     return !g_botw_touchhud_available || (g_botw_gameplay_ready && !dm_botw_touch_menu_visible());
 }
 int dm_botw_touch_map_active(void) { return g_botw_touch_map_active; }
+int dm_botw_touch_camera_active(void) { return g_botw_touch_camera_active; }
+void dm_botw_touch_camera_pose(float x, float y) {
+    if (g_camera_pose_count < (int)(sizeof g_camera_pose_events / sizeof g_camera_pose_events[0]))
+        g_camera_pose_events[g_camera_pose_count++] = (camera_pose_event){x, y};
+}
+void dm_botw_touch_camera_pose_modifier(int held) {
+    g_camera_pose_modifier = held != 0;
+    if (g_camera_pose_modifier_count < (int)(sizeof g_camera_pose_modifier_events / sizeof g_camera_pose_modifier_events[0]))
+        g_camera_pose_modifier_events[g_camera_pose_modifier_count++] = g_camera_pose_modifier;
+}
 static float g_pinch_ratios[64];
 static int g_pinch_count;
 void dm_botw_touch_menu_pinch(float ratio) {
@@ -234,6 +251,10 @@ static FakeTouch *touch(CGFloat x, CGFloat y) { return [[FakeTouch alloc] initAt
 static void began(DmGamepad *view, FakeTouch *t) { [view touchesBegan:[NSSet setWithObject:t] withEvent:nil]; }
 static void beganAt(DmGamepad *view, FakeTouch *t, NSTimeInterval time) { t.timeValue = time; began(view, t); }
 static void moved(DmGamepad *view, FakeTouch *t, CGFloat x, CGFloat y) { t.point = CGPointMake(x, y); [view touchesMoved:[NSSet setWithObject:t] withEvent:nil]; }
+static void movedTogether(DmGamepad *view, FakeTouch *a, CGPoint ap, FakeTouch *b, CGPoint bp) {
+    a.point = ap; b.point = bp;
+    [view touchesMoved:[NSSet setWithObjects:a, b, nil] withEvent:nil];
+}
 static void ended(DmGamepad *view, FakeTouch *t, CGFloat x, CGFloat y) { t.point = CGPointMake(x, y); [view touchesEnded:[NSSet setWithObject:t] withEvent:nil]; }
 static void endedAt(DmGamepad *view, FakeTouch *t, CGFloat x, CGFloat y, NSTimeInterval time) { t.timeValue = time; ended(view, t, x, y); }
 static void cancelled(DmGamepad *view, FakeTouch *t, CGFloat x, CGFloat y) { t.point = CGPointMake(x, y); [view touchesCancelled:[NSSet setWithObject:t] withEvent:nil]; }
@@ -1044,6 +1065,66 @@ static void test_botw_inventory_pointer(DmGamepad *view) {
           "map pointer ownership resumes after every pinch finger lifts");
     ended(view, replacement,500,250);
     g_botw_touch_map_active = NO;
+
+    // A live AppCamera makes a two-finger touch exclusive: midpoint motion is
+    // left-stick selfie pose, span motion is the native D-pad zoom pulse.
+    g_menu_pointer_count = g_pinch_count = g_camera_pose_count = g_camera_pose_modifier_count = 0;
+    g_camera_pose_modifier = 0;
+    g_botw_touch_camera_active = YES;
+    primary = touch(422,195); secondary = touch(600,195);
+    FakeTouch *modifier = touch(510,300);
+    began(view,primary); began(view,secondary); began(view,modifier);
+    CHECK(g_camera_pose_modifier == 0,
+          "third camera finger does not assert ZL before a pose gesture is selected");
+    movedTogether(view,primary,CGPointMake(462,175),secondary,CGPointMake(640,175));
+    CHECK(g_menu_pointer_count == 2 && g_menu_pointer_events[1].phase == DM_BOTW_MENU_CANCEL,
+          "AppCamera second finger cancels the one-finger framing pointer");
+    CHECK(g_camera_pose_count > 0 && g_pinch_count == 0 &&
+          g_camera_pose_events[g_camera_pose_count-1].x > 0 &&
+          g_camera_pose_events[g_camera_pose_count-1].y > 0,
+          "parallel two-finger translation sends selfie pose only");
+    CHECK(g_camera_pose_modifier == 1,
+          "third held camera finger enables ZL for the selected weapon pose");
+    ended(view,modifier,510,300);
+    CHECK(g_camera_pose_modifier == 0 && g_camera_pose_events[g_camera_pose_count-1].x != 0,
+          "releasing the third finger clears ZL while keeping pose active");
+    ended(view,secondary,640,175);
+    CHECK(g_camera_pose_events[g_camera_pose_count-1].x == 0 &&
+          g_camera_pose_events[g_camera_pose_count-1].y == 0,
+          "releasing either camera pose finger clears the native left stick");
+    ended(view,primary,462,175);
+
+    g_pinch_count = g_camera_pose_count = g_camera_pose_modifier_count = 0;
+    primary = touch(422,195); secondary = touch(600,195);
+    began(view,primary); began(view,secondary);
+    movedTogether(view,primary,CGPointMake(402,195),secondary,CGPointMake(620,195));
+    CHECK(g_pinch_count > 0 && g_pinch_ratios[g_pinch_count-1] > 1.2f &&
+          g_camera_pose_count == 0,
+          "AppCamera distance change selects zoom without sending pose");
+    ended(view,primary,422,195);
+    CHECK(g_pinch_ratios[g_pinch_count-1] == 0,
+          "lifting a camera zoom finger cancels the held native zoom input");
+    ended(view,secondary,640,195);
+
+    g_pinch_count = g_camera_pose_count = g_camera_pose_modifier_count = 0;
+    primary = touch(422,195); secondary = touch(600,195);
+    began(view,primary); began(view,secondary);
+    movedTogether(view,primary,CGPointMake(422,225),secondary,CGPointMake(600,225));
+    cancelled(view,secondary,600,225);
+    CHECK(g_camera_pose_events[g_camera_pose_count-1].x == 0 &&
+          g_camera_pose_events[g_camera_pose_count-1].y == 0,
+          "cancelled camera gesture clears selfie pose immediately");
+    ended(view,primary,422,225);
+
+    g_camera_pose_modifier = 0;
+    primary = touch(422,195); secondary = touch(600,195); modifier = touch(510,300);
+    began(view,primary); began(view,secondary); began(view,modifier);
+    movedTogether(view,primary,CGPointMake(452,195),secondary,CGPointMake(630,195));
+    CHECK(g_camera_pose_modifier == 1, "third finger can hold ZL through an active weapon pose");
+    g_botw_touch_camera_active = NO; [view reset];
+    CHECK(g_camera_pose_modifier == 0,
+          "camera owner reset clears the third-finger ZL modifier");
+    g_botw_touch_camera_active = NO;
 
     g_menu_pointer_count = 0;
     CGRect oldBounds = view.bounds;

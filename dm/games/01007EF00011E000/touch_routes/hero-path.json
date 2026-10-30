@@ -1,0 +1,68 @@
+{
+  "schema": 1,
+  "fixture": "Gameplay with installed DLC (Hero Path), using a disposable save.",
+  "steps": [
+    {
+      "name": "Open DLC map (setup key)",
+      "when": {
+        "gameplay": 1,
+        "menu_presented": 0
+      },
+      "key": "Minus",
+      "expect": {
+        "mode": "map",
+        "active": 1,
+        "hero_path": 0
+      }
+    },
+    {
+      "name": "Map X hint enters Hero Path",
+      "when": {
+        "mode": "map",
+        "active": 1,
+        "hero_path": 0
+      },
+      "tap": {
+        "kind": "hint",
+        "button": 4
+      },
+      "expect": {
+        "mode": "map",
+        "active": 1,
+        "hero_path": 1
+      }
+    },
+    {
+      "name": "Hero Path Back returns to the regular map",
+      "when": {
+        "mode": "map",
+        "active": 1,
+        "hero_path": 1
+      },
+      "tap": {
+        "kind": "back"
+      },
+      "expect": {
+        "mode": "map",
+        "active": 1,
+        "hero_path": 0
+      }
+    },
+    {
+      "name": "DLC map Back restores gameplay",
+      "when": {
+        "mode": "map",
+        "active": 1,
+        "hero_path": 0
+      },
+      "tap": {
+        "kind": "back"
+      },
+      "expect": {
+        "gameplay": 1,
+        "menu_presented": 0,
+        "active": 0
+      }
+    }
+  ]
+}

@@ -706,6 +706,179 @@ static void test_cursorless_help_prompts(void) {
     uint8_t *arrow = fake_pane(85, "P_ArrowL_00", 84, 64, 30, 0, 280);
     uint8_t *page = fake_pane(86, "Pa_PageTips_00", 80, 720, 420, 0, 0);
     generic_hit_observe(arrow, 1); generic_hit_observe(page, 1);
+    strcpy((char *)selector.screen + 0x200, "StaffRollDLC_00");
+    dm_botw_touch_menu_view credits = {0};
+    assert(selector_cursorless_prompt_view((uintptr_t)selector.manager, 9000,
+        (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &credits));
+    int credits_back = credits.back_valid, credits_scroll = 0;
+    for (int i = 0; i < credits.footer_action_count; i++)
+        credits_scroll |= credits.footer_action_buttons[i] == DM_BTN_UP;
+    assert(credits_back && credits_scroll); // native B skip + arrow scroll remain separate
+    strcpy((char *)selector.screen + 0x200, "ControllerWindow_00");
+    uint8_t *camera_guide = fake_pane(87, "N_Align_00", 80, 160, 40, 400, -318);
+    (void)camera_guide;
+    uint8_t *camera_icon = fake_pane(88, "T_Icon_00", 87, 32, 32, 400, -318);
+    uint8_t *camera_label = fake_pane(89, "T_Guide_00", 87, 120, 24, 382, -318);
+    link_child(root, camera_guide); link_child(camera_guide, camera_icon); link_child(camera_guide, camera_label);
+    uint16_t camera_glyph = 0xe040;
+    put_ptr(camera_icon + 0xe0, (uintptr_t)&camera_glyph);
+    generic_back_prompt_observe(camera_icon, 1);
+    generic_back_prompt_observe(camera_label, 1);
+    strcpy((char *)selector.screen + 0x200, "AppCamera_00");
+    dm_botw_touch_menu_view camera = {0};
+    assert(selector_cursorless_prompt_view((uintptr_t)selector.manager, 9000,
+        (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &camera));
+    assert(selector_pointer_screen_name("AppCamera_00") && camera.footer_action_count == 2);
+    int camera_shutter = -1;
+    for (int i = 0; i < camera.footer_action_count; i++)
+        if (camera.footer_action_buttons[i] == DM_BTN_A) camera_shutter = i;
+    assert(camera_shutter >= 0);
+    dm_botw_touch_menu_test_publish(&camera);
+    assert(dm_botw_touch_camera_active());
+    dm_botw_touch_menu_pinch(1.2f);
+    uint64_t camera_buttons = 0; int32_t camera_axes[4] = {0};
+    assert(dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8994));
+    assert(camera_buttons == DM_BTN_UP && camera_axes[1] == 0); // native camera zoom is D-pad up
+    dm_botw_touch_menu_pinch(0.0f);
+    camera_buttons = 0;
+    memset(camera_axes, 0, sizeof camera_axes);
+    dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8995);
+    assert(camera_buttons == 0 && camera_axes[1] == 0);
+    dm_botw_touch_menu_pinch(1.2f);
+    dm_botw_touch_menu_pinch(0.0f); // cancelling before HID sampling drops a queued zoom pulse
+    memset(camera_axes, 0, sizeof camera_axes); camera_buttons = 0;
+    dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8996);
+    assert(camera_buttons == 0);
+    dm_botw_touch_menu_pinch(.8f);
+    camera_buttons = 0; memset(camera_axes, 0, sizeof camera_axes);
+    assert(dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8997));
+    assert(camera_buttons == DM_BTN_DOWN); // pinch inward uses native D-pad down
+    dm_botw_touch_menu_pinch(0.0f);
+    camera_buttons = 0;
+    dm_botw_touch_camera_pose(-.5f, .25f);
+    dm_botw_touch_camera_pose_modifier(1);
+    memset(camera_axes, 0, sizeof camera_axes);
+    assert(dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8998));
+    assert(camera_axes[0] < 0 && camera_axes[1] > 0 && camera_buttons == DM_BTN_ZL);
+    dm_botw_touch_camera_pose_modifier(0);
+    camera_buttons = 0; memset(camera_axes, 0, sizeof camera_axes);
+    dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8999);
+    assert(camera_buttons == 0 && camera_axes[0] < 0 && camera_axes[1] > 0);
+    // Modifier release leaves the primary pose held but releases native ZL.
+    dm_botw_touch_camera_pose(0, 0);
+    camera_axes[0] = 777; camera_axes[1] = 0;
+    dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8900);
+    assert(camera_axes[0] == 777); // preserve the physical left-X channel
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .5f, .5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .501f, .498f);
+    memset(camera_axes, 0, sizeof camera_axes);
+    dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8910);
+    assert(camera_axes[2] == 0 && camera_axes[3] == 0); // accumulate slow motion before claiming the gesture
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .502f, .496f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .503f, .494f);
+    memset(camera_axes, 0, sizeof camera_axes);
+    dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8911);
+    assert(camera_axes[2] > 0 && camera_axes[3] > 0); // accumulated small moves cross the gesture threshold
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, .503f, .494f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .5f, .5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .6f, .4f);
+    memset(camera_axes, 0, sizeof camera_axes); camera_axes[2] = 1234;
+    dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8912);
+    assert(camera_axes[2] == 1234 && camera_axes[3] > 0); // preserve physical X, route touch look Y
+    memset(camera_axes, 0, sizeof camera_axes);
+    dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8912);
+    assert(camera_axes[3] > 0); // repeated reads in one native sample reuse the impulse
+    memset(camera_axes, 0, sizeof camera_axes);
+    dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8913);
+    assert(camera_axes[2] == 0 && camera_axes[3] == 0); // a stationary finger does not keep turning
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, .6f, .4f);
+    memset(camera_axes, 0, sizeof camera_axes);
+    dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8914);
+    assert(camera_axes[2] == 0 && camera_axes[3] == 0); // touch axes stop on release
+    tap(camera.footer_actions[camera_shutter][0] + camera.footer_actions[camera_shutter][2] * .5f,
+        camera.footer_actions[camera_shutter][1] + camera.footer_actions[camera_shutter][3] * .5f);
+    assert(sample(9000) == DM_BTN_A); // native camera shutter prompt
+    sample(9001);
+    uint16_t minus_glyph = 0xe04c;
+    put_ptr(camera_icon + 0xe0, (uintptr_t)&minus_glyph);
+    generic_back_prompt_observe(camera_icon, 1);
+    generic_back_prompt_observe(camera_label, 1);
+    dm_botw_touch_menu_view camera_album = {0};
+    assert(selector_cursorless_prompt_view((uintptr_t)selector.manager, 9000,
+        (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &camera_album));
+    int camera_album_action = 0;
+    for (int i = 0; i < camera_album.footer_action_count; i++)
+        camera_album_action |= camera_album.footer_action_buttons[i] == DM_BTN_MINUS;
+    assert(camera_album_action); // native Album minus prompt maps to the Minus action
+    int album_action = -1;
+    for (int i = 0; i < camera_album.footer_action_count; i++)
+        if (camera_album.footer_action_buttons[i] == DM_BTN_MINUS) album_action = i;
+    dm_botw_touch_menu_test_publish(&camera_album);
+    tap(camera_album.footer_actions[album_action][0] + camera_album.footer_actions[album_action][2] * .5f,
+        camera_album.footer_actions[album_action][1] + camera_album.footer_actions[album_action][3] * .5f);
+    assert(sample(9002) == DM_BTN_MINUS); // Album action is the native Minus button
+    sample(9003);
+    uint16_t portrait_glyph = 0xe042;
+    put_ptr(camera_icon + 0xe0, (uintptr_t)&portrait_glyph);
+    generic_back_prompt_observe(camera_icon, 1);
+    dm_botw_touch_menu_view camera_portrait = {0};
+    assert(selector_cursorless_prompt_view((uintptr_t)selector.manager, 9000,
+        (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &camera_portrait));
+    int portrait_action = -1;
+    for (int i = 0; i < camera_portrait.footer_action_count; i++)
+        if (camera_portrait.footer_action_buttons[i] == DM_BTN_X) portrait_action = i;
+    assert(portrait_action >= 0); // native X prompt toggles self-portrait / landscape
+    camera_portrait.render_frame = camera_portrait.prompt_owner_frame = 9004;
+    dm_botw_touch_menu_test_publish(&camera_portrait);
+    tap(camera_portrait.footer_actions[portrait_action][0] + camera_portrait.footer_actions[portrait_action][2] * .5f,
+        camera_portrait.footer_actions[portrait_action][1] + camera_portrait.footer_actions[portrait_action][3] * .5f);
+    assert(sample(9004) == DM_BTN_X);
+    sample(9005);
+    dm_botw_touch_camera_pose(.5f, .5f);
+    dm_botw_touch_camera_pose_modifier(1);
+    dm_botw_touch_menu_view other_owner = camera_portrait;
+    other_owner.generic_screen = (uintptr_t)selector.map_screen;
+    other_owner.prompt_owner_screen = (uintptr_t)selector.map_screen;
+    other_owner.page_key++;
+    dm_botw_touch_menu_test_publish(&other_owner);
+    assert(!dm_botw_touch_camera_active());
+    camera_buttons = 0; memset(camera_axes, 0, sizeof camera_axes);
+    dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 9006);
+    assert(camera_axes[0] == 0 && camera_axes[1] == 0 && !(camera_buttons & DM_BTN_ZL));
+    // A replacement screen cannot inherit pose axes or its ZL modifier.
+    // Pickup and challenge notices use the same live guide owner path. Their
+    // root screen is distinct, but the A guide is a real rendered action.
+    fake_pane(91, "Pa_GuideA_00", 80, 180, 40, 400, -318);
+    uint8_t *notice_icon = fake_pane(92, "T_Icon_00", 91, 32, 32, 400, -318);
+    uint8_t *notice_label = fake_pane(93, "T_Guide_00", 91, 120, 24, 382, -318);
+    uint16_t notice_glyph = 0xe040;
+    put_ptr(notice_icon + 0xe0, (uintptr_t)&notice_glyph);
+    generic_back_prompt_observe(notice_icon, 1);
+    generic_back_prompt_observe(notice_label, 1);
+    const char *notice_screens[] = {"PickUpWin_00", "ChallengeWin_00"};
+    for (unsigned i = 0; i < sizeof notice_screens / sizeof notice_screens[0]; i++) {
+        strcpy((char *)selector.screen + 0x200, notice_screens[i]);
+        dm_botw_touch_menu_view notice = {0};
+        assert(selector_cursorless_prompt_view((uintptr_t)selector.manager, 9000,
+            (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &notice));
+        int acknowledge = -1;
+        for (int j = 0; j < notice.footer_action_count; j++)
+            if (notice.footer_action_buttons[j] == DM_BTN_A) acknowledge = j;
+        assert(acknowledge >= 0 && notice.prompt_owner_screen == (uintptr_t)selector.screen);
+        if (!i) {
+            notice.render_frame = notice.prompt_owner_frame = 9008;
+            dm_botw_touch_menu_test_publish(&notice);
+            tap(notice.footer_actions[acknowledge][0] + notice.footer_actions[acknowledge][2] * .5f,
+                notice.footer_actions[acknowledge][1] + notice.footer_actions[acknowledge][3] * .5f);
+            assert(sample(9008) == DM_BTN_A); // only the live pickup guide owns acknowledgement
+            sample(9009);
+        }
+    }
+    pthread_mutex_lock(&g_generic_hits_mu);
+    memset(g_generic_back_prompts, 0, sizeof g_generic_back_prompts);
+    pthread_mutex_unlock(&g_generic_hits_mu);
+    generic_back_prompt_observe(icon, 1); generic_back_prompt_observe(label, 1);
+    strcpy((char *)selector.screen + 0x200, "ControllerWindow_00");
     dm_botw_touch_menu_view help = {0};
     assert(selector_cursorless_prompt_view((uintptr_t)selector.manager, 9000,
         (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &help));
@@ -1210,6 +1383,17 @@ static void test_menu_animation_visibility(void) {
     selector.active[1] = 0x80;
     selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
     assert(!dm_botw_touch_menu_visible() && dm_botw_touch_controls_visible());
+    // A shown no-button wait still blocks gameplay controls without becoming
+    // a touch target or inventing a body acknowledgement.
+    strcpy((char *)selector.map_screen + 0xa0, "SystemWindowNoBtn_00");
+    selector.active[1] = 0;
+    selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
+    assert(selector_screen_role("SystemWindowNoBtn_00") == UI_TRANSITION);
+    assert(!selector_pointer_screen_name("SystemWindowNoBtn_00"));
+    assert(dm_botw_touch_menu_visible() && !dm_botw_touch_controls_visible());
+    selector.active[1] = 0x80;
+    selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
+    assert(!dm_botw_touch_menu_visible() && dm_botw_touch_controls_visible());
     strcpy((char *)selector.map_screen + 0xa0, "MainShortCut_00");
     uint8_t *shortcut_all=fake_pane(76,"N_All_00",75,0,0,0,0);
     uint8_t *shortcut_main=fake_pane(77,"N_MainAll_00",76,0,0,0,0);
@@ -1535,6 +1719,26 @@ static void test_shared_prompt_collection(void) {
     a = 0;
     for (int i = 0; i < separate.footer_action_count; i++) a += separate.footer_action_buttons[i] == DM_BTN_A;
     assert(a == 2); // inline Add and footer Select must keep their distinct locations
+    uintptr_t old_guest_start = mock_guest_start; size_t old_guest_size = mock_guest_size;
+    mock_guest_start = (uintptr_t)native_panes; mock_guest_size = sizeof native_panes;
+    uint8_t *stick_guide = fake_pane(93, "N_Align_00", 70, 160, 40, 500, -300);
+    uint8_t *stick_icon = fake_pane(94, "T_Icon_00", 93, 32, 32, 500, -300);
+    uint8_t *stick_label = fake_pane(95, "T_Guide_00", 93, 120, 24, 480, -300);
+    uint16_t stick_glyph = 0xe057;
+    link_child(root, stick_guide); link_child(stick_guide, stick_icon); link_child(stick_guide, stick_label);
+    put_ptr(stick_icon + 0xe0, (uintptr_t)&stick_glyph);
+    generic_back_prompt_observe(stick_icon, 1); generic_back_prompt_observe(stick_label, 1);
+    assert(guide_glyph_button(pane_text_glyph(stick_icon)) == DM_BTN_RS);
+    assert(ancestor_action_guide(stick_icon) == stick_guide);
+    int cached_rs = 0; for (int i = 0; i < 32; i++) cached_rs |= g_generic_back_prompts[i].root == (uintptr_t)root && g_generic_back_prompts[i].button == DM_BTN_RS && g_generic_back_prompts[i].text_valid && g_generic_back_prompts[i].icon_valid;
+    assert(cached_rs);
+    float stick_rect[4]; assert(generic_action_prompt_snapshot((uintptr_t)root, 12000, DM_BTN_RS, stick_rect));
+    generic_action_prompts_to_view((uintptr_t)root, 12000, &separate);
+    int right_stick = 0;
+    for (int i = 0; i < separate.footer_action_count; i++)
+        right_stick |= separate.footer_action_buttons[i] == DM_BTN_RS;
+    assert(right_stick); // native press-stick prompts are touch actions too
+    mock_guest_start = old_guest_start; mock_guest_size = old_guest_size;
     dm_botw_touch_menu_reset();
 }
 
@@ -1723,6 +1927,111 @@ static void test_message_advance_owner(void) {
     mock_guest_start = saved_guest_start; mock_guest_size = saved_guest_size;
     atomic_store(&g_validated_box_cursor_manager,0);
     dm_botw_touch_menu_reset();
+}
+
+static void test_hero_path_native_guides(void) {
+    __typeof__(g_native_view) old = g_native_view;
+    memset(&g_native_view,0,sizeof g_native_view);
+    g_native_view.footer_root=0x1234;
+    for (int i=0;i<2;i++) {
+        g_native_view.guide_icon_valid[i]=g_native_view.guide_text_valid[i]=1;
+        g_native_view.guide_icon_seen[i]=g_native_view.guide_text_seen[i]=40;
+    }
+    g_native_view.guide_icon_glyph[0]=0xe064;
+    g_native_view.guide_icon_glyph[1]=0xe065;
+    assert(native_hero_path_guides_locked(0x1234,40));
+    assert(!native_hero_path_guides_locked(0x1235,40));
+    assert(!native_hero_path_guides_locked(0x1234,43));
+    g_native_view.guide_text_valid[1]=0;
+    assert(!native_hero_path_guides_locked(0x1234,40));
+    g_native_view.guide_text_valid[1]=1;
+    g_native_view.guide_icon_glyph[0]=0xe042; // regular map X and right stick
+    g_native_view.guide_icon_glyph[1]=0xe05e;
+    assert(!native_hero_path_guides_locked(0x1234,40));
+    g_native_view=old;
+}
+
+static void test_long_hud_path(void) {
+    _Alignas(16) uint8_t tree[3][0x100] = {0};
+    uintptr_t start=mock_guest_start; size_t size=mock_guest_size;
+    mock_guest_start=(uintptr_t)tree; mock_guest_size=sizeof tree;
+    put_ptr(tree[0]+0x28,(uintptr_t)tree[1]+8);
+    for (int i=1;i<3;i++) {
+        put_ptr(tree[i]+PANE_PARENT,(uintptr_t)tree[0]);
+        put_ptr(tree[i]+0x10,i==1 ? (uintptr_t)tree[2]+8 : (uintptr_t)tree[0]+0x20);
+        strcpy((char *)tree[i]+PANE_NAME,i==1 ? "Pa_MapDLCGaugeL_01" : "Pa_MapDLCGaugeL_00");
+    }
+    const char *const path[]={"Pa_MapDLCGaugeL_00"};
+    assert(selector_hud_path_pane((uintptr_t)tree[0],path,1)==(uintptr_t)tree[2]);
+    char first_name[25], second_name[25];
+    pane_name(tree[1], first_name); pane_name(tree[2], second_name);
+    assert(!strcmp(first_name, "Pa_MapDLCGaugeL_01"));
+    assert(!strcmp(second_name, "Pa_MapDLCGaugeL_00"));
+    assert(selector_pane_name((uintptr_t)tree[1], first_name));
+    assert(!strcmp(first_name, "Pa_MapDLCGaugeL_01"));
+    char text[512]; ui_audit_path((uintptr_t)tree[2],text);
+    assert(strstr(text,"Pa_MapDLCGaugeL_00"));
+    mock_guest_start=start; mock_guest_size=size;
+}
+
+static void test_passive_ui_audit(void) {
+    assert(selector_screen_role("MessageTipsRunTime_00") == UI_TIP);
+    assert(!selector_pointer_screen_name("MessageTipsRunTime_00"));
+    assert(selector_pointer_screen_name("MessageTips_00"));
+    assert(!selector_pointer_screen_name("PauseMenuInfo_00"));
+    assert(selector_apphome_page_screen_name("AppPictureBook_00"));
+    assert(selector_pointer_screen_name("ShopHorse_00"));
+    assert(selector_pointer_screen_name("SaveTransferWindow_00"));
+    assert(selector_pointer_screen_name("StaffRollDLC_00"));
+    assert(selector_pointer_screen_name("AppCamera_00"));
+    assert(selector_screen_role("ChangeController_00") == UI_TRANSITION);
+    assert(selector_screen_role("ChangeControllerNN_00") == UI_TRANSITION);
+    assert(selector_pointer_screen_name("ErrorViewer_00"));
+    assert(selector_screen_role("AppSystemWindowNoBtn_00") == UI_TRANSITION);
+    assert(selector_screen_role("SystemWindowNoBtn_00") == UI_TRANSITION);
+    assert(selector_screen_role("OPtext_00") == UI_PASSIVE);
+    assert(selector_pointer_screen_name("HardMode_00"));
+    assert(selector_screen_role("MainHardMode_00") == UI_PASSIVE);
+    assert(selector_screen_role("GameTitle_00") == UI_PASSIVE);
+    assert(selector_screen_role("DemoStart") == UI_PASSIVE);
+    assert(selector_screen_role("LastComplete_00") == UI_PASSIVE);
+    assert(selector_screen_role("StaffRoll_00") == UI_PASSIVE);
+    assert(selector_screen_role("Thanks_00") == UI_PASSIVE);
+    assert(selector_screen_role("End_00") == UI_PASSIVE);
+    assert(selector_screen_role("UnknownFuture_00") == UI_UNKNOWN);
+    FILE *file = tmpfile(); assert(file);
+    atomic_store(&g_ui_audit, file);
+    memset(g_ui_audit_screen_hash, 0, sizeof g_ui_audit_screen_hash);
+    g_ui_audit_state_hash = g_ui_audit_state_frame = 0;
+    ui_audit_screen(1, 0, 0, "Test\"Screen", 0, -1, 0, 0, 0, 1);
+    long size = ftell(file); assert(size > 0);
+    ui_audit_screen(1, 0, 0, "Test\"Screen", 0, -1, 0, 0, 0, 2);
+    assert(ftell(file) == size); // unchanged registrations are deduplicated
+    dm_botw_touch_menu_view empty = {0};
+    uintptr_t manager = atomic_exchange(&g_validated_box_cursor_manager, 0);
+    int old_mode = mock_touch_hud_active; mock_touch_hud_active = 0;
+    ui_audit_view(&empty, 0, 10); assert(ftell(file) == size);
+    mock_touch_hud_active = 1;
+    dm_botw_touch_menu_view before = g_view;
+    int old_gameplay = g_presented_gameplay, old_menu = g_presented_menu;
+    g_presented_gameplay = 1; g_presented_menu = 0;
+    ui_audit_view(&empty, 0, 10);
+    long gameplay_size = ftell(file);
+    // A presentation update must publish even without a menu observer callback.
+    selector_publish_menu_presentation(0, 11);
+    assert(ftell(file) > gameplay_size);
+    empty.generic_screen = 1; // a disposed view pointer is never dereferenced or called
+    ui_audit_view(&empty, 0, 12);
+    ui_audit_view(&empty, 1, 13); // stale targets cannot bind to an unrelated owner
+    assert(!memcmp(&before, &g_view, sizeof before)); // evidence never changes routing
+    g_presented_gameplay = old_gameplay; g_presented_menu = old_menu;
+    char data[4096] = {0}; rewind(file); assert(fread(data,1,sizeof data-1,file));
+    assert(strstr(data, "Test\\\"Screen"));
+    assert(strstr(data, "\"registered\":0"));
+    assert(strstr(data, "\"targets\":[]"));
+    assert(!strstr(data, "\"active\":1"));
+    atomic_store(&g_ui_audit, NULL); fclose(file);
+    atomic_store(&g_validated_box_cursor_manager, manager); mock_touch_hud_active = old_mode;
 }
 
 int main(void) {
@@ -2073,9 +2382,63 @@ int main(void) {
     assert(generic_view.generic_targets[0].pane == (uintptr_t)hit_one);
     assert(generic_view.generic_targets[1].pane == (uintptr_t)hit_two);
     assert(mock_eligibility_calls >= 2 && mock_eligibility_group == 2);
+    // Horse-shop rows are native registered entries in PaHorseBtn parts. The
+    // shared path must admit that screen and resolve each live B_Hit to its
+    // own entry before a touch can request the game's normal selection.
+    char previous_screen_name[64], row_one_name[24], row_two_name[24];
+    strcpy(previous_screen_name, (char *)selector.screen + 0x200);
+    memcpy(row_one_name, row_one + PANE_NAME, sizeof row_one_name);
+    memcpy(row_two_name, row_two + PANE_NAME, sizeof row_two_name);
+    strcpy((char *)selector.screen + 0x200, "ShopHorse_00");
+    strcpy((char *)row_one + PANE_NAME, "Pa_ShopBtn_00");
+    strcpy((char *)row_two + PANE_NAME, "Pa_ShopBtn_01");
+    selector_tick();
+    dm_botw_touch_menu_test_snapshot(&generic_view);
+    assert(selector_pointer_screen_name("ShopHorse_00"));
+    assert(generic_view.generic_count == 2 &&
+           selector_nearest_part(generic_view.generic_targets[0].pane) == (uintptr_t)row_one &&
+           selector_nearest_part(generic_view.generic_targets[1].pane) == (uintptr_t)row_two);
+    memcpy(row_one + PANE_NAME, row_one_name, sizeof row_one_name);
+    memcpy(row_two + PANE_NAME, row_two_name, sizeof row_two_name);
+    strcpy((char *)selector.screen + 0x200, previous_screen_name);
+    selector_tick();
+    // Save-transfer offers two- and three-button variants using the same
+    // PaCommonBtnThin/NormalButton owner path as the ordinary system dialogs.
+    memcpy(row_one_name, row_one + PANE_NAME, sizeof row_one_name);
+    memcpy(row_two_name, row_two + PANE_NAME, sizeof row_two_name);
+    strcpy((char *)selector.screen + 0x200, "SaveTransferWindow_00");
+    strcpy((char *)row_one + PANE_NAME, "Pa_BtnL_00");
+    strcpy((char *)row_two + PANE_NAME, "Pa_BtnR_00");
+    selector_tick();
+    dm_botw_touch_menu_test_snapshot(&generic_view);
+    assert(selector_pointer_screen_name("SaveTransferWindow_00") && generic_view.generic_count == 2);
+    assert(selector_nearest_part(generic_view.generic_targets[0].pane) == (uintptr_t)row_one &&
+           selector_nearest_part(generic_view.generic_targets[1].pane) == (uintptr_t)row_two);
+    memcpy(row_one + PANE_NAME, row_one_name, sizeof row_one_name);
+    memcpy(row_two + PANE_NAME, row_two_name, sizeof row_two_name);
+    strcpy((char *)selector.screen + 0x200, previous_screen_name);
+    selector_tick();
+    // ErrorViewer embeds legacy L_BtnDialog* parts rather than Pa_* parts.
+    // Their UniteButton B_BtnDialog bounds still pair with registered entries.
+    memcpy(row_one_name, row_one + PANE_NAME, sizeof row_one_name);
+    strcpy((char *)selector.screen + 0x200, "ErrorViewer_00");
+    strcpy((char *)row_one + PANE_NAME, "L_BtnDialog");
+    hit_one[0x58] = 0; generic_hit_observe(hit_one, 1);
+    uint8_t *error_hit = fake_pane(91, "B_BtnDialog", 41, 180, 80, 380, 300);
+    generic_alt_hit_observe(error_hit, 1);
+    selector_tick();
+    dm_botw_touch_menu_test_snapshot(&generic_view);
+    assert(selector_pointer_screen_name("ErrorViewer_00") && generic_view.generic_count == 2);
+    int error_row = -1;
+    for (int i = 0; i < generic_view.generic_count; i++)
+        if (generic_view.generic_targets[i].pane == (uintptr_t)error_hit) error_row = i;
+    assert(error_row >= 0 && generic_view.generic_targets[error_row].entry == (uintptr_t)selector.entry);
+    memcpy(row_one + PANE_NAME, row_one_name, sizeof row_one_name);
+    hit_one[0x58] = 1; generic_hit_observe(hit_one, 1);
+    strcpy((char *)selector.screen + 0x200, previous_screen_name);
+    selector_tick();
     // The title's amiibo confirmation is an ordinary registered modal too.
     // Its native entries must be available through the shared hit-test path.
-    char previous_screen_name[64];
     strcpy(previous_screen_name, (char *)selector.screen + 0x200);
     strcpy((char *)selector.screen + 0x200, "AmiiboWindow_00");
     selector_tick();
@@ -3045,14 +3408,14 @@ int main(void) {
     observe_native_pane(apphome_right_icon, 1);
     observe_native_pane(apphome_right_label, 1);
 
-    char saved_dest_name[16]; memcpy(saved_dest_name, top_destination + PANE_NAME, 16);
-    memset(top_destination + PANE_NAME, 0, 16);
+    char saved_dest_name[24]; memcpy(saved_dest_name, top_destination + PANE_NAME, 24);
+    memset(top_destination + PANE_NAME, 0, 24);
     memcpy(top_destination + PANE_NAME, "P_Missing_00", 12);
     assert(!apphome_capture_destination(capture_apphome_root, source_capture, NULL));
     observe_native_pane(apphome_icon, 1);
     assert(!g_native_view.header_icon_valid[0] && !g_native_view.header_text_valid[0] &&
            !g_native_view.header_icon_valid[1] && !g_native_view.header_text_valid[1]);
-    memcpy(top_destination + PANE_NAME, saved_dest_name, 16);
+    memcpy(top_destination + PANE_NAME, saved_dest_name, 24);
     uint8_t *duplicate_top_destination = fake_pane(93, "P_Text_00", 84, 696, 36, 0, 320);
     link_child(timeline, duplicate_top_destination);
     assert(!apphome_capture_destination(capture_apphome_root, source_capture, NULL));
@@ -3570,6 +3933,9 @@ int main(void) {
     test_inventory_preview_rotation();
     test_map_draw_order();
     test_map_displacement_drag();
+    test_long_hud_path();
+    test_hero_path_native_guides();
+    test_passive_ui_audit();
     puts("t_botw_touch_menu: native inventory/category/popup and current-screen generic targets, eligibility, delayed focus and inactive gates passed");
     return 0;
 }

@@ -12,12 +12,13 @@ QUIET = $(if $(strip $(SAN)),,2>/dev/null)
 GINC = $(if $(strip $(GAME)),-I../gen/$(GAME) -I../../games/$(GAME),$(error GAME is not set: make GAME=<base game title ID>: $(shell python3 ../../games/game.py list | awk -F'\t' '{printf "%s (%s)  ", $$1, $$3}')))
 $(B)/t_fs $(B)/t_fs_case $(B)/t_fs_commit_list $(B)/t_fs_commit_list_tsan: ../romfs_image.h
 GAME_H = ../gen/$(GAME)/game_profile.h
-run: $(B)/t_aspect $(B)/t_look $(B)/t_botw_touchhud $(B)/t_botw_touch_actions $(B)/t_botw_touch_menu $(B)/t_gate_obs_result $(B)/t_device_motion $(B)/t_motion $(B)/t_heap_size $(B)/t_touch $(B)/t_gesture $(B)/t_oe $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_audio_spsc $(B)/t_swkbd $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pctl $(B)/t_time $(B)/t_shared_font $(B)/t_vorbis $(B)/t_vorbis_divides $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple
+run: $(B)/t_aspect $(B)/t_look $(B)/t_botw_touchhud $(B)/t_botw_touch_actions $(B)/t_botw_touch_menu $(B)/t_botw_touch_trackpad $(B)/t_gate_obs_result $(B)/t_device_motion $(B)/t_motion $(B)/t_heap_size $(B)/t_touch $(B)/t_gesture $(B)/t_oe $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_audio_spsc $(B)/t_swkbd $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pctl $(B)/t_time $(B)/t_shared_font $(B)/t_vorbis $(B)/t_vorbis_divides $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple
 	$(B)/t_aspect
 	$(B)/t_look
 	$(B)/t_botw_touchhud
 	$(B)/t_botw_touch_actions
 	$(B)/t_botw_touch_menu
+	$(B)/t_botw_touch_trackpad
 	$(B)/t_gate_obs_result
 	$(B)/t_device_motion
 	$(B)/t_motion
@@ -128,6 +129,8 @@ $(B)/t_fpslock: t_fpslock.c ../hle_fpslock.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wno-unused-function $(GINC) -o $@ t_fpslock.c
 $(B)/t_swkbd: t_swkbd.c ../hle_swkbd.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_swkbd.c ../hle_swkbd.c
+$(B)/t_botw_touch_trackpad: t_botw_touch_trackpad.c ../botw_touch_trackpad.h | $(B)
+	$(CLANG) -O1 -Wall -Werror -I.. -o $@ t_botw_touch_trackpad.c
 $(B)/t_altstack: t_altstack.c t_altstack_stub.c ../crash.c ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_altstack.c t_altstack_stub.c ../crash.c
 $(B)/t_pctl: t_pctl.c ../hle_misc.c ../hle.h ../dm.h $(GAME_H) | $(B)
@@ -197,7 +200,7 @@ $(B)/t_botw_touch_actions: t_botw_touch_actions.c ../botw_touch_actions.h ../hle
 .PHONY: botw_touch_menu
 botw_touch_menu: $(B)/t_botw_touch_menu
 	$(B)/t_botw_touch_menu
-$(B)/t_botw_touch_menu: t_botw_touch_menu.c ../botw_touch_menu.h ../hle_botw_touch_menu.c ../front.h ../hle.h ../dm.h ../dm_input.h $(GAME_H) | $(B)
+$(B)/t_botw_touch_menu: t_botw_touch_menu.c ../botw_touch_menu.h ../botw_touch_screens.inc ../botw_ui_audit.inc ../hle_botw_touch_menu.c ../front.h ../hle.h ../dm.h ../dm_input.h $(GAME_H) | $(B)
 	clang -O1 -Wall -Werror -Wno-unused-function -DDM_TEST_HOOKS -I.. $(GINC) -o $@ t_botw_touch_menu.c -lpthread -lm
 $(B)/t_gate_obs_result: t_gate_obs_result.c ../hle.c ../dm.h $(GAME_H) | $(B)
 	clang -O1 -Wall -Werror -Wno-unused-function -ffunction-sections -fdata-sections -Wl,-dead_strip -I.. $(GINC) -o $@ t_gate_obs_result.c

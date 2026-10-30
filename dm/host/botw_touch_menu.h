@@ -48,6 +48,15 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y);
 // 0 ends the pinch).
 int dm_botw_touch_map_active(void);
 void dm_botw_touch_menu_pinch(float ratio);
+// The native AppCamera is owned by the touch menu when its live A/B prompts
+// belong to the focused AppCamera screen. Frontends use this to route pinch.
+int dm_botw_touch_camera_active(void);
+// Owner-scoped AppCamera pose input, normalized to native left-stick range.
+// Set (0,0) on gesture release or cancellation.
+void dm_botw_touch_camera_pose(float x, float y);
+// Hold the native ZL modifier during an active pose gesture for the alternate
+// selfie pose. Set to zero on release/cancel.
+void dm_botw_touch_camera_pose_modifier(int held);
 
 // Snapshot consumed by the native hit-test and navigation queue. Rectangles
 // and cursor coordinates use normalized logical-canvas coordinates (0..1,
