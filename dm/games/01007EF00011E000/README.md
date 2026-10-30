@@ -86,8 +86,9 @@ arrows at alpha 0.15; dragging reveals an unfilled gray ring and an arrow just o
 Dragging beyond the ring retains one direction arrow, without an extra haptic
 or automatic sprint. BOTW camera dragging is silent; camera double-tap retains
 R3 and one pulse.
-The map/environment cluster moves 48 native layout units left, reserving space
-for + with an 8-point gap. Both +/- use a white cross over a 40%-opaque black
+The map/environment cluster reserves space for + with an 8-point gap. The
+visible Plus cross has the same right-edge padding as the first heart's left
+edge, including the additional 2 frontend points. Both +/- use a white cross over a 40%-opaque black
 circle, with no border. Plus has one fixed anchor beside the minimap; its circle
 sits 4 frontend points below the minimap top. The circle is 39 native layout
 units across, and its centered cross is 19 units long with thickness set to 11%
@@ -96,15 +97,8 @@ including a cold start inside a shrine. Without the minimap, Minus appears
 directly below Plus. Their shared Mac/UIKit geometry and glyph paths keep
 drawing and hit areas aligned. The L rune badge shares
 Y's opaque gray fill and gold outline. L now uses the same exterior border width
-as XYAB, and R/ZR share the same base diameter. When the native rune is hidden
-(including mounted gameplay), L uses `touch_l.png` from the supplied artwork.
-The rune provider reads the native rune Picture's own source texture, tagged
-inside its build-checked DrawSelf scope and copied asynchronously before HUD
-composition. Location names and the adjacent D-pad guide never enter that
-source; the former canvas crop/guide mask has been removed. Inherited native
-alpha and visibility invalidate the provider, and lifetime tokens reject late
-GPU copies. The compact NVN draw records keep their original size and restore
-the native instance/base-instance values before rendering.
+as XYAB, and R/ZR share the same base diameter. L always uses `touch_l.png`
+from the supplied artwork, independently of the current rune and HUD messages.
 In BOTW touch gameplay, the rune-style L button uses the ordinary button path:
 it sends L immediately on touch-down, remains held while the finger is down,
 and releases on finger-up or cancellation. It no longer delays the press or
@@ -131,7 +125,8 @@ sessions, and the rewritten modules have no Dash observation. The matching
 Mac preview reaches gameplay and is registered for quick launch; physical
 iPhone movement feel remains for user acceptance.
 The iOS and packaged Mac launchers offer a separate [Touch settings](../../../docs/settings.md#touch-left-stick)
-page before Play. The shared native geometry powers its draggable, pinch-resizable
+page before Play. The editor hides its navigation bar and keeps a compact Back
+button beside its existing heading. The shared native geometry powers its draggable, pinch-resizable
 layout preview and the real drawing/hit regions. XYAB moves/scales as one group,
 with separate spacing; the D-pad equipment group moves/scales together. Movement,
 ZL, L, R and ZR adjust independently; +/- stay fixed. Controls also have offset
@@ -148,7 +143,7 @@ all seven action buttons while preserving their icons and input. English and
 Simplified Chinese launcher resources cover both fixed and generated setting
 labels/notes. Current evidence lives in
 `touch-settings-20261029/`; physical iPhone comfort remains for user acceptance.
-`touch-polish-20261029/` verifies the supplied `riding-horse` save: mounted
+Historical evidence in `touch-polish-20261029/` verifies the supplied `riding-horse` save: mounted
 loadout remains visible, L shows the default artwork, and dismount restores the
 current rune from its isolated source. The focused UIKit harness passes with
 zero failures in 32 sessions, including badge-off artwork, fallback L, matching
@@ -159,13 +154,40 @@ Physical iPhone acceptance remains separate.
 
 The 2026-10-29 touch defaults use the supplied layout offsets and scales in
 `settings.tsv` and `botw_touch_layout.h`; runtime, preview and Restore defaults
-agree. Existing saved customization is retained. The minimap/environment cluster
-and fixed +/- anchor move 12 native layout units farther right (72 units of right
-inset). R/ZR cancellation still happens only on an outside release; that release
-now emits one touch-feedback pulse. Cancel rings follow live finger ownership,
+agree. Existing saved customization is retained. The current minimap/environment
+cluster and fixed +/- anchor use the symmetric heart/Plus padding described above.
+R/ZR cancellation still happens only on an outside release. Crossing either way
+over the cancel circle emits a haptic pulse, as does the outside release itself.
+Continuous movement on the same side adds no pulse. Cancel rings follow live finger ownership,
 not the virtual trigger retained for native acknowledgement. Release and reset
 invalidate UIKit layout even when the published button bits have not changed,
 preventing a canceled ZR guide from remaining visible.
+
+**Touch HUD interactions (2026-10-30).** The native quick equipment/rune strip
+publishes its live visibility independently of the collapsed loadout. While it
+is open, touch right-stick axes and relative deltas reverse together so the
+strip follows the finger. Scene look and physical controller axes retain their
+direction. Mac touch preview now publishes the virtual stick as UIKit does;
+previously only the ordinary Mac mouse path supplied that UI input.
+
+The Hero's Path playback gauge in the native expanded map requests a separate
+four-direction overlay. Combat controls remain hidden, touches outside that
+overlay stay on the map path, and leaving Hero's Path releases held directions.
+It follows the native gauge's ancestor visibility/alpha, not a remembered X
+press, and does not depend on which map is open. Native and UIKit checks cover
+activation, exit, direction ownership and controller-mode suppression. The
+current test runtime has no mounted add-on content; X does not open Hero's Path
+there, so actual playback and physical iPhone acceptance remain pending.
+
+The relocated collapsed map is drawn before other screens in its native
+ScreenMgr layer. OBS41 filters the draw receiver at the validated
+`main+0xf714b8` dispatch and shifts preceding draw receivers one slot while
+preserving their order. It never edits the screen/input registry. Expanded
+maps, other layers, ordinary controller mode and other games retain their
+native order. This avoids relying on retained roots' visibility as proof that
+a dismissed screen is empty. Evidence and checks are in
+`touch-hud-interactions-20261030/`; the matching graphics runtime boundary and
+Metal compiler limitation described under Rendering still apply.
 
 The production launcher is also compiled separately for simulator UI checks:
 `run34/ui-custom-curve.png` records an interactive custom curve, and

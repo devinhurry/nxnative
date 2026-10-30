@@ -175,7 +175,10 @@ static void test_botw_new_touch_geometry(void) {
         dm_touchpad_rect plus = dm_touchpad_botw_menu_rect(40,20,canvas_width,h,0);
         dm_touchpad_rect minus = dm_touchpad_botw_menu_rect(40,20,canvas_width,h,1);
         nearf(plus.width,39*h/720,.01f); nearf(plus.height,plus.width,.01f);
-        nearf(plus.x-(40+1208*canvas_width/1280),8,.01f);
+        float glyphRight=plus.x+plus.width*.5f+DM_TP_BOTW_MENU_GLYPH_SIZE*h/1440;
+        nearf(40+canvas_width-glyphRight,58*h/720+2,.01f);
+        float mapRight=40+canvas_width-dm_touchpad_botw_map_right_inset(720/h)*h/720;
+        nearf(plus.x-mapRight,8,.01f);
         nearf(plus.y,20+20*h/720+4,.01f); // four frontend points below the minimap top
         nearf(minus.x,plus.x,.001f); nearf(minus.y-plus.y-plus.height,8,.001f);
         assert(dm_touchpad_rounded_rect_contains(plus,plus.width*.5f,plus.x+plus.width*.5f,plus.y+plus.height*.5f));

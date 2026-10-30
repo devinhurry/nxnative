@@ -34,6 +34,7 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
 - (BOOL)dm_testLeftStickRingHidden;
 - (void)setFull:(BOOL)full;
 - (BOOL)dm_testDpadArtworkHidden;
+- (BOOL)dm_testMenuDpadHidden;
 - (BOOL)dm_testZLArtworkHidden;
 - (BOOL)dm_testControlsHidden;
 - (UITapGestureRecognizer *)dm_testMenuPadGesture;
@@ -142,6 +143,8 @@ static BOOL g_botw_touch_menu_active;
 static BOOL g_botw_touch_menu_presented;
 static BOOL g_botw_gameplay_ready = YES;
 static BOOL g_botw_loadout_visible = YES;
+static BOOL g_botw_quick_select;
+static BOOL g_botw_hero_path;
 static BOOL g_force_controls_hidden;
 static BOOL g_botw_touch_map_active;
 typedef struct { int phase; float x, y; } menu_pointer_event;
@@ -153,6 +156,8 @@ int dm_botw_touch_hud_available(void) { return g_botw_touchhud_available; }
 int dm_botw_touch_menu_active(void) { return g_botw_touch_menu_active; }
 int dm_botw_touch_menu_visible(void) { return g_botw_touch_menu_active || g_botw_touch_menu_presented; }
 int dm_botw_touch_loadout_visible(void) { return g_botw_loadout_visible; }
+int dm_botw_touch_quick_select_active(void) { return g_botw_quick_select; }
+int dm_botw_touch_menu_dpad_visible(void) { return g_botw_hero_path; }
 int dm_botw_touch_controls_visible(void) {
     if (g_force_controls_hidden) return 0;
     return !g_botw_touchhud_available || (g_botw_gameplay_ready && !dm_botw_touch_menu_visible());
@@ -409,7 +414,10 @@ static void test_botw_button_artwork(DmGamepad *view) {
     g_botw_rune_icon_snapshot.valid=1; g_botw_rune_icon_snapshot.generation=1;
     g_botw_rune_icon_snapshot.width=g_botw_rune_icon_snapshot.height=DM_BOTW_RUNE_ICON_SIDE;
     g_botw_rune_icon_snapshot.stride=DM_BOTW_RUNE_ICON_STRIDE;
+    id fixedLIcon=[view dm_testRuneIconLayer].contents;
     [view botwRuneIconChanged]; [view layoutIfNeeded];
+    CHECK([view dm_testRuneIconLayer].contents==fixedLIcon,
+          "L keeps its packaged icon when the current native rune changes");
     CAShapeLayer *runeBadge=[view dm_testRuneBadgeLayer];
     CHECK(!runeBadge.hidden && CGColorEqualToColor(runeBadge.fillColor,badge.fillColor) &&
           CGColorEqualToColor([view dm_testRuneBadgeBorder].fillColor,[view dm_testYBadgeBorder].fillColor) &&
@@ -625,12 +633,14 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
     moved(view,trigger,shoulder.x+150,shoulder.y);
     CHECK(g_botw_cancel_requested==0 && (g_buttons&DM_BTN_R),
           "crossing the R cancel boundary while held does not cancel or release the trigger");
-    CHECK(cancelFeedback.count==pressedFeedback,"crossing the cancel circle adds no haptic before release");
+    CHECK(cancelFeedback.count==pressedFeedback+1,"crossing outside the cancel circle pulses once");
+    moved(view,trigger,shoulder.x+160,shoulder.y);
+    CHECK(cancelFeedback.count==pressedFeedback+1,"moving farther outside adds no duplicate crossing pulse");
     moved(view,trigger,shoulder.x+20,shoulder.y);
     ended(view,trigger,shoulder.x+20,shoulder.y);
     CHECK(g_botw_cancel_requested==0 && !(g_buttons&DM_BTN_R),
           "dragging out and back before an inside release fires R normally without cancel");
-    CHECK(cancelFeedback.count==pressedFeedback,"inside release has no cancel haptic");
+    CHECK(cancelFeedback.count==pressedFeedback+2,"crossing back inside pulses once; inside release adds no pulse");
     FakeTouch *releaseOutside=touch(shoulder.x,shoulder.y); began(view,releaseOutside);
     pressedFeedback=cancelFeedback.count;
     ended(view,releaseOutside,shoulder.x+150,shoulder.y);
@@ -974,6 +984,24 @@ static void test_botw_inventory_pointer(DmGamepad *view) {
     CHECK(![view dm_testL3GestureEnabled], "inventory mode disables the gameplay L3 gesture recognizer");
     CHECK(g_virtual_latch_cancel_mask == 0xffffull,
           "inventory mode clears every pending virtual button edge without touching physical input sources");
+    g_botw_hero_path=YES; [view refreshBotwTouchMenuMode]; [view layoutIfNeeded];
+    CHECK(![view dm_testMenuDpadHidden] && [view dm_testControlsHidden],
+          "Hero's Path shows only menu direction keys while combat controls stay hidden");
+    CGPoint d=[view dpadCenter]; FakeTouch *hero=touch(d.x+32,d.y);
+    began(view,hero); CHECK(g_buttons==DM_BTN_RIGHT,"Hero's Path right key holds the native direction");
+    moved(view,hero,d.x-32,d.y);
+    CHECK(g_buttons==DM_BTN_RIGHT,"Hero's Path direction remains locked to touch-down");
+    g_botw_hero_path=NO; [view refreshBotwTouchMenuMode]; [view layoutIfNeeded];
+    CHECK([view dm_testMenuDpadHidden] && !g_buttons,"leaving Hero's Path releases held direction keys");
+    ended(view,hero,d.x-32,d.y);
+    g_botw_hero_path=YES; [view refreshBotwTouchMenuMode]; [view layoutIfNeeded];
+    FakeTouch *outside=touch(422,195); int menuBefore=g_menu_pointer_count;
+    began(view,outside); ended(view,outside,422,195);
+    CHECK(!g_buttons && g_menu_pointer_count==menuBefore+2,"map touches outside Hero's Path keys retain menu routing");
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES]; [view layoutIfNeeded];
+    CHECK([view dm_testMenuDpadHidden],"connecting a controller hides Hero's Path touch keys");
+    g_botw_hero_path=NO; [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+    g_menu_pointer_count=0;
 
     int touch_sets = g_touch_sets, look_events = g_look_count;
     uint64_t buttons = g_buttons; int32_t lx = g_lx, ly = g_ly, rx = g_rx, ry = g_ry;
@@ -1121,6 +1149,16 @@ static void test_look_drag(DmGamepad *view) {
     int move_count = 0; for (int i = 0; i < g_look_count; i++) move_count += g_look_events[i].phase == DM_LOOK_MOVE;
     CHECK(move_count == 0 && g_look_count == 2 && g_look_events[1].phase == DM_LOOK_END,
           "stationary held finger sends no MOVE and does not duplicate BEGIN");
+    g_botw_touchhud_available=YES; g_botw_quick_select=YES;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+    reset_look(); t=touch(600,150); began(view,t); moved(view,t,615,165);
+    CHECK(g_rx<0 && g_ry>0 && g_look_events[1].dx<0 && g_look_events[1].dy<0,
+          "BOTW quick selection reverses only the touch stick and relative impulse");
+    ended(view,t,615,165); g_botw_quick_select=NO;
+    reset_look(); t=touch(600,150); began(view,t); moved(view,t,615,165);
+    CHECK(g_rx>0 && g_look_events[1].dx>0,"closing quick selection restores ordinary look direction");
+    ended(view,t,615,165);
+    g_botw_touchhud_available=NO; [view reset];
 }
 
 static void test_priority_and_multitouch(DmGamepad *view) {

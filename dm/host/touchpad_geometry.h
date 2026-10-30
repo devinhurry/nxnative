@@ -51,7 +51,8 @@ typedef struct { float x, y, width, height; } dm_touchpad_rect;
 #define DM_TP_SHOULDER_HIT_SCALE 1.0f
 #define DM_TP_SHIELD_GAP 8.0f
 #define DM_TP_CANCEL_RADIUS 70.0f
-#define DM_TP_BOTW_MAP_RIGHT_INSET 72.0f
+#define DM_TP_BOTW_HEART_EDGE 58.0f // visible first-heart edge in the native 720-unit HUD
+#define DM_TP_BOTW_EDGE_EXTRA 2.0f // frontend points, shared by hearts and the + glyph
 #define DM_TP_BOTW_MAP_TOP 340.0f
 #define DM_TP_BOTW_MENU_SIZE 39.0f
 #define DM_TP_BOTW_MENU_GLYPH_SIZE 19.0f
@@ -174,11 +175,16 @@ static inline int dm_touchpad_rounded_rect_contains(dm_touchpad_rect r, float ra
 
 // One fixed + anchor beside the relocated minimap, including in shrines.
 // Size follows the aspect canvas; y-offset is in frontend points.
+static inline float dm_touchpad_botw_map_right_inset(float points_to_native) {
+    return DM_TP_BOTW_HEART_EDGE + (DM_TP_BOTW_MENU_SIZE + DM_TP_BOTW_MENU_GLYPH_SIZE)*.5f +
+        (DM_TP_BOTW_EDGE_EXTRA + DM_TP_BOTW_MENU_GAP)*points_to_native;
+}
 static inline dm_touchpad_rect dm_touchpad_botw_menu_rect(float canvas_x, float canvas_y,
                                                            float canvas_width, float canvas_height,
                                                            int minus) {
     float size = DM_TP_BOTW_MENU_SIZE * canvas_height / 720.0f;
-    return (dm_touchpad_rect){canvas_x + canvas_width - DM_TP_BOTW_MAP_RIGHT_INSET * canvas_height / 720.0f + DM_TP_BOTW_MENU_GAP,
+    return (dm_touchpad_rect){canvas_x + canvas_width -
+        (DM_TP_BOTW_HEART_EDGE + (DM_TP_BOTW_MENU_SIZE + DM_TP_BOTW_MENU_GLYPH_SIZE)*.5f)*canvas_height/720.0f - DM_TP_BOTW_EDGE_EXTRA,
         canvas_y + (360.0f - DM_TP_BOTW_MAP_TOP) * canvas_height / 720.0f + DM_TP_BOTW_MENU_Y_OFFSET +
             (minus ? size + DM_TP_BOTW_MENU_GAP : 0), size, size};
 }
