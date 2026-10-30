@@ -93,6 +93,29 @@ class MacLauncherTests(unittest.TestCase):
             self.assertEqual(plan['romfs'],image.resolve())
             self.assertEqual(plan['exefs'],exefs.resolve())
 
+    def test_shader_preparation_preserves_resolved_layout(self):
+        from unittest.mock import Mock, patch
+        g = game_profile('01007EF00011E000')
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t) / f'{g.id}_build'
+            exefs, romfs, _, _ = self.make_layout(root, g)
+            romfs.rmdir(); image = romfs.with_name('RomFS.img'); image.write_bytes(b'romfs image')
+            args = run_mac.parser().parse_args(['--game', str(root), '--test'])
+            plan = run_mac.resolve(args, {}, REPO)
+            sources = dict(graphics=('nvn', ''), **{key: (False, '') for key in ('glslc_capture', 'ue_decode', 'oodle_packs', 'ue_legacy')})
+            guess = SimpleNamespace(build_sources=Mock(return_value=sources))
+            builder = Mock()
+            builder.build_shaders.return_value = plan['work'] / 'shader/cache'
+            # Stub binary inspection and compilation; exercise real layout selection and input links.
+            with patch('importlib.util.spec_from_file_location', return_value=Mock()), \
+                 patch('importlib.util.module_from_spec', return_value=guess):
+                run_mac.refresh_shaders(plan, {}, REPO, builder, plan['work'] / 'logs')
+            extraction = plan['work'] / 'extract' / plan['version']
+            self.assertEqual((extraction / 'ExeFS').resolve(), exefs.resolve())
+            self.assertEqual((extraction / 'RomFS.img').resolve(), image.resolve())
+            self.assertEqual(builder.split_shaders.call_args.args[3], [extraction / 'ExeFS/main'])
+            self.assertEqual(plan['graphics'], 'nvn')
+
     def test_release_runtime_uses_matched_artifacts_and_preserves_save(self):
         from unittest.mock import Mock
         spec = importlib.util.spec_from_file_location('build_release', REPO / 'scripts/build_ipa_from_nsp.py')

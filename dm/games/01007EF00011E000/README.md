@@ -790,6 +790,8 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 
 - **Implemented, cache equivalence validated:** [Operation-specific shader caches](../../../docs/reference/shaders.md#shader-caches-follow-each-operations-inputs) and [fixed Metal input names](../../../docs/reference/shaders.md#metal-cache-entries-require-a-fixed-compiler-input-name); the cache-validation note above records the real Mac/iOS output comparisons and the supported-toolchain/gameplay validation boundary.
 
+- **Resolved: test shader preparation reported an ambiguous layout after selecting the extraction:** [Mac test shader preparation reports an ambiguous build layout](../../../docs/reference/packing.md#mac-test-shader-preparation-reports-an-ambiguous-build-layout).
+
 - **Resolved: stray light/dark fringes during a widescreen loading wipe:** [Projected fullscreen fills keep texture and clip coordinates together](../../../docs/reference/rendering.md#projected-fullscreen-fills-keep-texture-and-clip-coordinates-together).
 
 - **Resolved: the Mac launcher rejected the extracted image:** [Mac launchers accept RomFS files and directories](../../../docs/reference/packing.md#mac-launchers-accept-romfs-files-and-directories). Development launches now use `run_mac.py --test`; fixed Mac builds use `--release`.
