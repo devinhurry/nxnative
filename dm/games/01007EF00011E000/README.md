@@ -747,6 +747,8 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 
 ## Found on this game
 
+- **Resolved: test shader preparation reported an ambiguous layout after selecting the extraction:** [Mac test shader preparation reports an ambiguous build layout](../../../docs/reference/packing.md#mac-test-shader-preparation-reports-an-ambiguous-build-layout).
+
 - **Resolved: stray light/dark fringes during a widescreen loading wipe:** [Projected fullscreen fills keep texture and clip coordinates together](../../../docs/reference/rendering.md#projected-fullscreen-fills-keep-texture-and-clip-coordinates-together).
 
 - **Resolved: the Mac launcher rejected the extracted image:** [Mac launchers accept RomFS files and directories](../../../docs/reference/packing.md#mac-launchers-accept-romfs-files-and-directories). Development launches now use `run_mac.py --test`; fixed Mac builds use `--release`.
