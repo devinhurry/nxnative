@@ -253,7 +253,9 @@ tsan: $(B)/t_audio_spsc_tsan $(B)/t_hid_tsan
 	TMPDIR="$(abspath $(B))" $(B)/t_hid_tsan
 
 MEM_FLAGS = -O1 -Wall -Werror -Wno-unused-function -Imemory_profile -I..
-MEM_DEPS = t_svc_memory.c memory_profile/game_profile.h ../hle_svc.c ../hle_guestthread.c ../hle.h ../dm.h
+$(B)/bench_file_heap: bench_file_heap.m ../file_backed_heap.h | $(B)
+	$(CLANG) -O2 -g -Wall -Wextra -Werror -fobjc-arc -o $@ $< -framework Foundation -framework Metal
+MEM_DEPS = t_svc_memory.c memory_profile/game_profile.h ../hle_svc.c ../file_backed_heap.h ../hle_guestthread.c ../hle.h ../dm.h
 $(B)/t_svc_memory: $(MEM_DEPS) | $(B)
 	$(CLANG) $(MEM_FLAGS) -fsanitize=undefined -o $@ t_svc_memory.c
 $(B)/t_svc_memory_unlimited: $(MEM_DEPS) | $(B)

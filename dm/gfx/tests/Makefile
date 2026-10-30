@@ -140,6 +140,10 @@ check_t_tex_fit_root: t_tex_fit_root
 	MTL_DEBUG_LAYER=1 ./t_tex_fit_root
 t_readback: t_readback.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_readback.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_pool_cpu_read: t_pool_cpu_read.m ../../host/file_backed_heap.h $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pool_cpu_read.m $(MTL_T_SRC) $(FW)
+t_upload_source_lifetime: t_upload_source_lifetime.m ../../host/file_backed_heap.h $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_upload_source_lifetime.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_readback
 check_t_readback: t_readback
 	MTL_DEBUG_LAYER=1 ./t_readback
