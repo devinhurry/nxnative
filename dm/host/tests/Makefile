@@ -21,6 +21,7 @@ run: $(B)/t_language $(B)/t_aspect $(B)/t_look $(B)/t_botw_touchhud $(B)/t_botw_
 	$(B)/t_botw_touch_menu
 	$(B)/t_botw_touch_trackpad
 	$(B)/t_gate_obs_result
+	$(B)/t_gate_reentry
 	$(B)/t_device_motion
 	$(B)/t_motion
 	$(B)/t_heap_size
@@ -227,6 +228,9 @@ $(B)/t_botw_touch_menu: t_botw_touch_menu.c ../botw_touch_menu.h ../botw_touch_s
 	clang -O1 -Wall -Werror -Wno-unused-function -DDM_TEST_HOOKS -I.. $(GINC) -o $@ t_botw_touch_menu.c -lpthread -lm
 $(B)/t_gate_obs_result: t_gate_obs_result.c ../hle.c ../dm.h $(GAME_H) | $(B)
 	clang -O1 -Wall -Werror -Wno-unused-function -ffunction-sections -fdata-sections -Wl,-dead_strip -I.. $(GINC) -o $@ t_gate_obs_result.c
+run: $(B)/t_gate_reentry
+$(B)/t_gate_reentry: t_gate_reentry.c t_gate_reentry.S ../entry.S ../thread.c ../hle.c ../dm.h $(GAME_H) | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -ffunction-sections -fdata-sections -Wl,-dead_strip -I.. $(GINC) -o $@ t_gate_reentry.c t_gate_reentry.S
 $(B)/t_device_motion: t_device_motion.c ../hle_hid.c ../hle_look.c ../front.h ../hle.h ../dm.h ../dm_input.h $(GAME_H) | $(B)
 	clang -O1 -Wall -Werror -Wno-unused-function -DDM_TEST_HOOKS -ffunction-sections -fdata-sections -Wl,-dead_strip -I.. $(GINC) -o $@ t_device_motion.c -lm -lpthread
 

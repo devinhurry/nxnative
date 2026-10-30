@@ -98,7 +98,8 @@ _dm_gate:
     stp x9, x29, [x30, #232]  // x29, then x30 = the return point
     mov x9, sp
     str x9, [x30, #792]
-    // A gate entered on its own gate stack would overwrite the frame of the gate below it: none is (gate handlers do not run guest code); stop if one ever is
+    // The caller must not occupy the next gate stack. Observers prepare a
+    // separate stack before calling guest code; reject any unprepared re-entry.
     add x10, x30, #800
     cmp x9, x10
     b.hs 1f

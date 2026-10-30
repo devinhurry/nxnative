@@ -125,9 +125,12 @@ uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs) {
             }
             case G_OBS: {
                 int id = g->arg & 0xff;
+                if (!g_obs_fn[id] && !g_obs_read_fn[id] && !g_obs_result_fn[id]) return 0;
+                guest_gate_observer_enter();
                 if (g_obs_fn[id]) g_obs_fn[id](regs, g->arg >> 8);
                 if (g_obs_read_fn[id]) g_obs_read_fn[id](regs);
                 if (g_obs_result_fn[id]) regs[0] = g_obs_result_fn[id](regs);
+                guest_gate_observer_leave();
                 return 0;
             }
             case G_SPIN: {   // a pass of a spin wait loop (patch_nso.py "Spin waits"), where the thread may sleep (hle_thread.c dm_spin_wait): inside an SVC frame, so that a thread paused there has its context

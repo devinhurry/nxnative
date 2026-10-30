@@ -796,6 +796,8 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 
 ## Found on this game
 
+- **Resolved in code, iPhone acceptance pending:** [Guest calls made by observation callbacks](../../../docs/reference/threads.md#guest-calls-made-by-observation-callbacks). The iPhone inventory-category crash log from build `895cecbc` matches the current gate-stack CPU reproduction. It now passes with the same native category entry points retained. Before/after logs and the supplied iPhone log are in `inventory-category-crash-20261030/` in the game's work folder.
+
 - **Implemented, cache equivalence validated:** [Operation-specific shader caches](../../../docs/reference/shaders.md#shader-caches-follow-each-operations-inputs) and [fixed Metal input names](../../../docs/reference/shaders.md#metal-cache-entries-require-a-fixed-compiler-input-name); the cache-validation note above records the real Mac/iOS output comparisons and the supported-toolchain/gameplay validation boundary.
 
 - **Resolved: test shader preparation reported an ambiguous layout after selecting the extraction:** [Mac test shader preparation reports an ambiguous build layout](../../../docs/reference/packing.md#mac-test-shader-preparation-reports-an-ambiguous-build-layout).

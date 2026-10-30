@@ -93,6 +93,10 @@ void *guest_sym(const char *name);
 module_t *module_of(const void *p);
 // Gate dispatch: rewritten svc / timer reads come in through the common entry, ret_addr = the return point of that gate block, regs points to the saved x0..x30
 uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs);
+// A synchronous observer may call guest code: its nested gates need another
+// stack while the current register frame and observer are still live.
+void guest_gate_observer_enter(void);
+void guest_gate_observer_leave(void);
 // Observation gates (rewriter OBS tables in the profiles' patches.py, applied by patch_nso.py; numbering matches): ordinary callbacks preserve registers; explicit result filters can change x0.
 // IDs 19 / 20 are retained for old rewritten modules; missing callbacks make those gates harmless pass-throughs.
 // ID 36 is retired (BOTW touch sprint); older modules keep it as a pass-through.
