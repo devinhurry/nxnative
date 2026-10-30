@@ -31,6 +31,9 @@ void hlecount_seal(void) {}
 int svc_nro_deactivate(module_t *m) { m->loaded = 0; return 1; }   // no memory mappings in this fixture
 void thr_svc_enter(uint64_t *r, uint64_t a) { (void)r; (void)a; }
 void thr_svc_leave(void) {}
+// This fixture resolves imports; observation dispatch is covered by t_gate_reentry.
+void guest_gate_observer_enter(void) { assert(0 && "unexpected observation in symbol fixture"); }
+void guest_gate_observer_leave(void) { assert(0 && "unexpected observation in symbol fixture"); }
 void dm_spin_wait(uint64_t r, uint64_t a) { (void)r; (void)a; }
 uint64_t svc_dispatch(int n, uint64_t *r, uint64_t a) { (void)n; (void)r; (void)a; return 0; }
 static const char *wrap_kind, *wrap_name;
