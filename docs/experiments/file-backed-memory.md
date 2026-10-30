@@ -374,6 +374,137 @@ logs, screenshots and `game-comparison.json`. The test uses the retained
 graphics backend described above; current-graphics and physical-iPhone
 validation remain open. No default archive policy was changed.
 
+## Overall charged memory including GPU, 2026-10-31
+
+After checkpoint `4787d6ee` was pushed, the requested comparison was narrowed
+from total physical RAM to the whole process's charged memory, including GPU.
+The metric is `ri_phys_footprint`, sampled through the existing
+`scripts/regress.py` `footprint(pid)` helper (`proc_pid_rusage`,
+`RUSAGE_INFO_V4`). `ri_lifetime_max_phys_footprint` records the kernel's peak,
+including spikes between samples. Apple's [game-memory guidance](https://developer.apple.com/videos/play/wwdc2022/10106/)
+explicitly includes CPU and GPU objects in footprint on Apple silicon.
+Metal's `currentAllocatedSize` is a separate allocation diagnostic and is
+**not added** to this total.
+
+Each run lasted 130 seconds, with a fresh copy of the same Lab save, the same
+rewritten modules, shaders, input, window size and archive snapshot. The total
+was sampled every 250 ms; the table uses the same 85-125 second window in every
+run (157 samples each). The signed apps used one bundle identifier. The before
+and candidate retained source snapshots differ only in `nvn_mtl.m`; the before
+binary includes the dormant file-heap opt-in but leaves it unset. Original
+source executable hashes are retained in the runtime manifests.
+
+| Configuration | Whole-process footprint, median | Kernel lifetime peak |
+|---|---:|---:|
+| Before: anonymous heap, original pool/upload lifetime, full archives | 4515.68 MiB | 4577.11 MiB |
+| File-backed heap, CPU-only lookups, transient uploads/lazy buffers, full archives | 2845.64 MiB | 2912.50 MiB |
+| Same changes plus GPU-only archives | 2308.88 MiB | 2562.32 MiB |
+
+The combined configuration saved 2206.80 MiB (48.87%) of total charged memory
+in this scene. Its kernel peak decreased by 44.02%. These are whole-process
+totals, including GPU charges, rather than shader-cache sizes or CPU-only
+malloc figures. The earlier 18.8% result isolated archive thinning; this new
+comparison also includes the file-backed heap and GPU-lifetime changes.
+
+At about 110 seconds, the system `footprint` command independently read each
+owned process. Its byte-valued `phys_footprint` matched a nearby rusage sample
+exactly in all three accepted runs. The host's one-second `TASK_VM_INFO`
+medians were within 5 MiB of the higher-frequency totals. For context, the
+graphics-ledger medians were 814.5 / 752 / 729.5 MiB respectively; they are
+already part of the totals above. Metal allocation medians were 1784 / 825 /
+800 MiB and must not be treated as an additional bill or as all-physical RAM.
+
+All accepted runs reached the same Lab scene, had their native screenshots
+inspected, and exited gracefully. They logged the same missing prewarm seed
+and no crash. One first attempt of the GPU-only configuration did not produce
+either requested screenshot. It remains under `after-gpu-only-no-shot`, with
+2541.05 MiB median and 2795.00 MiB peak, excluded from the scene-verified table
+for that reason. The retry's Lab window was also inspected through computer
+use and raised to remain visible. The capture failure's cause is open; this
+single retry is not evidence that it is fixed, and the higher reading remains
+part of the experiment record.
+
+These short sequential runs are not an FPS comparison or an iPhone result.
+The system shader cache was not emptied and another game process was active.
+The test still uses the retained graphics backend; current-graphics gameplay
+remains blocked by the toolchain mismatch described above. No default policy
+or production build was changed. A lower Mac ledger is not evidence of the
+same iPhone Jetsam headroom or a measurement of total physical RAM.
+
+Artifacts are under `file-heap-total-footprint-20261031/` in the external game
+work directory: `measurement.json`, `run_totals.py`, `retry_gpu_only.py`,
+`analyze_totals.py`, `total-comparison.json`, `unverified-trial.json`, source
+and signed-executable hashes, raw quarter-second counters, host counters,
+system-tool JSON, screenshots, logs and independent save copies.
+
+## Further experiment: runtime-captured pipeline cache, 2026-10-31
+
+The next target was the 1.2 GiB of GPU-only archives still opened at startup.
+Those files cover many shader pairs the measured scene never requests. Rather
+than add a new index or modify Metal's file loader, this experiment uses the
+existing runtime capture/flush path with a separate, initially empty archive
+directory and `DM_PSO_PREBUILD=0`. Metal 4, hybrid pipelines and persistent
+pipeline caching stay enabled. Only requested pipeline bases populate the cache.
+Apple discusses [pipeline prewarming, streaming and archive lookup](https://developer.apple.com/videos/play/wwdc2025/254/);
+this experiment changes which pipelines are prepared, not the archive API.
+
+Three sequential 130-second runs used the same executable as the preceding
+comparison, independently copied Lab saves, the same game/shaders, scripted
+input and memory sampler. The first run started with an empty cache. The first
+restart copied its resulting cache; the second restart copied the first
+restart's updated cache. Every run retained file backing and transient uploads.
+`DM_PSO_MANIFEST=off` matched the earlier comparisons' effective lack of
+prewarm (their seed file was missing). A production policy should retain a
+useful bounded prewarm list; this experiment does not justify disabling every
+kind of prewarming.
+
+The whole-process charged memory includes GPU, using the same 85-125 second
+window and kernel lifetime-peak measurement as above:
+
+| Run | Median total | Kernel peak | Archive size after run | Logged archive hits / new base compilations |
+|---|---:|---:|---:|---:|
+| Learn from an empty cache | 1111.82 MiB | 1264.50 MiB | 24.76 MiB | 0 / 727 |
+| First restart | 1147.60 MiB | 1334.35 MiB | 25.71 MiB | 658 / 16 |
+| Second restart | 1124.92 MiB | 1194.27 MiB | 26.68 MiB | 678 / 14 |
+
+The two restart medians are 50.30-51.28% below the prior GPU-only result of
+2308.88 MiB, and 74.59-75.09% below the original 4515.68 MiB comparison.
+No host implementation or default changed in this follow-up. The existing
+configuration and a smaller cache produced this result; it is not a new
+constant-memory cache implementation or a whole-game upper bound.
+
+All three runs reached the Lab, produced inspected native screenshots, reported
+no `[RED]` or crash, and exited gracefully. System `footprint` snapshots matched
+nearby rusage samples exactly. The archive bytes increased on both restarts:
+the remaining 14-16 compilations did not disappear. Shader/pipeline state can
+differ between runs, so the result does not establish complete cache coverage.
+
+There is a real preparation cost. The first learning run logged 21.90 seconds
+of submit-thread pipeline work, versus 0.63 and 0.67 seconds on the restarts.
+These totals cover reported frame intervals, not identical fixed-frame ranges;
+they diagnose compilation work rather than prove an FPS improvement. System
+shader caches were already warm, and this is not a fresh-device install test.
+New areas or states can compile additional pipelines and grow the cache. The
+whole-game prebuild avoids many such misses at the cost of a much larger
+startup cache. A shipping memory option needs a deliberate choice between
+preparation coverage, compilation pauses and memory, plus device validation.
+
+To reproduce the **cache policy**, choose a new, separate cache directory and
+set these existing switches alongside the earlier heap/upload options:
+
+```sh
+DM_PSO_ARCHIVE=/absolute/path/on/game/drive/runtime-only-cache
+DM_PSO_PREBUILD=0
+```
+
+Do not remove or overwrite the original full archives. No archive thinning was
+needed for the small captured cache. Artifacts are in
+`file-heap-runtime-cache-20261031/`: the learn/restart cache snapshots, runtime
+environments, source/signed hashes, quarter-second totals, system-tool JSON,
+screenshots, logs and `comparison.json`. This remains a retained-graphics Mac
+experiment on external storage. Lower physical RAM, current-graphics gameplay,
+long-session growth and iPhone Jetsam benefit are not established by it.
+
 ## Remaining boundaries
 
 - The useful metric is the active working set and actual resident pages, together
