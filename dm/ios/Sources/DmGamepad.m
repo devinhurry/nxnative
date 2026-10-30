@@ -751,7 +751,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     CGFloat best = 1;
     int kind = C_NONE;
     CGFloat f = dist(p, self.faceCenter) / (self.faceGap + self.faceR * 1.6);
-    if (f <= best) { best = f; kind = C_FACE; }
+    if ([self faceAt:p] && f <= best) { best = f; kind = C_FACE; }
     if (_full) {
         CGFloat d = dist(p, self.dpadCenter) / (self.dpadR * K_DPAD_GRAB);
         if (d < best) { best = d; kind = C_DPAD; }
@@ -1064,7 +1064,8 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         // Choose the nearest control in its grab radius, then route the open right half to relative look or the native right stick.
         CGFloat best = 1; int kind = C_NONE, idx = 0;
         BOOL scopePrompt = [self botwScopePromptOwnsPoint:p];
-        if (_botwCameraPadVisible || scopePrompt) {
+        // BOTW's face buttons own their individual hit areas, never the gaps.
+        if ([self botwTouchControlsActive]) {
             for (int b = B_A; b <= B_Y; b++) {
                 CGPoint center = [self facePos:b];
                 CGFloat faceHit = dist(p, center) / (self.faceR * 1.25);

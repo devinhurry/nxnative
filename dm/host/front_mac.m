@@ -467,6 +467,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     dm_touchpad_point face = [self faceCenter], dpad = [self dpadCenter], stick = [self stickHome];
     float f = preview_distance(NSMakePoint(p.x, p.y), NSMakePoint(face.x, face.y)) /
               (self.faceGap + self.faceRadius * 1.6f);
+    if (_active && ![self faceAtTop:p]) f = INFINITY;
     float d = preview_distance(NSMakePoint(p.x, p.y), NSMakePoint(dpad.x, dpad.y)) /
               (self.dpadRadius * DM_TP_DPAD_GRAB);
     float s = preview_distance(NSMakePoint(p.x, p.y), NSMakePoint(stick.x, stick.y)) /
@@ -550,17 +551,8 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     float canvas[4]; dm_aspect_touch_rect(self.bounds.size.width,self.bounds.size.height,canvas);
     BOOL scopePrompt = _active && canvas[2] > 0 && canvas[3] > 0 &&
         dm_botw_touch_scope_prompt_at((p.x-canvas[0])/canvas[2],(p.y-canvas[1])/canvas[3]);
-    BOOL faceHit = fd <= self.faceGap + self.faceRadius*1.6f;
-    if (_cameraPadVisible || scopePrompt) {
-        faceHit = NO;
-        for (int b=0;b<4;b++) {
-            dm_touchpad_point c=[self facePosition:b];
-            if (preview_distance(NSMakePoint(p.x,p.y),NSMakePoint(c.x,c.y)) <= self.faceRadius*1.25f ||
-                (_touchLayout.badges && dm_botw_button_badge_contains(CGPointMake(p.x,p.y),CGPointMake(c.x,c.y),self.faceRadius))) {
-                faceHit = YES; break;
-            }
-        }
-    }
+    // Only the individual buttons own BOTW touches; gaps remain available to look.
+    BOOL faceHit = _active ? [self faceAtTop:p] != 0 : fd <= self.faceGap + self.faceRadius*1.6f;
     if (faceHit && fd <= dd) { _lookTapPending = NO; _owner = PREVIEW_FACE; _held = [self faceAtTop:p]; [self publishButtons]; return; }
     if (dd <= self.dpadRadius*DM_TP_DPAD_GRAB && dd < fd) { _lookTapPending = NO; _owner = PREVIEW_DPAD; _held = [self dpadAtTop:p]; [self publishButtons]; return; }
     if (!_cameraPadVisible && [self mapOwnsTop:p]) {

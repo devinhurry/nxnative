@@ -25,6 +25,17 @@ separate from the acceptance results below.
 
 ## Coverage
 
+### Camera drag below face buttons (2026-10-31)
+
+The [game note](../dm/games/01007EF00011E000/README.md#direct-categories-and-gameplay-hud-prompts)
+records removal of the invisible whole-cluster touch capture in BOTW gameplay.
+The UIKit regression covers drag begin/move/end from two blank points below Y
+and an actual Y press, alongside the existing Camera/Scope, button sliding,
+multitouch and controller-isolation checks. The old handler failed all six gap
+checks; the fixed full harness passes with 0 failures and 38 look sessions.
+Mac and iPhone frontend source compilation passes. Evidence is in
+`y-drag-fix-20261031/` in the game's work folder. Physical iPhone acceptance is pending.
+
 ### Compendium target size and shoulder defaults (2026-10-31)
 
 The [game note](../dm/games/01007EF00011E000/README.md#direct-categories-and-gameplay-hud-prompts)
