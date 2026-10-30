@@ -252,9 +252,12 @@ class TranslationCacheTests(unittest.TestCase):
         source = (REPO / 'dm/gfx/tools/dmsh_build.py').read_text()
         self.assertIn('dmsh_xlatecache', source)
         self.assertNotRegex(source, r'subprocess\.run\(\[XLATE,')
-        for phase in ('initial', 'integer-input', 'geometry'):
+        for phase in ('integer-input', 'geometry'):
             self.assertIn("phase='" + phase + "'", source)
-        self.assertGreaterEqual(source.count('XLCACHE.translate('), 3)
+        self.assertGreaterEqual(source.count('XLCACHE.translate('), 2)
+        self.assertIn('translator=XLCACHE', source)
+        scheduler = (REPO / 'dm/gfx/tools/dmsh_shader_pipeline.py').read_text()
+        self.assertIn("translator.translate([jobs[k] for k in chunk], work, phase='initial')", scheduler)
 
 
 if __name__ == '__main__':
