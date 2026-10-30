@@ -123,6 +123,7 @@ static _Atomic uintptr_t g_presented_gameplay_root;
 static _Atomic uint64_t g_presentation_observed_frame = UINT64_MAX;
 static int g_map_pan_active;
 static int g_camera_drag_active, g_camera_dragged;
+static int g_camera_look_owned;
 static uintptr_t g_camera_screen, g_camera_root;
 static uint64_t g_camera_page;
 static int g_camera_group = -1;
@@ -5467,6 +5468,8 @@ static int camera_bound_to_view_locked(const dm_botw_touch_menu_view *view) {
 }
 
 static void camera_clear_locked(void) {
+    if (g_camera_look_owned) dm_look_input(DM_LOOK_CANCEL, 0, 0);
+    g_camera_look_owned = 0;
     int owned_pointer = g_camera_screen || g_camera_drag_active;
     g_camera_drag_active = g_camera_dragged = 0;
     if (owned_pointer) g_pointer_down = g_pointer_dragged = 0;
@@ -5776,6 +5779,22 @@ static int camera_axis_delta(float delta, float pixels_to_full) {
     return (int32_t)lrintf(value * DM_STICK_MAX);
 }
 
+static void camera_look_move_locked(float dx, float dy) {
+    // Match gameplay's relative look after the guest stick curve; feeding each
+    // small pointer delta through that curve makes camera framing barely move.
+    if (!g_camera_look_owned) return;
+    if (!g_camera_dragged) {
+        g_camera_gesture_delta[0] += dx;
+        g_camera_gesture_delta[1] += dy;
+        if (g_camera_gesture_delta[0] * g_camera_gesture_delta[0] +
+            g_camera_gesture_delta[1] * g_camera_gesture_delta[1] < 4.0f * 4.0f) return;
+        g_camera_dragged = 1;
+        dx = g_camera_gesture_delta[0]; dy = g_camera_gesture_delta[1];
+        g_camera_gesture_delta[0] = g_camera_gesture_delta[1] = 0;
+    }
+    if (dx != 0 || dy != 0) dm_look_input(DM_LOOK_MOVE, dx / 720.0f, dy / 720.0f);
+}
+
 static int clipped_hit(float x, float y, const float rect[4], const dm_botw_touch_menu_view *view) {
     if (!point_in_rect(x, y, rect)) return 0;
     if (!view->clip_valid) return 1;
@@ -6019,7 +6038,8 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
             float dx = (x - g_camera_last[0]) * 1280.0f;
             float dy = (y - g_camera_last[1]) * 720.0f;
             g_camera_last[0] = x; g_camera_last[1] = y;
-            if (!g_camera_dragged) {
+            if (g_camera_look_owned) camera_look_move_locked(dx, dy);
+            else if (!g_camera_dragged) {
                 g_camera_gesture_delta[0] += dx;
                 g_camera_gesture_delta[1] += dy;
                 if (g_camera_gesture_delta[0] * g_camera_gesture_delta[0] +
@@ -6029,7 +6049,7 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
                     g_camera_gesture_delta[0] = g_camera_gesture_delta[1] = 0;
                 } else dx = dy = 0;
             }
-            if (g_camera_dragged) {
+            if (g_camera_dragged && !g_camera_look_owned) {
                 int rx = g_camera_rx + camera_axis_delta(dx, 90.0f);
                 int ry = g_camera_ry + camera_axis_delta(-dy, 90.0f);
                 g_camera_rx = (int32_t)fmaxf(-DM_STICK_MAX, fminf(DM_STICK_MAX, rx));
@@ -6040,6 +6060,13 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
             return;
         }
         if (phase == DM_BOTW_MENU_END) {
+            float dx = (x - g_camera_last[0]) * 1280.0f;
+            float dy = (y - g_camera_last[1]) * 720.0f;
+            g_camera_last[0] = x; g_camera_last[1] = y;
+            if (g_camera_look_owned) {
+                camera_look_move_locked(dx, dy);
+                dm_look_input(DM_LOOK_END, 0, 0);
+            }
             g_camera_drag_active = g_camera_dragged = 0;
             g_camera_rx = g_camera_ry = 0;
             g_camera_gesture_delta[0] = g_camera_gesture_delta[1] = 0;
@@ -6063,6 +6090,8 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
             g_camera_page = g_view.page_key; g_camera_group = g_view.generic_group;
             g_camera_last[0] = x; g_camera_last[1] = y;
             g_camera_gesture_delta[0] = g_camera_gesture_delta[1] = 0;
+            g_camera_look_owned = dm_look_enabled();
+            if (g_camera_look_owned) dm_look_input(DM_LOOK_BEGIN, 0, 0);
             g_pointer_down = 1; g_pointer_start[0] = x; g_pointer_start[1] = y;
             g_pointer_page_key = g_view.page_key; g_pointer_popup_key = g_view.popup_key;
             g_last_apply_valid = 0;

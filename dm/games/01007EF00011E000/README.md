@@ -676,6 +676,25 @@ pose gesture. Hold a third finger during an iOS pose gesture to add the native
 ZL modifier; on Mac, hold Shift during Option-drag or Option during Shift-scroll.
 The native X prompt switches between selfie and landscape modes.
 
+**Resolved: AppCamera drag barely moved (2026-10-30).** Framing converted each
+pointer delta into native stick tilt, so the game's nonlinear stick response
+reduced a 2.56-pixel move to `0.00056`. It now uses the existing relative-look
+entry after that response curve; the same small move supplies `0.14222` in the
+Mac diagnostic. Normal release retains its final displacement; cancellation,
+pinch promotion and an owner/modal change clear the camera-owned look queue.
+`DM_LOOK=0` keeps the native-stick fallback. Zoom and selfie pose retain their
+native controls.
+
+The Mac test verifies horizontal, vertical and reverse drags with the pad visible,
+small repeated moves, and exiting/re-entering the camera. It uses retained
+graphics and current camera-input code with only the observation-API compatibility
+rename; hashes, traces and screenshots are in
+`camera-drag-regression-1793361366/` in the game's work folder. Native menu tests
+and all 74 look checks pass; iOS compiles all 188 files. Physical iPhone acceptance
+is pending. The BOTW-only `regress.py check --games 01007EF00011E000 --quick`
+report in that folder stops at the existing Metal compiler mismatch before game
+comparison; the retained-graphics test does not validate a rebuilt shader chain.
+
 **Resolved: Album edge swipes were ignored (2026-10-30).** Carousel gestures
 required both their start and release inside the photo. A leftward swipe from
 the left side, or a rightward swipe from the right side, could leave the photo
