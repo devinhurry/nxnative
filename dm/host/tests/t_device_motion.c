@@ -15,7 +15,11 @@ void guest_clock_freeze(int on) { (void)on; }
 void guest_clock_freeze_for(int reason, int on) { (void)reason; (void)on; }
 void guest_clock_read_wait(void) {}
 int dm_opmode(void) { return 0; }
+// Controller applets and scripted touches are outside this motion-only fixture.
+void dm_applet_enter(const char *name) { (void)name; }
+void dm_applet_leave(void) {}
 void dm_touch_set(const dm_touch *touches, int n) { (void)touches; (void)n; }
+void dm_touch_script(const dm_touch *touches, int n) { dm_touch_set(touches, n); }
 void *objmap_get(const void *p) { (void)p; return NULL; }
 void objmap_put(const void *p, void *host) { (void)p; (void)host; }
 void *objmap_del(const void *p) { (void)p; return NULL; }
@@ -244,6 +248,29 @@ int main(void) {
     dm_hid_test_fill(npad, handheld, NULL, NULL, &rx, &ry, NULL);
     assert(rx == 2500 && ry == -1200 && dm_hid_look_sample_at(test_frame, &look_sample) &&
            look_sample.source == DM_HID_LOOK_PHYSICAL && look_sample.selected_rx == 2500 && look_sample.selected_ry == -1200);
+    dm_pad_set(0, 0, 0, 0, 0); dm_input_set(0, 0, 0, 16000, -10000);
+    test_frame = 25;
+    dm_hid_test_fill(npad, handheld, NULL, NULL, &rx, &ry, NULL);
+    assert(dm_hid_look_sample_at(test_frame, &look_sample) && look_sample.source == DM_HID_LOOK_VIRTUAL);
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, test_frame);
+    dm_hid_test_fill(npad, handheld, NULL, NULL, &rx, &ry, NULL);
+    assert(dm_hid_look_sample_at(test_frame, &look_sample) && look_sample.source == DM_HID_LOOK_VIRTUAL);
+    test_frame = 26;
+    dm_hid_test_fill(npad, handheld, NULL, NULL, &rx, &ry, NULL);
+    assert(dm_hid_look_sample_at(test_frame, &look_sample) && look_sample.source == DM_HID_LOOK_RELATIVE);
+    dm_look_test_input_at(DM_LOOK_CANCEL, 0, 0, test_frame);
+    dm_hid_test_fill(npad, handheld, NULL, NULL, &rx, &ry, NULL);
+    assert(dm_hid_look_sample_at(test_frame, &look_sample) && look_sample.source == DM_HID_LOOK_RELATIVE);
+    test_frame = 27;
+    dm_hid_test_fill(npad, handheld, NULL, NULL, &rx, &ry, NULL);
+    assert(dm_hid_look_sample_at(test_frame, &look_sample) && look_sample.source == DM_HID_LOOK_VIRTUAL);
+    // Ending before the first poll still owns the queued final displacement.
+    test_frame = 28;
+    dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, test_frame);
+    dm_look_test_input_at(DM_LOOK_MOVE, .001f, 0, test_frame);
+    dm_look_test_input_at(DM_LOOK_END, 0, 0, test_frame);
+    dm_hid_test_fill(npad, handheld, NULL, NULL, &rx, &ry, NULL);
+    assert(dm_hid_look_sample_at(test_frame, &look_sample) && look_sample.source == DM_HID_LOOK_RELATIVE);
     dm_look_set_available(0);
     // A real controller owns SixAxis in auto mode; clearing it restores the BOTW phone feed.
     dm_device_motion_set(&neutral);

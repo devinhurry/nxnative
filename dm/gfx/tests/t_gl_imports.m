@@ -17,6 +17,9 @@ uint64_t guest_ns(void) { return 0; }
 void guest_clock_read_wait(void) {}
 void thr_svc_enter(uint64_t *r, uint64_t a) { (void)r; (void)a; }
 void thr_svc_leave(void) {}
+// Import lookup does not dispatch guest observations; never silently accept one.
+void guest_gate_observer_enter(void) { assert(0 && "unexpected observation in GL import fixture"); }
+void guest_gate_observer_leave(void) { assert(0 && "unexpected observation in GL import fixture"); }
 void dm_spin_wait(uint64_t r, uint64_t a) { (void)r; (void)a; }
 uint64_t svc_dispatch(int n, uint64_t *r, uint64_t a) { (void)n; (void)r; (void)a; return 0; }
 uint64_t unimpl_stubs[4096];

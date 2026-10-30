@@ -8,19 +8,19 @@ This is the implementation record for BOTW touch menus. It covers the supplied b
 
 | Implementation | Count |
 | --- | ---: |
-| implemented | 47 |
+| implemented | 48 |
 | partial | 0 |
 | missing | 0 |
-| not required | 5 |
+| not required | 6 |
 
 | Verification of required action groups | Count |
 | --- | ---: |
-| passed | 30 |
+| passed | 31 |
 | failed | 0 |
 | not run | 15 |
 | blocked | 2 |
 
-Passed results include 25 game-state checks and 5 handler tests. A handler test checks synthetic native owners or frontend gesture delivery; it does not prove that story/vendor/DLC state was reached in the game.
+Passed results include 27 game-state checks and 4 handler tests. A handler test checks synthetic native owners or frontend gesture delivery; it does not prove that story/vendor/DLC state was reached in the game.
 
 Implementation and verification are independent. `blocked` means a save, story/DLC state or hardware is unavailable; it never excuses a missing implementation. `passed` uses the evidence named in that row and does not imply every conditional variant or physical iPhone was tested. Runtime observations and per-target replay assertions are tracked separately in [UI coverage](botw-ui-coverage.md) and [acceptance progress](botw-menu-touch-progress.md).
 
@@ -37,14 +37,14 @@ Implementation and verification are independent. `blocked` means a save, story/D
 | `core.dialogue.choices` — Message/Shop screens; choice list visible | Tap exact choice; background/body tap must not confirm | implemented | not_run / none |
 | `core.dialogue.quantity` — Message screens; quantity dialog shown | Focus number field; increment/decrement; confirm/cancel | implemented | passed / game state |
 | `core.back` — menu/dialogue screens; native back action available | Invoke current native B/back action | implemented | passed / game state |
-| `inventory.category` — PauseMenu inventory; inventory tab active | Select categories directly | implemented | passed / game state |
+| `inventory.category` — PauseMenu inventory; inventory tab active | Select categories directly with immediate page positioning and cursor focus | implemented | passed / game state |
 | `inventory.actions` — PauseMenu inventory; item selected | Equip/eat/hold/drop/add/stop holding; open/cancel popup | implemented | passed / game state |
 | `inventory.sort_rotate_recipe` — PauseMenu inventory; subview active | Sort, rotate preview, close recipe | implemented | passed / game state |
 | `quest.rows_categories` — PauseMenu quests; quest page active | Select quest/category directly and update details | implemented | passed / game state |
 | `map.pan_zoom` — AppMap; map active | Tap, drag, pinch zoom and release without drift | implemented | passed / game state |
 | `map.stamp_warp_header` — AppMap; marker/stamp/warp/header state | Select marker, place/manage stamp, warp if enabled, activate header prompts | implemented | not_run / none |
 | `applet.album` — AppAlbum; grid/photo viewer state | Select/paginate thumbnails, view photo, navigate/back, operate file controls | implemented | passed / game state |
-| `applet.picture_book` — AppPictureBook; grid/detail state | Select entries and navigate pages/details/back | implemented | not_run / none |
+| `applet.picture_book` — AppPictureBook; grid/detail state | Select categories immediately; select entries and navigate pages/details/back | implemented | not_run / none |
 | `applet.tool` — AppTool; rune tool active | Operate available native controls and close to gameplay | implemented | not_run / none |
 | `applet.camera` — AppCamera_00; Camera Rune shown in native viewfinder | See enumerated camera action requirements: shutter, back, self-portrait, album, framing/focus, zoom, and selfie poses. | implemented | passed / game state |
 | `applet.dungeon` — AppMapDungeon; dungeon map active | Select/pan/zoom floor/markers and exit | implemented | not_run / none |
@@ -59,7 +59,7 @@ Implementation and verification are independent. `blocked` means a save, story/D
 | `horse.name_entry` — ShopHorse + KeyBoradTextArea; name editor active | Enter/erase name; change character page; accept/cancel back to registration | implemented | not_run / none |
 | `horse.hud` — MainHorse; horse HUD active | Respect native owner prompts and retain gameplay button routing | not_required | not_required / not required |
 | `guide.shrine` — SousaGuide; prompt-only shrine action | Touch native confirm/back prompt, exclude ordinary gameplay hint | implemented | passed / game state |
-| `notice.ack` — PickUpWin/ChallengeWin; notice/award shown | Acknowledge only when input-owning; ignore passive notifications | implemented | passed / handler test |
+| `notice.ack` — PickUpWin/ChallengeWin; corner notification shown | Retain gameplay controls; no modal acknowledgement | not_required | not_required / not required |
 | `system.error_viewer` — ErrorViewer; error dialog shown | Dismiss/continue with native action | implemented | not_run / none |
 | `ending.continue_skip` — StaffRollDLC_00; DLC credit roll with live B guide and page arrows | Tap native B prompt to skip; tap up/down page arrows to scroll credits. | implemented | passed / handler test |
 | `intro.advance_mode` — HardMode_00; mode choice dialog with live PaCommonBtnThin_00 left/right registered hit targets | Tap either native option button to choose its corresponding game mode. | implemented | not_run / none |
@@ -80,6 +80,8 @@ Implementation and verification are independent. `blocked` means a save, story/D
 | `cutscene.skip` — Skip_00; active cutscene with live X guide under Pa_Skip_00 | Tap the X guide to invoke native cutscene skip. | implemented | passed / handler test |
 | `system.controller_manual` — ControllerWindow_00; controller help/manual page with list, arrows, and A/B guides visible | Select a manual topic; use the live Up/Down page arrows; tap A confirm or B back guide. | implemented | not_run / none |
 | `system.ack.no_button_wait` — SystemWindowNoBtn_00, AppSystemWindowNoBtn_00; choice-less system message waiting for its native caller/service to close or advance it | No touch action is authored by these no-button layout resources. | not_required | not_required / not required |
+| `scope.native_actions` — MainScreen_00 / R3 Scope; Scope guide bar visible beside gameplay controls | Tap Place pin, Quit and Edit pins native hints while preserving virtual controls and relative-look gestures | implemented | passed / game state |
+| `item_get.inventory` — MessageGet_00; New-item card with visible Inventory Plus hint | Tap the native Plus glyph or its label to open Inventory; card body and arrow continue normally with A | implemented | passed / game state |
 
 ## Action evidence and remaining work
 
@@ -175,10 +177,11 @@ A complete shared or screen-specific code path is present; verification status s
 
 A complete shared or screen-specific code path is present; verification status separately records whether this exact guest state has been exercised.
 
-- [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `selector_list_categories_to_view`: Publishes native category controls.
-- [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `selector_native_list_select`: Selects through native list/setter entry point.
+- [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `selector_request_category`: Native category refresh runs before final commit; slot zero is staged after refresh so page and focus finish together.
 
-**Verification (passed; game state):** Categories including armor, food and key items are recorded.
+**Verification (passed; game state):** Mac category tap from a nonzero weapon column immediately selects first Food item with matching description; native order/transition tests pass. Physical iPhone pending.
+
+- Recorded artifact: `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/touch-menu-fixes-20261030/acceptance.json` — Current-host retained-graphics Mac case and before/final screenshots.
 
 ### inventory.actions
 
@@ -253,8 +256,9 @@ A complete shared or screen-specific code path is present; verification status s
 
 - [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `selector_find_generic_targets`: Finds visible native hit/focus targets owned by current screen.
 - [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `selector_native_list_select`: Selects through native list/setter entry point.
+- [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `selector_apply_list_category`: Validated five-category widget calls the native immediate completion mode instead of the animated stick wrapper.
 
-**Verification (not_run; none):** Shared native hit/focus/action path is present; the remaining conditional screen states have no independent end-to-end run evidence.
+**Verification (not_run; none):** Mac actual category clicks jump Creatures to Treasure and back with native immediate completion. Registered-entry details remain pending.
 
 ### applet.tool
 
@@ -409,15 +413,9 @@ A complete shared or screen-specific code path is present; verification status s
 
 ### notice.ack
 
-A complete shared or screen-specific code path is present; verification status separately records whether this exact guest state has been exercised.
+Pickup and quest updates are passive corner notifications. Their Plus hints use the visible gameplay pad and do not own a touch menu.
 
-- [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `selector_message_prompt_view`: Publishes visible dialogue body/continuation arrow.
-- [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `generic_action_prompts_to_view`: Publishes the live key-hint parts nested in PaPickUpWin_00 and PaChallengeWin_00 only while their prompt owner is active.
-- [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `selector_cursorless_prompt_view`: Routes visible A/B guide prompts from PickUpWin and ChallengeWin only when the corresponding screen owns the active native input group.
-
-**Verification (passed; handler test):** Native owner-bound prompt test passed for PickUpWin_00 and ChallengeWin_00; Pickup A tap emits the native action.
-
-- [dm/host/tests/t_botw_touch_menu.c](../dm/host/tests/t_botw_touch_menu.c) `test_cursorless_help_prompts`: Native peer reports the focused BOTW touch-menu test passed; asserts exact PickUpWin/ChallengeWin owner binding and pickup A tap output.
+**Verification (not_required; not required):** Native layouts place both notices at the right corner with a Plus glyph. The shared TIP policy excludes their lifecycle and cached guides from menu ownership.
 
 ### system.error_viewer
 
@@ -647,6 +645,33 @@ No touch action is authored by these message-only layouts. Shared TRANSITION pre
 
 **Verification (not_required; not required):** There is no authored touch interaction to verify for these passive waiting layouts.
 
+### scope.native_actions
+
+Concrete native and platform handlers are present; handler and game-state acceptance are tracked independently.
+
+- [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `selector_scope_prompts_to_view`: Maps live capture-backed guide rectangles under the shown Scope bar to native glyph actions.
+- [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `dm_botw_touch_scope_prompt_at`: Only native hint rectangles request pointer ownership; the ordinary gameplay controls and free-area look keep their input.
+
+**Verification (passed; game state):** Current-host retained-graphics Mac window clicks Quit, Place pin and Edit pins; pad remains visible and free-area drag rotates. UIKit coexistence checks pass; physical iPhone pending.
+
+- [dm/host/tests/t_botw_touch_menu.c](../dm/host/tests/t_botw_touch_menu.c) `test_scope_native_prompts`: Checks native scope ownership, action output and coexistence; runtime acceptance recorded separately.
+- [dm/ios/tests/ios_look_harness.m](../dm/ios/tests/ios_look_harness.m) `test_botw_scope_pointer`: Zero-failure UIKit run checks all three hints, control priority, concurrent owners, R3 and controller suppression.
+
+- Recorded artifact: `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/touch-menu-fixes-20261030/acceptance.json` — Mac actions and exact source/runtime evidence with retained-graphics validation boundary.
+
+### item_get.inventory
+
+Concrete native and platform handlers are present; handler and game-state acceptance are tracked independently.
+
+- [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `generic_back_prompt_observe`: Recognizes the live T_PauseGuide_00/T_Icon_00 pair and native Plus glyph.
+- [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `selector_message_prompt_view`: Publishes owner-bound native hints before the broad continuation surface.
+
+**Verification (passed; game state):** Mac supplied shrine save: after freeing one slot in the disposable copy, the Eightfold Blade card shows Inventory Plus; clicking its label emits native Plus and opens Inventory focused on the new item. Full-bag hidden hint is not published. Physical iPhone pending.
+
+- [dm/host/tests/t_botw_touch_menu.c](../dm/host/tests/t_botw_touch_menu.c) `test_new_item_inventory_prompt`: Checks Plus glyph/label/body overlap and hidden/stale/capture/controller/owner-loss rejection.
+
+- Recorded artifact: `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/touch-menu-fixes-20261030/acceptance.json` — Native Plus emission and current-host retained-graphics screenshots before/after the actual label click.
+
 ## Complete resource disposition
 
 Every scanned layout is listed, including passive HUDs, backgrounds and shared parts. The JSON retains exact resource hashes, owner/component links, control declarations and classification reasons. New/changed resources must be classified before completion can pass.
@@ -667,7 +692,7 @@ Every scanned layout is listed, including passive HUDs, backgrounds and shared p
 | `BootUp_00` | passive layer | No independent menu action |
 | `BtnDialog_00` | reusable component | core.native_target.dispatch |
 | `BtnScrollBar_07` | reusable component | No independent menu action |
-| `ChallengeWin_00` | interactive screen | notice.ack |
+| `ChallengeWin_00` | passive layer | No independent menu action |
 | `ChangeController_00` | passive layer | system.controller_pairing |
 | `ChangeControllerNN_00` | passive layer | system.controller_pairing |
 | `ControllerWindow_00` | interactive screen | core.back, core.dialogue.choices, system.controller_pairing, system.controller_manual |
@@ -701,7 +726,7 @@ Every scanned layout is listed, including passive HUDs, backgrounds and shared p
 | `MainHardMode_00` | visual only | intro.passive_transitions |
 | `MainHorse_00` | passive layer | horse.hud |
 | `MainScreen3D_00` | passive layer | No independent menu action |
-| `MainScreen_00` | passive layer | No independent menu action |
+| `MainScreen_00` | interactive screen | scope.native_actions |
 | `MainScreenHeartIchigekiDLC_00` | passive layer | No independent menu action |
 | `MainScreenMS_00` | passive layer | No independent menu action |
 | `MainShortCut_00` | passive layer | No independent menu action |
@@ -709,7 +734,7 @@ Every scanned layout is listed, including passive HUDs, backgrounds and shared p
 | `Message3D_00` | passive layer | No independent menu action |
 | `Message_00` | interactive screen | core.back, core.dialogue.body, core.dialogue.choices, message.variants |
 | `MessageDemo_00` | interactive screen | core.back, core.dialogue.body, core.dialogue.choices, message.variants |
-| `MessageGet_00` | interactive screen | core.back, core.dialogue.body, core.dialogue.choices, message.variants |
+| `MessageGet_00` | interactive screen | core.back, core.dialogue.body, core.dialogue.choices, message.variants, item_get.inventory |
 | `MessageSp_00` | interactive screen | core.back, core.dialogue.body, core.dialogue.choices, message.variants |
 | `MessageTips_00` | interactive screen | core.back, core.dialogue.body, core.dialogue.choices, message.variants |
 | `MessageTipsPauseMenu_00` | interactive screen | core.back, core.dialogue.body, core.dialogue.choices, message.variants |
@@ -770,7 +795,7 @@ Every scanned layout is listed, including passive HUDs, backgrounds and shared p
 | `PaArrow_00` | reusable component | No independent menu action |
 | `PaArrowPointer_00` | reusable component | No independent menu action |
 | `PaBoxedCursor_00` | reusable component | No independent menu action |
-| `PaCameraPointer_00` | reusable component | No independent menu action |
+| `PaCameraPointer_00` | reusable component | scope.native_actions |
 | `PaCameraPointerPin_00` | reusable component | No independent menu action |
 | `PaCategoryBtnS_00` | reusable component | core.native_target.dispatch |
 | `PaCategoryChallenge5_00` | reusable component | No independent menu action |
@@ -937,7 +962,7 @@ Every scanned layout is listed, including passive HUDs, backgrounds and shared p
 | `PaRstickGuide_00` | reusable component | No independent menu action |
 | `PaSaveIcon_00` | reusable component | No independent menu action |
 | `PaSeekPadDecoText_00` | reusable component | No independent menu action |
-| `PaSeekPadScanningLine_00` | reusable component | No independent menu action |
+| `PaSeekPadScanningLine_00` | reusable component | scope.native_actions |
 | `PaShopHorseCapture_00` | reusable component | No independent menu action |
 | `PaShopHorseInfo_01` | reusable component | No independent menu action |
 | `PaShopHorseInfoParam_00` | reusable component | No independent menu action |
@@ -970,7 +995,7 @@ Every scanned layout is listed, including passive HUDs, backgrounds and shared p
 | `PauseMenuRecipe_00` | interactive screen | applet.album, applet.picture_book, core.back, core.native_target.dispatch, inventory.actions, inventory.category, inventory.sort_rotate_recipe, map.stamp_warp_header, options.rows_values, pause.home, quest.rows_categories |
 | `PaWarpEfDLC_00` | reusable component | No independent menu action |
 | `PaWeather_00` | reusable component | No independent menu action |
-| `PickUpWin_00` | interactive screen | notice.ack |
+| `PickUpWin_00` | passive layer | No independent menu action |
 | `ReadyGo_00` | passive layer | No independent menu action |
 | `Rupee_00` | passive layer | No independent menu action |
 | `SaveTransferWindow_00` | interactive screen | core.back, core.dialogue.choices, system.save_transfer |

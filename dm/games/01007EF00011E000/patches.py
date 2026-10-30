@@ -194,6 +194,25 @@ def validate_main(ctx):
         0xa9be7bfd, 0xa9014ff4, 0x910003fd, 0xb9763808,
         0x2a0103f4, 0xaa0003f3, 0x3100051f, 0x54000220,
     ), 'BOTW native inventory navigation/update entry changed; revalidate zero-delta category refresh'
+    # Touch refreshes with the pending-page flag set, then commits last.
+    # Navigation reads that pending page, its zero delta does not enter the
+    # page-distance loop, and commit clears the transition after native focus.
+    assert tuple(word(o) for o in range(0xe3ddec, 0xe3de10, 4)) == (
+        0xb9768e69, 0x5286cb88, 0x5286cc0a, 0x8b080268, 0x8b0a026a, 0x7100013f,
+        0x9a8a0108, 0xb9400108, 0x0b348100,
+    ), 'BOTW inventory navigation pending-page choice changed; revalidate refresh before commit'
+    assert tuple(word(o) for o in range(0xe3d430, 0xe3d444, 4)) == (
+        0x6b1502ff, 0x52800028, 0x5a88c519, 0x54000161, 0xb9366277,
+    ), 'BOTW inventory zero-delta staging changed; revalidate immediate category completion'
+    assert tuple(word(o) for o in range(0xe3e228, 0xe3e240, 4)) == (
+        0xaa1303e0, 0x52800021, 0x97ffee73, 0xb9766260, 0xb97a1274, 0x9400cb91,
+    ), 'BOTW inventory refresh transition request changed; commit must finish after refresh'
+    assert tuple(word(o) for o in range(0xe3ba80, 0xe3bacc, 4)) == (
+        0x52800028, 0xaa1303e0, 0x390ee288, 0xb9766268, 0xb9365e68, 0x97fffd38,
+        0xb9765e61, 0xaa1303e0, 0xb9766662, 0x940009f8, 0x5286cc88, 0x12800009,
+        0x7900029f, 0xf8286a69, 0xaa1303e0, 0xa9414ff4, 0x2a1f03e1, 0xa8c27bfd,
+        0x17fff84d,
+    ), 'BOTW inventory commit focus/transition completion changed; revalidate direct category taps'
     assert tuple(word(o) for o in range(0xd6f034, 0xd6f054, 4)) == (
         0xd101c3ff, 0x6d0123e9, 0xa9027bfd, 0xa90367fa,
         0xa9045ff8, 0xa90557f6, 0xa9064ff4, 0x910083fd,
@@ -214,6 +233,21 @@ def validate_main(ctx):
         0xd10103ff, 0xa9017bfd, 0xf90013f5, 0xa9034ff4,
         0x910043fd, 0xb942a808,
     ), 'BOTW native list page setter changed; revalidate category taps and list scrolling'
+    assert tuple(word(o) for o in range(0xd6bfa0, 0xd6bfb8, 4)) == (
+        0xd101c3ff, 0x6d012beb, 0x6d0223e9, 0xa9037bfd, 0xa9045ff8, 0xa90557f6,
+    ), 'BOTW native list transition entry changed; revalidate immediate Compendium categories'
+    assert tuple(word(o) for o in range(0xd6c128, 0xd6c18c, 4)) == (
+        0x510006a8, 0xb9033a75, 0x7100051f, 0x540000a9, 0x52800020, 0x17ffffae,
+        0x2a1f03e0, 0x17ffffac, 0x71000abf, 0xaa1303e0, 0x1a9f07e1, 0x94000b02,
+        0x12800008, 0x910033e5, 0xb9000fe8, 0xaa1303e0, 0x2a1403e1, 0x2a1603e2,
+        0x2a1f03e3, 0x2a1f03e4, 0x940000c5, 0xb9400fe1, 0xaa1303e0, 0x940001bb,
+        0x17ffffec,
+    ), 'BOTW list mode-1 completion/first-item selection changed; revalidate Compendium category jumps'
+    assert tuple(word(o) for o in range(0xd6ed94, 0xd6edcc, 4)) == (
+        0xb942e808, 0xb942f009, 0xb902ec09, 0xbd02c000, 0xbd02c401, 0xb902e408,
+        0xb942dc08, 0xb902d808, 0x9400040f, 0xb9033660, 0x52800048, 0xaa1303e0,
+        0x52800021, 0xb9033268,
+    ), 'BOTW native list current/target synchronization changed; revalidate immediate category position'
     assert tuple(word(o) for o in range(0xd8caac, 0xd8cac0, 4)) == (
         0xbd400020, 0xbd088000, 0xbd400420, 0xbd088400, 0xd65f03c0,
     ), 'BOTW current map origin setter changed; revalidate direct touch dragging'

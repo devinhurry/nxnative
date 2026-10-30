@@ -338,6 +338,52 @@ Gameplay retains the pad; actual tutorials, dialogue, menus and loading keep
 their existing input ownership. Headshot and shield-surf notifications require
 the user's in-game check; no attempt was made to trigger either automatically.
 
+**Resolved on Mac: item pickup hid controls and the backup right stick did not turn the camera (2026-10-31).**
+The supplied `before-mushroom` save reproduces this with a Sunshroom.
+`PickUpWin_00` retains its shown/input-owned state over live gameplay; its
+Inventory hint is not a modal menu. Classifying it as one hid the pad even
+after the corner notification faded. It now shares the passive corner-tip
+policy, including rejection from focused and cursorless menu routing.
+The separate [ordinary-stick/relative-look source fix](../../../docs/reference/services.md#ordinary-virtual-sticks-while-relative-look-is-enabled)
+preserves the backup pad's right-stick input.
+
+`pickup-controls-20261031/` in the game's work folder records the independent
+save copies, source/host identities and before/after audits: the baseline
+reported a menu over live gameplay in 60 pickup snapshots; the fixed run's
+21 recorded snapshots retained gameplay with no menu ownership. The Mac pad
+remains visible, native virtual right-stick input turns the camera, and a
+relative-look gesture still reaches the shared getter. Native tests, the
+UIKit gesture harness and iPhone arm64 compilation of the changed input
+files pass. Source-save hashes are unchanged. Gameplay uses the current host
+input code with retained `371ad45` graphics and matching `07b0ea547435`
+shaders; the complete current Mac host builds separately. The scoped BOTW
+`regress.py check --quick` stops at the existing Metal compiler mismatch
+(`32023.883` installed, `32023.921` required). Physical iPhone acceptance
+remains pending.
+
+**Quest notifications and climbing/slipping tips (2026-10-31).**
+The native `ChallengeWin_00` is another passive corner notification: its part
+is at `(590,106)`, beside the pickup part at `(590,50)`, and both contain the
+same Plus glyph (`U+E04B`). There is no A acknowledgement. The old `MENU`
+classification hid the pad and allowed the hint to take menu ownership.
+It now shares the `TIP` policy with pickups. Native regression coverage
+rejects its cached, visible Plus guide and keeps controls visible through
+entering, shown and exiting notification states. Actual dialogue, tutorial,
+loading and controller-wait ownership stays covered by the existing tests.
+
+The English slippery-climbing and shield-surf messages belong to
+`LayoutMsg/MessageTipsRunTime_00.msbt`, already excluded from menu detection.
+Mac climbing with the native Jump/Let go hints retains the virtual pad and
+publishes gameplay with no menu ownership. Loading-screen climbing advice
+and centered tutorials remain separate blocking presentations.
+
+Evidence is in `pickup-controls-20261031/quest-controls-fix-20261031/`:
+the new native check fails before the policy change and passes after it;
+UI audit/progress checks and the compatible Mac host build pass. The Impa
+replay did not reach a quest notification, so a natural quest-update event
+and physical iPhone acceptance remain pending. The scoped BOTW regression
+is still blocked before boot by the required Metal compiler version.
+
 **Resolved: full-health Eat/Cancel dialog ignored touches (2026-10-29).**
 The native screen is `PauseMenuMantan_00`, with two registered `Pa_Btn_*`
 entries. Only the exact `PauseMenu_00` and recipe screen were classified as
@@ -453,6 +499,43 @@ host also compiles.
 | Node area cut 1 GB → 62 MB | `dm/tools/sdk_patches.py` SDK-wide rules, `sdk` build `574284b4…` | made for Tears of the Kingdom's issue #70 on the same `sdk` build; the SDK-wide rule gives it |
 
 No `tex_flush_upload` (a minute's boot saw it flush 32 CPU-filled textures with data, and it needs none).
+
+### Direct categories and gameplay HUD prompts
+
+Touch category selection uses the native completion paths, rather than
+intermediate stick navigation. Compendium's five-category widget calls
+`main+0xd6bfa0(widget, 0, category, 1)`; mode 1 synchronizes its current/target
+position and first selection. The ordinary `0xd6c244` wrapper always requests
+animated mode 0. Inventory stages the destination page, requests and refreshes
+the category, stages slot zero after refresh preserves the old cursor column,
+then commits through `0xe3b9f0` last. Refreshing after commit restarted a
+transition and disabled focus. Exact 1.9.0 build and instruction checks cover
+these native contracts; Quest/Sell keep their existing setter.
+
+Compendium category touch cells share inventory's expansion around the native
+glyphs, capped by neighboring category centers and the item-list clip. The native
+pane identities and immediate setter remain unchanged. BOTW's default shoulder
+positions are exchanged: ZR takes the former inward R position, and R takes the
+former outer ZR position. The shared geometry, C defaults and launcher defaults
+agree for Mac, UIKit and the editor preview. Focused menu/geometry checks and
+18 launcher settings/storage tests pass; physical iPhone acceptance is pending.
+
+R3 Scope owns a guide bar inside `MainScreen_00`, under
+`Pa_CameraPointer_00`, rather than an independent menu screen. Its visible
+capture-backed guide plates and native glyphs supply Place pin, Quit and Edit
+pins targets. Only those rectangles request pointer ownership alongside the
+gamepad; visible controls retain priority and free space keeps ordinary
+relative look and R3 double-tap. Hiding the guide bar invalidates pending
+actions even when the HUD root and input group remain unchanged.
+
+New-item cards pair `T_PauseGuide_00` with `T_Icon_00`. Their native `0xe04b`
+glyph maps to Plus, so the Inventory hint takes precedence over the broader A
+continuation area. Card body/arrow taps still send A. Hidden/stale guides and
+private capture copies remain ineligible. These adapters require BOTW touch
+mode and the validated native owner; controller input is unchanged.
+
+Validation and evidence for this follow-up are recorded in the
+[acceptance tracker](../../../docs/botw-menu-touch-progress.md#category-jumps-and-gameplay-prompts-2026-10-31).
 
 ## Frame rate
 
@@ -799,6 +882,8 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 ## Found on this game
 
 - **Experimental, off by default:** [File-backed guest heap](../../../docs/reference/memory.md#experimental-file-backed-guest-heap), on `experiment/file-backed-memory`. Mac probes check actual page residency separately from memory-limit accounting, including real GPU reads/writes. The experiment note records the retained-graphics game comparison and the current-graphics/iPhone validation boundary.
+
+- **Resolved in code and Mac gameplay, iPhone acceptance pending:** [Ordinary virtual sticks while relative look is enabled](../../../docs/reference/services.md#ordinary-virtual-sticks-while-relative-look-is-enabled). The pickup/backup-pad reproduction and runtime evidence are recorded above.
 
 - **Resolved in code, iPhone acceptance pending:** [Guest calls made by observation callbacks](../../../docs/reference/threads.md#guest-calls-made-by-observation-callbacks). The iPhone inventory-category crash log from build `895cecbc` matches the current gate-stack CPU reproduction. It now passes with the same native category entry points retained. Before/after logs and the supplied iPhone log are in `inventory-category-crash-20261030/` in the game's work folder.
 

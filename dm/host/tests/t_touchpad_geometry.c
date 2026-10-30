@@ -125,9 +125,9 @@ static void test_botw_right_cluster_and_camera_tap(void) {
         dm_touchpad_point zr = dm_touchpad_right_shoulder(w,h,0,0,0,0,1);
         dm_touchpad_point x = dm_touchpad_face_button(w,h,0,0,0,0,2);
         nearf(r.y,zr.y,0.001f);
-        nearf(zr.x-r.x,(DM_TP_ZL_R*2+DM_TP_SHOULDER_GAP)*u,0.001f);
+        nearf(r.x-zr.x,(DM_TP_ZL_R*2+DM_TP_SHOULDER_GAP)*u,0.001f);
         assert(r.y + DM_TP_ZL_R*u < x.y - DM_TP_FACE_R*u);
-        assert(zr.x + DM_TP_ZL_R*u < w);
+        assert(r.x + DM_TP_ZL_R*u < w);
         float xgr = DM_TP_FACE_R * u * 1.25f;
         float shoulder_hit = DM_TP_ZL_R * u * DM_TP_SHOULDER_HIT_SCALE;
         assert(hypotf(r.x-x.x,r.y-x.y) > shoulder_hit+xgr);
@@ -237,8 +237,8 @@ static void test_custom_layout(void) {
     nearf(layout.control[0].x,-.006f,.0001f); nearf(layout.control[0].y,-.068f,.0001f); nearf(layout.control[0].scale,1.1f,.0001f);
     nearf(layout.control[4].x,0,.0001f); nearf(layout.control[4].y,.023f,.0001f);
     nearf(layout.control[6].x,.021f,.0001f); nearf(layout.control[6].y,0,.0001f); nearf(layout.control[6].scale,1.2f,.0001f);
-    nearf(layout.control[7].x,-.022f,.0001f); nearf(layout.control[7].y,-.098f,.0001f); nearf(layout.control[7].scale,1.1f,.0001f);
-    nearf(layout.control[9].x,.025f,.0001f); nearf(layout.control[9].y,-.097f,.0001f); nearf(layout.control[9].scale,1.1f,.0001f);
+    nearf(layout.control[7].x,.025f,.0001f); nearf(layout.control[7].y,-.097f,.0001f); nearf(layout.control[7].scale,1.1f,.0001f);
+    nearf(layout.control[9].x,-.022f,.0001f); nearf(layout.control[9].y,-.098f,.0001f); nearf(layout.control[9].scale,1.1f,.0001f);
     nearf(layout.control[12].x,.042f,.0001f); nearf(layout.control[12].y,0,.0001f); nearf(layout.control[12].scale,1,.0001f);
     nearf(layout.control[8].x,0,.0001f); nearf(layout.control[8].y,0,.0001f); nearf(layout.control[8].scale,1,.0001f);
     setenv("DM_BOTW_PAD_BADGES","1",1); assert(dm_botw_layout_read(&layout) && layout.badges);
@@ -248,6 +248,7 @@ static void test_custom_layout(void) {
     dm_touchpad_rect r=dm_botw_layout_control(&layout,7,932,430,0,0,0,0,canvas);
     dm_touchpad_rect zr=dm_botw_layout_control(&layout,9,932,430,0,0,0,0,canvas);
     nearf(r.width,zr.width,.001f);
+    assert(zr.x < r.x); // the frequently used bow trigger occupies the inward position
 
     dm_touchpad_rect before=dm_botw_layout_control(&layout,0,932,430,0,0,0,0,canvas);
     setenv("DM_BOTW_PAD_FACE_X","-0.1",1); setenv("DM_BOTW_PAD_FACE_SCALE","0.8",1);
@@ -258,7 +259,7 @@ static void test_custom_layout(void) {
     nearf(after.width,2*(27+50*1.2f)*.8f,.001f);
     dm_touchpad_rect shoulder=dm_botw_layout_control(&layout,7,932,430,0,0,0,0,canvas);
     dm_touchpad_point native=dm_touchpad_right_shoulder(932,430,0,0,0,0,0);
-    nearf(shoulder.x+shoulder.width/2,native.x-canvas.width*.022f,.001f);
+    nearf(shoulder.x+shoulder.width/2,native.x+canvas.width*.025f,.001f);
     nearf(shoulder.y+shoulder.height/2,native.y+43,.001f);
     setenv("DM_BOTW_PAD_FACE_SCALE","nan",1); assert(!dm_botw_layout_read(&layout));
     const char *keys[]={"DM_BOTW_PAD_FACE_X","DM_BOTW_PAD_FACE_SCALE","DM_BOTW_PAD_FACE_GAP","DM_BOTW_PAD_R_Y"};
