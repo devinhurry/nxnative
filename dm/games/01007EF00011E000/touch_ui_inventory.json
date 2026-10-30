@@ -41,7 +41,7 @@
       "missing_target_layout_refs": 6
     },
     "current_screen_policy": "dm/host/botw_touch_screens.inc",
-    "current_screen_policy_sha256": "7583397ae74ab6d974cb231cf8dfebbba57f11756f7d9f30fbfd0b332c23241a",
+    "current_screen_policy_sha256": "40abb6c6ce0c8e2e9ac547642ece1bb0b265554277105200d4e4db41db3ec02c",
     "catalogue_parser_note": "Part instance names use24 bytes; referenced layout names are terminated strings, including names longerthan24 bytes.",
     "native_guide_audit": {
       "source": "corrected catalogue layout panes and control declarations; runtime glyph adapter in dm/host/hle_botw_touch_menu.c",
@@ -1144,33 +1144,34 @@
     },
     {
       "id": "notice.ack",
-      "screen": "ChallengeWin",
-      "state": "challenge notice shown",
-      "action": "Acknowledge only when input-owning; keep pickup notifications passive",
-      "implementation_status": "implemented",
-      "implementation_evidence": [
+      "screen": "PickUpWin/ChallengeWin",
+      "state": "corner notification shown",
+      "action": "Retain gameplay controls; no modal acknowledgement",
+      "implementation_status": "not_required",
+      "implementation_evidence": [],
+      "verification_status": "not_required",
+      "verification_reason": "Native layouts place both notices at the right corner with a Plus glyph. The shared TIP policy excludes their lifecycle and cached guides from menu ownership.",
+      "implementation_status_reason": "Pickup and quest updates are passive corner notifications. Their Plus hints use the visible gameplay pad and do not own a touch menu.",
+      "verification_evidence": [],
+      "verification_level": "not_required",
+      "passive_evidence": [
         {
-          "file": "dm/host/hle_botw_touch_menu.c",
-          "function": "generic_action_prompts_to_view",
-          "why": "Publishes visible native challenge guide prompts under their live owner."
+          "layout": "ChallengeWin_00",
+          "pane_count": 2,
+          "control_types": [],
+          "native_candidates": [],
+          "owner": "gameplay corner notification",
+          "why": "Pa_ChallengeWin_00 is positioned at (590,106), matching the pickup notice at (590,50). PaChallengeWin_00 supplies the native Plus glyph U+E04B and no acknowledgement button."
         },
         {
-          "file": "dm/host/hle_botw_touch_menu.c",
-          "function": "selector_cursorless_prompt_view",
-          "why": "Routes ChallengeWin guides only when the screen owns its native input group; PickUpWin uses the passive TIP policy."
+          "layout": "PickUpWin_00",
+          "pane_count": 2,
+          "control_types": [],
+          "native_candidates": [],
+          "owner": "gameplay corner notification",
+          "why": "Pickup keeps the gameplay pad and uses its ordinary Plus action; the actual Sunshroom reproduction is recorded separately."
         }
-      ],
-      "verification_status": "passed",
-      "verification_reason": "Native owner-bound ChallengeWin acknowledgement and PickUpWin passive-owner rejection pass.",
-      "implementation_status_reason": "A complete shared or screen-specific code path is present; verification status separately records whether this exact guest state has been exercised.",
-      "verification_evidence": [
-        {
-          "file": "dm/host/tests/t_botw_touch_menu.c",
-          "function": "test_cursorless_help_prompts",
-          "why": "Asserts the live ChallengeWin acknowledgement and rejects PickUpWin even when a visible guide glyph is cached."
-        }
-      ],
-      "verification_level": "handler_test"
+      ]
     },
     {
       "id": "system.error_viewer",
@@ -16507,8 +16508,8 @@
       "name": "ChallengeWin_00",
       "source": "Pack/Bootup.pack!Layout/Common.sblarc!blyt/ChallengeWin_00.bflyt",
       "sha256": "d1b0434bec95e7d116eeee10a42a6c13e48128c344b08b2b9d0d2063e39c6883",
-      "disposition": "interactive_screen",
-      "classification_reason": "Top-level user-facing screen with one or more explicit state/action requirements linked below.",
+      "disposition": "passive_layer",
+      "classification_reason": "Quest updates use the same corner notification and native Plus guide as pickups. They must not own a modal menu or hide gameplay controls.",
       "evidence": {
         "catalogue_component": false,
         "pane_count": 2,
@@ -16522,7 +16523,7 @@
         "touch_asserted": false,
         "route_resolution": "matched_by_current_route_policy",
         "route_resolution_reason": "Current shared BOTW touch route policy classifies this resource; this enables routing only and does not establish action implementation.",
-        "current_routing_policy": "MENU",
+        "current_routing_policy": "TIP",
         "current_route_rule": {
           "kind": "EXACT",
           "value": "ChallengeWin_00"
@@ -16539,9 +16540,7 @@
         }
       ],
       "reused_by": [],
-      "requirement_ids": [
-        "notice.ack"
-      ],
+      "requirement_ids": [],
       "interaction_surfaces": []
     },
     {
