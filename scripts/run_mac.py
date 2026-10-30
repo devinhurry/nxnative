@@ -273,6 +273,7 @@ def refresh_shaders(plan, env, repo, builder, logs):
     versions = g.words('shader_versions') or [plan['version']]
     for version in dict.fromkeys(versions + [plan['version']]):
         _, exefs, romfs = resolve_layout(plan['base'], version, g.words('modules'),
+            patched_arg=plan['patched'] if version == plan['version'] else None,
             exefs_arg=plan['exefs'] if version == plan['version'] else None,
             romfs_arg=plan['romfs'] if version == plan['version'] else None)
         d = work / 'extract' / version; d.mkdir(parents=True, exist_ok=True)

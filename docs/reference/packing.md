@@ -27,6 +27,13 @@
 
 ## RomFS images
 
+### Mac test shader preparation reports an ambiguous build layout
+
+- **Symptom:** `run_mac.py --test` selects ExeFS and RomFS successfully, then stops at missing shader preparation with `more than one complete build layout matches; specify --patched, --exefs and --romfs`.
+- **Cause:** shader preparation passed the selected ExeFS and RomFS back to layout discovery without the selected patched-module path. Both supported layouts then named the same original inputs but different patched outputs, producing a false ambiguity even with only one extraction.
+- **Fix:** pass the complete selected layout when preparing the running version's shader inputs. Other shader versions still require their own unambiguous extraction. Regression coverage exercises missing shaders with a RomFS image and the isolated test output.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game), update 1.9.0 on the Mac.
+
 ### Mac launchers accept RomFS files and directories
 
 - **Symptom:** `run_mac.py` rejects an existing `RomFS.img` as missing, or cannot find a complete extracted layout after the NSP builder produced an image.
