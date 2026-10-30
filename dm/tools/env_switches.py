@@ -26,6 +26,11 @@ def tracked():
 def scan():
     """({switch: files that read it}, {name quoted in the docs: docs})"""
     reads, docs, macros, direct = {}, {}, set(), set()
+    # Launcher settings read their declared keys dynamically, as does the BOTW
+    # layout's formatted getenv call. Literal-only scanning misses those keys.
+    settings = 'dm/games/settings.tsv'
+    for line in (REPO / settings).read_text().splitlines():
+        if line.startswith('DM_'): reads.setdefault(line.split('\t')[0], set()).add(settings)
     for p in tracked():
         path = REPO / p
         if not path.is_file(): continue

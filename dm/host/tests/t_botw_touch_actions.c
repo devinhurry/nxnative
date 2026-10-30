@@ -1,5 +1,9 @@
 #define DM_TEST_HOOKS 1
 #include "../botw_touch_actions.h"
+#include "../hle.h"
+// Trigger-cancel fixtures exercise BOTW independently of CI's host profile.
+#undef DM_GAME_ID
+#define DM_GAME_ID "01007EF00011E000"
 #include "../hle_botw_touch_actions.c"
 #include <assert.h>
 #include <stdio.h>

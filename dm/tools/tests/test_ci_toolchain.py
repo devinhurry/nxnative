@@ -1,4 +1,4 @@
-"""CI builds with the toolchain the project supports: the Xcode that .github/workflows/tests.yml names in DEVELOPER_DIR is the one README tells players to install and the NSP
+"""CI builds with the toolchain the project supports: the Xcode that .github/workflows/tests.yml names in DEVELOPER_DIR is the one the build guide names and the NSP
 script names beside dmsh_chain.lock, and every macOS job runs on the GitHub image of that Xcode (xcode-<major>). The build check compares the image's Metal compiler with the
 lock itself (own_compilers.py --check-metal); this test keeps the names in step, so raising the toolchain is one change in all of them. No Xcode or network needed."""
 from pathlib import Path
@@ -21,9 +21,10 @@ class Toolchain(unittest.TestCase):
         image = f'xcode-{self.xcode.split(".")[0]}'
         self.assertEqual(sorted({r for r in runners if r.startswith(('macos-', 'xcode-'))}), [image], f'tests.yml: every macOS job runs on {image} (Xcode {self.xcode})')
 
-    def test_readme_names_the_same_xcode(self):
-        named = re.findall(r'\[Xcode\]\([^)]*\) (\d+\.\d+)', (REPO / 'README.md').read_text())
-        self.assertEqual(set(named), {self.xcode}, f'README.md: the Xcode to install is not CI\'s {self.xcode}')
+    def test_build_guide_names_the_same_xcode(self):
+        named = re.findall(r'Xcode (\d+\.\d+)', (REPO / 'docs/development.md').read_text())
+        self.assertTrue(named, 'docs/development.md names no Xcode version')
+        self.assertEqual(set(named), {self.xcode}, f'docs/development.md: the Xcode to install is not CI\'s {self.xcode}')
 
     def test_nsp_script_names_the_same_xcode(self):
         named = re.findall(r'Xcode (\d+\.\d+)', (REPO / 'scripts/build_ipa_from_nsp.py').read_text())

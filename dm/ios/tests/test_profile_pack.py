@@ -26,7 +26,8 @@ class ProfilePackTests(unittest.TestCase):
                 header.parent.mkdir(parents=True)
                 header.write_text(game.header(game.Game(REPO / 'dm/games' / gid)))
                 app, shaders, romfs = [root / name for name in ('DmIOS.app', 'shaders', 'romfs')]
-                for folder in (app, shaders / 'b-fixture', romfs): folder.mkdir(parents=True)
+                for folder in (app, shaders / 'b-fixture', romfs, root / 'Gen/dm'): folder.mkdir(parents=True)
+                (root / 'Gen/dm/launcher.json').write_text('{}')
                 for name in ('fixture_b.metallib', 'fixture_bp.metallib', 'fixture_bv.metallib', 'fixture_b.json'):
                     (shaders / 'b-fixture' / name).write_text(name)
                 (app / 'executable').write_text('app')
@@ -34,8 +35,8 @@ class ProfilePackTests(unittest.TestCase):
                 (root / 'tools').symlink_to(REPO / 'dm/ios/tools', target_is_directory=True)
                 out = root / 'fixture.ipa'
                 env = {k: v for k, v in os.environ.items() if k not in ('IOS_PULL', 'DM_GAMES_DIR', 'DM_GAMES_FIRST')}
-                env.update(GAME=gid, DM=str(dm), APP=str(app), MSL_IOS=str(shaders), MSLDIR='b-fixture',
-                           AOC='', ROMFS=str(romfs), OUT_IPA=str(out), PROFILE_TOOL=str(REPO / 'dm/games/game.py'))
+                env.update(GAME=gid, DM=str(dm), IOS=str(root), APP=str(app), MSL_IOS=str(shaders), MSLDIR='b-fixture',
+                           AOC='', ROMFS=str(romfs), OUT_IPA=str(out), DM_SEPARATE_ROM='0', PROFILE_TOOL=str(REPO / 'dm/games/game.py'))
                 if override is not None: env['IOS_PULL'] = override
                 if with_pso:
                     pso = root / 'pso'; pso.mkdir(); (pso / 'prebuilt.tsv').write_text('fixture')
@@ -54,6 +55,7 @@ class ProfilePackTests(unittest.TestCase):
                     for name in ('fixture_b.metallib', 'fixture_bv.metallib', 'fixture_b.json'):
                         self.assertIn(prefix + name, names)
                     self.assertEqual(archive.read('Payload/DmIOS.app/romfs/marker'), b'romfs')
+                    self.assertEqual(archive.read('Payload/DmIOS.app/dm/launcher.json'), b'{}')
                     self.assertEqual('Payload/DmIOS.app/pso/prebuilt.tsv' in names, with_pso)
 
 

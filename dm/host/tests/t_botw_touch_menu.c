@@ -2,6 +2,10 @@
 #include "../botw_touch_menu.h"
 #include "../dm_input.h"
 #include "../front.h"
+#include "../hle.h"
+// Native BOTW fixtures must not inherit the unrelated profile selected by CI.
+#undef DM_GAME_ID
+#define DM_GAME_ID "01007EF00011E000"
 #include "../hle_botw_touch_menu.c"
 #include <assert.h>
 #include <math.h>

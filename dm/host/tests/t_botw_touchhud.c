@@ -6,6 +6,10 @@
 #include <string.h>
 #include "../botw_touch_actions.h"
 #include "../botw_touch_menu.h"
+#include "../hle.h"
+// This native HUD fixture is BOTW even when CI builds other host profiles.
+#undef DM_GAME_ID
+#define DM_GAME_ID "01007EF00011E000"
 #include "../hle_botw_touchhud.c"
 
 static module_t test_modules[8];
