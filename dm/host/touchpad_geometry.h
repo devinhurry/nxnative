@@ -93,7 +93,7 @@ static inline dm_touchpad_point dm_touchpad_face_center(float width, float heigh
                                c.y + c.height - DM_TP_PAD_Y * u};
 }
 
-// R and ZR sit together just above the face cluster on BOTW's virtual pad.
+// ZR sits inward of R above the face cluster on BOTW's virtual pad.
 static inline dm_touchpad_point dm_touchpad_right_shoulder(float width, float height,
                                                             float left, float top,
                                                             float right, float bottom,
@@ -102,7 +102,7 @@ static inline dm_touchpad_point dm_touchpad_right_shoulder(float width, float he
     float u = dm_touchpad_u(height);
     float half = (DM_TP_ZL_R + DM_TP_SHOULDER_GAP * .5f) * u;
     float y = face.y - (DM_TP_FACE_GAP + DM_TP_FACE_R + DM_TP_ZL_R + 18.0f) * u;
-    return (dm_touchpad_point){face.x + (zr ? half : -half), y};
+    return (dm_touchpad_point){face.x + (zr ? -half : half), y};
 }
 
 static inline int dm_touchpad_look_dragged(float down_x, float down_y,

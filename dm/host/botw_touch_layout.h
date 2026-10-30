@@ -21,8 +21,8 @@ static inline dm_botw_touch_layout dm_botw_layout_defaults(void) {
     layout.control[0] = (dm_botw_control_transform){-.006f, -.068f, 1.100f};
     layout.control[4].y = .023f;
     layout.control[6] = (dm_botw_control_transform){.021f, 0, 1.200f};
-    layout.control[7] = (dm_botw_control_transform){-.022f, -.098f, 1.100f};
-    layout.control[9] = (dm_botw_control_transform){.025f, -.097f, 1.100f};
+    layout.control[7] = (dm_botw_control_transform){.025f, -.097f, 1.100f};
+    layout.control[9] = (dm_botw_control_transform){-.022f, -.098f, 1.100f};
     layout.control[12].x = .042f;
     return layout;
 }

@@ -78,6 +78,8 @@ void dm_touch_script(const dm_touch *t, int n);   // scripted touches (DM_KEYS, 
 // and CANCEL clears held and pending input. May be called from any thread.
 enum { DM_LOOK_BEGIN, DM_LOOK_MOVE, DM_LOOK_END, DM_LOOK_CANCEL };
 int dm_look_enabled(void);
+// Freeze relative-gesture ownership with the Npad sample, including its release/cancel frame.
+int dm_look_owns_stick(uint64_t frame);
 void dm_look_input(int phase, float dx, float dy);
 // Republish already-connected input sources when a build-checked look mode becomes available.
 void front_look_mode_changed(void);

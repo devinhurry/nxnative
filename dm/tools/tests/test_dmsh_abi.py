@@ -39,7 +39,27 @@ def c_literals(text):   # (kind, value) of the string literals and hex numbers o
 
 
 def py_literals(text):   # the same for Python source
+    # Compiler-cache phases and artifact-family tags are not reflection binding
+    # kinds. Keep their AST contexts separate, without raising the ABI baseline.
+    metadata = set()
+    def labels(node):
+        metadata.update((n.lineno, n.col_offset) for n in (node.elts if isinstance(node, ast.Tuple) else [node])
+                        if isinstance(n, ast.Constant) and isinstance(n.value, str))
+    for node in ast.walk(ast.parse(text)):
+        if isinstance(node, ast.keyword) and node.arg == 'phase': labels(node.value)
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'cross_spirv' and len(node.args) == 3:
+            labels(node.args[2])   # cross_spirv's third argument is its cache phase
+        elif isinstance(node, ast.Dict):
+            fields = {k.value: v for k, v in zip(node.keys, node.values) if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+            if {'kind', 'analysis_source', 'outputs'} <= fields.keys(): labels(fields['kind'])
+        elif isinstance(node, ast.Compare) and isinstance(node.left, ast.Subscript):
+            tag = node.left
+            if (isinstance(tag.value, ast.Name) and tag.value.id == 'bundle' and
+                    isinstance(tag.slice, ast.Constant) and tag.slice.value == 'kind'):
+                for values in node.comparators:
+                    if isinstance(values, ast.Tuple) and any(isinstance(v, ast.Constant) and v.value == 'slice' for v in values.elts): labels(values)
     for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+        if tok.start in metadata: continue
         if tok.type == tokenize.NUMBER and tok.string.lower().startswith('0x'): yield ('int', int(tok.string, 16))
         elif tok.type == tokenize.STRING:
             try: v = ast.literal_eval(tok.string)
@@ -131,6 +151,21 @@ class Host(unittest.TestCase):
 
 
 class Ratchet(unittest.TestCase):
+    def test_compiler_cache_labels_are_not_binding_kinds(self):
+        source = """
+XLCACHE.translate(jobs, work, phase='geometry')
+cross_spirv(spv, args, 'geometry')
+bundle = {'kind': 'geometry', 'analysis_source': source, 'outputs': outputs}
+if bundle['kind'] in ('geometry', 'slice'): pass
+"""
+        self.assertNotIn(('str', 'geometry'), list(py_literals(source)))
+
+    def test_binding_kinds_and_offsets_still_count(self):
+        source = "binding = {'kind': 'geometry', 'offset': 0x200}; kind = 'geometry'; f(phase=choose({'kind': 'geometry'}))"
+        literals = list(py_literals(source))
+        self.assertEqual(literals.count(('str', 'geometry')), 3)
+        self.assertIn(('int', 0x200), literals)
+
     def test_no_new_abi_literals(self):
         worse = {}
         for path, base in BASELINE.items():

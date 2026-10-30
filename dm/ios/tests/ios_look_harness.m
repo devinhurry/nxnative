@@ -151,6 +151,8 @@ static BOOL g_botw_hero_path;
 static BOOL g_force_controls_hidden;
 static BOOL g_botw_touch_map_active;
 static BOOL g_botw_touch_camera_active;
+static BOOL g_botw_scope_active;
+static float g_botw_scope_prompts[3][4];
 typedef struct { int phase; float x, y; } menu_pointer_event;
 static menu_pointer_event g_menu_pointer_events[64];
 static int g_menu_pointer_count;
@@ -164,7 +166,7 @@ static int g_camera_pose_modifier_count;
 int dm_look_enabled(void) { return g_look_enabled; }
 int dm_botw_touch_hud_available(void) { return g_botw_touchhud_available; }
 int dm_botw_touch_menu_active(void) { return g_botw_touch_menu_active; }
-int dm_botw_touch_menu_visible(void) { return g_botw_touch_menu_active || g_botw_touch_menu_presented; }
+int dm_botw_touch_menu_visible(void) { return (g_botw_touch_menu_active && !g_botw_scope_active) || g_botw_touch_menu_presented; }
 int dm_botw_touch_loadout_visible(void) { return g_botw_loadout_visible; }
 int dm_botw_touch_quick_select_active(void) { return g_botw_quick_select; }
 int dm_botw_touch_menu_dpad_visible(void) { return g_botw_hero_path; }
@@ -174,6 +176,14 @@ int dm_botw_touch_controls_visible(void) {
 }
 int dm_botw_touch_map_active(void) { return g_botw_touch_map_active; }
 int dm_botw_touch_camera_active(void) { return g_botw_touch_camera_active; }
+int dm_botw_touch_scope_prompt_at(float x, float y) {
+    if (!g_botw_scope_active) return 0;
+    for (int i = 0; i < 3; i++) {
+        const float *r = g_botw_scope_prompts[i];
+        if (x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]) return 1;
+    }
+    return 0;
+}
 void dm_botw_touch_camera_pose(float x, float y) {
     if (g_camera_pose_count < (int)(sizeof g_camera_pose_events / sizeof g_camera_pose_events[0]))
         g_camera_pose_events[g_camera_pose_count++] = (camera_pose_event){x, y};
@@ -1275,6 +1285,81 @@ static void test_botw_inventory_pointer(DmGamepad *view) {
     g_botw_touchhud_available = NO;
 }
 
+static void test_botw_scope_pointer(DmGamepad *view) {
+    [view reset];
+    g_botw_touchhud_available = g_botw_gameplay_ready = g_botw_scope_active = YES;
+    g_botw_touch_menu_active = YES; g_botw_touch_menu_presented = NO;
+    g_botw_touch_camera_active = NO; g_look_enabled = YES;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view layoutIfNeeded];
+    CHECK(![view dm_testControlsHidden] && [view dm_testL3GestureEnabled],
+          "scope native hints leave the virtual gamepad and gameplay gestures visible");
+    float picture[4]; dm_aspect_touch_rect((float)view.bounds.size.width,
+        (float)view.bounds.size.height,picture);
+    for (int i = 0; i < 3; i++) {
+        float *r = g_botw_scope_prompts[i];
+        r[0] = .75f - i * .11f; r[1] = .917f; r[2] = .105f; r[3] = .056f;
+    }
+    const char *checks[] = {
+        "scope A hint uses the native pointer while the gamepad is visible",
+        "scope B hint uses the native pointer while the gamepad is visible",
+        "scope Minus hint uses the native pointer while the gamepad is visible"};
+    for (int i = 0; i < 3; i++) {
+        const float *r = g_botw_scope_prompts[i];
+        CGPoint p = CGPointMake(picture[0] + (r[0] + r[2] * .5f) * picture[2],
+                                picture[1] + (r[1] + r[3] * .5f) * picture[3]);
+        int before = g_menu_pointer_count, lookBefore = g_look_count;
+        FakeTouch *hint = touch(p.x,p.y); began(view,hint); ended(view,hint,p.x,p.y);
+        CHECK(g_menu_pointer_count == before + 2 &&
+              g_menu_pointer_events[before].phase == DM_BOTW_MENU_BEGIN &&
+              g_menu_pointer_events[before + 1].phase == DM_BOTW_MENU_END &&
+              !g_buttons && g_look_count == lookBefore,
+              checks[i]);
+    }
+    CGPoint a = [view facePos:0];
+    float saved[4]; memcpy(saved,g_botw_scope_prompts[0],sizeof saved);
+    g_botw_scope_prompts[0][0] = (a.x - picture[0]) / picture[2] - .02f;
+    g_botw_scope_prompts[0][1] = (a.y - picture[1]) / picture[3] - .02f;
+    g_botw_scope_prompts[0][2] = g_botw_scope_prompts[0][3] = .04f;
+    int before = g_menu_pointer_count;
+    FakeTouch *button = touch(a.x,a.y); began(view,button);
+    CHECK((g_buttons & DM_BTN_A) && g_menu_pointer_count == before,
+          "a visible scope gamepad button keeps priority over an overlapping native hint");
+    ended(view,button,a.x,a.y); memcpy(g_botw_scope_prompts[0],saved,sizeof saved);
+
+    CGPoint home = [view dm_testStickHome];
+    FakeTouch *stick = touch(home.x,home.y); began(view,stick); moved(view,stick,home.x+25,home.y);
+    int heldLX = g_lx;
+    FakeTouch *look = touch(600,150); began(view,look); moved(view,look,610,155);
+    const float *r = g_botw_scope_prompts[1];
+    CGPoint p = CGPointMake(picture[0] + (r[0] + r[2] * .5f) * picture[2],
+                            picture[1] + (r[1] + r[3] * .5f) * picture[3]);
+    FakeTouch *hint = touch(p.x,p.y); before = g_menu_pointer_count;
+    int lookBefore = g_look_count, pinchBefore = g_pinch_count;
+    began(view,hint); moved(view,look,615,157);
+    CHECK(heldLX > 0 && g_lx == heldLX && g_menu_pointer_count == before + 1 &&
+          g_look_count == lookBefore + 1 && g_pinch_count == pinchBefore,
+          "scope hint, movement stick and existing relative camera drag keep independent touch owners");
+    ended(view,hint,p.x,p.y);
+    CHECK(g_lx == heldLX && g_menu_pointer_events[g_menu_pointer_count-1].phase == DM_BOTW_MENU_END,
+          "releasing a scope hint preserves the held movement stick");
+    ended(view,look,615,157); ended(view,stick,home.x+25,home.y);
+    CHECK(!g_lx && !g_ly && !g_rx && !g_ry,
+          "scope gameplay stick and drag release without latched input");
+    g_input_sets = 0;
+    FakeTouch *first = touch(600,150); beganAt(view,first,9.0); endedAt(view,first,600,150,9.08);
+    FakeTouch *second = touch(600,150); beganAt(view,second,9.20); endedAt(view,second,600,150,9.28);
+    BOOL r3 = NO; for (int i=0;i<g_input_sets;i++) r3 |= (g_input_history[i] & DM_BTN_RS) != 0;
+    CHECK(r3,"scope free area retains the existing R3 double-tap gesture");
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES]; [view layoutIfNeeded];
+    before = g_menu_pointer_count;
+    hint = touch(p.x,p.y); began(view,hint); ended(view,hint,p.x,p.y);
+    CHECK([view dm_testControlsHidden] && g_menu_pointer_count == before,
+          "scope native hint routing is suppressed with a physical controller connected");
+    g_botw_scope_active = g_botw_touch_menu_active = NO;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view reset];
+    g_botw_touchhud_available = NO;
+}
+
 static void test_look_drag(DmGamepad *view) {
     g_look_enabled = YES; [view setFull:YES];
     reset_look();
@@ -1668,6 +1753,7 @@ static void run_tests(DmGamepad *view) {
     test_botw_stick_response(view);
     test_botw_stick_feedback(view);
     test_botw_inventory_pointer(view);
+    test_botw_scope_pointer(view);
     test_motion_orientation();
     test_look_drag(view);
     test_priority_and_multitouch(view);

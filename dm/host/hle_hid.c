@@ -523,9 +523,12 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
         // players and every look-disabled game retain upstream's per-axis merge unchanged.
         s->rx = physical ? physical_rx : virtual_rx;
         s->ry = physical ? physical_ry : virtual_ry;
-        dm_hid_look_sample sample = look_sample_for_frame(dm_guest_frame(), virtual_rx, virtual_ry,
+        uint64_t frame = dm_guest_frame();
+        int source = physical ? DM_HID_LOOK_PHYSICAL :
+            dm_look_owns_stick(frame) ? DM_HID_LOOK_RELATIVE : DM_HID_LOOK_VIRTUAL;
+        dm_hid_look_sample sample = look_sample_for_frame(frame, virtual_rx, virtual_ry,
             physical_rx, physical_ry, s->rx, s->ry,
-            physical ? DM_HID_LOOK_PHYSICAL : DM_HID_LOOK_VIRTUAL);
+            source);
         dm_hid_look_sample frozen = look_sample_freeze(&sample);
         // All Npad reads in one guest frame must return the exact pair whose source was frozen.
         if (frozen.frame == sample.frame) { s->rx = frozen.selected_rx; s->ry = frozen.selected_ry; }

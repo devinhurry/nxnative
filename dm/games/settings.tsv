@@ -42,11 +42,11 @@ DM_BOTW_PAD_ZL_SCALE	range	0.5:1.5:0.01	1.000	DM_GAME_ID==01007EF00011E000	Touch
 DM_BOTW_PAD_L_X	range	-0.5:0.5:0.001	0.021	DM_GAME_ID==01007EF00011E000	Touch layout	Rune: Horizontal offset	Applies only to BOTW touch controls.
 DM_BOTW_PAD_L_Y	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	Rune: Vertical offset	Applies only to BOTW touch controls.
 DM_BOTW_PAD_L_SCALE	range	0.5:1.5:0.01	1.200	DM_GAME_ID==01007EF00011E000	Touch layout	Rune: Size	Applies only to BOTW touch controls.
-DM_BOTW_PAD_R_X	range	-0.5:0.5:0.001	-0.022	DM_GAME_ID==01007EF00011E000	Touch layout	R: Horizontal offset	Applies only to BOTW touch controls.
-DM_BOTW_PAD_R_Y	range	-0.5:0.5:0.001	-0.098	DM_GAME_ID==01007EF00011E000	Touch layout	R: Vertical offset	Applies only to BOTW touch controls.
+DM_BOTW_PAD_R_X	range	-0.5:0.5:0.001	0.025	DM_GAME_ID==01007EF00011E000	Touch layout	R: Horizontal offset	Applies only to BOTW touch controls.
+DM_BOTW_PAD_R_Y	range	-0.5:0.5:0.001	-0.097	DM_GAME_ID==01007EF00011E000	Touch layout	R: Vertical offset	Applies only to BOTW touch controls.
 DM_BOTW_PAD_R_SCALE	range	0.5:1.5:0.01	1.100	DM_GAME_ID==01007EF00011E000	Touch layout	R: Size	Applies only to BOTW touch controls.
-DM_BOTW_PAD_ZR_X	range	-0.5:0.5:0.001	0.025	DM_GAME_ID==01007EF00011E000	Touch layout	ZR: Horizontal offset	Applies only to BOTW touch controls.
-DM_BOTW_PAD_ZR_Y	range	-0.5:0.5:0.001	-0.097	DM_GAME_ID==01007EF00011E000	Touch layout	ZR: Vertical offset	Applies only to BOTW touch controls.
+DM_BOTW_PAD_ZR_X	range	-0.5:0.5:0.001	-0.022	DM_GAME_ID==01007EF00011E000	Touch layout	ZR: Horizontal offset	Applies only to BOTW touch controls.
+DM_BOTW_PAD_ZR_Y	range	-0.5:0.5:0.001	-0.098	DM_GAME_ID==01007EF00011E000	Touch layout	ZR: Vertical offset	Applies only to BOTW touch controls.
 DM_BOTW_PAD_ZR_SCALE	range	0.5:1.5:0.01	1.100	DM_GAME_ID==01007EF00011E000	Touch layout	ZR: Size	Applies only to BOTW touch controls.
 DM_BOTW_PAD_DPAD_X	range	-0.5:0.5:0.001	0.042	DM_GAME_ID==01007EF00011E000	Touch layout	D-pad: Horizontal offset	Applies only to BOTW touch controls.
 DM_BOTW_PAD_DPAD_Y	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	D-pad: Vertical offset	Applies only to BOTW touch controls.
