@@ -2,7 +2,16 @@
 
 Updated: 2026-10-30 (Asia/Shanghai).
 
-This is the active progress tracker. Update it after each verified feature or new failure. `HANDOFF.md` is historical context, not the current status.
+This is the acceptance tracker. Update it after each verified feature or new failure. `HANDOFF.md` is historical context, not the current status.
+
+The [implementation checklist](botw-touch-implementation.md) tracks the complete
+resource disposition and required screen/state/action groups separately. A missing
+save can block verification; it does not defer implementation. Edit its JSON
+inventory and regenerate it with `python3 dm/tools/botw_touch_progress.py`.
+
+The [UI inventory and regression workflow](botw-ui-coverage.md) generates resource,
+native-screen and individual-target coverage reports. Keep its pending states
+separate from the acceptance results below.
 
 ## Scope and acceptance rules
 
@@ -17,6 +26,54 @@ This is the active progress tracker. Update it after each verified feature or ne
 ## Coverage
 
 Mac milestones refer to their recorded runtime evidence. The latest 2026-10-30 runtime uses the retained `371ad45` graphics base with current menu/HUD changes and matching chain `07b0ea547435`; the complete current host compiles, but rebuilding its shaders stops at the baseline Metal compiler/lock mismatch. Physical iPhone and controller-connection acceptance remain separate from the Mac and UIKit checks.
+
+### Implementation inventory completion (2026-10-30)
+
+The [implementation checklist](botw-touch-implementation.md) now classifies all
+339 layouts from the supplied base/update and both DLCs: 89 top-level layouts
+and 250 reusable components. Its 51 screen/state/action groups contain 46
+implemented interactions and five explicitly noninteractive groups. There are
+no identified partial or missing implementations. Verification remains separate:
+22 groups have game-state evidence, six have handler-test evidence, and 18
+remain unverified or blocked by their required game state. These counts do not
+claim every conditional variant or physical iPhone was tested.
+
+This pass adds native horse-list/save-transfer routing, ErrorViewer's alternate
+hit panes, pickup/challenge guide ownership, complete 24-byte pane names, and
+AppCamera actions and gestures. Camera framing consumes each drag movement once;
+a stationary finger stops turning. Pinch drives native D-pad zoom; a parallel
+two-finger drag drives selfie poses, with a held third finger for native ZL
+poses. The [game note](../dm/games/01007EF00011E000/README.md#appcamera-touch-gestures)
+documents the Mac equivalents. Native controls keep their existing owners.
+
+Choice-less waits and controller-service waits block gameplay controls without
+inventing a clickable acknowledgement. Their shared transition role controls
+presentation separately from touch-target discovery. Render-only logo/credit
+art stays passive; actual Skip, mode-choice and DLC-credit controls use their
+native owners. Mac preview now supports accumulated trackpad scrolling and
+map/camera magnification. BOTW touch keyboards enforce the supplied length
+bounds without changing other games or controller-mode input dialogs.
+
+Final-source evidence is in `01007EF00011E000-work/ui-implementation-20261030/`.
+Four replay routes passed 28 steps (24 touches and four setup keys): Title/load,
+Inventory/System/DLC/Map/Album/Compendium, Hero's Path, and Camera/Album/Capture/Quit.
+Capture opened its native Save/Delete choices; Delete discarded the unsaved
+capture and restored the viewfinder. These routes assert 23 distinct target
+contexts across ten screens, rather than claiming every control was exercised.
+The runtime records its executable hash and the source comparison against the
+retained graphics base; only the older observation API and absent controller
+motion APIs are adapted in that isolated test copy. The production Mac host
+build and all 184 iOS source-file compile checks pass. Native menu checks,
+23 gesture-reducer checks, 20 software-keyboard checks, 25 Python/docs checks
+and the UIKit regression (zero failures) pass. Pinned Python lint has no new
+findings.
+
+`regress.py` selected BOTW only because the new input behavior is restricted to
+its touch adapter. It stops before baseline/candidate comparison: this Mac's
+Metal compiler is `32023.883`, while the current shader lock requires
+`32023.921`. No shader-chain bypass was used. Its report is
+`ui-implementation-20261030/regress/report.md`; retained-shader gameplay and
+source builds above are separate evidence.
 
 | Surface | Status | Evidence or remaining work |
 | --- | --- | --- |
@@ -59,7 +116,7 @@ Mac milestones refer to their recorded runtime evidence. The latest 2026-10-30 r
 | Touch settings sharing, labels and L artwork | UIKit verified; fixed L Mac artwork verified; physical iPhone pending | Exact decimal readouts and Copy all parameters export every normalized runtime value. Optional corner-letter circles cover L/R/ZR/XYAB; fixed/generated launcher text has English and Simplified Chinese resources. L now always uses the packaged L icon, independently of the native rune and HUD text. The touch editor hides its navigation bar and keeps a compact Back button; its simulator launcher compiles. Evidence: `touch-polish-20261029/` for export/localization, `touch-hud-interactions-20261030/` for static L and title removal. |
 | Touch defaults and shoulder cancel guides | Native/UIKit verified; Mac compiled; physical haptic feel pending | All 26 supplied defaults are shared by runtime and Restore defaults, including badge-off. R/ZR emit one haptic when crossing either direction over the cancel circle and one on outside-release cancellation. Movement on the same side adds none; cancellation still requires outside release. Guides disappear at finger-up even while native acknowledgement is pending. Evidence: `touch-defaults-cancel-20261029/` and the updated zero-failure UIKit checks in `touch-hud-interactions-20261030/`. |
 | Quick rune/weapon swipe direction | Native/UIKit and live Mac input direction verified; gesture feel pending | Touch stick axes and relative deltas reverse only while the live native quick strip is open. Scene look and controller axes keep their direction. Mac touch preview now supplies the virtual right stick needed by native UI, matching UIKit. The live Mac rightward drag outputs -32767; the automated drag's mouse-up trace still had a zero native Npad sample, so visible selection and feel remain for manual acceptance. Evidence: `touch-hud-interactions-20261030/`. |
-| Hero's Path directions | Native/UIKit verified; actual playback pending | A visible native Hero's Path gauge enables only the four direction keys; other map touches retain menu routing. Leaving that state releases held keys; controller connection hides the overlay. There is no X-press latch or map-location rule. Current runtime mounts zero add-on contents and X does not open playback, so actual game-flow acceptance remains pending. Evidence: `touch-hud-interactions-20261030/`. |
+| Hero's Path | Mac entry/exit and native direction-guide checks verified; physical iPhone pending | With both DLCs mounted, touch X enters playback, Back returns to the regular map, and a second Back restores gameplay. The live AppHome direction-key guides establish this mode; the map's private capture source stays visible in both modes and is not an input-state signal. Controller and other-game gates are unchanged. Evidence: `ui-coverage-20261030/`. |
 | Minimap below right-corner messages | Native ordering and live Mac dispatch verified; corner-tip visual acceptance pending | The collapsed map's ScreenMgr draw receiver moves to the start of its layer, preserving every other screen's order and the input registry. Live dispatch changes slot 2 to the actual AppMap receiver from slot 42. Expanded maps and inactive touch mode retain native ordering. Requires current rewritten main with OBS41. Evidence: `touch-hud-interactions-20261030/`. |
 | Ultrawide minimap and touch HUD | Mac 3.6:1 verified; native/graphics checks passed; physical iPhone pending | D-pad coordinates outside the centered 16:9 canvas stay valid. The collapsed map retains native horizontal clip coordinates until final GPU replay, where drawing, scissor and touch hits share its right-edge translation. Complete minimap, tap to open Slate, Back and 16:9 resize/return passed. Nonfinite coordinates remain rejected; expanded map/menu clips stay centered. Evidence: `ultrawide-minimap-20261029/`; 178 recording checks and 160 graphics checks passed. |
 | Three-finger menu backup | UIKit configuration and input handling verified; physical gesture pending | Double-tap with three fingers while automatic controls are hidden to reveal the original full virtual pad for one menu visit. Menu pointers are cancelled; buttons and UI right stick bypass direct-menu hit tests. Leaving menus, controller connection or input reset clears the override. It is not saved. Ordinary combat chords remain intact; an unavailable HUD adapter does not block the escape. `inventory-touch-20261025/run34/ios-fallback/` records the focused checks. |
@@ -84,11 +141,35 @@ Mac milestones refer to their recorded runtime evidence. The latest 2026-10-30 r
 | Right HUD / Plus edge padding | Native geometry and Mac layout verified; physical iPhone pending | The visible Plus cross's right spacing equals the first heart's left spacing. The map/environment cluster follows it while retaining the 8-point map-to-button gap. Input mode does not determine display edge padding; both landscape inset arrangements and explicit aspect bars are covered. Evidence: `touch-top-right-inset-20261030/` and `touch-hud-interactions-20261030/`. |
 | Minimap flash after Inventory | Mac frame sequence verified; physical iPhone pending | The return animation's native blur copied the old 16:9 framebuffer rectangle after the map had moved. Its replayed capture now follows the map projection, excluding adjacent temperature/noise graphics. Same-frame canvas/clip checks leave other captures unchanged. Eight recorded return frames are clean; 168 graphics checks pass. Evidence: `minimap-album-compendium-20261030/`, `probe-contact.png` before and `fixed-contact.png` after. |
 
+## Automated inventory and regression
+
+The base/update and DLC indices 1 and 2 have been scanned: 48,157 files,
+18,684 SARC archives, 339 layouts and 1,324 animations, with no parse errors.
+The DLCs add no layouts or animations. The current runtime census found 43
+screen names; three replay routes passed 22 steps, including 19 touch actions
+and three setup-key steps, with successful touch outcomes on nine screens.
+The report generates 216 target/context candidates and separately identifies
+18 distinct asserted targets. Unvisited resources and unasserted cases remain
+pending. The report's blocking-gap/evidence check passes.
+
+Evidence is in `01007EF00011E000-work/ui-coverage-20261030/`: `catalogue.json`,
+`coverage.md`, `coverage.json`, `cases.json`, `runtime.json`, `audit.jsonl` and
+`suite-*/replay.json`. Each replay binds its assertions to the adapter source,
+policy and original audit prefix. The launch uses a disposable save copy and
+both DLCs, with current touch-menu code on retained compatible graphics; the
+recorded source comparison accounts only for its older observation API name.
+Current Mac host and 184 iOS source-file builds pass, native menu checks and
+18 focused Python/docs checks pass, and the pinned Python lint ratchet remains
+400 baseline findings with no new findings. Full `regress.py` for BOTW remains
+blocked before comparison by the existing translator-source/lock mismatch;
+`ui-coverage-20261030/regress/report.md` records the error. Other games were not
+selected because this change is confined to the build-gated BOTW touch adapter.
+
 ## Next work
 
 1. Album user-photo loading/deletion needs a save including its photo files; Compendium details need a registered entry. Horse registration/naming and specialized vendors need their corresponding game state; these conditional layouts are not claimed as runtime verified.
 2. Physical iPhone/controller transitions require hardware acceptance. The user-provided `save-yizhan` slot is copied to external scratch for tests; the original is preserved.
-3. Hero's Path playback needs a runtime with its add-on content mounted; current native/UIKit state checks do not substitute for that game-flow test. Corner-tip overlap still needs the user's event-specific visual acceptance.
+3. Corner-tip overlap still needs the user's event-specific visual acceptance. The generated UI coverage report keeps unvisited story/vendor states and pending control assertions explicit; a resource or registered screen is not acceptance.
 
 ## Evidence
 

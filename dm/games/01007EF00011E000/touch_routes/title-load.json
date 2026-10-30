@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "fixture": "A disposable normal-mode save with at least one save entry; start at Title.",
+  "steps": [
+    {
+      "name": "Continue opens the save list",
+      "when": {"screen": "Title_00", "active": 1},
+      "tap": {"path_suffix": "/Pa_SaveFile_00/B_Hit_00"},
+      "expect": {"screen": "SystemWindow_01", "active": 1, "target": {"path_contains": "N_FileSelect_00"}}
+    },
+    {
+      "name": "First save opens its confirmation",
+      "when": {"screen": "SystemWindow_01", "active": 1, "target": {"path_contains": "N_FileSelect_00"}},
+      "tap": {"kind": "target", "path_suffix": "/Pa_File_00/N_Disable_00/B_Hit_00"},
+      "expect": {"screen": "SystemWindow_01", "active": 1, "target": {"path_contains": "N_FileCheck_00"}}
+    },
+    {
+      "name": "Start loads gameplay",
+      "when": {"screen": "SystemWindow_01", "active": 1, "target": {"path_contains": "N_FileCheck_00"}},
+      "tap": {"kind": "target", "path_suffix": "/Pa_BtnR_01/B_Hit_00"},
+      "expect": {"gameplay": 1, "menu_presented": 0, "active": 0}
+    }
+  ]
+}

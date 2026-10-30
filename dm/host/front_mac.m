@@ -17,6 +17,7 @@
 #include "haptics_apple.h"
 #include "botw_touch_actions.h"
 #include "botw_touch_menu.h"
+#include "botw_touch_trackpad.h"
 #include "botw_touch_style.h"
 #include "botw_rune_icon.h"
 #include "touchpad_geometry.h"
@@ -297,7 +298,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
 @implementation DmTouchPreviewView {
     dm_touchpad_stick_response _moveResponse;
     dm_botw_touch_layout _touchLayout;
-    BOOL _active, _menuMode, _menuPointerActive, _mapValid, _mapTapConsumed, _mapInvalidAfterTap, _lookDragged, _lookTapPending;
+    BOOL _active, _menuMode, _menuPointerActive, _menuMagnifying, _menuScrolling, _mapValid, _mapTapConsumed, _mapInvalidAfterTap, _lookDragged, _lookTapPending;
     dm_touchpad_rect _mapRect;
     int _owner, _button;
     uint64_t _held, _cancelPending, _cancelLatched;
@@ -306,6 +307,10 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     BOOL _stickUsed, _cancelOutside;
     NSPoint _lookTapPoint;
     float _menuLastX, _menuLastY;
+    float _menuMagnification;
+    dm_botw_trackpad_scroll _menuScroll;
+    dm_botw_trackpad_pose _menuPose;
+    NSPoint _menuPoseStart;
     BOOL _hasTouch;
     NSImage *_runeIcon, *_buttonIcons[12];
     uint64_t _runeIconGeneration;
@@ -327,7 +332,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
 - (void)setFrameSize:(NSSize)s {
     BOOL resized = !NSEqualSizes(self.frame.size, s);
     [super setFrameSize:s];
-    if (resized && _menuPointerActive) [self cancelInput];
+    if (resized && (_menuPointerActive || _menuPose.active)) [self cancelInput];
 }
 - (BOOL)acceptsFirstMouse:(NSEvent *)event { (void)event; return YES; }
 - (NSView *)hitTest:(NSPoint)p { return _active && !self.hidden && NSPointInRect(p, self.bounds) ? self : nil; }
@@ -351,6 +356,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
 }
 - (void)setBotwMenuActive:(BOOL)active {
     if (_menuMode == active) {
+        if (_menuPose.active && !dm_botw_touch_camera_active()) [self cancelInput];
         if (active && _owner == PREVIEW_DPAD && !dm_botw_touch_menu_dpad_visible()) [self cancelInput];
         [self setNeedsDisplay:YES]; return;
     }
@@ -506,6 +512,12 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     _down = _last = NSMakePoint(p.x, p.y); _hasTouch = YES; _held = _cancelPending; _owner = PREVIEW_NONE;
     [self setBotwMenuActive:_active && !dm_botw_touch_controls_visible()];
     if (_menuMode) {
+        if (_active && dm_botw_touch_camera_active() && (e.modifierFlags & NSEventModifierFlagOption)) {
+            _owner = PREVIEW_MENU; dm_botw_trackpad_pose_begin(&_menuPose);
+            _menuPoseStart = NSMakePoint(p.x, p.y);
+            dm_botw_touch_camera_pose(0, 0);
+            return;
+        }
         if (dm_botw_touch_menu_dpad_visible()) {
             dm_touchpad_point center=self.dpadCenter;
             uint64_t direction = hypotf(p.x-center.x,p.y-center.y)<=self.dpadRadius*DM_TP_DPAD_GRAB ? [self dpadAtTop:p] : 0;
@@ -559,7 +571,16 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
 - (void)mouseDragged:(NSEvent *)e {
     if (!_hasTouch) return;
     dm_touchpad_point p = [self topPoint:e];
-    if (_owner == PREVIEW_MENU && _menuPointerActive) [self sendBotwMenuPointer:DM_BOTW_MENU_MOVE point:p];
+    if (_menuPose.active) {
+        if (!dm_botw_touch_camera_active()) { dm_botw_touch_camera_pose(0, 0); dm_botw_trackpad_pose_end(&_menuPose); }
+        else {
+            dm_botw_trackpad_pose_drag(&_menuPose, (float)(p.x - _menuPoseStart.x),
+                (float)(p.y - _menuPoseStart.y));
+            dm_botw_touch_camera_pose(_menuPose.x, _menuPose.y);
+            dm_botw_touch_camera_pose_modifier((e.modifierFlags & NSEventModifierFlagShift) != 0);
+        }
+    }
+    else if (_owner == PREVIEW_MENU && _menuPointerActive) [self sendBotwMenuPointer:DM_BOTW_MENU_MOVE point:p];
     else if (_owner == PREVIEW_STICK) [self updateStick:p];
     else if (_owner == PREVIEW_SHIELD) [self updateShield:p];
     else if (_owner == PREVIEW_BUTTON && (_button == 7 || _button == 9) && _active) {
@@ -591,10 +612,112 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     }
     _last = NSMakePoint(p.x,p.y);
 }
+- (void)flagsChanged:(NSEvent *)e {
+    if (!_menuPose.active) return;
+    if (!_active || !dm_botw_touch_camera_active()) { [self cancelInput]; return; }
+    NSUInteger modifier = _hasTouch ? NSEventModifierFlagShift : NSEventModifierFlagOption;
+    dm_botw_touch_camera_pose_modifier((e.modifierFlags & modifier) != 0);
+}
+- (void)magnifyWithEvent:(NSEvent *)e {
+    if (!_active || !_menuMode) return;
+    if (!_menuMagnifying && (e.phase == NSEventPhaseBegan || e.phase == NSEventPhaseChanged)) {
+        if (!dm_botw_touch_menu_active() || _owner == PREVIEW_MENU || _menuScrolling) return;
+        dm_touchpad_point p = [self topPoint:e];
+        [self sendBotwMenuPointer:DM_BOTW_MENU_BEGIN point:p];
+        if (!dm_botw_trackpad_magnify_allowed(dm_botw_touch_hud_active(), _menuMode,
+                                               dm_botw_touch_menu_active(),
+                                               _owner == PREVIEW_MENU || _menuScrolling,
+                                               dm_botw_touch_map_active() ||
+                                                   dm_botw_touch_camera_active())) {
+            [self sendBotwMenuPointer:DM_BOTW_MENU_CANCEL point:p];
+            return;
+        }
+        _menuPointerActive = _menuMagnifying = YES; _menuMagnification = 0;
+    }
+    if (!_menuMagnifying) return;
+    if (e.phase == NSEventPhaseChanged) {
+        _menuMagnification += (float)e.magnification;
+        dm_botw_touch_menu_pinch(expf(_menuMagnification));
+    }
+    if (e.phase == NSEventPhaseEnded || e.phase == NSEventPhaseCancelled) {
+        dm_botw_touch_menu_pinch(0.0f);
+        [self sendBotwMenuPointer:DM_BOTW_MENU_CANCEL point:(dm_touchpad_point){0}];
+        _menuPointerActive = _menuMagnifying = NO; _menuMagnification = 0;
+    }
+}
+- (void)scrollWheel:(NSEvent *)e {
+    if (_menuPose.active && !_hasTouch &&
+        (!dm_botw_touch_camera_active() || !(e.modifierFlags & NSEventModifierFlagShift))) {
+        dm_botw_touch_camera_pose(0, 0); dm_botw_trackpad_pose_end(&_menuPose);
+    }
+    if (!_active || !_menuMode || !dm_botw_touch_menu_active() || _owner == PREVIEW_MENU || _menuMagnifying) return;
+    if (e.momentumPhase != NSEventPhaseNone) return;
+    if (dm_botw_touch_camera_active() && (e.modifierFlags & NSEventModifierFlagShift) &&
+        e.hasPreciseScrollingDeltas && e.phase != NSEventPhaseNone) {
+        if (e.phase == NSEventPhaseCancelled || e.phase == NSEventPhaseEnded) {
+            if (_menuPose.active) dm_botw_touch_camera_pose(0, 0);
+            dm_botw_touch_camera_pose_modifier(0);
+            dm_botw_trackpad_pose_end(&_menuPose);
+            return;
+        }
+        if (e.phase == NSEventPhaseBegan || !_menuPose.active) {
+            dm_botw_trackpad_pose_begin(&_menuPose);
+            dm_botw_touch_camera_pose(0, 0);
+        }
+        dm_botw_trackpad_pose_scroll(&_menuPose, (float)e.scrollingDeltaX,
+            (float)-e.scrollingDeltaY);
+        dm_botw_touch_camera_pose(_menuPose.x, _menuPose.y);
+        dm_botw_touch_camera_pose_modifier((e.modifierFlags & NSEventModifierFlagOption) != 0);
+        return;
+    }
+    dm_touchpad_point p = [self topPoint:e];
+    if (!e.hasPreciseScrollingDeltas && e.phase == NSEventPhaseNone) {
+        float rect[4], end_x, end_y;
+        dm_aspect_touch_rect((float)self.bounds.size.width, (float)self.bounds.size.height, rect);
+        dm_botw_trackpad_scroll_discrete(p.x, p.y, (float)e.scrollingDeltaX,
+                                         (float)e.scrollingDeltaY, rect[2], rect[3],
+                                         (float)self.bounds.size.width, (float)self.bounds.size.height,
+                                         &end_x, &end_y);
+        if (end_x == p.x && end_y == p.y) return;
+        [self sendBotwMenuPointer:DM_BOTW_MENU_BEGIN point:p];
+        [self sendBotwMenuPointer:DM_BOTW_MENU_MOVE point:(dm_touchpad_point){end_x,end_y}];
+        [self sendBotwMenuPointer:DM_BOTW_MENU_END point:(dm_touchpad_point){end_x,end_y}];
+        return;
+    }
+    if (!_menuScrolling) {
+        dm_botw_trackpad_scroll_begin(&_menuScroll, p.x, p.y);
+        [self sendBotwMenuPointer:DM_BOTW_MENU_BEGIN point:p];
+        _menuScrolling = _menuPointerActive = YES;
+    }
+    if (e.phase == NSEventPhaseCancelled) {
+        p = (dm_touchpad_point){_menuScroll.x, _menuScroll.y};
+        [self sendBotwMenuPointer:DM_BOTW_MENU_CANCEL point:p];
+        dm_botw_trackpad_scroll_cancel(&_menuScroll);
+        _menuScrolling = _menuPointerActive = NO;
+        return;
+    }
+    dm_botw_trackpad_scroll_move(&_menuScroll, (float)e.scrollingDeltaX,
+                                 (float)-e.scrollingDeltaY, (float)self.bounds.size.width,
+                                 (float)self.bounds.size.height);
+    p = (dm_touchpad_point){_menuScroll.x, _menuScroll.y};
+    [self sendBotwMenuPointer:DM_BOTW_MENU_MOVE point:p];
+    if (e.phase == NSEventPhaseEnded || e.phase == NSEventPhaseNone) {
+        float end_x, end_y;
+        dm_botw_trackpad_scroll_end(&_menuScroll, &end_x, &end_y);
+        [self sendBotwMenuPointer:DM_BOTW_MENU_END point:(dm_touchpad_point){end_x,end_y}];
+        _menuScrolling = _menuPointerActive = NO;
+    }
+}
 - (void)mouseUp:(NSEvent *)e {
     if (!_hasTouch) return;
     dm_touchpad_point release = [self topPoint:e];
     _cancelOutside = NO;
+    if (_menuPose.active) {
+        dm_botw_touch_camera_pose_modifier(0); dm_botw_touch_camera_pose(0, 0);
+        dm_botw_trackpad_pose_end(&_menuPose);
+        _owner = PREVIEW_NONE; _hasTouch = NO; _held = _cancelPending;
+        return;
+    }
     if (_owner == PREVIEW_MENU && _menuPointerActive) {
         [self sendBotwMenuPointer:DM_BOTW_MENU_END point:release];
         _menuPointerActive=NO; _owner=PREVIEW_NONE; _hasTouch=NO; _held=_cancelPending;
@@ -651,7 +774,11 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     if (_held & DM_BTN_L) cancelMask |= DM_BTN_L;
     dm_touchpad_point noPoint = {0};
     if (_menuPointerActive) [self sendBotwMenuPointer:DM_BOTW_MENU_CANCEL point:noPoint];
-    _menuPointerActive = NO;
+    if (_menuMagnifying) dm_botw_touch_menu_pinch(0.0f);
+    dm_botw_touch_camera_pose_modifier(0);
+    if (_menuPose.active) dm_botw_touch_camera_pose(0.0f, 0.0f);
+    _menuPointerActive = _menuMagnifying = _menuScrolling = NO; _menuMagnification = 0; _menuScroll.active = 0;
+    dm_botw_trackpad_pose_end(&_menuPose);
     if (_owner == PREVIEW_GAME) dm_touch_set(NULL,0);
     if (_owner == PREVIEW_LOOK) dm_look_input(DM_LOOK_CANCEL,0,0);
     if (dm_botw_touch_hud_available()) dm_botw_touch_actions_reset();
@@ -1074,6 +1201,7 @@ void front_progress(const char *title, long done, long total) {
 extern int g_swkbd_min_chars;
 int front_text_input(const char *title, const char *sub, const char *guide, const char *initial, int max_chars, char *out, int out_cap) {
     if (!g_layer) return -1;
+    BOOL botw_touch_mode = dm_botw_touch_hud_active();
     __block int r = 0;
     __block NSString *text = nil;
     dispatch_sync(dispatch_get_main_queue(), ^{
@@ -1089,12 +1217,14 @@ int front_text_input(const char *title, const char *sub, const char *guide, cons
             if (guide && *guide) f.placeholderString = @(guide);
             a.accessoryView = f; a.window.initialFirstResponder = f;
             r = [a runModal] == NSAlertFirstButtonReturn; text = f.stringValue;
-            if (!r || (int)text.length >= min_chars) break;
-            info = [info stringByAppendingFormat:@"\nAt least %d characters are needed here.", min_chars];
+            BOOL too_short = min_chars > 0 && (int)text.length < min_chars;
+            BOOL too_long = !front_text_input_length_valid(botw_touch_mode, 0, max_chars, text.length);
+            if (!r || (!too_short && !too_long)) break;
+            if (too_short) info = [info stringByAppendingFormat:@"\nAt least %d characters are needed here.", min_chars];
+            else info = [info stringByAppendingFormat:@"\nEnter no more than %d characters.", max_chars];
         }
     });
     if (!r) return 0;
-    (void)max_chars;                              // Truncation is done uniformly in hle_swkbd.c in UTF-16 units
     snprintf(out, out_cap, "%s", text.UTF8String);
     return 1;
 }

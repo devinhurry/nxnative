@@ -1,6 +1,7 @@
 // Host front end (Mac: front_mac.m; iOS: dm/ios separately implements the same-named interface).
 #pragma once
 #include <stdlib.h>
+#include <stddef.h>
 // Metal reads HUD switches when the first device is made. Called before host preload and again after the launcher applies its settings; explicit environment values win.
 static inline void front_hud_env(void) {
     const char *e = getenv("DM_METAL_HUD");
@@ -28,6 +29,11 @@ void front_progress(const char *title, long done, long total);
 // Confirm returns 1 and writes the result into out (including the terminating 0); cancel returns 0;
 // with no window (front_metal_layer() == NULL) nothing is shown and -1 is returned.
 int front_text_input(const char *title, const char *sub, const char *guide, const char *initial, int max_chars, char *out, int out_cap);
+// BOTW touch-mode software keyboard bounds are counted in UTF-16 units, as in swkbd_show.
+static inline int front_text_input_length_valid(int botw_touch_mode, int min_chars, int max_chars, size_t length) {
+    return !botw_touch_mode || ((min_chars <= 0 || length >= (size_t)min_chars) &&
+                                (max_chars <= 0 || length <= (size_t)max_chars));
+}
 
 // Early start of host loading (main.c): reading the NSO / relocation / forced takeover / prefetch start are moved to a background thread, in parallel with the front end (UIKit launch chain, Metal view);
 // the dm_main / main called afterwards waits for it to finish. For call timing and preconditions see the comments in main.c (set DM_ROMFS and the other environment variables and the cwd first; arguments identical item by item to those of the later main).

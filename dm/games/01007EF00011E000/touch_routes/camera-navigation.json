@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "fixture": "Gameplay on a disposable save with Camera equipped and Album unlocked. No photo is saved.",
+  "steps": [
+    {
+      "name": "Open equipped Camera (setup key)",
+      "when": {"gameplay": 1, "menu_presented": 0},
+      "key": "L",
+      "expect": {"screen": "AppCamera_00", "active": 1}
+    },
+    {
+      "name": "Camera Album hint opens Album",
+      "when": {"screen": "AppCamera_00", "active": 1},
+      "tap": {"kind": "hint", "button": 2048},
+      "expect": {"screen": "AppAlbum_00", "active": 1}
+    },
+    {
+      "name": "Album Back returns to Camera",
+      "when": {"screen": "AppAlbum_00", "active": 1},
+      "tap": {"kind": "back"},
+      "expect": {"screen": "AppCamera_00", "active": 1}
+    },
+    {
+      "name": "Camera Capture opens its native Save/Delete choices",
+      "when": {"screen": "AppCamera_00", "active": 1, "target": {"kind": "hint", "button": 1}},
+      "tap": {"kind": "hint", "button": 1},
+      "expect": {"screen": "AppCamera_00", "active": 1, "target": {"path_contains": "N_AlbumCon_00/Pa_BtnL_01/B_Hit_00"}}
+    },
+    {
+      "name": "Delete discards the unsaved capture and returns to viewfinder",
+      "when": {"screen": "AppCamera_00", "active": 1, "target": {"path_contains": "N_AlbumCon_00/Pa_BtnL_01/B_Hit_00"}},
+      "tap": {"kind": "target", "path_suffix": "N_AlbumCon_00/Pa_BtnL_01/B_Hit_00"},
+      "expect": {"screen": "AppCamera_00", "active": 1, "target": {"kind": "hint", "button": 1}}
+    },
+    {
+      "name": "Camera Quit restores gameplay",
+      "when": {"screen": "AppCamera_00", "active": 1},
+      "tap": {"kind": "back"},
+      "expect": {"gameplay": 1, "menu_presented": 0, "active": 0}
+    }
+  ]
+}

@@ -7,6 +7,7 @@
 #include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdarg.h>
 
 enum { PANE_PARENT = 0x18, PANE_FLAGS = 0x58, PANE_MATRIX = 0x70, PANE_NAME = 0xb8,
        INVENTORY_PAGE_COUNT = 3, GUIDE_SLOTS = 6,
@@ -25,6 +26,7 @@ typedef struct {
 static pane_trace_t g_panes[PANE_TRACE_SLOTS];
 static pthread_mutex_t g_panes_mu = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic int g_trace;
+static void ui_audit_open(const char *path);
 static _Atomic int g_selector_hook_installed;
 static struct {
     uintptr_t root, slide, item_area, cut, popup_root, selected_page_pane, category_slide;
@@ -120,6 +122,19 @@ static _Atomic uintptr_t g_presented_menu_root;
 static _Atomic uintptr_t g_presented_gameplay_root;
 static _Atomic uint64_t g_presentation_observed_frame = UINT64_MAX;
 static int g_map_pan_active;
+static int g_camera_drag_active, g_camera_dragged;
+static uintptr_t g_camera_screen, g_camera_root;
+static uint64_t g_camera_page;
+static int g_camera_group = -1;
+static float g_camera_last[2];
+static float g_camera_gesture_delta[2];
+static int32_t g_camera_rx, g_camera_ry;
+static int32_t g_camera_pose_lx, g_camera_pose_ly;
+static int g_camera_pose_modifier;
+static uint64_t g_camera_zoom_button;
+static float g_camera_pinch_last = 1.0f, g_camera_pinch_accum;
+static int g_apply_output_camera_axes_valid;
+static int32_t g_apply_output_camera_axes[4];
 static struct {
     int valid, pending;
     float point[2], applied[2];
@@ -295,9 +310,9 @@ static uintptr_t g_test_list_category_setter;
 #endif
 static _Atomic int g_map_setter_signature_reported;
 
-static void pane_name(const uint8_t *pane, char out[17]) {
-    memcpy(out, pane + PANE_NAME, 16);
-    out[16] = 0;
+static void pane_name(const uint8_t *pane, char out[25]) {
+    memcpy(out, pane + PANE_NAME, 24);
+    out[24] = 0;
 }
 
 static int cursor_name(const char *name) {
@@ -324,7 +339,7 @@ static int relevant_chain(uint8_t *pane, char path[256], int *visible, int *has_
     path[0] = 0;
     for (uint8_t *p = pane; p && depth++ < PANE_PATH_DEPTH;
          p = *(uint8_t **)(p + PANE_PARENT)) {
-        char name[17]; pane_name(p, name);
+        char name[25]; pane_name(p, name);
         int n = snprintf(path + used, 256 - used, "%s%s[%c]", used ? " <- " : "", name,
                          (p[PANE_FLAGS] & PANE_VISIBLE) ? 'V' : '-');
         if (n > 0) used += (size_t)n < 256 - used ? (size_t)n : 255 - used;
@@ -340,7 +355,7 @@ static int relevant_chain(uint8_t *pane, char path[256], int *visible, int *has_
         if (!strcmp(name, "N_Cat_01") && *has_slide) has_category_row = 1;
         if (!strcmp(name, "RootPane")) break;
     }
-    char name[17]; pane_name(pane, name);
+    char name[25]; pane_name(pane, name);
     if (!has_root) return 0;
     // Keep the trace bounded to cursor subtrees and likely item-action
     // popup subtrees. Their exact runtime names vary across linked layouts,
@@ -370,7 +385,7 @@ static int relevant_chain(uint8_t *pane, char path[256], int *visible, int *has_
 
 static uint8_t *ancestor_named(uint8_t *pane, const char *wanted) {
     for (int depth = 0; pane && depth < PANE_PATH_DEPTH; depth++, pane = *(uint8_t **)(pane + PANE_PARENT)) {
-        char name[17]; pane_name(pane, name);
+        char name[25]; pane_name(pane, name);
         if (!strcmp(name, wanted)) return pane;
         if (!strcmp(name, "RootPane")) break;
     }
@@ -392,7 +407,7 @@ static int pane_find_unique_under_parent(uint8_t *root, const char *wanted,
 static uint8_t *ancestor_prefix(uint8_t *pane, const char *prefix) {
     size_t n = strlen(prefix);
     for (int depth = 0; pane && depth < PANE_PATH_DEPTH; depth++, pane = *(uint8_t **)(pane + PANE_PARENT)) {
-        char name[17]; pane_name(pane, name);
+        char name[25]; pane_name(pane, name);
         if (!strncmp(name, prefix, n)) return pane;
         if (!strcmp(name, "RootPane")) break;
     }
@@ -425,8 +440,8 @@ static void refresh_captured_header_locked(uint64_t frame) {
         uintptr_t icon_parent = g_native_view.header_capture_icon_parent[side];
         uintptr_t text_parent = g_native_view.header_capture_text_parent[side];
         uint8_t *root = (uint8_t *)g_native_view.header_root;
-        char destination_name[17] = {0};
-        if (dest && dm_guest_as_contains(dest) && dm_guest_as_contains(dest + PANE_NAME + 16))
+        char destination_name[25] = {0};
+        if (dest && dm_guest_as_contains(dest) && dm_guest_as_contains(dest + PANE_NAME + 24))
             pane_name((uint8_t *)dest, destination_name);
         if (!root || !capture || !dest || !icon || !text || !icon_parent || !text_parent ||
             !dm_guest_as_contains(capture) || !dm_guest_as_contains(dest) ||
@@ -476,7 +491,7 @@ static void refresh_captured_header_locked(uint64_t frame) {
 static int pane_chain_visible(uint8_t *pane) {
     for (int depth = 0; pane && depth < PANE_PATH_DEPTH; depth++, pane = *(uint8_t **)(pane + PANE_PARENT)) {
         if (!(pane[PANE_FLAGS] & PANE_VISIBLE)) return 0;
-        char name[17]; pane_name(pane, name);
+        char name[25]; pane_name(pane, name);
         if (!strcmp(name, "RootPane")) return 1;
     }
     return 0;
@@ -485,7 +500,7 @@ static int pane_chain_visible(uint8_t *pane) {
 static int pane_chain_alpha_visible(uint8_t *pane) {
     for (int depth = 0; pane && depth < PANE_PATH_DEPTH; depth++, pane = *(uint8_t **)(pane + PANE_PARENT)) {
         if (!pane[0x59]) return 0;
-        char name[17]; pane_name(pane, name);
+        char name[25]; pane_name(pane, name);
         if (!strcmp(name, "RootPane")) return 1;
     }
     return 0;
@@ -503,12 +518,12 @@ static uint16_t pane_text_glyph(uint8_t *pane) {
 static int pane_slot_index(uint8_t *pane) {
     uint8_t *button = NULL;
     for (int depth = 0; pane && depth < PANE_PATH_DEPTH; depth++, pane = *(uint8_t **)(pane + PANE_PARENT)) {
-        char name[17]; pane_name(pane, name);
+        char name[25]; pane_name(pane, name);
         if (!strncmp(name, "Pa_Btn_", 7)) { button = pane; break; }
         if (!strcmp(name, "RootPane")) break;
     }
     if (!button) return -1;
-    char name[17]; pane_name(button, name);
+    char name[25]; pane_name(button, name);
     char *end = NULL;
     long index = strtol(name + 7, &end, 10);
     return end && !*end && index >= 0 && index < DM_BOTW_MENU_MAX_SLOTS ? (int)index : -1;
@@ -516,7 +531,7 @@ static int pane_slot_index(uint8_t *pane) {
 
 static int pane_inventory_page_index(uint8_t *pane) {
     for (int depth = 0; pane && depth < PANE_PATH_DEPTH; depth++, pane = *(uint8_t **)(pane + PANE_PARENT)) {
-        char name[17]; pane_name(pane, name);
+        char name[25]; pane_name(pane, name);
         if (!strncmp(name, "Pa_PagePorch_", 13)) {
             char *end = NULL;
             long index = strtol(name + 13, &end, 10);
@@ -532,12 +547,12 @@ static int pane_category_index(uint8_t *pane) {
     // Category names carry the native index; accept only a complete numeric
     // suffix under the live gear-category row.
     for (int depth = 0; pane && depth < PANE_PATH_DEPTH; depth++, pane = *(uint8_t **)(pane + PANE_PARENT)) {
-        char candidate[17]; pane_name(pane, candidate);
+        char candidate[25]; pane_name(pane, candidate);
         if (!strncmp(candidate, "Pa_CategoryS_", 13)) { category = pane; break; }
         if (!strcmp(candidate, "RootPane")) break;
     }
     if (!category) return -1;
-    char name[17]; pane_name(category, name);
+    char name[25]; pane_name(category, name);
     char *end = NULL;
     long index = strtol(name + 13, &end, 10);
     if (!end || *end || index < 0 || index >= DM_BOTW_MENU_MAX_CATEGORIES) return -1;
@@ -547,12 +562,12 @@ static int pane_category_index(uint8_t *pane) {
 static int pane_button_index(uint8_t *pane, const char *prefix, int limit) {
     uint8_t *button = NULL;
     for (int depth = 0; pane && depth < PANE_PATH_DEPTH; depth++, pane = *(uint8_t **)(pane + PANE_PARENT)) {
-        char name[17]; pane_name(pane, name);
+        char name[25]; pane_name(pane, name);
         if (!strncmp(name, prefix, strlen(prefix))) { button = pane; break; }
         if (!strcmp(name, "RootPane")) break;
     }
     if (!button) return -1;
-    char name[17]; pane_name(button, name);
+    char name[25]; pane_name(button, name);
     char *end = NULL;
     long index = strtol(name + strlen(prefix), &end, 10);
     return end && !*end && index >= 0 && index < limit ? (int)index : -1;
@@ -563,9 +578,9 @@ static int pane_guide_index(uint8_t *pane) {
 }
 
 static uint8_t *ancestor_guide(uint8_t *pane, int index) {
-    char wanted[17]; snprintf(wanted, sizeof wanted, "Pa_Guide_%02d", index);
+    char wanted[25]; snprintf(wanted, sizeof wanted, "Pa_Guide_%02d", index);
     for (int depth = 0; pane && depth < PANE_PATH_DEPTH; depth++, pane = *(uint8_t **)(pane + PANE_PARENT)) {
-        char name[17]; pane_name(pane, name);
+        char name[25]; pane_name(pane, name);
         if (!strcmp(name, wanted)) return pane;
         if (!strcmp(name, "RootPane")) break;
     }
@@ -660,19 +675,19 @@ static int pane_find_unique_matching(uint8_t *root, const char *wanted,
     uintptr_t match = 0;
     if (out) *out = 0;
     if (!root || !dm_guest_as_contains((uintptr_t)root) ||
-        !dm_guest_as_contains((uintptr_t)root + PANE_NAME + 16)) return 0;
+        !dm_guest_as_contains((uintptr_t)root + PANE_NAME + 24)) return 0;
     stack[sp++] = (uintptr_t)root;
     while (sp && visited < MAX_NODES) {
         uintptr_t pane = stack[--sp];
-        if (!dm_guest_as_contains(pane) || !dm_guest_as_contains(pane + PANE_NAME + 16)) continue;
+        if (!dm_guest_as_contains(pane) || !dm_guest_as_contains(pane + PANE_NAME + 24)) continue;
         int duplicate_visit = 0;
         for (int i = 0; i < visited; i++) if (seen[i] == pane) { duplicate_visit = 1; break; }
         if (duplicate_visit) continue;
         seen[visited++] = pane;
-        char name[17]; pane_name((uint8_t *)pane, name);
+        char name[25]; pane_name((uint8_t *)pane, name);
         uintptr_t parent = selector_read_ptr(pane, PANE_PARENT);
-        char parent_name[17] = {0};
-        if (parent && dm_guest_as_contains(parent) && dm_guest_as_contains(parent + PANE_NAME + 16))
+        char parent_name[25] = {0};
+        if (parent && dm_guest_as_contains(parent) && dm_guest_as_contains(parent + PANE_NAME + 24))
             pane_name((uint8_t *)parent, parent_name);
         int parent_ok = !required_parent_prefix || (parent_name[0] &&
             !strncmp(parent_name, required_parent_prefix, strlen(required_parent_prefix)));
@@ -745,7 +760,7 @@ static int rect_intersects_canvas(const float rect[4]) {
 
 static int pane_private_capture_branch(uint8_t *pane) {
     for (int depth = 0; pane && depth < PANE_PATH_DEPTH; depth++, pane = *(uint8_t **)(pane + PANE_PARENT)) {
-        char name[17]; pane_name(pane, name);
+        char name[25]; pane_name(pane, name);
         if (!strncmp(name, "N_Capture", 9)) return 1;
         if (!strcmp(name, "RootPane")) break;
     }
@@ -761,7 +776,8 @@ static int pane_private_capture_branch(uint8_t *pane) {
 static int native_hit_pane_tier(const char *name) {
     if (!name) return 0;
     if (!strcmp(name, "B_Hit_00")) return 1;
-    return !strcmp(name, "B_Btn_00") || !strcmp(name, "B_Area_00") ? 2 : 0;
+    return !strcmp(name, "B_Btn_00") || !strcmp(name, "B_Area_00") ||
+        !strcmp(name, "B_BtnDialog") ? 2 : 0;
 }
 
 // Captured dialogue text is displayed by a P_Text/P_Sh pane under N_TextOut.
@@ -769,14 +785,14 @@ static int native_hit_pane_tier(const char *name) {
 // event, content-container name or numeric instance suffix.
 static int native_message_output_sibling(uint8_t *owner) {
     uintptr_t parent = (uintptr_t)owner;
-    if (!owner || !dm_guest_as_contains(parent) || !dm_guest_as_contains(parent + PANE_NAME + 16)) return 0;
+    if (!owner || !dm_guest_as_contains(parent) || !dm_guest_as_contains(parent + PANE_NAME + 24)) return 0;
     uintptr_t sentinel = parent + 0x20, node = selector_read_ptr(parent, 0x28);
     for (int n = 0; n < 512 && node && node != sentinel; n++) {
         if (node < 8) return 0;
         uintptr_t child = node - 8;
-        if (!dm_guest_as_contains(child) || !dm_guest_as_contains(child + PANE_NAME + 16) ||
+        if (!dm_guest_as_contains(child) || !dm_guest_as_contains(child + PANE_NAME + 24) ||
             selector_read_ptr(child, PANE_PARENT) != parent) return 0;
-        char name[17]; pane_name((uint8_t *)child, name);
+        char name[25]; pane_name((uint8_t *)child, name);
         if (!strncmp(name, "N_TextOut_", 10)) return 1;
         node = selector_read_ptr(child, 0x10);
     }
@@ -789,7 +805,7 @@ static int native_message_body(uint8_t *pane, const char *name) {
     if (!output && !background) return 0;
     if (pane_private_capture_branch(pane)) return 0;
     uint8_t *owner = *(uint8_t **)(pane + PANE_PARENT);
-    char parent[17] = {0}; if (owner) pane_name(owner, parent);
+    char parent[25] = {0}; if (owner) pane_name(owner, parent);
     if (output && !strncmp(parent, "N_TextOut_", 10)) return 1;
     // Include the native window's blank padding and continuation indicator,
     // rather than limiting a touch to its rendered letters or arrow shape.
@@ -815,7 +831,7 @@ static int native_message_body(uint8_t *pane, const char *name) {
 static uint8_t *native_message_arrow_part(uint8_t *pane, const char *name) {
     if (strcmp(name, "P_ArrowS_00") && strcmp(name, "P_ArrowS_01")) return NULL;
     for (int depth = 0; pane && depth < PANE_PATH_DEPTH; depth++, pane = *(uint8_t **)(pane + PANE_PARENT)) {
-        char part[17]; pane_name(pane, part);
+        char part[25]; pane_name(pane, part);
         if (!strncmp(part, "Pa_ABtn_", 8)) return pane;
         if (!strcmp(part, "RootPane")) break;
     }
@@ -942,7 +958,7 @@ static int generic_text_snapshot(generic_hit_t out[DM_BOTW_MENU_MAX_GENERIC_TARG
 static uint8_t *ancestor_action_guide(uint8_t *pane) {
     uint8_t *direct_parent = *(uint8_t **)(pane + PANE_PARENT);
     for (int depth = 0; pane && depth < PANE_PATH_DEPTH; depth++, pane = *(uint8_t **)(pane + PANE_PARENT)) {
-        char name[17]; pane_name(pane, name);
+        char name[25]; pane_name(pane, name);
         if (!strcmp(name, "Pa_GuideA_00") || !strcmp(name, "Pa_GuideB_00") ||
             !strcmp(name, "Pa_GuideX_00") || !strcmp(name, "Pa_GuideY_00") ||
             !strcmp(name, "Pa_GuideL_00") || !strcmp(name, "Pa_GuideR_00") ||
@@ -973,7 +989,7 @@ static uint8_t *inline_action_guide(uint8_t *pane, int is_text) {
     native_rect_from_pane(pane, x, y, text);
     uintptr_t match = 0;
     for (int i = 0; i < 3; i++) {
-        char name[17]; snprintf(name, sizeof name, "T_Icon_%02d", i);
+        char name[25]; snprintf(name, sizeof name, "T_Icon_%02d", i);
         uintptr_t icon = 0;
         if (pane_find_unique(part, name, NULL, &icon) != 1) continue;
         float rect[4];
@@ -989,7 +1005,7 @@ static uint8_t *inline_action_guide(uint8_t *pane, int is_text) {
 }
 
 static void generic_back_prompt_observe(uint8_t *pane, int after_matrix) {
-    char name[17]; pane_name(pane, name);
+    char name[25]; pane_name(pane, name);
     if (strncmp(name, "T_Guide_", 8) && strncmp(name, "T_Icon_", 7)) return;
     int inline_prompt = ancestor_named(pane, "Pa_HaveNum_00") != NULL;
     int is_text = inline_prompt ? !strncmp(name, "T_Guide_", 8) : !strcmp(name, "T_Guide_00");
@@ -1132,8 +1148,8 @@ static void menu_add_action(dm_botw_touch_menu_view *view, uint64_t button, cons
 
 static void generic_action_prompts_to_view(uintptr_t root, uint64_t frame,
                                            dm_botw_touch_menu_view *view) {
-    const uint64_t buttons[] = {DM_BTN_A, DM_BTN_X, DM_BTN_Y, DM_BTN_L, DM_BTN_R,
-                                DM_BTN_ZL, DM_BTN_ZR};
+    const uint64_t buttons[] = {DM_BTN_A, DM_BTN_X, DM_BTN_Y, DM_BTN_L, DM_BTN_R, DM_BTN_MINUS,
+                                DM_BTN_ZL, DM_BTN_ZR, DM_BTN_RS};
     for (size_t i = 0; i < sizeof buttons / sizeof buttons[0]; i++) {
         float rect[4];
         if (!generic_action_prompt_snapshot(root, frame, buttons[i], rect)) continue;
@@ -1418,7 +1434,7 @@ static void observe_map_transform(uint8_t *pane, int after_matrix) {
     uint8_t *map = ancestor_named(pane, "Pa_Map_00");
     uint8_t *root = ancestor_named(pane, "RootPane");
     if (!map || !root) return;
-    char parent_name[17];
+    char parent_name[25];
     uint8_t *parent = *(uint8_t **)(pane + PANE_PARENT);
     pane_name(parent, parent_name);
     if (strcmp(parent_name, "N_MapSR_00")) return;
@@ -1577,7 +1593,7 @@ static int observe_apphome_header_capture(uint8_t *pane, const char *name,
 
 static void observe_native_pane(uint8_t *pane, int after_matrix) {
     if (!pane) return;
-    char name[17]; pane_name(pane, name);
+    char name[25]; pane_name(pane, name);
     if (after_matrix && (!strcmp(name, "Pa_ArrowL_00") || !strcmp(name, "Pa_ArrowR_00")) &&
         ancestor_named(pane, "N_Cat_00")) {
         int side = !strcmp(name, "Pa_ArrowR_00");
@@ -1702,7 +1718,7 @@ static void observe_native_pane(uint8_t *pane, int after_matrix) {
     uint8_t *cursor_type = corner >= 0 ? *(uint8_t **)(pane + PANE_PARENT) : NULL;
     uint8_t *cursor_parent = cursor_type ? *(uint8_t **)(cursor_type + PANE_PARENT) : NULL;
     uint8_t *cursor_root = cursor_parent ? *(uint8_t **)(cursor_parent + PANE_PARENT) : NULL;
-    char cursor_type_name[17] = {0}, cursor_parent_name[17] = {0}, cursor_root_name[17] = {0};
+    char cursor_type_name[25] = {0}, cursor_parent_name[25] = {0}, cursor_root_name[25] = {0};
     if (cursor_type) pane_name(cursor_type, cursor_type_name);
     if (cursor_parent) pane_name(cursor_parent, cursor_parent_name);
     if (cursor_root) pane_name(cursor_root, cursor_root_name);
@@ -1757,7 +1773,7 @@ static void observe_native_pane(uint8_t *pane, int after_matrix) {
             else if ((button = ancestor_named(pane, "Pa_BtnZR_00"))) side = 1;
             if (!button || ancestor_named(button, "RootPane") != root) side = -1;
         } else {
-            char label_name[17]; pane_name(pane, label_name);
+            char label_name[25]; pane_name(pane, label_name);
             if (!strncmp(label_name, "T_LeftText_", 11)) side = 0;
             else if (!strncmp(label_name, "T_RightText_", 12)) side = 1;
         }
@@ -1893,11 +1909,11 @@ static void observe_native_pane(uint8_t *pane, int after_matrix) {
         }
         pthread_mutex_unlock(&seen_mu);
         if (fresh) {
-            char pname[17], ppath[96] = {0};
+            char pname[25], ppath[96] = {0};
             pane_name(pane, pname);
             uint8_t *walk = pane;
             for (int d = 0; walk && d < 6; d++) {
-                char n[17]; pane_name(walk, n);
+                char n[25]; pane_name(walk, n);
                 size_t used = strlen(ppath);
                 snprintf(ppath + used, sizeof ppath - used, "%s%s", used ? "<-" : "", n);
                 walk = *(uint8_t **)(walk + PANE_PARENT);
@@ -2210,9 +2226,9 @@ static void trace_bottom_strip(uint8_t *pane, int after_matrix) {
     }
     pthread_mutex_unlock(&mu);
     if (known) return;
-    char name[17]; pane_name(pane, name);
+    char name[25]; pane_name(pane, name);
     uint8_t *parent = *(uint8_t **)(pane + PANE_PARENT);
-    char parent_name[17] = {0};
+    char parent_name[25] = {0};
     if (parent) pane_name(parent, parent_name);
     // No glyph read here: only a text pane's 0xe0 field holds one, and the
     // strip walk sees every kind of pane.
@@ -2235,7 +2251,7 @@ void dm_botw_touch_menu_pane(const uint64_t *regs, int after_matrix) {
     if (!trace) return;
     char path[256]; int visible, has_slide, has_item_area, has_slot;
     if (!relevant_chain(pane, path, &visible, &has_slide, &has_item_area, &has_slot)) return;
-    char name[17]; pane_name(pane, name);
+    char name[25]; pane_name(pane, name);
     uint8_t flags = pane[PANE_FLAGS];
     uint8_t marker = pane[PANE_FLAGS + 1];
     float x = 0, y = 0, width = 0, height = 0;
@@ -2291,12 +2307,12 @@ void dm_botw_touch_menu_dump_tree(const char *arg) {
         sp--;
         uintptr_t pane = stack[sp];
         int depth = depths[sp];
-        if (!dm_guest_as_contains(pane) || !dm_guest_as_contains(pane + PANE_NAME + 16)) continue;
+        if (!dm_guest_as_contains(pane) || !dm_guest_as_contains(pane + PANE_NAME + 24)) continue;
         int dup = 0;
         for (int i = 0; i < visited; i++) if (seen[i] == pane) { dup = 1; break; }
         if (dup) continue;
         seen[visited++] = pane;
-        char name[17];
+        char name[25];
         pane_name((uint8_t *)pane, name);
         float x = 0, y = 0, rect[4] = {0};
         memcpy(&x, (const void *)(pane + PANE_MATRIX + 0x0c), 4);
@@ -2332,6 +2348,7 @@ void dm_botw_touch_menu_install(void) {
         gate_obs_read_set(OBS_BOTW_LIST_WIDGET_UPDATE, selector_list_widget_observe);
     if (gate_obs_present(OBS_BOTW_SCREEN_DRAW)) gate_obs_result_set(OBS_BOTW_SCREEN_DRAW, selector_screen_draw);
     atomic_store_explicit(&g_selector_hook_installed, 1, memory_order_release);
+    ui_audit_open(getenv("DM_BOTW_UI_AUDIT"));
     const char *trace = getenv("DM_BOTW_MENU_TRACE");
     int tracing = trace ? atoi(trace) : 0;
     atomic_store_explicit(&g_trace, tracing, memory_order_release);
@@ -2963,35 +2980,26 @@ static int selector_name_prefix(const char *name, const char *prefix) {
     return strncmp(name, prefix, strlen(prefix)) == 0;
 }
 
-static int selector_corner_tip_screen_name(const char *name) {
-    return !strcmp(name, "MessageTipsRunTime_00") || !strcmp(name, "MessageTipsPauseMenu_00");
+enum { UI_UNKNOWN, UI_HUD, UI_PASSIVE, UI_TIP, UI_SLATE, UI_MENU, UI_TRANSITION };
+static int selector_screen_role(const char *name) {
+    if (!name || !*name) return UI_UNKNOWN;
+#define EXACT 0
+#define PREFIX 1
+#define BOTW_UI_SCREEN(match, pattern, role) \
+    if ((match) ? selector_name_prefix(name, pattern) : !strcmp(name, pattern)) return UI_##role;
+#include "botw_touch_screens.inc"
+#undef BOTW_UI_SCREEN
+#undef PREFIX
+#undef EXACT
+    return UI_UNKNOWN;
 }
-
-static int selector_apphome_page_screen_name(const char *name) {
-    return selector_name_prefix(name, "AppMap") || !strcmp(name, "AppTool_00") ||
-        !strcmp(name, "AppAlbum_00") || !strcmp(name, "AppPictureBook_00");
-}
-
+static int selector_corner_tip_screen_name(const char *name) { return selector_screen_role(name) == UI_TIP; }
+static int selector_apphome_page_screen_name(const char *name) { return selector_screen_role(name) == UI_SLATE; }
 static int selector_pointer_screen_name(const char *name) {
-    // Runtime tips are non-modal corner notifications, unlike MessageTips_00's
-    // full tutorial. Their Message prefix must not hide or intercept the pad.
-    if (!name || !*name ||
-        selector_name_prefix(name, "MainScreen") ||
-        !strcmp(name, "DoCommand_00") || !strcmp(name, "MainShortCut_00") ||
-        !strcmp(name, "PauseMenuBG_00") || !strcmp(name, "PauseMenuInfo_00") || !strcmp(name, "AppCamera_00") ||
-        selector_name_prefix(name, "Message3D") ||
-        selector_corner_tip_screen_name(name) ||
-        !strcmp(name, "BoxCursorTV") || !strcmp(name, "SeekPadMenuBG_00")) return 0;
-    // Inventory modal screens (for example the full-health Eat/Cancel prompt)
-    // have their own native entries, outside the main PauseMenu screen.
-    return selector_name_prefix(name, "PauseMenu") || !strcmp(name, "Title_00") ||
-        !strcmp(name, "AppHome_00") || selector_apphome_page_screen_name(name) ||
-        selector_name_prefix(name, "SystemWindow") || selector_name_prefix(name, "GameOver") ||
-        selector_name_prefix(name, "ShopBtnList") || selector_name_prefix(name, "Message") ||
-        !strcmp(name, "AppSystemWindow_00") || !strcmp(name, "OptionWindow_00") ||
-        !strcmp(name, "End_00") || !strcmp(name, "ControllerWindow_00") || !strcmp(name, "Skip_00") ||
-        !strcmp(name, "DLCWindow_00") || !strcmp(name, "AmiiboWindow_00");
+    int role = selector_screen_role(name);
+    return role == UI_MENU || role == UI_SLATE;
 }
+#include "botw_ui_audit.inc"
 
 // MainScreen keeps its empty root shown during conversations. The heart HUD's
 // native InOut layer follows the game's gameplay/cinematic presentation even
@@ -3003,10 +3011,12 @@ static uintptr_t selector_hud_path_pane(uintptr_t root, const char *const *path,
         int n = 0;
         for (; link && link != sentinel && n < 64; n++) {
             uintptr_t child = link >= 8 ? link - 8 : 0;
-            char name[17];
+            char name[25];
             if (!child || selector_read_ptr(child, PANE_PARENT) != pane ||
-                !selector_range(child, PANE_NAME + 16)) return 0;
-            pane_name((uint8_t *)child, name);
+                !selector_range(child, PANE_NAME + 24)) return 0;
+            // Native ui2d names have 24 bytes. A 16-byte trace label truncates
+            // Pa_MapDLCGaugeL_00 and cannot resolve a full HUD path.
+            memcpy(name,(const void *)(child+PANE_NAME),24); name[24]=0;
             if (!strcmp(name, path[i])) {
                 if (found) return 0;
                 found = child;
@@ -3049,7 +3059,7 @@ static uint64_t selector_screen_draw(const uint64_t *regs) {
             if (!selector_range(screen,0x100)) break;
             if (order.first==UINT32_MAX) order.first=i;
             uintptr_t root=selector_read_ptr(selector_read_ptr(screen,0x30),0x18);
-            if (!selector_range(root,PANE_NAME+16) || selector_read_ptr(root,PANE_PARENT) ||
+            if (!selector_range(root,PANE_NAME+24) || selector_read_ptr(root,PANE_PARENT) ||
                 memcmp((void *)(root+PANE_NAME),"RootPane",9)) continue;
             char name[64];
             if (!selector_screen_name(screen,name)) continue;
@@ -3098,6 +3108,7 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
     if (selector_range(registry, 0x48)) memcpy(&count, (const void *)(registry + 0x28), 4);
     uintptr_t screens = selector_read_ptr(registry, 0x30);
     uintptr_t flags = selector_read_ptr(registry, 0x40);
+    int auditing = g_ui_audit && dm_botw_touch_hud_active();
     int presented = 0, gameplay = 0, loadout = 0, quick_select = 0;
     uintptr_t presented_root = 0;
     uintptr_t gameplay_root = 0;
@@ -3105,17 +3116,19 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
     if (count && count <= 256 && selector_range(screens, count * sizeof(uintptr_t)) &&
         selector_range(flags, count)) {
         for (uint32_t i = 0; i < count; i++) {
-            if (((const uint8_t *)flags)[i] & 0x80) continue;
+            int registered = !(((const uint8_t *)flags)[i] & 0x80);
+            if (!registered && !auditing) continue;
             uintptr_t screen = selector_read_ptr(screens, i * sizeof(uintptr_t));
             if (!selector_range(screen, 0x100)) continue;
             int shown = ((const int8_t *)screen)[0xfd];
             int mode = ((const uint8_t *)screen)[0xfe];
-            if (!(mode == 3 || ((mode == 1 || mode == 2) && shown >= 0))) continue;
+            int presented_state = mode == 3 || ((mode == 1 || mode == 2) && shown >= 0);
+            if (!auditing && !presented_state) continue;
             // Screens such as Title retain the shown state after dismissal.
             // Validate the layout and distinguish input ownership from its
             // animated visibility before publishing presentation below.
             uintptr_t root = selector_read_ptr(selector_read_ptr(screen, 0x30), 0x18);
-            if (!selector_range(root, PANE_NAME + 16) ||
+            if (!selector_range(root, PANE_NAME + 24) ||
                 selector_read_ptr(root, PANE_PARENT) ||
                 memcmp((const void *)(root + PANE_NAME), "RootPane", 9)) continue;
             char name[64];
@@ -3123,6 +3136,8 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
             uintptr_t state = selector_read_ptr(screen, 0x38);
             int input_owned = selector_range(state, 0x39) && (((const uint8_t *)state)[0x38] & 2);
             int root_visible = pane_chain_visible((uint8_t *)root);
+            if (auditing) ui_audit_screen(i,screen,root,name,registered,shown,mode,input_owned,root_visible,frame);
+            if (!registered || !presented_state) continue;
             if (!strcmp(name, "MainShortCut_00") && root_visible) {
                 loadout |= selector_loadout_visible(root);
                 quick_select |= mode == 2 && shown >= 0 && input_owned && selector_quick_select_visible(root);
@@ -3140,10 +3155,9 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
             // input ownership. Presentation ends when the native screen gives
             // input back, rather than when one animated layer disappears.
             if (!presented && (root_visible || input_owned || mode == 1 || mode == 3) &&
-                // Fade owns scene transitions after the last interactive
-                // menu closes, while MainScreen's HUD can still be shown.
-                // It blocks gameplay artwork but supplies no touch targets.
-                (selector_pointer_screen_name(name) || !strcmp(name, "Fade_00")) &&
+                // Transition-policy screens own blocking waits and scene
+                // fades while supplying no touch targets.
+                (selector_pointer_screen_name(name) || selector_screen_role(name) == UI_TRANSITION) &&
                 !selector_apphome_page_screen_name(name) && strcmp(name, "AppSystemWindow_00")) {
                 presented = 1;
                 presented_root = root;
@@ -3162,6 +3176,16 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
     g_presented_quick_select = quick_select;
     g_presented_gameplay_root = gameplay_root;
     pthread_mutex_unlock(&g_menu_mu);
+    if (auditing) {
+        // Gameplay need not publish a menu view. Keep diagnostic presentation
+        // current after loading/closing too, without changing the menu queue.
+        dm_botw_touch_menu_view view;
+        pthread_mutex_lock(&g_menu_mu);
+        view = g_view;
+        int active = menu_active_locked(frame);
+        pthread_mutex_unlock(&g_menu_mu);
+        ui_audit_view(&view, active, frame);
+    }
     if (changed) {
         if (atomic_load_explicit(&g_trace, memory_order_acquire))
             LOG("BOTW menu presentation visible=%d gameplay=%d frame=%llu name=%s root=%p", presented,
@@ -3201,11 +3225,11 @@ static int selector_request_slot_available(uintptr_t manager, uintptr_t entry) {
     return !pending || pending == entry;
 }
 
-static int selector_pane_name(uintptr_t pane, char out[17]) {
-    if (!pane || pane > UINTPTR_MAX - (PANE_NAME + 16)) return 0;
-    if (!selector_range(pane + PANE_NAME, 16)) return 0;
-    memcpy(out, (const void *)(pane + PANE_NAME), 16);
-    out[16] = 0;
+static int selector_pane_name(uintptr_t pane, char out[25]) {
+    if (!pane || pane > UINTPTR_MAX - (PANE_NAME + 24)) return 0;
+    if (!selector_range(pane + PANE_NAME, 24)) return 0;
+    memcpy(out, (const void *)(pane + PANE_NAME), 24);
+    out[24] = 0;
     return 1;
 }
 
@@ -3218,11 +3242,11 @@ static uintptr_t selector_pane_parent(uintptr_t pane) {
 static int selector_pane_visible_alpha(uintptr_t pane, uintptr_t *out_root) {
     uintptr_t root = 0;
     for (int depth = 0; pane && depth < PANE_PATH_DEPTH; depth++) {
-        if (!selector_range(pane, PANE_NAME + 16)) return 0;
+        if (!selector_range(pane, PANE_NAME + 24)) return 0;
         if (!( ((const uint8_t *)pane)[PANE_FLAGS] & PANE_VISIBLE) ||
              !((const uint8_t *)pane)[PANE_FLAGS + 1]) return 0;
-        char name[17];
-        memcpy(name, (const void *)(pane + PANE_NAME), 16); name[16] = 0;
+        char name[25];
+        memcpy(name, (const void *)(pane + PANE_NAME), 24); name[24] = 0;
         if (!strcmp(name, "RootPane")) { root = pane; break; }
         pane = selector_pane_parent(pane);
     }
@@ -3260,9 +3284,13 @@ static int selector_entry_eligible(uintptr_t entry, int group) {
 
 static uintptr_t selector_nearest_part(uintptr_t pane) {
     for (int depth = 0; pane && depth < PANE_PATH_DEPTH; depth++) {
-        char name[17];
+        char name[25];
         if (!selector_pane_name(pane, name)) return 0;
         if (!strcmp(name, "RootPane")) return 0;
+        // ErrorViewer's native dialog rows are `L_BtnDialog*` layouts. Their
+        // B_BtnDialog bound is paired with the same registered owner entry as
+        // ordinary Pa_* buttons, despite the legacy L_ instance prefix.
+        if (!strncmp(name, "L_BtnDialog", 11)) return pane;
         if (!strncmp(name, "Pa_", 3) && strncmp(name, "Pa_Rstick", 9)) return pane;
         pane = selector_pane_parent(pane);
     }
@@ -3575,7 +3603,7 @@ static int selector_find_generic_targets(uintptr_t manager, uintptr_t screen, in
         uintptr_t owner_pane = selector_read_ptr(owner, 0x60);
         if (entry_screen == screen && selector_entry_eligible(entry, group) &&
             selector_range(owner, 0x62) &&
-            (owner_pane == 0 || selector_range(owner_pane, PANE_NAME + 16))) {
+            (owner_pane == 0 || selector_range(owner_pane, PANE_NAME + 24))) {
             uintptr_t root = 0;
             if (selector_pane_visible_alpha(owner_pane, &root) &&
                 root == current_root) {
@@ -3612,7 +3640,7 @@ static int selector_find_generic_targets(uintptr_t manager, uintptr_t screen, in
                                 text_match = t; text_matches++;
                             }
                         if (text_matches == 1) {
-                            char text_name[17];
+                            char text_name[25];
                             if (selector_pane_name(texts[text_match].pane, text_name) &&
                                 !strcmp(text_name, "T_Num_00")) target->focus_only = 1;
                             const float *r = texts[text_match].rect;
@@ -3694,7 +3722,7 @@ static int selector_message_prompt_view(uintptr_t manager, uint64_t frame,
     uintptr_t root = 0, part = 0;
     float rect[4] = {0};
     for (int i = 0; i < count; i++) {
-        char name[17];
+        char name[25];
         if (!hits[i].usable || !selector_pane_name(hits[i].pane, name)) continue;
         uintptr_t visible_root = 0;
         if (!selector_pane_visible_alpha(hits[i].pane, &visible_root) ||
@@ -3856,7 +3884,7 @@ static void selector_value_adjusters_to_view(dm_botw_touch_menu_view *view) {
                 for (int t = 0; t < text_count; t++) {
                     if (!texts[t].usable || texts[t].root != row.root ||
                         selector_nearest_part(texts[t].pane) != part) continue;
-                    char name[17];
+                    char name[25];
                     if (selector_pane_name(texts[t].pane, name) &&
                         !strcmp(name, side ? "T_BtnOFF_00" : "T_BtnON_00")) {
                         pane = texts[t].pane; memcpy(rect, texts[t].rect, sizeof rect); matches++;
@@ -3973,7 +4001,7 @@ static void selector_grid_carousel_to_view(dm_botw_touch_menu_view *view, uint64
                 !selector_ancestor_named(target->pane, "N_List_00") &&
                 !selector_ancestor_named(target->pane, "N_Open_00")) continue;
             for (uintptr_t pane = target->pane; pane && pane != root; pane = selector_pane_parent(pane)) {
-                char name[17]; float rect[4], x, y;
+                char name[25]; float rect[4], x, y;
                 if (!selector_pane_name(pane, name) || strncmp(name, "Pa_Page_", 8)) continue;
                 memcpy(&x, (void *)(pane + PANE_MATRIX + 0xc), 4);
                 memcpy(&y, (void *)(pane + PANE_MATRIX + 0x1c), 4);
@@ -3990,7 +4018,7 @@ static void selector_grid_carousel_to_view(dm_botw_touch_menu_view *view, uint64
         generic_hit_t photos[DM_BOTW_MENU_MAX_GENERIC_TARGETS];
         int count = generic_geometry_snapshot(g_generic_photos, photos, frame), matches = 0;
         for (int i = 0; i < count; i++) {
-            char name[17];
+            char name[25];
             if (!photos[i].usable || photos[i].root != view->generic_root ||
                 !selector_pane_name(photos[i].pane, name) || strcmp(name, "B_Photo_00") ||
                 !point_in_rect(.5f, .5f, photos[i].rect)) continue;
@@ -4006,7 +4034,7 @@ static void selector_grid_carousel_to_view(dm_botw_touch_menu_view *view, uint64
     for (int i = 0; i < view->generic_count; i++) {
         uintptr_t pane = view->generic_targets[i].pane;
         for (int depth = 0; pane && depth < PANE_PATH_DEPTH; depth++) {
-            char name[17];
+            char name[25];
             if (!selector_pane_name(pane, name) || !strcmp(name, "RootPane")) break;
             if (!strncmp(name, "Pa_Page_4x5_", 12)) {
                 uintptr_t owner = selector_ancestor_named(pane, "N_Cut_00");
@@ -4029,7 +4057,7 @@ static void selector_grid_carousel_to_view(dm_botw_touch_menu_view *view, uint64
             view->carousel_valid = view->clip_valid = 1;
             memcpy(view->clip, hit->rect, sizeof view->clip);
         }
-        char name[17];
+        char name[25];
         if (!selector_pane_name(hit->pane, name) ||
             (strcmp(name, "Pa_ArrowL_00") && strcmp(name, "Pa_ArrowR_00")) ||
             (!slate && !selector_ancestor_named(hit->pane, "N_Cat_01"))) continue;
@@ -4183,9 +4211,9 @@ static int selector_apphome_owner_active(uintptr_t manager, int group,
             !(((const uint8_t *)state)[0x38] & 2)) continue;
         uintptr_t wrapper = selector_read_ptr(apphome, 0x30);
         uintptr_t root = selector_read_ptr(wrapper, 0x18);
-        if (!selector_range(wrapper, 0x20) || !selector_range(root, PANE_NAME + 16) ||
+        if (!selector_range(wrapper, 0x20) || !selector_range(root, PANE_NAME + 24) ||
             selector_read_ptr(root, PANE_PARENT)) continue;
-        char root_name[17]; pane_name((const uint8_t *)root, root_name);
+        char root_name[25]; pane_name((const uint8_t *)root, root_name);
         if (strcmp(root_name, "RootPane")) continue;
         uintptr_t visible_root = 0;
         if (!selector_pane_visible_alpha(root, &visible_root) || visible_root != root) continue;
@@ -4242,7 +4270,7 @@ static int selector_map_owner_active(uintptr_t manager, int group,
             uintptr_t owner = selector_read_ptr(entry, 0x18);
             uintptr_t pane = selector_read_ptr(owner, 0x60);
             if (selector_read_ptr(entry, 0x20) == screen && selector_range(owner, 0x62) &&
-                selector_range(pane, PANE_NAME + 16) &&
+                selector_range(pane, PANE_NAME + 24) &&
                 selector_ancestor_named(pane, "RootPane") == map_root) {
                 if (out_screen) *out_screen = screen;
                 if (out_apphome_screen) *out_apphome_screen = apphome_screen;
@@ -4295,7 +4323,7 @@ static void selector_paging_prompts(uintptr_t root, uint64_t frame,
             uintptr_t live_root = 0;
             if (!hits[i].usable || hits[i].root != root ||
                 !selector_pane_visible_alpha(hits[i].pane, &live_root) || live_root != root) continue;
-            char name[17]; pane_name((uint8_t *)hits[i].pane, name);
+            char name[25]; pane_name((uint8_t *)hits[i].pane, name);
             if (side == 0 && !strcmp(name, "Pa_PageTips_00")) {
                 view->clip_valid = 1; memcpy(view->clip, hits[i].rect, sizeof view->clip);
             }
@@ -4550,9 +4578,9 @@ static void selector_service_map_tap(uint64_t frame, const dm_botw_touch_menu_vi
     uintptr_t cursor_object = selector_read_ptr(mapview, 0x128);
     if (!selector_range(cursor_object, 0x3bb8)) return;
     uintptr_t cursor_pane = selector_read_ptr(cursor_object, 0x3bb0);
-    if (!selector_range(cursor_pane, PANE_NAME + 16) ||
+    if (!selector_range(cursor_pane, PANE_NAME + 24) ||
         selector_ancestor_named(cursor_pane, "RootPane") != expected_root) return;
-    char cursor_name[17];
+    char cursor_name[25];
     pane_name((const uint8_t *)cursor_pane, cursor_name);
     if (strcmp(cursor_name, "Pa_Cursor_00")) return;
     if (!selector_range(model + 0x3868, 8) || !selector_range(model + 0x3870, 8)) return;
@@ -4673,6 +4701,22 @@ static void selector_service_map_tap(uint64_t frame, const dm_botw_touch_menu_vi
             attempts + 1, cursor_x, cursor_y);
 }
 
+// The timeline's private capture source stays visible on the regular map.
+// Hero's Path instead exposes both native D-pad guides in AppHome's live bar.
+// Called with g_native_view_mu held, after proving the current AppHome owner.
+static int native_hero_path_guides_locked(uintptr_t root, uint64_t frame) {
+    if (!root || g_native_view.footer_root != root) return 0;
+    unsigned directions = 0;
+    for (int i=0;i<GUIDE_SLOTS;i++) {
+        if (!g_native_view.guide_icon_valid[i] || !g_native_view.guide_text_valid[i] ||
+            frame<g_native_view.guide_icon_seen[i] || frame-g_native_view.guide_icon_seen[i]>2 ||
+            frame<g_native_view.guide_text_seen[i] || frame-g_native_view.guide_text_seen[i]>2) continue;
+        if (g_native_view.guide_icon_glyph[i]==0xe064) directions |= 1; // Back/Forward
+        if (g_native_view.guide_icon_glyph[i]==0xe065) directions |= 2; // Change Speed
+    }
+    return directions==3;
+}
+
 static int selector_map_view_for_manager(uintptr_t manager, uint64_t frame,
                                          dm_botw_touch_menu_view *view,
                                          uintptr_t *candidate_pane,
@@ -4756,8 +4800,6 @@ static int selector_map_view_for_manager(uintptr_t manager, uint64_t frame,
                             ((uint64_t)root << 1));
     map_view.page_key = map_view.generic_key;
     map_view.map_visible = 1;
-    static const char *const hero_gauge[] = {"N_InOut_00", "N_Cut_01", "N_VisitMark_00", "Pa_MapDLCGaugeL_00"};
-    map_view.hero_path = selector_hud_path_visible(root, hero_gauge, sizeof hero_gauge/sizeof *hero_gauge);
     map_view.map_pane = pane;
     map_view.map_root = root;
     memcpy(map_view.map, rect, sizeof map_view.map);
@@ -4770,6 +4812,7 @@ static int selector_map_view_for_manager(uintptr_t manager, uint64_t frame,
                                                       apphome_root, &map_view);
     pthread_mutex_lock(&g_native_view_mu);
     dm_botw_touch_menu_view native = snapshot_native_view_locked();
+    map_view.hero_path = native_fresh && native_hero_path_guides_locked(apphome_root,frame);
     pthread_mutex_unlock(&g_native_view_mu);
     selector_service_map_drag(frame, &map_view);
     selector_service_map_tap(frame, &map_view);
@@ -4844,7 +4887,7 @@ static void selector_clear_generic_mode(void) {
 
 static uintptr_t selector_ancestor_named(uintptr_t pane, const char *wanted) {
     for (int depth = 0; pane && depth < PANE_PATH_DEPTH; depth++) {
-        char name[17];
+        char name[25];
         if (!selector_pane_name(pane, name)) return 0;
         if (!strcmp(name, wanted)) return pane;
         if (!strcmp(name, "RootPane")) return 0;
@@ -4856,7 +4899,7 @@ static uintptr_t selector_ancestor_named(uintptr_t pane, const char *wanted) {
 static uintptr_t selector_find_entry(uintptr_t manager, uintptr_t target_pane, int popup) {
     uintptr_t popup_button = 0, popup_root = 0;
     if (popup) {
-        char name[17];
+        char name[25];
         if (!selector_pane_name(target_pane, name) || strcmp(name, "B_Hit_00")) return 0;
         popup_button = selector_pane_parent(target_pane);
         if (!selector_pane_name(popup_button, name) || strncmp(name, "Pa_Btn_", 7)) return 0;
@@ -4900,7 +4943,7 @@ static uintptr_t selector_find_entry(uintptr_t manager, uintptr_t target_pane, i
                 if (flags & 0x10) {
                     if (pane == target_pane) return entry;
                     if (popup) {
-                        char pane_name_buf[17];
+                        char pane_name_buf[25];
                         if (selector_pane_name(pane, pane_name_buf) &&
                             !strcmp(pane_name_buf, "N_Cursor_00") &&
                             selector_pane_parent(pane) == popup_button &&
@@ -4919,7 +4962,7 @@ static uintptr_t selector_find_entry(uintptr_t manager, uintptr_t target_pane, i
 
 static uintptr_t selector_find_category_screen(uintptr_t manager, uintptr_t target_pane,
                                                int category, uintptr_t expected_vtable) {
-    char name[17];
+    char name[25];
     if (category < 0 || category > 6 ||
         !selector_pane_name(target_pane, name) || strcmp(name, "B_Hit_00") ||
         pane_category_index((uint8_t *)target_pane) != category) return 0;
@@ -5328,9 +5371,12 @@ void dm_botw_touch_menu_selector(const uint64_t *regs) {
             (void *)pane, (void *)entry, category, popup, index);
 }
 
+static void camera_clear_locked(void);
+
 static void menu_clear_queue_locked(void) {
     g_pointer_down = g_pointer_dragged = 0;
     g_pointer_rotate = 0;
+    camera_clear_locked();
     g_map_prompt_down = g_map_prompt_back = 0;
     g_map_prompt_button = 0;
     g_map_prompt_owner_valid = 0; g_map_prompt_owner_group = -1;
@@ -5385,6 +5431,88 @@ static int menu_prompt_owner_live_locked(uint64_t frame) {
         selector_pane_visible_alpha(g_target_prompt_owner_root, &root) && root == g_target_prompt_owner_root;
 }
 
+// Camera framing uses the native right stick and zoom uses the D-pad. Keep
+// those touch actions tied to the live AppCamera owner and its input group.
+static int camera_owner_live_locked(uint64_t frame) {
+    if (!menu_active_locked(frame) || !g_view.generic_mode ||
+        selector_screen_role("AppCamera_00") != UI_MENU ||
+        g_view.prompt_owner_screen != g_view.generic_screen ||
+        g_view.prompt_owner_root != g_view.generic_root ||
+        g_view.prompt_owner_group != g_view.generic_group ||
+        frame < g_view.prompt_owner_frame || frame - g_view.prompt_owner_frame > 2 ||
+        !g_view.prompt_owner_valid || !selector_range(g_view.generic_screen, 0x100)) return 0;
+    uintptr_t screen = g_view.generic_screen, state = selector_read_ptr(screen, 0x38), root = 0;
+    char name[64];
+    return selector_screen_name(screen, name) && !strcmp(name, "AppCamera_00") &&
+        selector_range(state, 0x39) && (((const uint8_t *)state)[0x38] & 2) &&
+        ((const int8_t *)screen)[0xfd] >= 0 && ((const uint8_t *)screen)[0xfe] == 2 &&
+        selector_read_ptr(selector_read_ptr(screen, 0x30), 0x18) == g_view.generic_root &&
+        selector_pane_visible_alpha(g_view.generic_root, &root) && root == g_view.generic_root;
+}
+
+static int camera_bound_to_view_locked(const dm_botw_touch_menu_view *view) {
+    return view && view->generic_mode && view->generic_screen == g_camera_screen &&
+        view->generic_root == g_camera_root && view->page_key == g_camera_page &&
+        view->generic_group == g_camera_group;
+}
+
+static void camera_clear_locked(void) {
+    g_camera_drag_active = g_camera_dragged = 0;
+    g_camera_screen = g_camera_root = 0; g_camera_page = 0; g_camera_group = -1;
+    g_camera_rx = g_camera_ry = g_camera_pose_lx = g_camera_pose_ly = 0;
+    g_camera_pose_modifier = 0;
+    g_camera_zoom_button = 0; g_camera_pinch_last = 1.0f; g_camera_pinch_accum = 0;
+    g_camera_gesture_delta[0] = g_camera_gesture_delta[1] = 0;
+    g_apply_output_camera_axes_valid = 0;
+    memset(g_apply_output_camera_axes, 0, sizeof g_apply_output_camera_axes);
+}
+
+static void camera_bind_view_locked(void) {
+    if (!camera_owner_live_locked(menu_render_frame())) return;
+    if (g_camera_screen && !camera_bound_to_view_locked(&g_view)) {
+        camera_clear_locked(); g_last_apply_valid = 0;
+    }
+    g_camera_screen = g_view.generic_screen; g_camera_root = g_view.generic_root;
+    g_camera_page = g_view.page_key; g_camera_group = g_view.generic_group;
+}
+
+int dm_botw_touch_camera_active(void) {
+    pthread_mutex_lock(&g_menu_mu);
+    int active = camera_owner_live_locked(menu_render_frame());
+    pthread_mutex_unlock(&g_menu_mu);
+    return active;
+}
+
+void dm_botw_touch_camera_pose(float x, float y) {
+    pthread_mutex_lock(&g_menu_mu);
+    if (camera_owner_live_locked(menu_render_frame()) && isfinite(x) && isfinite(y)) {
+        camera_bind_view_locked();
+        x = fmaxf(-1.0f, fminf(1.0f, x));
+        y = fmaxf(-1.0f, fminf(1.0f, y));
+        g_camera_pose_lx = (int32_t)lrintf(x * DM_STICK_MAX);
+        g_camera_pose_ly = (int32_t)lrintf(y * DM_STICK_MAX);
+        if (!g_camera_pose_lx && !g_camera_pose_ly) g_camera_pose_modifier = 0;
+        g_last_apply_valid = 0;
+    } else if (!x && !y) {
+        g_camera_pose_lx = g_camera_pose_ly = 0;
+        g_camera_pose_modifier = 0;
+        g_last_apply_valid = 0;
+    }
+    pthread_mutex_unlock(&g_menu_mu);
+}
+
+void dm_botw_touch_camera_pose_modifier(int held) {
+    pthread_mutex_lock(&g_menu_mu);
+    if (held && camera_owner_live_locked(menu_render_frame())) {
+        camera_bind_view_locked();
+        g_camera_pose_modifier = 1;
+    } else {
+        g_camera_pose_modifier = 0;
+    }
+    g_last_apply_valid = 0;
+    pthread_mutex_unlock(&g_menu_mu);
+}
+
 void dm_botw_touch_menu_observe(const dm_botw_touch_menu_view *view) {
     int notify = 0;
     dm_botw_touch_menu_view report = {0};
@@ -5399,6 +5527,10 @@ void dm_botw_touch_menu_observe(const dm_botw_touch_menu_view *view) {
     int old_map_group = g_view.generic_group;
     int late_inventory_view = view && !view->generic_mode && g_view_valid && g_view.generic_mode &&
                               menu_view_fresh_locked(frame);
+    if (!late_inventory_view && g_camera_screen && !camera_bound_to_view_locked(view)) {
+        camera_clear_locked();
+        g_last_apply_valid = 0;
+    }
     if (late_inventory_view) {
         // The native focus screen is a modal authority; late inventory pane
         // callbacks must not replace its same-frame generic hit map.
@@ -5436,13 +5568,14 @@ void dm_botw_touch_menu_observe(const dm_botw_touch_menu_view *view) {
     }
     int is_active = menu_active_locked(frame);
     if (had_menu_dpad != (is_active && g_view.map_visible && g_view.hero_path)) notify = 1;
-    if (view) report = g_view;
+    if (g_ui_audit || view) report = g_view;
     if (!is_active) menu_clear_queue_locked();
     if (was_active != is_active || g_active_notified != is_active) {
         g_active_notified = is_active;
         notify = 1;
     }
     pthread_mutex_unlock(&g_menu_mu);
+    if (g_ui_audit) ui_audit_view(&report, is_active, frame);
     if (notify) {
         if (atomic_load_explicit(&g_trace, memory_order_acquire))
             LOG("BOTW menu snapshot: active=%d inventory=%d popup=%d cursor=%d back=%d slots=%d popupRows=%d frame=%llu",
@@ -5538,25 +5671,43 @@ int dm_botw_touch_map_active(void) {
 }
 
 void dm_botw_touch_menu_pinch(float ratio) {
-    // Discard pinch samples outside touch mode so a stale zoom value cannot
-    // be replayed when BOTW's touch HUD becomes active again. The primary
-    // pointer is cancelled before iOS sends pinch updates, so validate the
-    // current focused map surface rather than requiring pointer ownership.
+    // Keep map zoom on its native right-stick channel; AppCamera pinch maps
+    // to the D-pad zoom buttons shown by its native Zoom prompt.
     pthread_mutex_lock(&g_menu_mu);
-    int map_active = menu_active_locked(menu_render_frame()) && g_view.map_visible;
-    if (!map_active) {
+    uint64_t frame = menu_render_frame();
+    int camera_active = camera_owner_live_locked(frame);
+    int map_active = menu_active_locked(frame) && g_view.map_visible;
+    if (!map_active && !camera_active) {
         pthread_mutex_unlock(&g_menu_mu);
         return;
     }
-    int32_t ry = 0;
+    int32_t stick = 0;
     if (isfinite(ratio) && ratio > 0 && fabsf(ratio - 1.0f) >= 0.03f) {
         // Map zoom consumes the native stick-direction bits (threshold
         // 0x4000 in hle_hid), not small analog values. A 20% spread used to
         // produce only 3200 and could never request a zoom step.
-        ry = ratio > 1.0f ? DM_STICK_MAX : -DM_STICK_MAX;
+        stick = ratio > 1.0f ? DM_STICK_MAX : -DM_STICK_MAX;
     }
-    g_map_ry = ry;
-    g_map_ry_frame = menu_render_frame();
+    if (camera_active) {
+        camera_bind_view_locked();
+        if (ratio <= 0 || !isfinite(ratio)) {
+            g_camera_pinch_last = 1.0f; g_camera_pinch_accum = 0;
+            g_camera_zoom_button = 0;
+        } else if (ratio > 0) {
+            float step = logf(ratio / g_camera_pinch_last);
+            g_camera_pinch_last = ratio;
+            if (isfinite(step) && fabsf(step) > 0.0001f) {
+                g_camera_pinch_accum += step;
+                if (fabsf(g_camera_pinch_accum) >= .08f) {
+                    g_camera_zoom_button = g_camera_pinch_accum > 0 ? DM_BTN_UP : DM_BTN_DOWN;
+                    g_camera_pinch_accum += g_camera_pinch_accum > 0 ? -.08f : .08f;
+                }
+            }
+        }
+    } else {
+        g_map_ry = stick;
+        g_map_ry_frame = frame;
+    }
     g_last_apply_valid = 0;
     pthread_mutex_unlock(&g_menu_mu);
 }
@@ -5569,7 +5720,8 @@ static int point_in_rect(float x, float y, const float rect[4]) {
 static int generic_action_button(uint64_t button) {
     return button == DM_BTN_A || button == DM_BTN_B || button == DM_BTN_X ||
            button == DM_BTN_Y || button == DM_BTN_L || button == DM_BTN_R ||
-           button == DM_BTN_ZL || button == DM_BTN_ZR || button == DM_BTN_UP || button == DM_BTN_DOWN ||
+           button == DM_BTN_ZL || button == DM_BTN_ZR || button == DM_BTN_MINUS ||
+           button == DM_BTN_UP || button == DM_BTN_DOWN ||
            button == DM_BTN_RS;
 }
 
@@ -5583,6 +5735,7 @@ static uint64_t guide_glyph_button(uint16_t glyph) {
         case 0xe045: return DM_BTN_R;
         case 0xe046: return DM_BTN_ZL;
         case 0xe047: return DM_BTN_ZR;
+        case 0xe04c: return DM_BTN_MINUS; // AppCamera's native Album prompt.
         case 0xe057: return DM_BTN_RS; // Native press-right-stick Rotate hint.
         default: return 0;
     }
@@ -5591,6 +5744,12 @@ static uint64_t guide_glyph_button(uint16_t glyph) {
 static int hit_rects(float x, float y, const float rects[][4], int count) {
     for (int i = 0; i < count; i++) if (point_in_rect(x, y, rects[i])) return i;
     return -1;
+}
+
+static int camera_axis_delta(float delta, float pixels_to_full) {
+    if (!isfinite(delta) || delta == 0.0f) return 0;
+    float value = fmaxf(-1.0f, fminf(1.0f, delta / pixels_to_full));
+    return (int32_t)lrintf(value * DM_STICK_MAX);
 }
 
 static int clipped_hit(float x, float y, const float rect[4], const dm_botw_touch_menu_view *view) {
@@ -5823,6 +5982,70 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
         pthread_mutex_unlock(&g_menu_mu);
         return;
     }
+    int camera_live = camera_owner_live_locked(frame);
+    if (g_camera_drag_active) {
+        if (!camera_live || !camera_bound_to_view_locked(&g_view)) {
+            camera_clear_locked();
+            g_last_apply_valid = 0;
+            g_pointer_down = 0;
+            pthread_mutex_unlock(&g_menu_mu);
+            return;
+        }
+        if (phase == DM_BOTW_MENU_MOVE) {
+            float dx = (x - g_camera_last[0]) * 1280.0f;
+            float dy = (y - g_camera_last[1]) * 720.0f;
+            g_camera_last[0] = x; g_camera_last[1] = y;
+            if (!g_camera_dragged) {
+                g_camera_gesture_delta[0] += dx;
+                g_camera_gesture_delta[1] += dy;
+                if (g_camera_gesture_delta[0] * g_camera_gesture_delta[0] +
+                    g_camera_gesture_delta[1] * g_camera_gesture_delta[1] >= 4.0f * 4.0f) {
+                    g_camera_dragged = 1;
+                    dx = g_camera_gesture_delta[0]; dy = g_camera_gesture_delta[1];
+                    g_camera_gesture_delta[0] = g_camera_gesture_delta[1] = 0;
+                } else dx = dy = 0;
+            }
+            if (g_camera_dragged) {
+                int rx = g_camera_rx + camera_axis_delta(dx, 90.0f);
+                int ry = g_camera_ry + camera_axis_delta(-dy, 90.0f);
+                g_camera_rx = (int32_t)fmaxf(-DM_STICK_MAX, fminf(DM_STICK_MAX, rx));
+                g_camera_ry = (int32_t)fmaxf(-DM_STICK_MAX, fminf(DM_STICK_MAX, ry));
+            }
+            g_last_apply_valid = 0;
+            pthread_mutex_unlock(&g_menu_mu);
+            return;
+        }
+        if (phase == DM_BOTW_MENU_END) {
+            g_camera_drag_active = g_camera_dragged = 0;
+            g_camera_rx = g_camera_ry = 0;
+            g_camera_gesture_delta[0] = g_camera_gesture_delta[1] = 0;
+            g_pointer_down = g_pointer_dragged = 0;
+            g_last_apply_valid = 0;
+            pthread_mutex_unlock(&g_menu_mu);
+            return;
+        }
+    }
+    if (phase == DM_BOTW_MENU_BEGIN && camera_live &&
+        !(g_view.back_valid && point_in_rect(x, y, g_view.back)) &&
+        hit_rects(x, y, g_view.footer_actions, g_view.footer_action_count) < 0 &&
+        hit_rects(x, y, (const float (*)[4])g_view.categories, g_view.category_count) < 0) {
+        int on_target = 0;
+        for (int i = 0; i < g_view.generic_count; i++)
+            if (point_in_rect(x, y, g_view.generic_targets[i].rect)) on_target = 1;
+        if (!on_target) {
+            menu_clear_queue_locked();
+            g_camera_drag_active = 1; g_camera_dragged = 0;
+            g_camera_screen = g_view.generic_screen; g_camera_root = g_view.generic_root;
+            g_camera_page = g_view.page_key; g_camera_group = g_view.generic_group;
+            g_camera_last[0] = x; g_camera_last[1] = y;
+            g_camera_gesture_delta[0] = g_camera_gesture_delta[1] = 0;
+            g_pointer_down = 1; g_pointer_start[0] = x; g_pointer_start[1] = y;
+            g_pointer_page_key = g_view.page_key; g_pointer_popup_key = g_view.popup_key;
+            g_last_apply_valid = 0;
+            pthread_mutex_unlock(&g_menu_mu);
+            return;
+        }
+    }
     if (phase == DM_BOTW_MENU_BEGIN) {
         menu_clear_queue_locked();
         g_pointer_down = 1;
@@ -6030,7 +6253,7 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
                 (void *)g_view.generic_screen);
             if (atomic_load_explicit(&g_trace, memory_order_acquire) >= 2)
                 for (int i = 0; i < g_view.generic_count; i++) {
-                    char tname[17] = {0};
+                    char tname[25] = {0};
                     if (g_view.generic_targets[i].pane) pane_name((uint8_t *)g_view.generic_targets[i].pane, tname);
                     LOG("BOTW menu target %d adj=%d pane=%s rect=(%.3f,%.3f,%.3f,%.3f)", i,
                         g_view.generic_targets[i].adjustment, tname, g_view.generic_targets[i].rect[0],
@@ -6136,8 +6359,13 @@ int dm_botw_touch_menu_apply(uint64_t *buttons, int32_t axes[4], uint64_t frame)
         if (g_apply_output_axis_valid) {
             axes[2] = g_apply_output_rx; axes[3] = 0;
         }
+        if (g_apply_output_camera_axes_valid) {
+            for (int i = 0; i < 4; i++)
+                if (!axes[i]) axes[i] = g_apply_output_camera_axes[i];
+        }
         int handled = g_apply_output_axis_valid || g_apply_output_map_left_valid ||
-                      g_apply_output_map_right_valid || g_apply_output_bits;
+                      g_apply_output_map_right_valid || g_apply_output_camera_axes_valid ||
+                      g_apply_output_bits;
         pthread_mutex_unlock(&g_menu_mu);
         return handled;
     }
@@ -6145,6 +6373,8 @@ int dm_botw_touch_menu_apply(uint64_t *buttons, int32_t axes[4], uint64_t frame)
     g_last_apply_valid = 1; g_last_apply_frame = frame;
     g_apply_output_bits = 0;
     g_apply_output_axis_valid = 0;
+    g_apply_output_camera_axes_valid = 0;
+    memset(g_apply_output_camera_axes, 0, sizeof g_apply_output_camera_axes);
     g_apply_output_map_left_valid = g_apply_output_map_right_valid = 0;
     if (!menu_active) {
         menu_clear_queue_locked();
@@ -6169,6 +6399,44 @@ int dm_botw_touch_menu_apply(uint64_t *buttons, int32_t axes[4], uint64_t frame)
         pthread_mutex_unlock(&g_menu_mu);
         if (notify) front_botw_touch_menu_changed();
         return handled;
+    }
+    int camera_axes_applied = 0;
+    int camera_live = camera_owner_live_locked(render_frame);
+    if (g_camera_screen && !camera_bound_to_view_locked(&g_view)) camera_clear_locked();
+    if (camera_live && g_camera_screen && camera_bound_to_view_locked(&g_view)) {
+        // Touch camera axes fill only unused native channels. A physical stick
+        // already driving a channel remains the owner for that channel.
+        if (g_camera_zoom_button && !(*buttons & g_camera_zoom_button)) {
+            *buttons |= g_camera_zoom_button;
+            g_apply_output_bits |= g_camera_zoom_button;
+            camera_axes_applied = 1;
+        }
+        if (g_camera_rx && !axes[2]) {
+            axes[2] = g_apply_output_camera_axes[2] = g_camera_rx;
+            g_apply_output_camera_axes_valid = camera_axes_applied = 1;
+        }
+        if (g_camera_ry && !axes[3]) {
+            axes[3] = g_apply_output_camera_axes[3] = g_camera_ry;
+            g_apply_output_camera_axes_valid = camera_axes_applied = 1;
+        }
+        if (g_camera_pose_lx && !axes[0]) {
+            axes[0] = g_apply_output_camera_axes[0] = g_camera_pose_lx;
+            g_apply_output_camera_axes_valid = camera_axes_applied = 1;
+        }
+        if (g_camera_pose_ly && !axes[1]) {
+            axes[1] = g_apply_output_camera_axes[1] = g_camera_pose_ly;
+            g_apply_output_camera_axes_valid = camera_axes_applied = 1;
+        }
+        if (g_camera_pose_modifier && (g_camera_pose_lx || g_camera_pose_ly) &&
+            !(*buttons & DM_BTN_ZL)) {
+            *buttons |= DM_BTN_ZL;
+            g_apply_output_bits |= DM_BTN_ZL;
+            camera_axes_applied = 1;
+        }
+        g_camera_rx = g_camera_ry = 0; // one consumed look impulse per HID sample
+        g_camera_zoom_button = 0;
+    } else if (!camera_live) {
+        camera_clear_locked();
     }
     int map_channels_released = 0;
     if (g_map_left_owned && (!g_view.map_visible || !g_map_pan_active)) {
@@ -6264,17 +6532,17 @@ int dm_botw_touch_menu_apply(uint64_t *buttons, int32_t axes[4], uint64_t frame)
             if (g_view.footer_action_buttons[i] == g_target_button_bits) action_still_visible = 1;
         if (!action_still_visible) menu_clear_queue_locked();
     }
-    if (!g_target_valid) { pthread_mutex_unlock(&g_menu_mu); return 0; }
+    if (!g_target_valid) { pthread_mutex_unlock(&g_menu_mu); return camera_axes_applied; }
     if (g_target_pane) {
         if (g_requested_entry && g_selector_manager &&
             !selector_request_slot_available(g_selector_manager, g_requested_entry)) {
             menu_clear_target_locked();
             pthread_mutex_unlock(&g_menu_mu);
-            return 0;
+            return camera_axes_applied;
         }
         if (!g_selector_ready || !g_requested_entry || !selector_range(g_selector_manager, 0x58)) {
             pthread_mutex_unlock(&g_menu_mu);
-            return 0;
+            return camera_axes_applied;
         }
         int native_target_live = g_target_generic ?
             (g_view.generic_mode && g_view.generic_key == g_target_page_key &&
@@ -6292,13 +6560,13 @@ int dm_botw_touch_menu_apply(uint64_t *buttons, int32_t axes[4], uint64_t frame)
             (selector_find_entry(g_selector_manager, g_target_pane, g_target_popup) == g_requested_entry);
         if (!native_target_live) {
             pthread_mutex_unlock(&g_menu_mu);
-            return 0;
+            return camera_axes_applied;
         }
         uintptr_t focused = selector_read_ptr(g_selector_manager, 0x48);
         if (focused != g_requested_entry ||
             (!g_target_generic && selector_find_entry(g_selector_manager, g_target_pane, g_target_popup) != g_requested_entry)) {
             pthread_mutex_unlock(&g_menu_mu);
-            return 0;
+            return camera_axes_applied;
         }
         if (g_target_generic && g_list_selection.issued &&
             g_list_selection.serial == atomic_load_explicit(&g_target_serial, memory_order_acquire) &&
@@ -6308,14 +6576,14 @@ int dm_botw_touch_menu_apply(uint64_t *buttons, int32_t axes[4], uint64_t frame)
             if (!g_list_selection.acknowledged || !selector_range(widget, 0x314) ||
                 !selector_range(g_list_selection.screen + 0xe0, sizeof(uintptr_t))) {
                 pthread_mutex_unlock(&g_menu_mu);
-                return 0;
+                return camera_axes_applied;
             }
             memcpy(&committed, (const void *)(widget + 0x30c), sizeof committed);
             if (committed != g_list_selection.index ||
                 selector_read_ptr(g_list_selection.screen, 0xe0) != g_requested_entry) {
                 menu_clear_queue_locked();
                 pthread_mutex_unlock(&g_menu_mu);
-                return 0;
+                return camera_axes_applied;
             }
         }
         if (g_target_generic && g_target_axis && g_confirm_pending) {
@@ -6381,7 +6649,7 @@ int dm_botw_touch_menu_apply(uint64_t *buttons, int32_t axes[4], uint64_t frame)
                 g_target_center[0], g_target_center[1]);
     }
     pthread_mutex_unlock(&g_menu_mu);
-    return 0;
+    return camera_axes_applied;
 }
 void dm_botw_touch_menu_reset(void) {
     int notify;
