@@ -4,10 +4,11 @@
 # deflate level 6, a file whose deflate is not smaller is stored (zip's rule), and names ending in a --store suffix are always stored (the profile's zip_store, compared without regard to case).
 # Speed (Info-ZIP managed about 100 MB/s on the T7): files up to BIG are read, and deflated, by a thread pool (zlib releases the GIL) while this thread writes them in order;
 # bigger files are streamed here, their CRC patched into the local header afterwards (no data descriptors). Zip64 fields wherever a size, an offset or the entry count passes its 32 / 16-bit field.
-# Usage: pack_ipa.py <out.ipa> [--store .a:.b] [--skip <archive path>]... <archive path>=<source file or folder>...
+# Usage: pack_ipa.py <out.ipa> [--store .a:.b] [--skip <archive path>]... [--skip-suffix-under <archive prefix> <suffix>]... <archive path>=<source file or folder>...
 #   Mappings are packed in command-line order; put the files that change least first, and the app last
 #   --skip: an archive path left out of the walk of the folder that holds it (folders a stale app build still has, the signature); a mapping of its own still adds it
 #   --skip-suffix: files whose names end so are left out of every walk (build_ipa.sh: the pulling vertex libraries _bp.metallib when the profile's pso_mtl4 is off, unless IOS_PULL overrides it)
+#   --skip-suffix-under: files below one archive prefix whose names end so are left out of that part of the walk
 #   Writes <out.ipa>.partial and renames it at the end; prints "pack: N entries, X bytes" first (the NSP script's progress total, X = the files' bytes) and a summary line last
 #   Repeat packs reuse a file when its size, mtime_ns, ctime_ns and inode are unchanged (true on APFS). A tool that rewrites in place and restores mtime defeats this if ctime also stays
 #   unchanged; --no-reuse forces a full pack. The index holds only source metadata and compression settings; ZIP metadata comes from the old IPA.
@@ -26,10 +27,11 @@ DIR_MODE = stat.S_IFDIR | 0o755   # a parent folder no source folder stands for 
 Entry = collections.namedtuple('Entry', 'name path st root')   # st None: a synthetic parent; root: the mapping's source folder
 
 
-def entries(maps, skip, skip_suffix=()):
+def entries(maps, skip, skip_suffix=(), skip_suffix_under=()):
     """The archive's entries in order: for each mapping its parent folders (unless an earlier entry gave them), its root, then its tree depth first, sorted by name,
     without the skipped paths and without other mappings' roots (each adds its own). Parents needed before their mapping are synthetic folders with fixed metadata."""
     roots, out, seen, parents = {a for a, _ in maps}, [], set(), set()
+    scoped_suffixes = tuple((prefix.strip('/'), suffix) for prefix, suffix in skip_suffix_under if prefix.strip('/'))
     def add(name, path, st):
         if name in parents and st is not None and stat.S_ISDIR(st.st_mode): return   # written already, as a parent folder
         if name in seen: sys.exit(f'[RED] pack_ipa: {name} twice in the archive')
@@ -38,7 +40,9 @@ def entries(maps, skip, skip_suffix=()):
         with os.scandir(d) as it: es = sorted(it, key=lambda e: e.name)
         for e in es:
             name = f'{arc}/{e.name}'
-            if name in skip or name in roots or (skip_suffix and e.name.endswith(skip_suffix) and not e.is_dir(follow_symlinks=False)): continue
+            if (name in skip or name in roots or
+                    (skip_suffix and e.name.endswith(skip_suffix) and not e.is_dir(follow_symlinks=False)) or
+                    (not e.is_dir(follow_symlinks=False) and any(name.startswith(prefix + '/') and e.name.endswith(suffix) for prefix, suffix in scoped_suffixes))): continue
             st = e.stat(follow_symlinks=False)
             if stat.S_ISDIR(st.st_mode): add(name + '/', e.path, st); walk(e.path, name)
             elif stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode): add(name, e.path, st)
@@ -231,6 +235,7 @@ def main():
     ap.add_argument('--store', default='', help='suffixes stored without compressing, separated by ":"')
     ap.add_argument('--skip', action='append', default=[], help='an archive path left out of the folder walk that would add it')
     ap.add_argument('--skip-suffix', action='append', default=[], help='files whose names end so are left out of every folder walk')
+    ap.add_argument('--skip-suffix-under', action='append', nargs=2, default=[], metavar=('ARCHIVE_PREFIX', 'SUFFIX'), help='files below this archive prefix with this name suffix are left out')
     ap.add_argument('--no-reuse', action='store_true', help='pack every file again, without copying from the old IPA')
     a = ap.parse_args()
     maps = []
@@ -241,7 +246,7 @@ def main():
     store = tuple(s.lower() for s in a.store.split(':') if s)
     t0 = time.time()
     if len({arc for arc, _ in maps}) != len(maps): sys.exit('[RED] pack_ipa: mapping twice in the archive')
-    es = entries(maps, {s.strip('/') for s in a.skip}, tuple(a.skip_suffix))
+    es = entries(maps, {s.strip('/') for s in a.skip}, tuple(a.skip_suffix), tuple(a.skip_suffix_under))
     total = sum(e.st.st_size for e in es if e.st and stat.S_ISREG(e.st.st_mode))
     print(f'pack: {len(es)} entries, {total} bytes', flush=True)
     apfs = {root: fs_type(root) == b'apfs' for root in {src for _, src in maps}}

@@ -49,7 +49,8 @@ else
     mkdir -p "$APP/romfs"; /usr/bin/rsync -a --delete -- "$DM_RESOURCE_ROMFS/" "$APP/romfs/"
     rm -f "$APP/romfs.img" "$APP/romfs.id"
 fi
-/usr/bin/rsync -a --delete -- "$DM_RESOURCE_SHADERS/" "$APP/msl/$DM_RESOURCE_MSLDIR/"
+# Analysis MSL is an external cache/prefill input, not a runtime resource; remove old copies only from this shader folder.
+/usr/bin/rsync -a --delete --delete-excluded --exclude '*.metal' -- "$DM_RESOURCE_SHADERS/" "$APP/msl/$DM_RESOURCE_MSLDIR/"
 for old in "$APP/msl/"*; do
     [ "$old" = "$APP/msl/$DM_RESOURCE_MSLDIR" ] || rm -rf "$old"
 done

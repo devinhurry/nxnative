@@ -21,11 +21,14 @@ import re
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[3]
 RYU = ROOT / 'dm/third_party/ryujinx/src/Ryujinx.Graphics.Shader'
+sys.path.insert(0, str(ROOT / 'dm/gfx/tools'))
+import dmsh_codegen_cache  # noqa: E402
 spec = importlib.util.spec_from_file_location('dmsh_atomic', ROOT / 'dm/gfx/tools/dmsh_atomic.py')
 atomic = importlib.util.module_from_spec(spec); spec.loader.exec_module(atomic)
 SPIRV_CROSS = ROOT / 'dm/gfx/tools/spirv_cross_bin/spirv-cross'   # the build dmsh_build.py runs (dmsh_chain.SPIRV_CROSS)
@@ -200,9 +203,31 @@ class Portable(unittest.TestCase):
 
     def test_helper_participates_in_cache_digest(self):
         source = (ROOT / 'dm/gfx/tools/dmsh_build.py').read_text()
-        assignment = next(n for n in ast.parse(source).body if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'CODE_FP' for t in n.targets))
-        self.assertIn('dmsh_atomic', {n.id for n in ast.walk(assignment) if isinstance(n, ast.Name)})
-        self.assertIn("'tools/dmsh_atomic.py'", (ROOT / 'dm/gfx/tools/dmsh_chain.py').read_text())
+        tree = ast.parse(source)
+        def assignment(name: str) -> ast.Assign:
+            node = next(n for n in tree.body if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in n.targets))
+            assert isinstance(node, ast.Assign)
+            return node
+        modules = assignment('_ANALYSIS_MODULES')
+        assert isinstance(modules.value, ast.Dict)
+        stage_names = {k.value for k in modules.value.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+        self.assertEqual(stage_names, {'vs', 'ps', 'cs', 'gs'})
+        for stage_modules in modules.value.values:
+            assert isinstance(stage_modules, ast.Dict)
+            self.assertIn('dmsh_atomic', {k.value for k in stage_modules.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)})
+        chain_files = (ROOT / 'dm/gfx/tools/dmsh_chain.py').read_text()
+        self.assertIn("'tools/dmsh_atomic.py'", chain_files)
+        self.assertIn("'tools/dmsh_mtlcache.py'", chain_files)
+
+        roots = ast.literal_eval(assignment('_ANALYSIS_ROOTS').value)['ps']
+        runtime = ast.literal_eval(assignment('_ANALYSIS_RUNTIME').value)
+        with tempfile.TemporaryDirectory(prefix='dm-atomic-fingerprint-') as temp:
+            helper = Path(temp) / 'dmsh_atomic.py'; helper.write_text((ROOT / 'dm/gfx/tools/dmsh_atomic.py').read_text())
+            modules = {'dmsh_atomic': str(helper), 'abi': str(ROOT / 'dm/gfx/tools/dmsh_abi.py')}
+            before = dmsh_codegen_cache.code_fingerprint(ROOT / 'dm/gfx/tools/dmsh_build.py', roots, runtime=runtime, modules=modules)
+            helper.write_text(helper.read_text() + '\ndef cache_fingerprint_probe(): return True\n')
+            after = dmsh_codegen_cache.code_fingerprint(ROOT / 'dm/gfx/tools/dmsh_build.py', roots, runtime=runtime, modules=modules)
+            self.assertNotEqual(before, after)
 
     def test_synthetic_inputs(self):
         for mode in range(4):

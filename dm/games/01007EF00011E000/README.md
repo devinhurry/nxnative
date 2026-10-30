@@ -607,6 +607,47 @@ On the Mac, frame times stayed at 60 fps; crop comparisons showed sharper edges 
 - **Resolved: duplicate pipeline keys from disabled blend state.** A recording held 4,829 keys for 1,982 distinct pipelines from 1,818 Metal 4 bases; 2,845 keys differed only in blend factors of targets whose blending was disabled. [Pipeline keys omit unused colour state](../../../docs/reference/shaders.md#pipeline-keys-omit-unused-colour-state) describes the shared normalization.
 - `pack_ipa.py` packs its 16 GB IPA in 57 s (Info-ZIP took 2 min 50 s).
 
+### Shader cache validation
+
+The [operation-specific shader caches](../../../docs/reference/shaders.md#shader-caches-follow-each-operations-inputs)
+are implemented (2026-10-30), including complete translation outputs, SPIRV-Cross
+conversion, source analysis, variants and independent Mac/iOS compilation.
+The reproducible harness, source hashes and reports are in
+`01007EF00011E000-work/shader-cache-full-20261030/`:
+`candidate_subset.py`, `candidate-report.json` and `metal-repeat-report.json`.
+The workload keeps the pair closure of 11 real BOTW shaders: three vertex,
+five pixel and three compute shaders. It compiles both Mac and iOS outputs.
+
+All 87 source, reflection and library artifacts match byte for byte across
+cold, warm and forced rebuilds, with zero shader failures. Cold took 20.498 s,
+warm 2.854 s and forced 21.012 s; common discovery/snapshot setup took 1.305 s.
+The warm run starts no translator, SPIRV-Cross or Metal compiler process,
+hits all 11 analysis bundles and 37 variant entries, and restores all 21
+libraries per target. These are bounded-workload measurements, not timings
+for all 19,592 game shaders. The first build must populate the new caches.
+
+The comparison also exposed a Metal input-basename dependency and concurrent
+same-key compilation. The [fixed input-name convention](../../../docs/reference/shaders.md#metal-cache-entries-require-a-fixed-compiler-input-name)
+and cache format 4 make repeated and forced outputs agree; older compiled
+cache entries are rebuilt once. The pre-change baseline differs in two fetch
+libraries per target because of the corrected compiler filename convention,
+despite identical MSL. The extra per-target analysis sources stay outside the
+runtime app; packaging tests retain unrelated `.metal` game assets.
+
+Supplemental translator coverage in `translation-cache-20261030/report.json`
+compares 98 jobs, including an integer-attribute retry and a synthetic geometry
+reader: all 197 raw outputs and 97 ordinary MSL sources match cold, warm and
+disabled-cache runs. Unit tests additionally cover scoped invalidation,
+paired source dependencies, independent target fallback, corruption and races.
+
+The real compiler comparison above is explicitly experimental:
+`DM_ALLOW_OTHER_METAL=1` uses local Metal `32023.883`; the unchanged lock requires
+`32023.921`. The supported-toolchain regression report is
+`shader-cache-full-20261030/regress/report.md`; that check stops at this compiler
+mismatch. No new-chain gameplay or rendered-image comparison is claimed.
+BOTW is the only locally available Mac game build; other games have no local
+regression run for this change.
+
 ### Pipelines on a cold start
 
 - `pso_pairs.tsv`: 3,012 shader pairs from agl's BAHS program variations (the agl / gsys / terrain resource packs), which `shader_pairs.tsv` does not hold. 109 of the 543 pairs drawn on entering Zora's Domain came from them; with the table all 543 are known. The prebuild (15,767 bases) takes 910 MB in 16 files, 187 s with 7 workers for the first 12,755 and 19 s for the 3,012 more; the files open in 2.2 s cold, 0.25 s from the file cache, and add about 850 MB of footprint.
@@ -746,6 +787,8 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 - The frame step under load: `DM_TEST_PRESENT_LAG=1,12` (12 ms added to every frame: 30 fps at 1.000 of real time).
 
 ## Found on this game
+
+- **Implemented, cache equivalence validated:** [Operation-specific shader caches](../../../docs/reference/shaders.md#shader-caches-follow-each-operations-inputs) and [fixed Metal input names](../../../docs/reference/shaders.md#metal-cache-entries-require-a-fixed-compiler-input-name); the cache-validation note above records the real Mac/iOS output comparisons and the supported-toolchain/gameplay validation boundary.
 
 - **Resolved: stray light/dark fringes during a widescreen loading wipe:** [Projected fullscreen fills keep texture and clip coordinates together](../../../docs/reference/rendering.md#projected-fullscreen-fills-keep-texture-and-clip-coordinates-together).
 

@@ -22,11 +22,11 @@ import pso_offline
 
 def builder():
     # Use production functions without the CLI's translator/profile initialization.
-    names = {'load_pairs', 'vs_pad', 'vs_depth', 'shader_key', 'pair_keyed'}
+    names = {'load_pairs', 'vs_pad', 'vs_depth', 'analysis_digest', 'pair_keyed'}
     tree = ast.parse((TOOLS / 'dmsh_build.py').read_text())
-    ns = dict(collections=collections, os=os, re=re, sys=sys, hashlib=hashlib)
-    exec(compile(ast.Module(body=[n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names],
-                            type_ignores=[]), str(TOOLS / 'dmsh_build.py'), 'exec'), ns)
+    nodes: list[ast.stmt] = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
+    ns = dict(collections=collections, os=os, re=re, sys=sys, hashlib=hashlib, json=json)
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(TOOLS / 'dmsh_build.py'), 'exec'), ns)
     return ns
 
 
@@ -74,11 +74,9 @@ class Pairing(unittest.TestCase):
         self.extra = self.package.parent / 'pso_pairs.tsv'
         self.extra.write_text('# BAHS\nv\tf1\nv\tf6\nv\tf1\n\n')
         self.ns = builder()
-        self.ns.update(out=str(self.root), PAIRS=self.ns['load_pairs'](self.g, self.package))
-        for key, loc in [('f0', 0), ('f1', 1), ('f6', 6)]:
-            src = pixel(loc)
-            if not loc: src = src.replace('    float4 missing [[user(locn0)]];\n', '').replace('in.v0 + in.missing', 'in.v0')
-            (self.root / f'{key}_b.metal').write_text(src)
+        self.ns.update(out=str(self.root), PAIRS=self.ns['load_pairs'](self.g, self.package), ANALYSIS_BY_KEY={
+            'f0': pixel(0).replace('    float4 missing [[user(locn0)]];\n', '').replace('in.v0 + in.missing', 'in.v0'),
+            'f1': pixel(1), 'f6': pixel(6)})
 
     def test_split_fallback_union_and_defaults(self):
         self.assertEqual(self.ns['PAIRS'], {'v': {'f0', 'f1', 'f6'}})
@@ -106,14 +104,22 @@ class Pairing(unittest.TestCase):
         self.assertNotEqual(present, dmsh_chain.inputs(self.g))
 
     def test_vertex_cache_depends_on_extra_pairs_and_pixel_code(self):
-        self.ns.update(FACTS={}, MAP_ROWS={}, MAP_CONFLICT_ROWS={}, TOOL_FP=b'tools', CODE_FP='code',
-                       PROFILE_ROWS=b'', shader_rule_source=lambda name: b'')
-        key = self.ns['shader_key']
-        v1 = key('v', 'pkg.bin', b'vertex')
+        self.ns.update(ANALYSIS_CODE_FP={'vs':'vs-code','ps':'ps-code','cs':'cs-code','gs':'gs-code'},
+            XLCACHE=types.SimpleNamespace(identity='translator'), CODEGEN=types.SimpleNamespace(identity='cross'), XC=[],
+            abi=types.SimpleNamespace(VALUES={}), DUAL_WANT=set(), shader_rule_source=lambda name: b'')
+        vertex = self.root / 'vertex.bin'; vertex.write_bytes(b'vertex')
+        pixel_code = self.root / 'pixel.bin'; pixel_code.write_bytes(b'pixel')
+        extra_pixel_code = self.root / 'extra-pixel.bin'; extra_pixel_code.write_bytes(b'extra pixel')
+        def digest(key, stage, code):
+            job={'stage':stage,'code':str(code),'attr':{},'tex':{},'img':{}}
+            return self.ns['analysis_digest'](key,'pkg.bin',b'record',job,stage)
+        vertex_base=digest('v','vs',vertex); pixel_one=digest('f1','ps',pixel_code); pixel_extra=digest('f6','ps',extra_pixel_code)
+        initial=self.ns['pair_keyed'](vertex_base,[pixel_one,pixel_extra])
         self.ns['PAIRS']['v'].remove('f6')
-        self.assertNotEqual(v1, key('v', 'pkg.bin', b'vertex'))
-        f1, f2 = key('f1', 'pkg.bin', b'pixel'), key('f1', 'pkg.bin', b'changed pixel')
-        self.assertNotEqual(self.ns['pair_keyed'](v1, [f1]), self.ns['pair_keyed'](v1, [f2]))
+        self.assertNotEqual(initial,self.ns['pair_keyed'](vertex_base,[pixel_one]))
+        pixel_code.write_bytes(b'changed pixel')
+        pixel_changed=digest('f1','ps',pixel_code)
+        self.assertNotEqual(initial,self.ns['pair_keyed'](vertex_base,[pixel_changed]))
 
     @unittest.skipUnless(shutil.which('xcrun'), 'needs the Metal compiler')
     def test_metal_archive_with_padded_regular_and_pulling_entries(self):
