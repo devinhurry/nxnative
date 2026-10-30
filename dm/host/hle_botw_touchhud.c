@@ -323,7 +323,7 @@ static int touchhud_update_cluster_delta(uint8_t *pane) {
     float left, bottom, right, top;
     if (!transform_bounds(pane, &left, &bottom, &right, &top)) return 0;
     pthread_mutex_lock(&g_touchhud_mu);
-    g_touchhud.map_dx = 640.0f + dm_aspect_hud_offset(1) - DM_TP_BOTW_MAP_RIGHT_INSET - right;
+    g_touchhud.map_dx = 640.0f + dm_aspect_hud_offset(1) - dm_touchpad_botw_map_right_inset(dm_aspect_ui_point_scale()) - right;
     g_touchhud.map_dy = DM_TP_BOTW_MAP_TOP - top;
     g_touchhud.delta_valid = 1;
     pthread_mutex_unlock(&g_touchhud_mu);

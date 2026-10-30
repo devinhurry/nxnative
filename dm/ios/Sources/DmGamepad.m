@@ -221,6 +221,7 @@ int dm_opmode(void);   // hle_oe.c: 0 = handheld
 - (void)emitTouchFeedback;
 - (BOOL)inSwap:(CGPoint)p;
 - (BOOL)botwTouchControlsActive;
+- (BOOL)botwMenuDpadActive;
 - (void)setBotwMapRectValid:(BOOL)valid x:(CGFloat)x y:(CGFloat)y width:(CGFloat)width height:(CGFloat)height;
 - (BOOL)botwMapOwnsPoint:(CGPoint)p;
 - (void)botwTouchActionChanged;
@@ -254,7 +255,7 @@ void front_botw_touch_menu_changed(void) {
     NSMapTable<UITouch *, NSNumber *> *_owner;     // touch → control (with the key for C_BTN or the stick for C_STICK, << 8)
     UITouch *_stick[2]; CGPoint _stickNow[2];      // the touch holding each stick and where it is now (0 left, 1 right)
     UITouch *_leftAxisTouch, *_shieldTouch; CGPoint _shieldNow, _shieldOrigin;
-    uint64_t _botwCancelPending, _botwCancelLatched;
+    uint64_t _botwCancelPending, _botwCancelLatched, _botwCancelOutside;
     CGPoint _lCentre, _rCentre;                    // the stick centres: where their touches landed (the left one returns to the ring's home on release)
     CGPoint _ringAt;                               // where the left stick's ring is drawn now
     uint64_t _faceBits, _dpadBits, _btnBits;
@@ -265,6 +266,7 @@ void front_botw_touch_menu_changed(void) {
     CAShapeLayer *_runeBadgeBorder;
     uint64_t _runeIconGeneration; BOOL _runeIconValid;
     CAShapeLayer *_ring, *_knob, *_stickDirection, *_shieldRing, *_shieldGraph, *_shieldDirection, *_cancelRing;
+    CAShapeLayer *_menuDpad;
     CATextLayer *_cancelCue;
     CAShapeLayer *_swap; CATextLayer *_swapLabel; BOOL _swapHeld; CFTimeInterval _swapT0;
     UITapGestureRecognizer *_leftStickDoubleTap;
@@ -339,6 +341,9 @@ static BOOL botwTouchHudSupported(void) { return dm_botw_touch_hud_available(); 
             k_botwOn = [UIColor colorWithWhite:.40 alpha:DM_BOTW_BUTTON_ALPHA];
         });
         _controls = [CALayer layer]; [self.layer addSublayer:_controls];
+        _menuDpad = shape(self.layer); _menuDpad.hidden = YES;
+        _menuDpad.fillColor = [UIColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:.8].CGColor;
+        _menuDpad.strokeColor = nil; _menuDpad.shadowOpacity = 0;
         _ring = shape(_controls); _ring.fillColor = k_ringFill.CGColor;
         _knob = shape(_controls);
         _stickDirection = shape(_controls); _stickDirection.hidden = YES;
@@ -544,8 +549,8 @@ static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPoint
 - (CGFloat)shieldR { return dm_touchpad_botw_stick_radius(self.bounds.size.height) * [self botwLayoutScale:B_ZL]; }
 - (BOOL)inLeftArea:(CGPoint)p { CGRect b = self.bounds; return p.x < b.size.width * K_LSWIPE && p.y > CGRectGetMidY(b); }   // lower-left: the left stick starts where the touch lands
 - (BOOL)inRightArea:(CGPoint)p { CGRect b = self.bounds; return p.x >= CGRectGetMaxX(b) - b.size.width * K_RSWIPE; }
-- (CGPoint)dpadCenter { if ([self botwTouchControlsActive]) return [self botwLayoutCenter:B_LEFT]; UIEdgeInsets i = self.safeAreaInsets; dm_touchpad_point p = dm_touchpad_dpad_center(self.bounds.size.width, self.bounds.size.height, i.left, i.top, i.right, i.bottom); return CGPointMake(p.x, p.y); }
-- (CGFloat)dpadR { return K_DPAD_R * self.u * [self botwLayoutScale:B_LEFT]; }
+- (CGPoint)dpadCenter { if ([self botwTouchControlsActive] || [self botwMenuDpadActive]) return [self botwLayoutCenter:B_LEFT]; UIEdgeInsets i = self.safeAreaInsets; dm_touchpad_point p = dm_touchpad_dpad_center(self.bounds.size.width, self.bounds.size.height, i.left, i.top, i.right, i.bottom); return CGPointMake(p.x, p.y); }
+- (CGFloat)dpadR { return K_DPAD_R * self.u * ([self botwMenuDpadActive] ? _touchLayout.control[B_LEFT].scale : [self botwLayoutScale:B_LEFT]); }
 static BOOL isDrop(int b) { return b == B_ZL || b == B_L || b == B_ZR || b == B_R; }
 static BOOL isClick(int b) { return b == B_LS || b == B_RS; }
 - (CGPoint)dropCenter:(int)b { if ([self botwTouchControlsActive]) return [self botwLayoutCenter:b]; CGRect s = self.safe; CGFloat u = self.u; BOOL z = b == B_ZL || b == B_ZR;
@@ -560,6 +565,7 @@ static BOOL isClick(int b) { return b == B_LS || b == B_RS; }
 
 static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); }
 - (BOOL)botwTouchControlsActive { return botwTouchHudSupported() && _full && !_tap && !_padOff && !_botwMenuMode && !atomic_load(&g_any_controller_connected); }
+- (BOOL)botwMenuDpadActive { return botwTouchHudSupported() && _full && !_tap && !_padOff && _botwMenuMode && !_manualMenuPad && !atomic_load(&g_any_controller_connected) && dm_botw_touch_menu_dpad_visible(); }
 
 - (void)sendBotwMenuPointer:(int)phase point:(CGPoint)p {
     if (phase == DM_BOTW_MENU_CANCEL) {
@@ -596,7 +602,16 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
 }
 - (void)refreshBotwTouchMenuMode {
     BOOL active = !atomic_load(&g_any_controller_connected) && !dm_botw_touch_controls_visible();
-    if (_botwMenuMode == active) return;
+    if (_botwMenuMode == active) {
+        if (!_menuDpad.hidden && ![self botwMenuDpadActive]) {
+            for (UITouch *t in _owner.keyEnumerator.allObjects)
+                if (([_owner objectForKey:t].unsignedLongLongValue & 0xff) == C_DPAD) [_owner removeObjectForKey:t];
+            [self recompute];
+        }
+        _menuDpad.hidden = ![self botwMenuDpadActive];
+        [self setNeedsLayout];
+        return;
+    }
     [self reset];
     if (botwTouchHudSupported()) dm_input_cancel_virtual_latch(0xffffull);
     _botwMenuMode = active;
@@ -614,22 +629,12 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     _label[B_L].hidden = NO;
 }
 - (void)refreshBotwRuneIcon {
-    if (![self botwTouchControlsActive]) {
-        [self clearBotwRuneIcon]; _runeIconGeneration = 0; return;
-    }
-    dm_botw_rune_icon_state snapshot = {0};
-    if (!dm_botw_rune_icon_snapshot(&snapshot) || snapshot.generation < _runeIconGeneration) return;
-    if (snapshot.generation == _runeIconGeneration) return;
-    _runeIconGeneration = snapshot.generation;
     [self clearBotwRuneIcon];
-    CGImageRef image = botwRuneImage(&snapshot);
-    if (!image) return;
-    _runeIconLayer.contents = (__bridge id)image;
+    if (![self botwTouchControlsActive]) return;
+    _runeIconLayer.contents = (__bridge id)_runeDefaultIcon.CGImage;
     _runeIconLayer.hidden = NO;
     _runeBadge.hidden = _runeBadgeLabel.hidden = !_touchLayout.badges;
-    _runeIconValid = YES;
     _label[B_L].hidden = YES;
-    CGImageRelease(image);
 }
 - (void)botwRuneIconChanged {
     [self refreshBotwRuneIcon]; [self setNeedsLayout];
@@ -785,7 +790,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
             uint64_t bit = 1ull << (v >> 8);
             if ((_botwCancelPending & bit) || !(_botwCancelLatched & bit)) btn |= bit;
         } else if (c == C_SHIELD) btn |= 1ull << B_ZL;
-        else if (c == C_DPAD) dpad |= [self botwTouchControlsActive] ? v >> 8 : [self dpadAt:[t locationInView:self]];
+        else if (c == C_DPAD) dpad |= ([self botwTouchControlsActive] || dm_botw_touch_menu_dpad_visible()) ? v >> 8 : [self dpadAt:[t locationInView:self]];
         else if (c == C_SWAP) swap = YES; }
     // Keep a canceled trigger published even after its finger lifts. The native
     // sequencer needs one or more real Npad samples to observe R/ZR with B.
@@ -809,6 +814,9 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     }
     CGPoint o = [self knobOffset:1]; CGFloat R = [self stickR:1];
     dm_touchpad_stick_axis((float)o.x, (float)o.y, (float)R, _manualMenuPad || !dm_look_enabled(), &ax[2], &ax[3]);
+    if (_lookTouch && [self botwTouchControlsActive] && dm_botw_touch_quick_select_active()) {
+        ax[2] = -ax[2]; ax[3] = -ax[3];
+    }
     BOOL changed = face != _faceBits || dpad != _dpadBits || btn != _btnBits || swap != _swapHeld;
     uint64_t pressed = (face | dpad | btn) & ~(_faceBits | _dpadBits | _btnBits);
     unsigned gripping = (_stick[0] ? 1u : 0) | (_stick[1] && ![self botwTouchControlsActive] ? 2u : 0);
@@ -868,6 +876,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     _stickNow[1] = p;
     CGFloat d = dist(p, _rCentre), R = [self stickR:1];
     if (d > R) _rCentre = CGPointMake(p.x - (p.x - _rCentre.x) * R / d, p.y - (p.y - _rCentre.y) * R / d);
+    if ([self botwTouchControlsActive] && dm_botw_touch_quick_select_active()) { dx=-dx; dy=-dy; }
     if (dx != 0 || dy != 0) dm_look_input(DM_LOOK_MOVE, dx, dy);
 }
 - (void)endLook:(UITouch *)t at:(CGPoint)p cancelled:(BOOL)cancelled {
@@ -927,6 +936,11 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     BOOL game = NO;
     for (UITouch *t in ts) {
         if (_botwMenuMode && !_manualMenuPad) {
+            if ([self botwMenuDpadActive]) {
+                CGPoint p=[t locationInView:self];
+                uint64_t direction = dist(p,self.dpadCenter)<=self.dpadR*K_DPAD_GRAB ? [self dpadAt:p] : 0;
+                if (direction) { [_owner setObject:@(C_DPAD | direction << 8) forKey:t]; continue; }
+            }
             // The host owns menu hit testing and gestures. Keep only one primary
             // pointer and never let extra touches fall through to gameplay.
             if (_botwMapGestureSuppressed) {
@@ -1029,7 +1043,15 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         }
         else if (c == C_FACE) [_faceOf setObject:@([self faceAt:p]) forKey:t];
         else if (c == C_SHIELD) { _shieldNow = p; [self setNeedsLayout]; }
-        else if (c == C_BTN && [self botwTouchControlsActive] && ((v >> 8) == B_R || (v >> 8) == B_ZR)) [self setNeedsLayout];
+        else if (c == C_BTN && [self botwTouchControlsActive] && ((v >> 8) == B_R || (v >> 8) == B_ZR)) {
+            uint64_t bit = 1ull << (v >> 8);
+            CGPoint center = [self dropCenter:(int)(v >> 8)];
+            BOOL outside = dm_touchpad_cancel_outside(p.x,p.y,center.x,center.y,
+                DM_TP_CANCEL_RADIUS*self.u*[self botwLayoutScale:(int)(v >> 8)]);
+            if (outside != !!(_botwCancelOutside & bit)) [self emitTouchFeedback];
+            if (outside) _botwCancelOutside |= bit; else _botwCancelOutside &= ~bit;
+            [self setNeedsLayout];
+        }
         else if (c == C_STICK) {
             _stickNow[v >> 8] = p;
             if ((v >> 8) == 0) [self updateLeftStickTapAt:p];
@@ -1069,6 +1091,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
             // the guide belongs to the finger and ends on this release.
             [self setNeedsLayout];
             uint64_t bit = 1ull << (v >> 8);
+            _botwCancelOutside &= ~bit;
             CGPoint p = [t locationInView:self], center = [self dropCenter:(int)(v >> 8)];
             if (ended && dm_botw_touch_actions_available() && !((_botwCancelPending | _botwCancelLatched) & bit) &&
                 dm_touchpad_cancel_outside((float)p.x, (float)p.y, (float)center.x, (float)center.y, DM_TP_CANCEL_RADIUS * self.u * [self botwLayoutScale:(int)(v >> 8)])) {
@@ -1123,7 +1146,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     if (botwTouchHudSupported()) dm_botw_touch_actions_reset();
     if (botwTouchHudSupported()) dm_input_cancel_virtual_latch(cancelMask);
     [self cancelLook]; [_owner removeAllObjects]; [_faceOf removeAllObjects]; _stick[0] = _stick[1] = nil;
-    _leftAxisTouch = _shieldTouch = nil; _shieldNow = _shieldOrigin = CGPointZero; _botwCancelPending = _botwCancelLatched = 0;
+    _leftAxisTouch = _shieldTouch = nil; _shieldNow = _shieldOrigin = CGPointZero; _botwCancelPending = _botwCancelLatched = _botwCancelOutside = 0;
     _leftStickTapEnd = 0; _leftStickTapGap = INFINITY;
     _leftStickDownTime = 0; _leftStickUsed = NO;
     _leftStickDoubleTap.enabled = [self botwTouchControlsActive] && !_botwMenuMode;
@@ -1186,6 +1209,15 @@ static CGImageRef botwRuneImage(const dm_botw_rune_icon_state *snapshot) {
     CGFloat u = self.u;
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     _controls.frame = self.layer.bounds;
+    _menuDpad.hidden = ![self botwMenuDpadActive];
+    if (!_menuDpad.hidden) {
+        CGMutablePathRef path = CGPathCreateMutable();
+        for (int b=B_LEFT;b<=B_DOWN;b++) {
+            CGPathRef key = dm_botw_dpad_key_path(self.dpadCenter,self.dpadR,b);
+            CGPathAddPath(path,NULL,key); CGPathRelease(key);
+        }
+        setPath(_menuDpad,path);
+    }
     for (int b = B_A; b <= B_Y; b++) { CGPoint c = [self facePos:b]; setPath(_key[b], circlePath(c, self.faceR)); placeLabel(_label[b], c, 20 * u); }
     BOOL botw = [self botwTouchControlsActive];
     for (int i = 0; i < (int)(sizeof k_btns / sizeof *k_btns); i++) { int b = k_btns[i];
@@ -1318,6 +1350,7 @@ static CGImageRef botwRuneImage(const dm_botw_rune_icon_state *snapshot) {
 - (BOOL)dm_testDpadArtworkHidden {
     return _key[B_LEFT].hidden && _key[B_UP].hidden && _key[B_RIGHT].hidden && _key[B_DOWN].hidden;
 }
+- (BOOL)dm_testMenuDpadHidden { return _menuDpad.hidden; }
 - (BOOL)dm_testZLArtworkHidden { return _key[B_ZL].hidden; }
 - (BOOL)dm_testL3ArtworkHidden { return _key[B_LS].hidden; }
 - (BOOL)dm_testR3ArtworkHidden { return _key[B_RS].hidden; }

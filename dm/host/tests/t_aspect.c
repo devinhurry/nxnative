@@ -52,7 +52,8 @@ static void test_right_hud_padding(void) {
             float rect[4]; dm_aspect_hud_rect(w,h,rect);
             assert(fabsf(rect[0]+rect[2]-w)<.001f);
             dm_touchpad_rect plus=dm_touchpad_botw_menu_rect(rect[0],rect[1],rect[2],rect[3],0);
-            float padding=(DM_TP_BOTW_MAP_RIGHT_INSET-DM_TP_BOTW_MENU_SIZE)*rect[3]/720-DM_TP_BOTW_MENU_GAP;
+            float padding=DM_TP_BOTW_HEART_EDGE*rect[3]/720+DM_TP_BOTW_EDGE_EXTRA-
+                (DM_TP_BOTW_MENU_SIZE-DM_TP_BOTW_MENU_GLYPH_SIZE)*rect[3]/1440;
             assert(fabsf(w-plus.x-plus.width-padding)<.001f);
         }
     }
@@ -71,7 +72,7 @@ static void test_edge_hud(void) {
     pane_init(sensor,"Pa_Sensor_00",392,582,78); pane_child(all,sensor);
     dm_aspect_set_display(21.f/10); dm_aspect_set_safe_area(1512,720,0,0);
     for (int i=0;i<20;i++) { dm_aspect_ui_pane(heart); dm_aspect_ui_pane(sensor); }
-    assert(fabsf(*(float *)(heart+0x30)+550)<.001f && *(float *)(heart+0x50)==312);
+    assert(fabsf(*(float *)(heart+0x30)+548)<.001f && *(float *)(heart+0x50)==312);
     assert(fabsf(*(float *)(sensor+0x30)-508)<.001f && *(float *)(sensor+0x50)==582);
     dm_aspect_ui_pane(glyph); assert(*(float *)(glyph+0x30)==20 && *(float *)(glyph+0x50)==32);
     uint64_t regs[31]={0}; regs[21]=(uintptr_t)glyph; draw_callback(regs);
@@ -93,12 +94,12 @@ static void test_edge_hud(void) {
     assert(*(float *)(inout+0x30)==0 && *(float *)(ornaments+0x30)==0);
     draw_callback(regs); assert(!dm_aspect_ui_hud_drawing()); draw_end_callback(regs);
     dm_aspect_set_safe_area(1512,720,40,20); dm_aspect_ui_pane(heart); dm_aspect_ui_pane(sensor);
-    assert(fabsf(*(float *)(heart+0x30)+550)<.001f && fabsf(*(float *)(sensor+0x30)-508)<.001f);
+    assert(fabsf(*(float *)(heart+0x30)+548)<.001f && fabsf(*(float *)(sensor+0x30)-508)<.001f);
     float rect[4]; dm_aspect_hud_rect(1512,720,rect);
     assert(fabsf(rect[0]-40)<.001f && fabsf(rect[2]-1472)<.001f && rect[1]==0 && rect[3]==720);
     dm_aspect_touch_rect(1512,720,rect); assert(fabsf(rect[0]-116)<.001f && rect[2]==1280);
     dm_aspect_set_display(GAME_ASPECT); dm_aspect_ui_pane(heart); dm_aspect_ui_pane(sensor);
-    assert(*(float *)(heart+0x30)==-434 && *(float *)(sensor+0x30)==392);
+    assert(*(float *)(heart+0x30)==-432 && *(float *)(sensor+0x30)==392);
     dm_aspect_set_safe_area(1280,720,0,0);
     uint8_t fade[0x100],logo[0x100],upper[0x100];
     pane_init(fade,"RootPane",0,1280,720); pane_init(logo,"N_LogoInOut_00",0,30,40); pane_child(fade,logo);

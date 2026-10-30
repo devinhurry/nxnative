@@ -32,7 +32,7 @@ Every piece of code that runs for one game and not the others: the rewriter's pa
 | [SHIN MEGAMI TENSEI V: Vengeance](#shin-megami-tensei-v-vengeance) | 1 | 1 | 0 | 0 | 3 | yes |
 | [Super Smash Bros. Ultimate](#super-smash-bros-ultimate) | 11 | 0 | 0 | 1 | 0 | yes |
 | [Taiko Risshiden V DX](#taiko-risshiden-v-dx) | 1 | 0 | 0 | 2 | 0 | yes |
-| [The Legend of Zelda: Breath of the Wild](#the-legend-of-zelda-breath-of-the-wild) | 7 | 12 | 5 | 0 | 3 | yes |
+| [The Legend of Zelda: Breath of the Wild](#the-legend-of-zelda-breath-of-the-wild) | 7 | 13 | 5 | 0 | 3 | yes |
 | [The Legend of Zelda: Link's Awakening](#the-legend-of-zelda-links-awakening) | 1 | 0 | 0 | 0 | 0 | yes |
 | [The Legend of Zelda: Tears of the Kingdom](#the-legend-of-zelda-tears-of-the-kingdom) | 0 | 0 | 11 | 0 | 0 | yes |
 | [Xenoblade Chronicles 3](#xenoblade-chronicles-3) | 6 | 0 | 0 | 0 | 0 | yes |
@@ -489,6 +489,7 @@ Every piece of code that runs for one game and not the others: the rewriter's pa
   - gate 35 at `+0x27ae4`: Pane::Calculate after global matrix composition and before child recursion: offset N_MainAll_00 translation
   - gate 39 at `+0x27d7c`: Pane::Draw before virtual DrawSelf: x21 owns the native background pane
   - gate 40 at `+0x27d84`: Pane::Draw after virtual DrawSelf: end the native background draw scope
+  - gate 41 at `+0xf714b8`: ScreenMgr draw dispatch: result filter moves the collapsed touch map before foreground screens in its layer
   - gate 29 at `+0xeb4468`: projection update: apply the display aspect to the main camera before checking dirty flags
   - gate 30 at `+0xd44a2c`: UI 3D camera update: x19 owns the source lens at +0xa0 and projection at +0xa8; apply aspect before copying lens parameters
   - gate 31 at `+0xe1a628`: MainScreen3D update: correct its copied projection before rebuilding the world-label view

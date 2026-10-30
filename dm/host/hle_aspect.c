@@ -3,6 +3,7 @@
 // 16:9; native full-width background panes can extend to the display edges.
 #include "hle.h"
 #include "botw_rune_icon.h"
+#include "touchpad_geometry.h"
 #include <ctype.h>
 #include <math.h>
 #include <search.h>
@@ -13,6 +14,7 @@ static int g_on;
 static float g_custom;
 static _Atomic float g_screen = 16.0f / 9.0f;
 static _Atomic float g_hud_safe_left;
+static _Atomic float g_ui_point_scale = 1;
 static module_t *g_main;
 static uint64_t g_single_off, g_proj_off, g_vt_off, g_field_off, g_dirty_off;
 static unsigned g_ui_reg; static uint64_t g_ui_source, g_ui_projection, g_ui_fovy;
@@ -64,11 +66,13 @@ float dm_aspect_hud_offset(int right) {
     float safe = right ? 0 : atomic_load(&g_hud_safe_left);
     return fmaxf(0, extra - safe);
 }
+float dm_aspect_ui_point_scale(void) { return atomic_load(&g_ui_point_scale); }
 void dm_aspect_set_safe_area(float w, float h, float left, float right) {
     if (!isfinite(w) || !isfinite(h) || !isfinite(left) || !isfinite(right) || w <= 0 || h <= 0) return;
     float canvas[4]; dm_aspect_touch_rect(w, h, canvas);
     float frame_width = dm_aspect_native() ? fminf(w, h * dm_aspect_ratio()) : canvas[2];
     float bar = (w - frame_width) * .5f, scale = 720 / canvas[3];
+    atomic_store(&g_ui_point_scale, scale);
     atomic_store(&g_hud_safe_left, fmaxf(0, left - bar) * scale);
 }
 void dm_aspect_hud_rect(float w, float h, float rect[4]) {
@@ -275,7 +279,7 @@ void dm_aspect_ui_pane(uint8_t *pane) {
     pthread_mutex_lock(&g_ui_width_mu);
     aspect_ui_width **found = tfind(&key, &g_ui_widths, aspect_ui_width_order);
     float wide = fmaxf(1, dm_aspect_ratio() / GAME_ASPECT);
-    if (!found && wide == 1) { pthread_mutex_unlock(&g_ui_width_mu); return; }
+    if (!found && wide == 1 && hud != -1) { pthread_mutex_unlock(&g_ui_width_mu); return; }
     if (!found) {
         aspect_ui_width *entry = calloc(1, sizeof *entry);
         if (!entry) die("[RED] aspect: cannot allocate background pane state");
@@ -305,7 +309,7 @@ void dm_aspect_ui_pane(uint8_t *pane) {
     // Landscape's horizontal safe inset reserves the notch at mid-height.
     // Hearts sit above it, with their own authored top/corner padding; adding
     // the entire inset here leaves an unnecessary gap on iPhone.
-    if (hud == -1) entry->written_x -= fmaxf(0, 360 * dm_aspect_ratio() - 640);
+    if (hud == -1) entry->written_x += DM_TP_BOTW_EDGE_EXTRA*dm_aspect_ui_point_scale() - fmaxf(0, 360 * dm_aspect_ratio() - 640);
     // AppMap's ScissorPane::Draw rejects clips outside its native 16:9
     // target before submitting draws. Anchor that subtree during GPU replay.
     else if (hud == 1 && !dm_botw_touch_hud_active())

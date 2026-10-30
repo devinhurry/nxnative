@@ -54,6 +54,9 @@ int gate_obs_present(int id) { return id > 0 && id < OBS_MAX && mock_gate_presen
 void gate_obs_read_set(int id, void (*fn)(const uint64_t *regs)) {
     if (id > 0 && id < OBS_MAX) mock_gate_callbacks[id] = fn;
 }
+void gate_obs_result_set(int id, uint64_t (*fn)(const uint64_t *regs)) {
+    assert(id==OBS_BOTW_SCREEN_DRAW && fn==selector_screen_draw);
+}
 int dm_guest_as_contains(uintptr_t address) {
     return mock_guest_size && address >= mock_guest_start && address - mock_guest_start < mock_guest_size;
 }
@@ -1211,6 +1214,16 @@ static void test_menu_animation_visibility(void) {
     selector.active[1]=0;
     selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
     assert(dm_botw_touch_loadout_visible() && dm_botw_touch_controls_visible());
+    assert(!dm_botw_touch_quick_select_active());
+    uint8_t *quick=fake_pane(79,"N_ShortCutPos_00",76,632,148,0,0);
+    uint8_t *quick_cut=fake_pane(80,"N_Cut_00",79,632,148,0,0);
+    uint8_t *quick_items=fake_pane(81,"N_ShortCutAll_00",80,632,148,0,0);
+    link_child(shortcut_all,quick); link_child(quick,quick_cut); link_child(quick_cut,quick_items);
+    selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
+    assert(dm_botw_touch_quick_select_active());
+    quick[0x59]=0;
+    selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
+    assert(!dm_botw_touch_quick_select_active());
     shortcut_main[0x59]=0;
     selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
     assert(!dm_botw_touch_loadout_visible() && dm_botw_touch_controls_visible());
@@ -1339,6 +1352,60 @@ static void test_inventory_preview_rotation(void) {
     assert(snapshot_native_view_locked().inventory_arrow_valid[1]);
     guide[0x59] = 0;
     assert(!snapshot_native_view_locked().inventory_arrow_valid[1]);
+    dm_botw_touch_menu_reset();
+}
+
+static void test_map_draw_order(void) {
+    dm_botw_touch_menu_reset(); init_selector_fixture();
+    current_guest_frame=8800;
+    uint32_t count=3;
+    memcpy(selector.registry+0x28,&count,4); memcpy(selector.registry+0x38,&count,4);
+    selector.screen_list[1]=(uintptr_t)selector.apphome_screen;
+    selector.screen_list[2]=(uintptr_t)selector.map_screen;
+    strcpy((char *)selector.screen+0x200,"Title_00");
+    strcpy((char *)selector.map_screen+0xa0,"AppMap_00");
+    uint8_t *hidden=fake_pane(100,"RootPane",-1,1280,720,0,0); hidden[0x58]=0;
+    uint8_t *hud=fake_pane(101,"RootPane",-1,1280,720,0,0);
+    uint8_t *map=fake_pane(102,"RootPane",-1,1280,720,0,0);
+    uint8_t *inout=fake_pane(103,"N_InOut_00",102,30,40,0,0);
+    uint8_t *cut=fake_pane(104,"N_Cut_00",103,166,166,0,0);
+    link_child(map,inout); link_child(inout,cut);
+    put_ptr(selector.screen+0x30,(uintptr_t)selector.apphome_wrapper);
+    put_ptr(selector.apphome_wrapper+0x18,(uintptr_t)hidden);
+    put_ptr(selector.apphome_screen+0x30,(uintptr_t)selector.owner2);
+    put_ptr(selector.owner2+0x18,(uintptr_t)hud);
+    put_ptr(selector.map_screen+0x30,(uintptr_t)selector.map_owner);
+    put_ptr(selector.map_owner+0x18,(uintptr_t)map);
+    uint64_t regs[31]={0}; regs[20]=(uintptr_t)selector.registry;
+    uint8_t registry_before[sizeof selector.registry]; memcpy(registry_before,selector.registry,sizeof registry_before);
+    for(int i=0;i<3;i++) {
+        regs[22]=i; regs[0]=selector.screen_list[i];
+        assert(selector_screen_draw(regs)==selector.screen_list[i==0?2:i-1]);
+    }
+    assert(!memcmp(registry_before,selector.registry,sizeof registry_before));
+    // Root visibility does not determine order: dismissed screens retain
+    // visible empty roots. Other layers, expanded maps and inactive touch
+    // mode retain the original draw receiver and input registry.
+    hidden[0x58]=1; current_guest_frame++;
+    regs[22]=0; regs[0]=selector.screen_list[0];
+    assert(selector_screen_draw(regs)==selector.screen_list[2]);
+    selector.active[1]=2; current_guest_frame++;
+    regs[22]=1; regs[25]=2; regs[0]=selector.screen_list[1];
+    assert(selector_screen_draw(regs)==regs[0]);
+    regs[22]=2; regs[25]=0; regs[0]=selector.screen_list[2];
+    assert(selector_screen_draw(regs)==selector.screen_list[0]);
+    selector.active[1]=0;
+    *(float *)(cut+0x50)=1500; current_guest_frame++;
+    regs[22]=0; regs[0]=selector.screen_list[0];
+    assert(selector_screen_draw(regs)==regs[0]);
+    *(float *)(cut+0x50)=166; mock_touch_hud_active=0; current_guest_frame++;
+    assert(selector_screen_draw(regs)==regs[0]);
+    mock_touch_hud_active=1;
+    dm_botw_touch_menu_view v={.generic_mode=1,.map_visible=1,.hero_path=1,.render_frame=current_guest_frame};
+    set_rect(v.map,.1f,.1f,.8f,.8f); dm_botw_touch_menu_test_set_render_frame(current_guest_frame);
+    dm_botw_touch_menu_test_publish(&v); assert(dm_botw_touch_menu_dpad_visible());
+    v.hero_path=0; dm_botw_touch_menu_test_publish(&v); assert(!dm_botw_touch_menu_dpad_visible());
+    v.hero_path=1; v.map_visible=0; dm_botw_touch_menu_test_publish(&v); assert(!dm_botw_touch_menu_dpad_visible());
     dm_botw_touch_menu_reset();
 }
 
@@ -3497,6 +3564,7 @@ int main(void) {
     test_shop_category_touch();
     test_cutscene_skip_prompt();
     test_inventory_preview_rotation();
+    test_map_draw_order();
     test_map_displacement_drag();
     puts("t_botw_touch_menu: native inventory/category/popup and current-screen generic targets, eligibility, delayed focus and inactive gates passed");
     return 0;

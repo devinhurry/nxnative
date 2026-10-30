@@ -114,6 +114,7 @@ static float g_rotate_last_x;
 static int g_presented_menu;
 static int g_presented_gameplay;
 static int g_presented_loadout;
+static int g_presented_quick_select;
 static uint64_t g_presented_menu_frame;
 static _Atomic uintptr_t g_presented_menu_root;
 static _Atomic uintptr_t g_presented_gameplay_root;
@@ -217,6 +218,7 @@ static unsigned g_selector_trace_next;
 static pthread_mutex_t g_selector_trace_mu = PTHREAD_MUTEX_INITIALIZER;
 static int point_in_rect(float x, float y, const float rect[4]);
 static uint64_t menu_render_frame(void);
+static uint64_t selector_screen_draw(const uint64_t *regs);
 static uint64_t g_pointer_page_key, g_pointer_popup_key;
 static int g_map_prompt_down, g_map_prompt_back;
 static uint64_t g_map_prompt_button;
@@ -2328,6 +2330,7 @@ void dm_botw_touch_menu_install(void) {
     gate_obs_read_set(OBS_BOTW_MENU_SELECT, dm_botw_touch_menu_selector);
     if (gate_obs_present(OBS_BOTW_LIST_WIDGET_UPDATE))
         gate_obs_read_set(OBS_BOTW_LIST_WIDGET_UPDATE, selector_list_widget_observe);
+    if (gate_obs_present(OBS_BOTW_SCREEN_DRAW)) gate_obs_result_set(OBS_BOTW_SCREEN_DRAW, selector_screen_draw);
     atomic_store_explicit(&g_selector_hook_installed, 1, memory_order_release);
     const char *trace = getenv("DM_BOTW_MENU_TRACE");
     int tracing = trace ? atoi(trace) : 0;
@@ -2993,7 +2996,7 @@ static int selector_pointer_screen_name(const char *name) {
 // MainScreen keeps its empty root shown during conversations. The heart HUD's
 // native InOut layer follows the game's gameplay/cinematic presentation even
 // across the gap when one Message page closes before the next one opens.
-static int selector_hud_path_visible(uintptr_t root, const char *const *path, unsigned count) {
+static uintptr_t selector_hud_path_pane(uintptr_t root, const char *const *path, unsigned count) {
     uintptr_t pane = root;
     for (unsigned i = 0; i < count; i++) {
         uintptr_t sentinel = pane + 0x20, link = selector_read_ptr(pane, 0x28), found = 0;
@@ -3013,7 +3016,63 @@ static int selector_hud_path_visible(uintptr_t root, const char *const *path, un
         if (n == 64 || !found) return 0;
         pane = found;
     }
-    return pane_chain_visible((uint8_t *)pane) && pane_chain_alpha_visible((uint8_t *)pane);
+    return pane;
+}
+static int selector_hud_path_visible(uintptr_t root, const char *const *path, unsigned count) {
+    uintptr_t pane = selector_hud_path_pane(root,path,count);
+    return pane && pane_chain_visible((uint8_t *)pane) && pane_chain_alpha_visible((uint8_t *)pane);
+}
+
+// ScreenMgr draws equal-layer screens in ID order. The relocated map would
+// otherwise draw over MainScreen messages and corner tips. Move its draw
+// receiver to the start of that layer and shift preceding receivers one slot:
+// every other screen retains its order; the native input registry stays intact.
+static uint64_t selector_screen_draw(const uint64_t *regs) {
+    uintptr_t original=regs[0], manager=regs[20];
+    if (!dm_botw_touch_hud_active() || !selector_range(manager,0x48)) return original;
+    uint32_t count=0, layers=0;
+    memcpy(&count,(void *)(manager+0x28),4); memcpy(&layers,(void *)(manager+0x38),4);
+    uintptr_t screens=selector_read_ptr(manager,0x30), flags=selector_read_ptr(manager,0x40);
+    uint32_t index=(uint32_t)regs[22], layer=(uint32_t)regs[25];
+    if (!count || count>256 || layers!=count || index>=count ||
+        !selector_range(screens,count*sizeof(uintptr_t)) || !selector_range(flags,count) ||
+        selector_read_ptr(screens,index*sizeof(uintptr_t))!=original) return original;
+    static _Thread_local struct {
+        uint64_t frame; uintptr_t manager, map; uint32_t layer, first, map_index;
+    } order;
+    uint64_t frame=dm_guest_frame();
+    if (order.frame!=frame || order.manager!=manager || order.layer!=layer) {
+        order.frame=frame; order.manager=manager; order.layer=layer; order.map=0; order.first=UINT32_MAX;
+        for (uint32_t i=0;i<count;i++) {
+            if (((const uint8_t *)flags)[i]!=layer) continue;
+            uintptr_t screen=selector_read_ptr(screens,i*sizeof(uintptr_t));
+            if (!selector_range(screen,0x100)) break;
+            if (order.first==UINT32_MAX) order.first=i;
+            uintptr_t root=selector_read_ptr(selector_read_ptr(screen,0x30),0x18);
+            if (!selector_range(root,PANE_NAME+16) || selector_read_ptr(root,PANE_PARENT) ||
+                memcmp((void *)(root+PANE_NAME),"RootPane",9)) continue;
+            char name[64];
+            if (!selector_screen_name(screen,name)) continue;
+            if (!strcmp(name,"AppMap_00")) {
+                static const char *const path[]={"N_InOut_00","N_Cut_00"};
+                uintptr_t cut=selector_hud_path_pane(root,path,2); float size[2]={0};
+                if (cut) memcpy(size,(void *)(cut+0x50),sizeof size);
+                if (fabsf(size[0]-166)<2 && fabsf(size[1]-166)<2 &&
+                    pane_chain_visible((uint8_t *)cut) && pane_chain_alpha_visible((uint8_t *)cut)) {
+                    order.map=screen; order.map_index=i;
+                }
+                break;
+            }
+        }
+    }
+    if (order.map && index>=order.first && index<=order.map_index) {
+        if (index==order.first) return order.map;
+        for (uint32_t i=index;i>order.first;) {
+            if (((const uint8_t *)flags)[--i]==layer)
+                return selector_read_ptr(screens,i*sizeof(uintptr_t));
+        }
+    }
+    return original;
 }
 static int selector_gameplay_hud_visible(uintptr_t root) {
     static const char *const path[] = {"N_All_00", "N_State_00", "Pa_HeartGauge_00", "N_InOut_00"};
@@ -3021,6 +3080,10 @@ static int selector_gameplay_hud_visible(uintptr_t root) {
 }
 static int selector_loadout_visible(uintptr_t root) {
     static const char *const path[] = {"N_All_00", "N_MainAll_00", "N_Pos_00"};
+    return selector_hud_path_visible(root, path, sizeof path / sizeof *path);
+}
+static int selector_quick_select_visible(uintptr_t root) {
+    static const char *const path[] = {"N_All_00", "N_ShortCutPos_00", "N_Cut_00", "N_ShortCutAll_00"};
     return selector_hud_path_visible(root, path, sizeof path / sizeof *path);
 }
 
@@ -3035,7 +3098,7 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
     if (selector_range(registry, 0x48)) memcpy(&count, (const void *)(registry + 0x28), 4);
     uintptr_t screens = selector_read_ptr(registry, 0x30);
     uintptr_t flags = selector_read_ptr(registry, 0x40);
-    int presented = 0, gameplay = 0, loadout = 0;
+    int presented = 0, gameplay = 0, loadout = 0, quick_select = 0;
     uintptr_t presented_root = 0;
     uintptr_t gameplay_root = 0;
     char presented_name[64] = {0};
@@ -3060,7 +3123,10 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
             uintptr_t state = selector_read_ptr(screen, 0x38);
             int input_owned = selector_range(state, 0x39) && (((const uint8_t *)state)[0x38] & 2);
             int root_visible = pane_chain_visible((uint8_t *)root);
-            if (!strcmp(name, "MainShortCut_00") && root_visible && selector_loadout_visible(root)) loadout = 1;
+            if (!strcmp(name, "MainShortCut_00") && root_visible) {
+                loadout |= selector_loadout_visible(root);
+                quick_select |= mode == 2 && shown >= 0 && input_owned && selector_quick_select_visible(root);
+            }
             if (!strcmp(name, "MainScreen_00") && mode == 2 && shown >= 0 &&
                 input_owned && root_visible &&
                 pane_chain_alpha_visible((uint8_t *)root) && selector_gameplay_hud_visible(root)) {
@@ -3093,6 +3159,7 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
     g_presented_menu_frame = frame;
     g_presented_gameplay = gameplay;
     g_presented_loadout = loadout;
+    g_presented_quick_select = quick_select;
     g_presented_gameplay_root = gameplay_root;
     pthread_mutex_unlock(&g_menu_mu);
     if (changed) {
@@ -4689,6 +4756,8 @@ static int selector_map_view_for_manager(uintptr_t manager, uint64_t frame,
                             ((uint64_t)root << 1));
     map_view.page_key = map_view.generic_key;
     map_view.map_visible = 1;
+    static const char *const hero_gauge[] = {"N_InOut_00", "N_Cut_01", "N_VisitMark_00", "Pa_MapDLCGaugeL_00"};
+    map_view.hero_path = selector_hud_path_visible(root, hero_gauge, sizeof hero_gauge/sizeof *hero_gauge);
     map_view.map_pane = pane;
     map_view.map_root = root;
     memcpy(map_view.map, rect, sizeof map_view.map);
@@ -5323,6 +5392,7 @@ void dm_botw_touch_menu_observe(const dm_botw_touch_menu_view *view) {
     pthread_mutex_lock(&g_menu_mu);
     int was_active = menu_active_locked(frame);
     int had_map_owner = g_view_valid && g_view.map_visible;
+    int had_menu_dpad = had_map_owner && g_view.hero_path;
     uintptr_t old_map_pane = g_view.map_pane, old_map_root = g_view.map_root;
     uintptr_t old_map_screen = g_view.generic_screen;
     uint64_t old_map_page = g_view.page_key;
@@ -5365,6 +5435,7 @@ void dm_botw_touch_menu_observe(const dm_botw_touch_menu_view *view) {
         g_last_apply_valid = 0;
     }
     int is_active = menu_active_locked(frame);
+    if (had_menu_dpad != (is_active && g_view.map_visible && g_view.hero_path)) notify = 1;
     if (view) report = g_view;
     if (!is_active) menu_clear_queue_locked();
     if (was_active != is_active || g_active_notified != is_active) {
@@ -5438,6 +5509,20 @@ int dm_botw_touch_loadout_visible(void) {
     pthread_mutex_lock(&g_menu_mu);
     uint64_t frame = menu_render_frame();
     int visible = g_presented_loadout && frame >= g_presented_menu_frame && frame - g_presented_menu_frame <= 2;
+    pthread_mutex_unlock(&g_menu_mu);
+    return visible;
+}
+int dm_botw_touch_quick_select_active(void) {
+    if (!dm_botw_touch_hud_active()) return 0;
+    pthread_mutex_lock(&g_menu_mu);
+    uint64_t frame = menu_render_frame();
+    int active = g_presented_quick_select && frame >= g_presented_menu_frame && frame-g_presented_menu_frame <= 2;
+    pthread_mutex_unlock(&g_menu_mu);
+    return active;
+}
+int dm_botw_touch_menu_dpad_visible(void) {
+    pthread_mutex_lock(&g_menu_mu);
+    int visible = menu_active_locked(menu_render_frame()) && g_view.map_visible && g_view.hero_path;
     pthread_mutex_unlock(&g_menu_mu);
     return visible;
 }
@@ -6305,7 +6390,7 @@ void dm_botw_touch_menu_reset(void) {
     g_map_pan_active = 0; g_map_ax = g_map_ay = 0; g_map_ry = 0;
     notify = g_active_notified || g_presented_menu;
     g_presented_menu = 0; g_presented_menu_frame = 0; g_presented_menu_root = 0;
-    g_presented_gameplay = 0; g_presented_gameplay_root = 0; g_presented_loadout = 0;
+    g_presented_gameplay = 0; g_presented_gameplay_root = 0; g_presented_loadout = g_presented_quick_select = 0;
     atomic_store_explicit(&g_presentation_observed_frame, UINT64_MAX, memory_order_release);
     memset(&g_view, 0, sizeof g_view); g_view_valid = 0;
     g_map_published_pane = g_map_published_root = 0;

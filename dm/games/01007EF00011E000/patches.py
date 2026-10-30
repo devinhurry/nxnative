@@ -116,6 +116,11 @@ FRAME_STEP = {'cd57b23fa4bbad65803d9788c01821ee': frame_step}
 # checked here with the per-game rewrite rules, rather than embedding BOTW addresses in patch_nso.py.
 def validate_main(ctx):
     word = lambda off: struct.unpack_from('<I', ctx.image, off)[0]
+    assert tuple(word(o) for o in range(0xf71490, 0xf714d8, 4)) == (
+        0x12001c39, 0x3877cb08, 0x6b19011f, 0x54000141, 0xb9402a88, 0xaa1303e1,
+        0x6b16011f, 0xf9401a89, 0x1a9f82c8, 0xf868d920, 0xf9400008, 0xf9402d08,
+        0xd63f0100, 0x910006e8, 0x110006d6, 0x92407d17, 0x6b0802bf, 0x54fffe01,
+    ), 'BOTW ScreenMgr draw loop changed; revalidate OBS41 receiver and layer/index registers'
     assert tuple(word(o) for o in range(0xe1a61c, 0xe1a62c, 4)) == (
         0x97fd1459, 0x97fd1470, 0xb40002c0, 0xf960de68,
     ), 'BOTW MainScreen3D camera copy / successful-result branch changed'
@@ -234,6 +239,7 @@ OBS = {
     (0x27ae4, 35, '52800036', 'Pane::Calculate after global matrix composition and before child recursion: offset N_MainAll_00 translation'),
     (0x27d7c, 39, 'f9405908', 'Pane::Draw before virtual DrawSelf: x21 owns the native background pane'),
     (0x27d84, 40, '394162a8', 'Pane::Draw after virtual DrawSelf: end the native background draw scope'),
+    (0xf714b8, 41, 'f9400008', 'ScreenMgr draw dispatch: result filter moves the collapsed touch map before foreground screens in its layer'),
     (0xeb4468, 29, 'a9be7bfd', 'projection update: apply the display aspect to the main camera before checking dirty flags'),
     (0xd44a2c, 30, 'a94a2269', 'UI 3D camera update: x19 owns the source lens at +0xa0 and projection at +0xa8; apply aspect before copying lens parameters'),
     (0xe1a628, 31, 'f960de68', 'MainScreen3D update: correct its copied projection before rebuilding the world-label view'),
@@ -251,6 +257,8 @@ OBS = {
 # 0x27d7c reaches the validated C++ DrawSelf virtual call with only x0-x2
 # as arguments; x8 retains its target and x9-x17 are caller-clobbered. The
 # general straight-line checker deliberately refuses unknown indirect calls.
-OBS_SAFE = {'cd57b23fa4bbad65803d9788c01821ee': {0xd5801c, 0x27ae4, 0xe1a628, 0x27d7c}}
+# 0xf714b8 loads only x8 before the Draw virtual call. Its receiver x0 and
+# render info x1 are live; x9-x17 are unread until that call, as checked above.
+OBS_SAFE = {'cd57b23fa4bbad65803d9788c01821ee': {0xd5801c, 0x27ae4, 0xe1a628, 0x27d7c, 0xf714b8}}
 # Whether a general rule could replace these patches (dm/tools/docs_patches.py lists it in docs/agents/game-patches.md)
 GENERALIZE = "No for the hook sites: sead::GameFrameworkNx's interval controller and ksys::VFR in this build; Tears of the Kingdom shares sead but not this code. The frame-step state page they use is general"

@@ -28,6 +28,10 @@ int dm_botw_touch_controls_visible(void);
 
 // The native equipment/rune group can fade independently of gameplay controls.
 int dm_botw_touch_loadout_visible(void);
+// The native quick equipment/rune strip is open. Only touch drag changes sign.
+int dm_botw_touch_quick_select_active(void);
+// A live Hero's Path map exposes only the virtual direction keys, not combat controls.
+int dm_botw_touch_menu_dpad_visible(void);
 
 // Diagnostic for DM_CTL ("panes <hex root> [max depth]"): log the live pane tree
 // below a native layout root with names, flags, alpha and normalized geometry,
@@ -88,6 +92,7 @@ typedef struct {
     int inventory_arrow_valid[2];
     float inventory_arrows[2][4]; // Live previous/next carousel arrows.
     int map_visible;
+    int hero_path;
     int popup_visible;
     int cursor_valid;
     int clip_valid;

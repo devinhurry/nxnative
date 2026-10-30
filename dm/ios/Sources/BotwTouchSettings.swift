@@ -10,6 +10,7 @@ import AppKit
 
 struct BotwTouchSettingsView: View {
     @ObservedObject var m: LauncherModel
+    @Environment(\.dismiss) private var dismiss
     var viewport = CGSize(width: 932, height: 430)
     var safeInsets = EdgeInsets()
     @State private var selected = BotwTouchControl.all[1]
@@ -47,7 +48,13 @@ struct BotwTouchSettingsView: View {
     var body: some View {
         HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Touch layout").font(.headline)
+                HStack {
+                    #if os(iOS)
+                    Button(action: { dismiss() }) { Image(systemName: "chevron.left") }
+                        .accessibilityLabel(Text("Back"))
+                    #endif
+                    Text("Touch layout").font(.headline)
+                }
                 GeometryReader { geometry in
                     let scale = min(geometry.size.width / viewport.width, geometry.size.height / viewport.height)
                     ZStack(alignment: .topLeading) {
@@ -111,11 +118,9 @@ struct BotwTouchSettingsView: View {
             }.frame(width: 285)
         }
         .padding(16)
-        .navigationTitle("BOTW touch settings")
         .onChange(of: m.values) { _, _ in copied = false }
         #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.visible, for: .navigationBar)
+        .toolbar(.hidden, for: .navigationBar)
         #endif
     }
 }
