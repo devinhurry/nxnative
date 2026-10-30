@@ -8,12 +8,12 @@
 # Build output: <key>_b.metallib, <key>_b.json (replay reflection, including drv_reads, the runtime read offsets into driver segments c0 / c2), <key>_b.metal (MSL)
 # Environment IOSOUT=dir: the same MSL also goes through dm/ios/tools/ios_metal.compile to produce an iphoneos metallib + reflection (chain_metal records the iOS compile convention)
 # Final summary: success / failure counts and the distribution of reasons; distribution of driver segment read offsets (those outside the range the replay layer can fill are listed separately)
-import inspect, os, re, sys, json, struct, hashlib, shutil, subprocess, tempfile, collections, threading, time, concurrent.futures as cf
+import inspect, os, re, sys, json, struct, hashlib, shutil, subprocess, tempfile, collections, threading, concurrent.futures as cf
 import dmsh_geometry, dmsh_atomic, dmsh_abi as abi   # abi: the driver segment layout and the binding kinds the host shares (dm/gfx/nvn/dmsh_abi.h)
 DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # Workspace root (game files, build outputs and run artifacts are all under it)
 HOME = os.path.expanduser('~')
 dm_dir, out = sys.argv[1:3]; want = set(sys.argv[3:]); cache_root = out
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import dmsh_chain, dmsh_fetch, dmsh_facts, dmsh_mtlcache, dmsh_xlatecache, dmsh_codegen_cache, dmsh_vin, dmsh_pull, dmsh_alpha, dmsh_logic, dmsh_mesh, tool_lock   # translation chain version: verify the tools against the lock file first; build output goes into b-<V>/
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import dmsh_chain, dmsh_fetch, dmsh_facts, dmsh_mtlcache, dmsh_xlatecache, dmsh_codegen_cache, dmsh_shader_pipeline, dmsh_vin, dmsh_pull, dmsh_alpha, dmsh_logic, dmsh_mesh, tool_lock   # translation chain version: verify the tools against the lock file first; build output goes into b-<V>/
 _bad = tool_lock.check_tools()
 if _bad: sys.exit('\n'.join('[RED] translation chain tools do not match the lock file: ' + b for b in _bad) + '\n(if the tools changed, run tool_lock.py --update-lock and commit the lock file; if the translator just was not rebuilt, rebuild it)')
 CHAIN = dmsh_chain.version(); out = os.path.join(out, 'b-' + CHAIN)
@@ -94,7 +94,6 @@ def border_emu(msl):
         msl = msl[:m.start()] + f'dm_bs({msl[m.start():i]}, spvDescriptorSet0.{abi.BORDER_MEMBER}, {bit[m.group(2)]}u, spvDescriptorSet0.{m.group(1)}, {twin}, {args})' + msl[i:]
     return msl.replace('using namespace metal;\n', 'using namespace metal;\n' + BORDER_HELPERS, 1)
 CAS =os.environ.get('DMSH_CAS', os.path.join(cache_root, 'cas'))
-PRE_STATS = collections.Counter()
 # -fpreserve-invariance: vertex positions are marked [[invariant]], but without this flag Metal does not promise that two different shaders compute the same expression to the same value; on Maxwell the same multiply-adds always agree.
 # Super Mario Odyssey draws a depth pre-pass with alRenderDepthOnly, then the G-buffer with another vertex shader and depth test less-or-equal: a hair off and the test failed, leaving those pixels with old content (Cap Kingdom's ground in 32x32 blocks)
 # -O1: the front end's -O2 (CorrelatedValuePropagation, then SimplifyCFG) folds the translated shaders' repeated tests of one value into switches whose cases jump past their own join.
@@ -146,10 +145,6 @@ def shader_rule_source(name):
 
 def cross_spirv(spv, flags, phase):
     return CODEGEN.convert(spv, flags, phase=phase)
-
-# Pair a vertex shader's analysis digest with its paired pixel shaders' digests because vs_pad reads their canonical analysis sources.
-def pair_keyed(digest, pixel_digests):   # a vertex shader's key with its pixel shaders' keys (vs_pad)
-    return hashlib.sha256((digest + '\0' + ','.join(pixel_digests)).encode()).hexdigest()
 
 VIN_STATS = collections.Counter()
 PULL_STATS = collections.Counter()
@@ -267,7 +262,7 @@ def logic_finish(key, sources, refls):   # the logic operation library <key>_bl 
     return ps_side_finish(key, sources, refls, dmsh_logic, 'bl', 'logic', LOGIC_STATS, 'logic operation')
 
 CODEGEN = dmsh_codegen_cache.Cache(os.path.join(CAS, 'codegen'), SPIRV_CROSS)
-CODEGEN.watch_sources([__file__, SPIRV_CROSS, dmsh_codegen_cache.__file__, dmsh_xlatecache.__file__, dmsh_mtlcache.__file__, dmsh_chain.__file__, dmsh_atomic.__file__, dmsh_geometry.__file__,
+CODEGEN.watch_sources([__file__, SPIRV_CROSS, dmsh_codegen_cache.__file__, dmsh_shader_pipeline.__file__, dmsh_xlatecache.__file__, dmsh_mtlcache.__file__, dmsh_chain.__file__, dmsh_atomic.__file__, dmsh_geometry.__file__,
                        dmsh_facts.__file__, dmsh_fetch.__file__, dmsh_vin.__file__, dmsh_pull.__file__, dmsh_alpha.__file__,
                        dmsh_logic.__file__, dmsh_mesh.__file__, abi.__file__, abi.HEADER,
                        os.path.join(os.path.dirname(dmsh_pull.__file__), 'dmsh_pull.metal')])
@@ -683,11 +678,6 @@ def vs_pad(key, src):
     k = src.find('main0_out out = {};') + len('main0_out out = {};')
     return src[:k] + ''.join(f'\n    out.dm_pad{l} = float4(0.0, 0.0, 0.0, 1.0);' for l in miss) + src[k:], miss
 
-def paired_vertex_dependency_error(key, stage, pairs, known, analysis_sources):
-    """A paired vertex needs canonical MSL for every known pixel row before its analysis can be cached or materialized."""
-    if stage != 'vs': return ''
-    missing = sorted(ps for ps in pairs.get(key, ()) if ps in known and not analysis_sources.get(ps))
-    return f"paired pixel shader analysis unavailable: {', '.join(missing)}" if missing else ''
 
 def vs_init(src):
     """Every vertex shader output starts as (0,0,0,1) before the translated body runs: on the hardware that is what an unwritten component reads. The translator's source starts with out = {}, all zeros;
@@ -1109,32 +1099,6 @@ def analysis_digest(key, name, rec, job, stage=None):
                 'rules': shader_rule_source(name).decode('utf-8', 'replace')}
     return hashlib.sha256(json.dumps(semantic, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
 
-def valid_analysis(stage, payload):
-    if not isinstance(payload, dict) or payload.get('stage') != stage: return False
-    if payload.get('kind') == 'shader':
-        flags = payload.get('candidate_flags'); fallback = payload.get('fallback'); refl = payload.get('base_refl')
-        return (bool(payload.get('analysis_source')) and bool(payload.get('candidate')) and
-                (fallback is None or bool(fallback)) and isinstance(refl, dict) and refl.get('stage') == stage and
-                isinstance(flags, dict) and all(k in flags for k in ('layer', 'layer_from', 'discard', 'tf', 'uint', 'uint_mask', 'dual')))
-    if payload.get('kind') == 'slice': return isinstance(payload.get('reflection'), dict)
-    if payload.get('kind') == 'geometry':
-        outputs = payload.get('outputs')
-        required = {'_b', '_bg0', '_bg1', '_bg2', '_bg3', '_bg4', '_bgv'}
-        return (isinstance(payload.get('analysis_source'), str) and isinstance(outputs, dict) and required <= outputs.keys() and
-                all(isinstance(v, dict) and isinstance(v.get('msl'), str) and isinstance(v.get('reflection'), dict) for v in outputs.values()))
-    return False
-
-def cached_analysis(stage, key, name, rec, job, fn=None, digest=None):
-    digest = digest or analysis_digest(key, name, rec, job, stage)
-    payload = CODEGEN.load(digest)
-    if valid_analysis(stage, payload): PRE_STATS['hit'] += 1; return payload, digest, True
-    payload = None
-    if fn is None: return None, digest, False
-    payload = fn()
-    if not valid_analysis(stage, payload): raise ValueError(f'{stage} analysis produced an incomplete bundle')
-    CODEGEN.store(digest, payload); PRE_STATS['miss'] += 1
-    return payload, digest, False
-
 def materialize_shader(key, bundle):
     if bundle['kind'] in ('geometry', 'slice'): return materialize_geometry(key, bundle)
     selected, refls, failed = {}, {}, []
@@ -1189,8 +1153,7 @@ for _spec in [cache_root + ('=' + os.path.dirname(IOSOUT) if IOSOUT else '')] + 
     for _b in sorted(os.listdir(_mac)) if os.path.isdir(_mac) else []:
         if _b.startswith('b-') and os.path.realpath(os.path.join(_mac, _b)) != os.path.realpath(out):
             for _ln in MTL.fill(os.path.join(_mac, _b), os.path.join(_ios, _b) if _ios else None, targets=TARGETS): print(_ln, flush=True)
-packs, jobs, c1s = {}, {}, {}
-digests, analysis_bundles, recs = {}, {}, {}
+packs = {}
 def rec_of(key):   # → (package name, the shader's record)
     name, k = loc[key]
     if name not in packs: packs[name] = records(open(os.path.join(dm_dir, name), 'rb').read())
@@ -1199,58 +1162,14 @@ def rec_of(key):   # → (package name, the shader's record)
     if actual != key:
         sys.exit(f'[RED] shader package {dm_dir}/{name}#{k} holds {actual or "an invalid record"}, expected {key}: split the game version matching this profile before building shaders')
     return name, rec
-analysis_only = {ps for vertex in keys for ps in PAIRS.get(vertex, ()) if ps in loc and ps not in keys}
-analysis_keys = sorted(set(keys) | analysis_only)
-for key in analysis_keys:
-    name, rec = recs[key] = rec_of(key)
-    jobs[key], c1s[key] = job_for(key, name, rec, w)
-    digests[key] = analysis_digest(key, name, rec, jobs[key])
-for key in analysis_keys:
-    if PAIRS.get(key): digests[key] = pair_keyed(digests[key], [digests.get(p, 'missing') for p in sorted(PAIRS[key])])
-analysis_misses = []
-for key in analysis_keys:
-    payload, _digest, hit = cached_analysis(jobs[key]['stage'], key, recs[key][0], recs[key][1], jobs[key], digest=digests[key])
-    if payload is not None:
-        analysis_bundles[key] = payload
-        if payload.get('analysis_source'): ANALYSIS_BY_KEY[key] = payload['analysis_source']
-    else: analysis_misses.append(key)
-chunks = [analysis_misses[i::NJ] for i in range(NJ)]
-def xl(ch):
-    return XLCACHE.translate([jobs[k] for k in ch], w, phase='initial')
-initial_xlate_started = time.perf_counter()
-with cf.ThreadPoolExecutor(NJ) as ex: xr = list(ex.map(xl, [c for c in chunks if c]))
-initial_xlate_wall = time.perf_counter() - initial_xlate_started
-xerr = {}
-for r in xr:
-    for ln in r.stderr.splitlines():
-        m = re.match(r'\[RED\] (\w+): (.*)', ln)
-        if m: xerr[m.group(1)] = m.group(2)[:160]
-def fin(key):
-    job, (name, rec) = jobs[key], recs[key]
-    dependency_error = paired_vertex_dependency_error(key, job['stage'], PAIRS, loc, ANALYSIS_BY_KEY)
-    if dependency_error: return key, 'dependency failed', dependency_error, None
-    if analysis_bundles.get(key) is None:
-        if key in xerr or not os.path.exists(os.path.join(w, key + '.spv')):
-            return key, 'translation failed', xerr.get(key, 'no spv'), None
-        analyze = {'vs': analyze_vs, 'ps': analyze_ps, 'cs': analyze_cs, 'gs': analyze_geometry}.get(job['stage'])
-        if analyze is None: return key, 'analysis failed', f"unsupported stage {job['stage']}", None
-        try:
-            bundle, _, _ = cached_analysis(job['stage'], key, name, rec, job, lambda: analyze(key, w, job, c1s[key]), digest=digests[key])
-        except (ValueError, subprocess.CalledProcessError) as e:
-            return key, 'analysis failed', str(e)[:160], None
-        analysis_bundles[key] = bundle
-    bundle = analysis_bundles[key]
-    if bundle.get('analysis_source'): ANALYSIS_BY_KEY[key] = bundle['analysis_source']
-    if key in analysis_only: return key, 'analysis only', '', {}
-    try: status, err, refl = materialize_shader(key, bundle)
-    except (ValueError, subprocess.CalledProcessError) as e: return key, 'analysis failed', str(e)[:160], None
-    return key, status, err, refl
-if analysis_only:
-    with cf.ThreadPoolExecutor(NJ) as ex: list(ex.map(fin, sorted(analysis_only)))
-finish_started = time.perf_counter()
-with cf.ThreadPoolExecutor(NJ) as ex:   # two phases: paired vertex shaders read their pixel shaders' MSL (vs_pad), so they go last
-    res = list(ex.map(fin, [k for k in keys if k not in PAIRS])) + list(ex.map(fin, [k for k in keys if k in PAIRS]))
-finish_wall = time.perf_counter() - finish_started
+# The cache scheduler owns lookup, translation batching and paired pixel-before-vertex ordering.
+_pipeline = dmsh_shader_pipeline.run(keys, pairs=PAIRS, known_keys=loc, work=w, workers=NJ,
+    codegen=CODEGEN, translator=XLCACHE, analysis_sources=ANALYSIS_BY_KEY,
+    read_record=rec_of, make_job=job_for, digest_for=analysis_digest,
+    analyzers={'vs': analyze_vs, 'ps': analyze_ps, 'cs': analyze_cs, 'gs': analyze_geometry},
+    materialize=materialize_shader)
+res, PRE_STATS = _pipeline.rows, _pipeline.stats
+initial_xlate_wall, finish_wall = _pipeline.translate_wall, _pipeline.finish_wall
 # Passthrough geometry as mesh shaders (dmsh_mesh.py): <vertex key>_<geometry key>_m3 for each pair in the profile's geo_mesh.tsv whose two libraries exist; the host
 # draws a lean triangle-list geometry draw with it when its pair has one, and through the compute path otherwise (nvn_geometry.inc geo_mesh_draw)
 MESH_STATS = collections.Counter()

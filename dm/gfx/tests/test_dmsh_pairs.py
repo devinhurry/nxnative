@@ -22,11 +22,13 @@ import pso_offline
 
 def builder():
     # Use production functions without the CLI's translator/profile initialization.
-    names = {'load_pairs', 'vs_pad', 'vs_depth', 'analysis_digest', 'pair_keyed'}
+    names = {'load_pairs', 'vs_pad', 'vs_depth', 'analysis_digest'}
     tree = ast.parse((TOOLS / 'dmsh_build.py').read_text())
     nodes: list[ast.stmt] = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
     ns = dict(collections=collections, os=os, re=re, sys=sys, hashlib=hashlib, json=json)
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(TOOLS / 'dmsh_build.py'), 'exec'), ns)
+    from dmsh_shader_pipeline import pair_keyed
+    ns['pair_keyed'] = pair_keyed
     return ns
 
 

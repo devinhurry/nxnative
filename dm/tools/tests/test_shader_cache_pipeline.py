@@ -16,6 +16,7 @@ REPO = Path(__file__).resolve().parents[3]
 BUILD = REPO / 'dm/gfx/tools/dmsh_build.py'
 sys.path.insert(0, str(REPO / 'dm/gfx/tools'))
 import dmsh_chain
+import dmsh_shader_pipeline as pipeline
 
 
 def functions(names, ns):
@@ -38,7 +39,8 @@ class AnalysisIdentity(unittest.TestCase):
             'CODEGEN': types.SimpleNamespace(identity='cross-id'), 'XC': ['--msl-version', '20300'],
             'DUAL_WANT': set(), 'ANALYSIS_CODE_FP': {'vs':'vs-1','ps':'ps-1','cs':'cs-1','gs':'gs-1'},
             'shader_rule_source': lambda name: b'', 'PRE_STATS': collections.Counter(), 'CODEGEN_CACHE': None}
-        functions({'analysis_digest','pair_keyed','valid_analysis','cached_analysis'}, self.ns)
+        functions({'analysis_digest'}, self.ns)
+        self.ns['pair_keyed'] = pipeline.pair_keyed
         self.job = {'stage':'vs','code':str(self.code),'attr':{},'tex':{},'img':{},'c1':'00'}
 
     def digest(self, stage='vs', key='k'):
@@ -70,8 +72,8 @@ class AnalysisIdentity(unittest.TestCase):
         complete={'kind':'shader','stage':'vs','analysis_source':'source','candidate':'candidate','fallback':'plain',
             'base_refl':{'stage':'vs'},'candidate_flags':{'layer':False,'layer_from':None,'discard':False,'tf':False,'uint':False,'uint_mask':0,'dual':False}}
         fn=mock.Mock(return_value=complete)
-        a=self.ns['cached_analysis']('vs','k','package',b'record',self.job,fn,digest='known')
-        b=self.ns['cached_analysis']('vs','k','package',b'record',self.job,mock.Mock(),digest='known')
+        a=pipeline.cached_analysis(cache,self.ns['PRE_STATS'],'vs','known',fn)
+        b=pipeline.cached_analysis(cache,self.ns['PRE_STATS'],'vs','known',mock.Mock())
         self.assertEqual(a[0],b[0]); self.assertFalse(a[2]); self.assertTrue(b[2])
         fn.assert_called_once_with(); self.assertEqual(len(cache.stores),1)
 
@@ -84,47 +86,86 @@ class AnalysisIdentity(unittest.TestCase):
         complete={'kind':'shader','stage':'vs','analysis_source':'source','candidate':'candidate','fallback':None,
             'base_refl':{'stage':'vs'},'candidate_flags':{'layer':False,'layer_from':None,'discard':False,'tf':False,'uint':False,'uint_mask':0,'dual':False}}
         analyze=mock.Mock(return_value=complete)
-        payload,_,hit=self.ns['cached_analysis']('vs','k','package',b'record',self.job,analyze,digest='known')
+        payload,_,hit=pipeline.cached_analysis(cache,self.ns['PRE_STATS'],'vs','known',analyze)
         self.assertFalse(hit); self.assertEqual(payload,complete); analyze.assert_called_once_with()
         self.assertEqual(cache.saved,complete); self.assertEqual(self.ns['PRE_STATS']['miss'],1)
 
 
 class PairedVertexDependency(unittest.TestCase):
     def setUp(self):
-        self.ns={'PAIRS':{'vs':['ps']},'loc':{'ps':('package',0)},'ANALYSIS_BY_KEY':{},
-            'jobs':{'vs':{'stage':'vs'}},'recs':{'vs':('package',b'record')},'analysis_bundles':{},
-            'analysis_only':set(),'xerr':{},'w':'/unused'}
-        functions({'paired_vertex_dependency_error','fin'},self.ns)
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.entries, self.sources = {}, {}
+        self.fail_analysis, self.fail_translation = set(), set()
+        self.cache = types.SimpleNamespace(load=mock.Mock(side_effect=self.entries.get),
+            store=mock.Mock(side_effect=self.entries.__setitem__))
+        def translate(jobs, work, *, phase):
+            errors = []
+            for job in jobs:
+                if job['key'] in self.fail_translation: errors.append(f"[RED] {job['key']}: translator failed")
+                else: (Path(work) / (job['key'] + '.spv')).write_bytes(b'synthetic SPIR-V')
+            return subprocess.CompletedProcess([], int(bool(errors)), '', '\n'.join(errors))
+        self.translator = types.SimpleNamespace(translate=mock.Mock(side_effect=translate))
+        def analyze(key, work, job, c1):
+            if key in self.fail_analysis: raise ValueError('pixel analysis failed')
+            return self.bundle(job['stage'])
+        self.analyze = mock.Mock(side_effect=analyze)
+        self.materialize = mock.Mock(side_effect=lambda key, bundle: ('ok', '', bundle['base_refl']))
+
+    def bundle(self, stage):
+        return {'kind':'shader','stage':stage,'analysis_source':'canonical ' + stage,
+            'candidate':'candidate ' + stage,'fallback':None,'base_refl':{'stage':stage},
+            'candidate_flags':{'layer':False,'layer_from':None,'discard':False,'tf':False,'uint':False,'uint_mask':0,'dual':False}}
+
+    def run_pipeline(self, keys, known_keys=('vs','ps')):
+        return pipeline.run(keys, pairs={'vs':['ps']}, known_keys=known_keys,
+            work=self.tmp.name, workers=2, codegen=self.cache, translator=self.translator,
+            analysis_sources=self.sources, read_record=lambda key: ('package', key.encode()),
+            make_job=lambda key, name, rec, work: ({'key':key,'stage':'ps' if key == 'ps' else 'vs'}, b'c1'),
+            digest_for=lambda key, name, rec, job: key,
+            analyzers={'vs':self.analyze,'ps':self.analyze}, materialize=self.materialize)
 
     def test_cold_pixel_analysis_failure_blocks_vertex_before_analysis_or_cache(self):
-        result=self.ns['fin']('vs')
-        self.assertEqual(result[:2],('vs','dependency failed'))
-        self.assertIn('ps',result[2])
+        self.fail_analysis.add('ps')
+        result = self.run_pipeline(['vs']).rows[0]
+        self.assertEqual(result[:2], ('vs','dependency failed'))
+        self.assertIn('ps', result[2])
+        self.assertEqual([call.args[0] for call in self.analyze.call_args_list], ['ps'])
+        self.materialize.assert_not_called(); self.cache.store.assert_not_called()
 
     def test_warm_vertex_analysis_is_rejected_when_pixel_source_is_unavailable(self):
-        self.ns['analysis_bundles']['vs']={'analysis_source':'cached vertex','candidate':'cached'}
-        result=self.ns['fin']('vs')
-        self.assertEqual(result[:2],('vs','dependency failed'))
-        self.assertIn('ps',result[2])
+        self.entries[pipeline.pair_keyed('vs', ['ps'])] = self.bundle('vs')
+        self.fail_translation.add('ps')
+        result = self.run_pipeline(['vs']).rows[0]
+        self.assertEqual(result[:2], ('vs','dependency failed'))
+        self.assertIn('ps', result[2])
+        self.analyze.assert_not_called(); self.materialize.assert_not_called()
 
     def test_valid_pixel_analysis_allows_vertex_even_when_target_compile_fails(self):
-        self.ns['jobs']['ps']={'stage':'ps'}
-        self.ns['recs']['ps']=('package',b'record')
-        self.ns['analysis_bundles']['ps']={'analysis_source':'canonical pixel source','candidate':'pixel candidate'}
-        self.ns['analysis_bundles']['vs']={'analysis_source':'canonical vertex','candidate':'candidate'}
-        compile_error=subprocess.CalledProcessError(1,['metal'],'','target compile failed')
-        materialize=mock.Mock(side_effect=[compile_error, ('ok','',{'stage':'vs'})])
-        self.ns['materialize_shader']=materialize
-        self.ns['subprocess']=subprocess
-        ps_result=self.ns['fin']('ps')
-        self.assertEqual(ps_result[:2],('ps','analysis failed'))
-        self.assertEqual(self.ns['ANALYSIS_BY_KEY']['ps'],'canonical pixel source')
-        result=self.ns['fin']('vs')
-        self.assertEqual(materialize.call_args_list,[mock.call('ps',self.ns['analysis_bundles']['ps']),mock.call('vs',self.ns['analysis_bundles']['vs'])])
-        self.assertEqual(result[:2],('vs','ok'))
+        self.materialize.side_effect = lambda key, bundle: ('metal failed' if key == 'ps' else 'ok', '', bundle['base_refl'])
+        rows = self.run_pipeline(['vs','ps']).rows
+        self.assertEqual([(row[0],row[1]) for row in rows], [('ps','metal failed'),('vs','ok')])
+        self.assertEqual(self.sources['ps'], 'canonical ps')
+        self.assertEqual([call.args[0] for call in self.materialize.call_args_list], ['ps','vs'])
 
     def test_pair_absent_from_shader_rows_does_not_block_vertex(self):
-        self.assertEqual(self.ns['paired_vertex_dependency_error']('vs','vs',self.ns['PAIRS'],{},{}),'')
+        result = self.run_pipeline(['vs'], known_keys=('vs',)).rows[0]
+        self.assertEqual(result[:2], ('vs','ok'))
+        self.assertEqual([call.args[0] for call in self.analyze.call_args_list], ['vs'])
+
+    def test_partial_build_analyzes_pixel_first_without_emitting_its_library(self):
+        result = self.run_pipeline(['vs'])
+        self.assertEqual([row[:2] for row in result.rows], [('vs','ok')])
+        self.assertEqual([call.args[0] for call in self.analyze.call_args_list], ['ps','vs'])
+        self.assertEqual([call.args[0] for call in self.materialize.call_args_list], ['vs'])
+
+    def test_warm_partial_build_reuses_both_analyses_without_translator_or_analyzer(self):
+        self.run_pipeline(['vs'])
+        self.translator.translate.reset_mock(); self.analyze.reset_mock(); self.materialize.reset_mock()
+        result = self.run_pipeline(['vs'])
+        self.translator.translate.assert_not_called(); self.analyze.assert_not_called()
+        self.assertEqual((result.stats['hit'],result.stats['miss']), (2,0))
+        self.assertEqual([row[:2] for row in result.rows], [('vs','ok')])
+        self.assertEqual([call.args[0] for call in self.materialize.call_args_list], ['vs'])
 
 
 class TargetMaterialization(unittest.TestCase):

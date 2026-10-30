@@ -640,6 +640,14 @@ reader: all 197 raw outputs and 97 ordinary MSL sources match cold, warm and
 disabled-cache runs. Unit tests additionally cover scoped invalidation,
 paired source dependencies, independent target fallback, corruption and races.
 
+Cache scheduling was then isolated in `dmsh_shader_pipeline.py`. The separate
+`shader-cache-isolation-20261030/candidate-report.json` records identical
+87-file cold/warm/forced outputs and agreement with the pre-refactor outputs
+apart from chain metadata. Reusing the pre-refactor cache also restores all
+11 analysis bundles and 42 target libraries without translation or compilation.
+The builder supplies explicit callbacks and retains shader transforms and
+target fallback policy.
+
 The real compiler comparison above is explicitly experimental:
 `DM_ALLOW_OTHER_METAL=1` uses local Metal `32023.883`; the unchanged lock requires
 `32023.921`. The supported-toolchain regression report is

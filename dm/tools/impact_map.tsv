@@ -74,6 +74,7 @@ dm/gfx/tools/dmsh_abi.py	shader:stage:*	the reader of the shader library ABI: ev
 dm/gfx/tools/dmsh_mtlcache.py	shader:stage:*	the Metal compile cache
 dm/gfx/tools/dmsh_xlatecache.py	shader:stage:*	the complete translator-output cache, including integer-input retries and geometry readers
 dm/gfx/tools/dmsh_codegen_cache.py	shader:stage:*	the SPIRV-Cross, semantic source and variant-generation caches
+dm/gfx/tools/dmsh_shader_pipeline.py	shader:stage:*	shader cache scheduling and paired pixel-before-vertex dependencies
 dm/gfx/tools/own_compilers.py	shader:stage:*	the tested-compiler build guard
 dm/gfx/tools/tool_lock.py	shader:stage:*	the tool lock check every NVN shader build runs first (not part of the chain version)
 dm/gfx/tools/dmsh_dryrun.py	shader:stage:*	the standalone shader conversion check
