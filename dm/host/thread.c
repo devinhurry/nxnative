@@ -37,19 +37,53 @@ void guest_thread_set_id(uint64_t id) { *(uint32_t *)((uint8_t *)pthread_getspec
 // (the process ends with it). The slot is released when the thread exits, after which another thread may take it with its own stack.
 #define GATE_SLOTS 1024                 // = entry.S .rept count and dm_gate_top size
 #define GATE_STACK_SIZE (1 << 20)       // = entry.S nesting check
+#define GATE_OBSERVER_DEPTH 16
+// Reserve another gate stack before invoking an observer. Its guest calls can
+// then trap without overwriting this observer's C frames or saved registers.
+// Mappings are lazy, reused at the same depth and freed after observers return
+// when the thread exits; the base exit stack retains its existing lifetime.
+typedef struct {
+    unsigned slot, depth;
+    uint64_t top[GATE_OBSERVER_DEPTH], previous[GATE_OBSERVER_DEPTH];
+} gate_slot;
 extern uint64_t dm_gate_top[GATE_SLOTS];
 extern const uint8_t dm_gate_stubs[];
 static pthread_mutex_t g_gate_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint16_t g_gate_free[GATE_SLOTS]; static int g_gate_nfree = -1;
 static pthread_key_t g_keygslot; static pthread_once_t g_gslot_once = PTHREAD_ONCE_INIT;
-static void gslot_release(void *p) {   // key destructor (pthread_exit): slot + 1
-    pthread_mutex_lock(&g_gate_lock); g_gate_free[g_gate_nfree++] = (uint16_t)((uintptr_t)p - 1); pthread_mutex_unlock(&g_gate_lock);
+static void gslot_release(void *p) {   // The key owns this context; C TLS may already be gone.
+    gate_slot *s = p;
+    if (s->depth) die("guest thread exited inside a synchronous gate observer");
+    for (unsigned i = 0; i < GATE_OBSERVER_DEPTH; i++) if (s->top[i]) {
+        munmap((void *)(uintptr_t)(s->top[i] - GATE_STACK_SIZE - 16384), GATE_STACK_SIZE + 16384);
+    }
+    pthread_mutex_lock(&g_gate_lock); g_gate_free[g_gate_nfree++] = (uint16_t)s->slot; pthread_mutex_unlock(&g_gate_lock);
+    free(s);
 }
 static void gslot_key_init(void) {
     if (pthread_key_create(&g_keygslot, gslot_release)) die("cannot create the gate slot key");
     if ((uintptr_t)dm_gate_top & 0xfff) die("gate stack table %p is not page-aligned (entry.S stubs address it with adrp alone)", (void *)dm_gate_top);
 }
 void dm_gate_nested(uint64_t sp) { die("SVC gate entered on its own gate stack (sp %#llx): a gate handler ran guest code", (unsigned long long)sp); }
+void guest_gate_observer_enter(void) {
+    gate_slot *s = pthread_getspecific(g_keygslot);
+    if (!s || s->slot >= GATE_SLOTS) die("gate observer has no guest thread slot");
+    unsigned d = s->depth;
+    if (d >= GATE_OBSERVER_DEPTH) die("gate observer nesting exceeds %d", GATE_OBSERVER_DEPTH);
+    if (!s->top[d]) {
+        uint8_t *m = mmap(NULL, GATE_STACK_SIZE + 16384, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (m == MAP_FAILED || mprotect(m, 16384, PROT_NONE)) die("cannot map an observer gate stack (errno %d)", errno);
+        s->top[d] = (uint64_t)(uintptr_t)(m + 16384 + GATE_STACK_SIZE);
+    }
+    s->previous[d] = dm_gate_top[s->slot];
+    s->depth++;
+    dm_gate_top[s->slot] = s->top[d];
+}
+void guest_gate_observer_leave(void) {
+    gate_slot *s = pthread_getspecific(g_keygslot);
+    if (!s || s->slot >= GATE_SLOTS || !s->depth) die("unbalanced gate observer return");
+    dm_gate_top[s->slot] = s->previous[--s->depth];
+}
 __attribute__((noinline)) void guest_gate_stack(int own_stack) {
     pthread_once(&g_gslot_once, gslot_key_init);
     uint8_t *top;
@@ -59,16 +93,22 @@ __attribute__((noinline)) void guest_gate_stack(int own_stack) {
         if (m == MAP_FAILED || mprotect(m, 16384, PROT_NONE)) die("cannot map a gate stack (errno %d)", errno);   // guard page at the bottom
         top = m + 16384 + GATE_STACK_SIZE;
     }
-    uintptr_t prev = (uintptr_t)pthread_getspecific(g_keygslot);
+    gate_slot *slot = pthread_getspecific(g_keygslot);
     int k;
-    if (prev) k = (int)prev - 1;   // set again on the same thread: keep its slot
+    if (slot) {
+        if (slot->depth) die("cannot replace a gate stack inside an observer");
+        k = (int)slot->slot;   // set again on the same thread: keep its slot
+    }
     else {
+        slot = calloc(1, sizeof *slot);
+        if (!slot) die("cannot allocate a gate slot context");
         pthread_mutex_lock(&g_gate_lock);
         if (g_gate_nfree < 0) { g_gate_nfree = 0; for (int i = GATE_SLOTS - 1; i >= 0; i--) g_gate_free[g_gate_nfree++] = (uint16_t)i; }
         if (!g_gate_nfree) die("more than %d threads with a gate stack", GATE_SLOTS);
         k = g_gate_free[--g_gate_nfree];
         pthread_mutex_unlock(&g_gate_lock);
-        pthread_setspecific(g_keygslot, (void *)(uintptr_t)(k + 1));
+        slot->slot = (unsigned)k;
+        if (pthread_setspecific(g_keygslot, slot)) die("cannot set the gate slot context");
     }
     dm_gate_top[k] = (uint64_t)(uintptr_t)top & ~15ull;
     pthread_setspecific(g_keygate, (void *)(dm_gate_stubs + 16 * k));

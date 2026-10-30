@@ -25,6 +25,15 @@ separate from the acceptance results below.
 
 ## Coverage
 
+### Inventory category crash on iPhone (2026-10-30)
+
+The supplied iPhone log confirms a nested gate-stack abort during native category
+refresh. Fixed the shared observation callback stack handling, preserving the
+native category selection path and the original stack guard. A CPU test with
+the current production gate code reproduces the original abort and passes after
+the fix, including nested callbacks, register/stack preservation and cleanup.
+iPhone gameplay acceptance remains pending. [Cause and validation](reference/threads.md#guest-calls-made-by-observation-callbacks).
+
 ### Camera framing with the gamepad visible (2026-10-30)
 
 Fixed the shared AppCamera pointer adapter to use the existing relative-look
