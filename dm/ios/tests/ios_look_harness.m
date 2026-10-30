@@ -1437,6 +1437,37 @@ static void test_look_drag(DmGamepad *view) {
     g_botw_touchhud_available=NO; [view reset];
 }
 
+static void test_botw_face_gaps(DmGamepad *view) {
+    g_botw_touchhud_available = g_botw_gameplay_ready = YES;
+    g_botw_touch_menu_active = g_botw_touch_menu_presented = NO;
+    g_look_enabled = YES;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+    [view setNeedsLayout]; [view layoutIfNeeded];
+    CGPoint y = [view facePos:3];
+    CGFloat radius = CGPathGetPathBoundingBox([view dm_testButtonLayer:3].path).size.width * .5;
+    const CGPoint gaps[] = {
+        {y.x, y.y + radius * 1.6},
+        {y.x - radius * .55, y.y + radius * 1.45}
+    };
+    for (unsigned i = 0; i < sizeof gaps / sizeof *gaps; i++) {
+        [view reset]; reset_look();
+        FakeTouch *t = touch(gaps[i].x, gaps[i].y); began(view, t);
+        CHECK(g_look_count == 1 && g_look_events[0].phase == DM_LOOK_BEGIN && !g_buttons,
+              "BOTW blank space below Y starts look instead of an empty face-button owner");
+        moved(view, t, gaps[i].x + 20, gaps[i].y - 10);
+        CHECK(g_look_count == 2 && g_look_events[1].phase == DM_LOOK_MOVE && !g_buttons,
+              "BOTW look begun below Y keeps receiving drag movement without pressing a button");
+        ended(view, t, gaps[i].x + 20, gaps[i].y - 10);
+        CHECK(!g_look_held && g_look_count == 3 && g_look_events[2].phase == DM_LOOK_END,
+              "BOTW look begun below Y ends cleanly");
+    }
+    reset_look();
+    FakeTouch *button = touch(y.x, y.y); began(view, button);
+    CHECK(g_buttons == DM_BTN_Y && !g_look_count, "the actual Y button retains priority over camera drag");
+    ended(view, button, y.x, y.y);
+    g_botw_touchhud_available = NO; [view reset];
+}
+
 static void test_priority_and_multitouch(DmGamepad *view) {
     reset_look(); g_look_enabled = YES; [view setFull:YES];
     CGPoint a = [view facePos:0];
@@ -1756,6 +1787,7 @@ static void run_tests(DmGamepad *view) {
     test_botw_scope_pointer(view);
     test_motion_orientation();
     test_look_drag(view);
+    test_botw_face_gaps(view);
     test_priority_and_multitouch(view);
     test_cancel_and_modes(view);
     reset_look(); g_look_enabled = YES;

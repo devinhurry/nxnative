@@ -520,6 +520,14 @@ former outer ZR position. The shared geometry, C defaults and launcher defaults
 agree for Mac, UIKit and the editor preview. Focused menu/geometry checks and
 18 launcher settings/storage tests pass; physical iPhone acceptance is pending.
 
+BOTW face-button touch ownership uses the individual button circles and enabled
+corner badges. The old whole-cluster grab circle captured blank space below Y
+as a face-button gesture with no pressed button, preventing camera drag from
+starting there. Ordinary gameplay now shares the per-button capture already
+used by Camera and Scope. The left-stick ownership check uses the same button
+hit eligibility, and the Mac preview shares the fix. Other games retain their
+existing cluster behavior; button sizes and sliding behavior are unchanged.
+
 R3 Scope owns a guide bar inside `MainScreen_00`, under
 `Pa_CameraPointer_00`, rather than an independent menu screen. Its visible
 capture-backed guide plates and native glyphs supply Place pin, Quit and Edit
