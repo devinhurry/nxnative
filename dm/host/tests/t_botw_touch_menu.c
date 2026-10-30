@@ -67,6 +67,17 @@ int dm_guest_as_contains(uintptr_t address) {
 static unsigned mock_menu_change_notifications;
 void front_botw_touch_menu_changed(void) { mock_menu_change_notifications++; }
 uint64_t dm_nvn_frame_count(void) { return 0; }
+static int mock_look_enabled;
+static struct { int phase; float dx, dy; } mock_look_events[32];
+static int mock_look_event_count;
+int dm_look_enabled(void) { return mock_look_enabled; }
+void dm_look_input(int phase, float dx, float dy) {
+    assert(mock_look_event_count < (int)(sizeof mock_look_events / sizeof mock_look_events[0]));
+    mock_look_events[mock_look_event_count].phase = phase;
+    mock_look_events[mock_look_event_count].dx = dx;
+    mock_look_events[mock_look_event_count].dy = dy;
+    mock_look_event_count++;
+}
 static int mock_touch_sets;
 void dm_touch_set(const dm_touch *t, int n) { (void)t; if (n > 0) mock_touch_sets++; }
 uint64_t dm_guest_frame(void) { return current_guest_frame; }
@@ -814,6 +825,48 @@ static void test_cursorless_help_prompts(void) {
     memset(camera_axes, 0, sizeof camera_axes);
     dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8914);
     assert(camera_axes[2] == 0 && camera_axes[3] == 0); // touch axes stop on release
+    mock_look_enabled = 1; mock_look_event_count = 0;
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .5f, .5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .502f, .5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .5035f, .5f);
+    assert(mock_look_event_count == 2 && mock_look_events[0].phase == DM_LOOK_BEGIN &&
+           mock_look_events[1].phase == DM_LOOK_MOVE &&
+           fabsf(mock_look_events[1].dx - (4.48f / 720.0f)) < .00001f && mock_look_events[1].dy == 0);
+    memset(camera_axes, 0, sizeof camera_axes);
+    dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8915);
+    assert(camera_axes[2] == 0 && camera_axes[3] == 0); // relative camera drag bypasses the guest stick response curve
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, .505f, .5f);
+    assert(mock_look_event_count == 4 && mock_look_events[2].phase == DM_LOOK_MOVE &&
+           fabsf(mock_look_events[2].dx - (1.92f / 720.0f)) < .00001f &&
+           mock_look_events[3].phase == DM_LOOK_END); // END consumes its final location and preserves the queued delta
+    dm_botw_touch_menu_test_publish(&camera_confirmation);
+    assert(mock_look_event_count == 5 && mock_look_events[4].phase == DM_LOOK_CANCEL &&
+           !dm_botw_touch_camera_active()); // a modal change cancels an ended but unconsumed relative sample
+    dm_botw_touch_menu_test_publish(&camera);
+    mock_look_event_count = 0;
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .5f, .5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .51f, .5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_CANCEL, .51f, .5f);
+    assert(mock_look_event_count == 3 && mock_look_events[0].phase == DM_LOOK_BEGIN &&
+           mock_look_events[1].phase == DM_LOOK_MOVE && mock_look_events[2].phase == DM_LOOK_CANCEL);
+    mock_look_event_count = 0;
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .5f, .5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .498f, .498f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .497f, .496f);
+    assert(mock_look_event_count == 2 && mock_look_events[0].phase == DM_LOOK_BEGIN &&
+           mock_look_events[1].phase == DM_LOOK_MOVE &&
+           fabsf(mock_look_events[1].dx - (-3.84f / 720.0f)) < .00001f &&
+           fabsf(mock_look_events[1].dy - (-2.88f / 720.0f)) < .00001f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_CANCEL, .497f, .496f);
+    assert(mock_look_event_count == 3 && mock_look_events[2].phase == DM_LOOK_CANCEL);
+    mock_look_event_count = 0;
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .5f, .5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .51f, .5f);
+    dm_botw_touch_menu_test_publish(&camera_confirmation);
+    assert(mock_look_event_count == 3 && mock_look_events[2].phase == DM_LOOK_CANCEL &&
+           !dm_botw_touch_camera_active()); // losing the AppCamera owner cancels only our relative session
+    dm_botw_touch_menu_test_publish(&camera);
+    mock_look_enabled = 0;
     tap(camera.footer_actions[camera_shutter][0] + camera.footer_actions[camera_shutter][2] * .5f,
         camera.footer_actions[camera_shutter][1] + camera.footer_actions[camera_shutter][3] * .5f);
     assert(sample(9000) == DM_BTN_A); // native camera shutter prompt

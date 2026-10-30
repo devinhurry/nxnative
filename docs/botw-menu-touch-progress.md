@@ -25,6 +25,14 @@ separate from the acceptance results below.
 
 ## Coverage
 
+### Camera framing with the gamepad visible (2026-10-30)
+
+Fixed the shared AppCamera pointer adapter to use the existing relative-look
+entry. Mac gameplay verifies horizontal, vertical and reverse framing, small
+repeated moves, and camera exit/re-entry while virtual controls remain usable.
+Native lifecycle tests and the 188-file iOS compile check pass; iPhone acceptance
+is pending. [Cause, evidence and graphics validation boundary](../dm/games/01007EF00011E000/README.md#appcamera-touch-gestures).
+
 ### Album swipe and Camera control follow-up (2026-10-30)
 
 Album full-photo navigation had a confirmed boundary bug: the shared carousel
