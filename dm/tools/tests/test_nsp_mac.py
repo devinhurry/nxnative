@@ -44,7 +44,9 @@ class Base(unittest.TestCase):
                 if target == 'mac': (d / 'k_b.metal').write_text('MSL'); (d / 'k_b.json').write_text('{}')
                 (o / f'b-{CHAIN}' / 'inputs.tsv').write_text(f'# stamp\ngame\t0100535012974000\ninputs\t{INPUTS}\n')
             for n in ('c1_full.tsv', 'cb_extent.tsv'): (self.tmp / n).write_text(f'# chain b-{CHAIN} inputs {INPUTS} 2026-10-23T00:00:00+00:00\n')
-            log.write_text('shaders 1: ok 1\n')
+            targets = (env or {}).get('DMSH_TARGETS', 'mac').split(',')
+            metal = '; '.join(f'{t} 0 reused, 1 compiled' for t in targets)
+            log.write_text(f'shaders 1: ok 1\nbase shader analysis cache: hit 0, generated 1\nMetal cache: {metal}\n')
 
 
 class Layer(Base):
@@ -92,6 +94,18 @@ class Nvn(Base):
         self.assertNotIn('IOSOUT', self.ran[0][1])
         self.assertTrue((self.sh / f'mac-b-{CHAIN}.key').is_file()); self.assertEqual([p.name for p in (self.sh / 'cache').iterdir()], [f'b-{CHAIN}'])
         self.assertEqual(self.build(True), self.sh / 'cache'); self.assertEqual(self.ran, [])
+
+    def test_shader_note_reports_analysis_and_metal_reuse(self):
+        self.build(True)
+        note = nsp.PROG.end.call_args.args[0]
+        self.assertIn('base source 0 reused, 1 generated', note)
+        self.assertIn('Metal mac 0 reused, 1 compiled', note)
+        self.assertNotIn('shaders compiled', note)
+
+    def test_ios_note_reports_its_target_compile_counts(self):
+        self.build(False)
+        note = nsp.PROG.end.call_args.args[0]
+        self.assertIn('Metal ios 0 reused, 1 compiled', note)
 
     def test_mac_after_ios(self):
         self.assertEqual(self.build(False), self.sh / 'ios')

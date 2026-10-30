@@ -92,6 +92,20 @@ class PackIpa(unittest.TestCase):
         self.assertEqual(self.reused, 6); self.assertEqual(self.kept, end)
         self.same_as_fresh()
 
+    def test_scoped_msl_suffix_skip_keeps_romfs_metal(self):
+        shader_dir = self.app / 'msl/b-fixture'; shader_dir.mkdir(parents=True)
+        (shader_dir / 'shader.metal').write_text('analysis source')
+        (shader_dir / 'shader.json').write_text('reflection')
+        (shader_dir / 'shader.metallib').write_text('runtime library')
+        (self.rom / 'foo.metal').write_text('game asset')
+        self.run_pack(None, '--skip-suffix-under', 'Payload/DmIOS.app/msl/b-fixture/', '.metal')
+        with zipfile.ZipFile(self.out) as archive:
+            names = set(archive.namelist())
+            self.assertNotIn('Payload/DmIOS.app/msl/b-fixture/shader.metal', names)
+            self.assertIn('Payload/DmIOS.app/msl/b-fixture/shader.json', names)
+            self.assertIn('Payload/DmIOS.app/msl/b-fixture/shader.metallib', names)
+            self.assertIn('Payload/DmIOS.app/romfs/foo.metal', names)
+
     def test_app_change_keeps_romfs_and_ignores_app_folder_time(self):
         self.run_pack()
         (self.app / 'replacement').write_bytes(b'new!' * 3000)

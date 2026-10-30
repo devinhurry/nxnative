@@ -3,13 +3,16 @@
 # that leaves a shader's MSL as it was (a translator fix, a new rule for other shaders) costs that shader no Metal compile. The Metal compiler is deterministic:
 # the same MSL with the same flags gives a byte-identical metallib (checked for macOS and iOS), which is what makes reuse safe.
 # Layout: <cache>/<target>/<2 hex>/<digest>.metallib, digest = sha256 over FORMAT, the target's compile convention (the record written into json chain_metal),
-# the compiler's identity (metal / metallib --version without the install path, the SDK version and build) and the MSL bytes.
+# the compiler's identity (metal / metallib --version without the install path, the SDK version and build) and the MSL bytes. Metal embeds the input basename
+# in its output, so _compile gives every source a fixed basename in a private temporary directory before invoking the tool.
 # Filling from earlier builds: every imported library must record the current compiler identity and flags in its reflection. Legacy libraries without that identity are not imported.
 # A fresh compile of two shaders per stage also checks their bytes. Each folder is read once per compiler identity (filled.json remembers its number of libraries).
-# Not part of the chain version (dmsh_chain.py): the cache never changes an output, it only skips recompiling one. Change FORMAT when what it stores changes.
-import os, re, json, shutil, ctypes, hashlib, threading, subprocess, collections
+# This file is part of the chain version (dmsh_chain.py): Metal output depends on its canonical input basename, so changing this compile convention can change library bytes.
+# Bump FORMAT when the cache identity or stored artifact policy changes.
+import os, re, json, shutil, ctypes, hashlib, threading, subprocess, collections, tempfile
 
-FORMAT = b'dmsh_mtlcache 2'   # earlier prefill could misclassify an unsampled library from another compiler
+FORMAT = b'dmsh_mtlcache 4'   # canonical compile input basename; earlier cache entries used caller basenames
+CHOICE_FORMAT = b'dmsh_mtlcache candidate choice 1'
 OUTPUT = re.compile(r'[0-9a-f]{16}_b\.metal')   # a shader's MSL in dmsh_build.py's outputs: <key>_b.metal
 _clonefile = getattr(ctypes.CDLL(None, use_errno=True), 'clonefile', None)   # APFS copy-on-write copy (no data written); elsewhere a plain copy
 
@@ -32,6 +35,8 @@ class Cache:
         self.root, self.targets, self.work = root, targets, work
         self.ident = {t: hashlib.sha256(FORMAT + b'\0' + rec.encode() + b'\0' + compiler_id(sdk).encode()).digest() for t, (sdk, rec, _) in targets.items()}
         self.stats, self.lock = collections.Counter(), threading.Lock()
+        self.choice_locks, self.choice_locks_guard = {}, threading.Lock()
+        self.compile_locks, self.compile_locks_guard = {}, threading.Lock()
 
     def path(self, target, src):
         d = hashlib.sha256(self.ident[target] + b'\0' + src).hexdigest()
@@ -44,22 +49,90 @@ class Cache:
         with self.lock: self.stats[what] += n
 
     def _compile(self, target, msl, lib):
-        air = os.path.join(self.work, f'mtlcache-{target}-{os.getpid()}-{threading.get_ident()}.air')
-        try: self.targets[target][2](msl, air, lib)
-        finally:
-            if os.path.exists(air): os.unlink(air)
+        directory = tempfile.mkdtemp(prefix=f'mtlcache-{target}-', dir=self.work)
+        canonical = os.path.join(directory, 'shader.metal')
+        air = os.path.join(directory, 'shader.air')
+        try:
+            shutil.copyfile(msl, canonical)
+            self.targets[target][2](canonical, air, lib)
+        finally: shutil.rmtree(directory, ignore_errors=True)
 
     def compile(self, target, msl, lib):
         """msl → lib for target: a clone of the library that the same source compiled to before, or a compile (then kept). Raises CalledProcessError as the compile does"""
-        p = self.path(target, open(msl, 'rb').read())
-        if os.path.exists(p):
-            clone(p, lib); self.count((target, 'reused')); return
-        tmp = f'{lib}.tmp-{os.getpid()}-{threading.get_ident()}'
-        self._compile(target, msl, tmp)
-        os.replace(tmp, lib)
-        os.makedirs(os.path.dirname(p), exist_ok=True); clone(lib, p); self.count((target, 'compiled'))
+        with open(msl, 'rb') as f: source = f.read()
+        p = self.path(target, source)
+        with self.compile_locks_guard: lock = self.compile_locks.setdefault((target, p), threading.Lock())
+        with lock:
+            if os.path.exists(p):
+                clone(p, lib); self.count((target, 'reused')); return
+            tmp = f'{lib}.tmp-{os.getpid()}-{threading.get_ident()}'
+            self._compile(target, msl, tmp)
+            os.replace(tmp, lib)
+            os.makedirs(os.path.dirname(p), exist_ok=True); clone(lib, p); self.count((target, 'compiled'))
 
-    def _check(self, target, d, stems, mac_dir):
+    def _choice_path(self, target, digest):
+        return os.path.join(self.root, 'candidate-selections', target, digest[:2], digest + '.json')
+
+    @staticmethod
+    def _choice_digest(target_id, contents):
+        h = hashlib.sha256(CHOICE_FORMAT + b'\0' + target_id + b'\0ordered-candidates-v1\0')
+        for source in contents: h.update(len(source).to_bytes(8, 'little') + source)
+        return h.hexdigest()
+
+    def _load_choice(self, target, digest, count):
+        try:
+            record = json.load(open(self._choice_path(target, digest)))
+            payload = {'format': CHOICE_FORMAT.decode(), 'digest': digest, 'selected': record['selected']}
+            checksum = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+            index = record['selected']
+            return index if record.get('format') == payload['format'] and record.get('digest') == digest and record.get('sha256') == checksum and type(index) is int and 0 <= index < count else None
+        except (OSError, ValueError, TypeError, KeyError): return None
+
+    def _store_choice(self, target, digest, selected):
+        payload = {'format': CHOICE_FORMAT.decode(), 'digest': digest, 'selected': selected}
+        record = dict(payload, sha256=hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest())
+        path = self._choice_path(target, digest); os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f'{path}.tmp-{os.getpid()}-{threading.get_ident()}'
+        try:
+            with open(tmp, 'w') as f: json.dump(record, f, sort_keys=True, separators=(',', ':'))
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp): os.unlink(tmp)
+
+    def compile_candidates(self, target, candidates, lib):
+        """Compile the first successful ordered MSL candidate for this target; return its index.
+
+        The successful index is keyed by this target's compiler and every candidate's
+        bytes and order. A hit still calls compile() so the requested output is restored
+        from the target-specific compiled-library cache. No all-failed result is stored.
+        """
+        candidates = tuple(os.fspath(p) for p in candidates)
+        if not candidates: raise ValueError('compile_candidates requires at least one MSL source')
+        contents = tuple(open(p, 'rb').read() for p in candidates)
+        digest = self._choice_digest(self.ident[target], contents)
+        path = self._choice_path(target, digest)
+        with self.choice_locks_guard: lock = self.choice_locks.setdefault((target, digest), threading.Lock())
+        with lock:
+            selected = self._load_choice(target, digest, len(candidates))
+            if selected is not None:
+                try:
+                    self.compile(target, candidates[selected], lib)
+                    self.count((target, 'candidate reused')); return selected
+                except subprocess.CalledProcessError:
+                    try: os.unlink(path)
+                    except FileNotFoundError: pass
+            last = None
+            for index, source in enumerate(candidates):
+                try:
+                    self.compile(target, source, lib)
+                    self._store_choice(target, digest, index)
+                    self.count((target, 'candidate selected')); return index
+                except subprocess.CalledProcessError as e: last = e
+            self.count((target, 'candidate failed'))
+            if last is not None: raise last
+            raise RuntimeError('no Metal candidate compiled')
+
+    def _check(self, target, d, stems, source_dir):
         """None if folder d was built with the current convention and compiler, else why not"""
         rec, picks = self.targets[target][1], collections.defaultdict(list)
         for stem in stems:
@@ -70,7 +143,9 @@ class Cache:
             if len(picks[j.get('stage')]) < 2: picks[j.get('stage')].append(stem)
         for stem in (s for v in picks.values() for s in v):
             tmp = os.path.join(self.work, f'mtlcache-check-{target}.metallib')
-            try: self._compile(target, os.path.join(mac_dir, stem + '.metal'), tmp)
+            src = os.path.join(source_dir, stem + '.metal')
+            if not os.path.isfile(src): return f'no verifiable {target} MSL source for {stem}'
+            try: self._compile(target, src, tmp)
             except subprocess.CalledProcessError: return f'{stem}.metal does not compile now'
             same = open(tmp, 'rb').read() == open(os.path.join(d, stem + '.metallib'), 'rb').read(); os.unlink(tmp)
             if not same: return f'a fresh compile of {stem}.metal differs from its library'
@@ -89,7 +164,8 @@ class Cache:
             libs = names if d == mac_dir else set(os.listdir(d))
             have = [s for s in stems if s + '.metallib' in libs]; key = self.ident[target].hex() + ':' + os.path.realpath(d)
             if not have or stamps.get(key) == len(have): continue
-            why = self._check(target, d, have, mac_dir)
+            source_dir = mac_dir if target == 'mac' else d
+            why = self._check(target, d, have, source_dir)
             if why: notes.append(f'Metal cache: not filled from {d}: {why}')
             else: todo[target] = (d, set(have))
             stamps[key] = len(have)
@@ -97,8 +173,9 @@ class Cache:
         for stem in stems:
             ts = [t for t, (d, have) in todo.items() if stem in have]
             if not ts: continue
-            src = open(os.path.join(mac_dir, stem + '.metal'), 'rb').read()
             for t in ts:
+                source_dir = mac_dir if t == 'mac' else todo[t][0]
+                src = open(os.path.join(source_dir, stem + '.metal'), 'rb').read()
                 p = self.path(t, src)
                 if os.path.exists(p): continue
                 os.makedirs(os.path.dirname(p), exist_ok=True); clone(os.path.join(todo[t][0], stem + '.metallib'), p); added[t] += 1

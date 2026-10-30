@@ -116,7 +116,7 @@ class ChainCheck(unittest.TestCase):   # dmsh_build.py run directly (tool_lock.c
         with open(dmsh_chain.LOCK) as f: lock = dict(l.rstrip('\n').split('\t', 1) for l in f if '\t' in l and not l.startswith('#'))
         with mock.patch.object(tool_lock, 'tools_now', lambda: {**lock, 'xlate_source': xlate_source}): return tool_lock.check_tools()
 
-    def test_checks_are_outside_the_chain(self):   # a fix to a check changes neither V nor any shader's cache key (dmsh_build.py CODE_FP takes dmsh_chain.py's code form)
+    def test_checks_are_outside_the_chain(self):   # the translator prereq checks do not change the toolchain or shader-analysis fingerprints
         self.assertNotIn('tools/tool_lock.py', dmsh_chain.FILES)
         for name in ('tools_now', 'check_tools', 'xlate_embedded'): self.assertFalse(hasattr(dmsh_chain, name), name)
 

@@ -1832,9 +1832,9 @@ def split_shaders(py, repo, roms, mains, pkg, env, logs, g, provisional=False, o
 
 class ShaderWatch:
     """Progress of dmsh_build.py, read from the files it writes (it prints nothing until it ends). It works in three phases:
-    the cache check (a hit restores <key>_b.json into the library directory b-<chain>/: the iOS one, or the Mac's for a Mac-only build; a miss writes <key>.bin into its temporary folder dmsh_* under WORK),
-    the translation of the misses (<key>.spv in the temporary folder), and the compile, which takes the keys in a fixed order (sorted, the vertex shaders with pixel pairs last)
-    and writes <key>_b.json again for every miss and every pixel shader: the furthest key written so far tells how far it got"""
+    the analysis-cache lookup (a miss writes <key>.bin into its temporary folder dmsh_* under WORK),
+    translation of misses (<key>.spv in the temporary folder), and preparation of shader outputs, which writes <key>_b.json as analysis bundles are materialized. The last phase may
+    restore MSL analysis and metallibs from caches or compile them, so its progress label is deliberately neutral; the furthest key written so far tells how far it got"""
     def __init__(self, g, out, tmp, pso_pairs=None):   # out: the library directory b-<chain>/ (the iOS one, or the Mac's for a Mac-only build)
         keys = set()
         for ln in g.table('shader_map.tsv').read_text(errors='replace').splitlines():   # the keys dmsh_build.py builds: column 4 of the rows from a shader package
@@ -1866,14 +1866,14 @@ class ShaderWatch:
         if self.t1 is None:
             self.hits |= self.written(self.pos.keys() - self.hits, self.t0 - 2)
             if len(self.hits) + ext['.bin'] < self.n and not ext['.spv'] and not ext['.metal']:
-                return {'step': 'cache check', 'done': len(self.hits) + ext['.bin'], 'total': self.n, 'unit': 'shaders', 'note': f'{len(self.hits):,} cached'}
-            self.t1 = time.time()   # the cache check is over: from now on a <key>_b.json is written by the compile
+                return {'step': 'cache check', 'done': len(self.hits) + ext['.bin'], 'total': self.n, 'unit': 'shaders', 'note': f'{len(self.hits):,} outputs ready'}
+            self.t1 = time.time()   # the lookup is over: from now on a <key>_b.json is written as a shader output is prepared
         if ext['.bin'] and not ext['.metal'] and ext['.spv'] < ext['.bin']:
             return {'step': 'translating', 'done': ext['.spv'], 'total': ext['.bin'], 'unit': 'shaders'}
         new = self.written(self.pos.keys() - self.fin, self.t1)
         self.fin |= new; self.top = max([self.top] + [self.pos[k] for k in new])
-        return {'step': 'compiling' if ext['.bin'] else 'finishing', 'done': max(len(self.fin), self.top + 1), 'total': self.n, 'unit': 'shaders',
-                'note': f'{ext[".bin"]:,} not cached' if ext['.bin'] else ''}
+        return {'step': 'preparing shader outputs', 'done': max(len(self.fin), self.top + 1), 'total': self.n, 'unit': 'shaders',
+                'note': f'{ext[".bin"]:,} analysis misses' if ext['.bin'] else ''}
 
 
 def spirv_cross(repo, env=None):   # resolve the same selection the shader tools run, including an executable name on PATH
@@ -1959,13 +1959,20 @@ def build_shaders(py, repo, sh, xlate, env, logs, g, pkg_key=None, mac=False):
     if keep_mac: say(f'{sum(1 for _ in (sh / "cache" / f"b-{chain}").glob("*_b.metallib"))} Mac shader libraries kept for the Mac run command ({sh / "cache" / f"b-{chain}"})')
     t = log.read_text(errors='replace')
     if own := re.search(r'^note: (built with this Mac\'s compilers.*)$', t, re.M): say(own.group(1))
-    m, c = re.search(r'shaders (\d+): ok (\d+)', t), re.search(r'shader cache: hit (\d+)', t)
+    m = re.search(r'shaders (\d+): ok (\d+)', t)
+    analysis = re.search(r'^base shader analysis cache: hit (\d+), generated (\d+)$', t, re.M)
+    metal = re.search(r'^Metal cache: (.*)$', t, re.M)
     note = ''
     if m:
         total, ok = int(m.group(1)), int(m.group(2))
         failed = f'; {total - ok:,} failed, reasons at the end of {log}' if ok < total else ''
-        note = f'{ok:,} of {total:,} shaders ready{failed}'
-        PROG.end(f'{ok:,} of {total:,} shaders ready' + (f' ({int(c.group(1)):,} from the cache)' if c else '') + failed)
+        parts = [f'{ok:,} of {total:,} shader outputs ready']
+        if analysis: parts.append(f'base source {int(analysis.group(1)):,} reused, {int(analysis.group(2)):,} generated')
+        if metal:
+            targets = re.findall(r'(mac|ios) (\d+) reused, (\d+) compiled', metal.group(1))
+            if targets: parts.append('Metal ' + ', '.join(f'{target} {int(reused):,} reused, {int(compiled):,} compiled' for target, reused, compiled in targets))
+        note = '; '.join(parts)
+        PROG.end(note + failed)
     else: PROG.end()
     shader_regressions(py, repo, sh / 'cache', chain, logs)   # before the key: a stopped build is checked again on the next run
     if key:
