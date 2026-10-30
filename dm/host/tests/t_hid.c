@@ -26,6 +26,7 @@ uint64_t now_ns(void) { return motion_now; }
 static uint64_t test_frame;   // presented frames (t_rec moves it)
 uint64_t dm_guest_frame(void) { return test_frame; }
 int dm_look_enabled(void) { return 0; }
+int dm_look_owns_stick(uint64_t frame) { (void)frame; return 0; }
 // The touchscreen as the game would read it: the first finger, and whether one was put down since the last read (a touch's Start is reported once, hle_touch.c)
 static int touch_down, touch_new, touch_downs; static float touch_x, touch_y;
 static void touch_to(const dm_touch *t, int n) { if (n > 0) { touch_new |= !touch_down; touch_downs += !touch_down; touch_x = t[0].x; touch_y = t[0].y; } touch_down = n > 0; }

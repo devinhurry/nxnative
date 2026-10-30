@@ -321,10 +321,21 @@ static void test_actual_observer_ratio_read(void) {
     memcpy(vfr + 0x20, &ratio, sizeof ratio);
     float pair[2] = {0, 0};
     uint64_t regs[31] = {0}; regs[0] = (uintptr_t)child; regs[19] = (uintptr_t)pair;
+    test_frame = 79;
+    test_hid_valid = 1;
+    test_hid_sample = (dm_hid_look_sample){.frame=79, .source=DM_HID_LOOK_VIRTUAL,
+        .selected_rx=16000, .selected_ry=-10000};
+    native_stick_pair(16000, -10000, &pair[0], &pair[1]);
+    memcpy(child + 0x128, pair, sizeof pair);
+    pair[0] = .4f; pair[1] = -.2f;
+    camera_look_source(regs); camera_look_vector(regs);
+    check("an ordinary virtual right stick retains its native response without a relative gesture",
+          pair[0] == .4f && pair[1] == -.2f);
+    memset(child, 0, sizeof child);
     test_frame = 80;
     dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, 80);
     dm_look_test_input_at(DM_LOOK_MOVE, 0.005f, -0.0025f, 80);
-    test_hid_valid = 1; test_hid_sample = (dm_hid_look_sample){.frame=80, .source=DM_HID_LOOK_VIRTUAL};
+    test_hid_valid = 1; test_hid_sample = (dm_hid_look_sample){.frame=80, .source=DM_HID_LOOK_RELATIVE};
     camera_look_source(regs);
     camera_look_vector(regs);
     check("a valid paired source with no VFR leaves native output unchanged and drops unready touch input", pair[0] == 0 && pair[1] == 0);
@@ -341,7 +352,7 @@ static void test_actual_observer_ratio_read(void) {
     dm_look_test_input_at(DM_LOOK_MOVE, 0.005f, -0.0025f, 81);
     pair[0] = pair[1] = 0;
     regs[0] = (uintptr_t)child;
-    test_hid_sample = (dm_hid_look_sample){.frame=81, .source=DM_HID_LOOK_VIRTUAL};
+    test_hid_sample = (dm_hid_look_sample){.frame=81, .source=DM_HID_LOOK_RELATIVE};
     camera_look_source(regs);
     camera_look_vector(regs);
     check("the real OBS33→OBS32 path reads the VFR ratio and applies both signed axes", near(pair[0], 0.2f) && near(pair[1], 0.1f));
@@ -359,7 +370,7 @@ static void test_actual_observer_ratio_read(void) {
     // mismatch seam. Such a mismatch can represent another native producer that won selection.
     float native_candidate[2] = {0.25f, -0.125f};
     memcpy(child + 0x128, native_candidate, sizeof native_candidate);
-    test_hid_sample = (dm_hid_look_sample){.frame=82, .source=DM_HID_LOOK_VIRTUAL,
+    test_hid_sample = (dm_hid_look_sample){.frame=82, .source=DM_HID_LOOK_RELATIVE,
         .selected_rx=23170, .selected_ry=23170, .virtual_rx=23170, .virtual_ry=23170};
     camera_look_source(regs);
     camera_look_vector(regs);
@@ -373,7 +384,7 @@ static void test_actual_observer_ratio_read(void) {
     memcpy(child + 0x128, &virtual_axis, sizeof virtual_axis);
     float virtual_y = 0;
     memcpy(child + 0x12c, &virtual_y, sizeof virtual_y);
-    test_hid_sample = (dm_hid_look_sample){.frame=84, .source=DM_HID_LOOK_VIRTUAL,
+    test_hid_sample = (dm_hid_look_sample){.frame=84, .source=DM_HID_LOOK_RELATIVE,
         .selected_rx=16384, .virtual_rx=16384};
     pair[0] = pair[1] = 0;
     camera_look_source(regs);
@@ -387,7 +398,7 @@ static void test_actual_observer_ratio_read(void) {
     float diagonal_axis = from_bits(0x3f3504f3);
     memcpy(child + 0x128, &diagonal_axis, sizeof diagonal_axis);
     memcpy(child + 0x12c, &diagonal_axis, sizeof diagonal_axis);
-    test_hid_sample = (dm_hid_look_sample){.frame=85, .source=DM_HID_LOOK_VIRTUAL,
+    test_hid_sample = (dm_hid_look_sample){.frame=85, .source=DM_HID_LOOK_RELATIVE,
         .selected_rx=23170, .selected_ry=23170, .virtual_rx=23170, .virtual_ry=23170};
     dm_look_test_input_at(DM_LOOK_MOVE, 0.003f, -0.004f, 85);
     camera_look_source(regs);
@@ -399,7 +410,7 @@ static void test_actual_observer_ratio_read(void) {
     test_frame = 86; pair[0] = virtual_axis; pair[1] = 0;
     memcpy(child + 0x128, &virtual_axis, sizeof virtual_axis);
     memcpy(child + 0x12c, &virtual_y, sizeof virtual_y);
-    test_hid_sample = (dm_hid_look_sample){.frame=85, .source=DM_HID_LOOK_VIRTUAL,
+    test_hid_sample = (dm_hid_look_sample){.frame=85, .source=DM_HID_LOOK_RELATIVE,
         .selected_rx=16384, .virtual_rx=16384};
     dm_look_test_input_at(DM_LOOK_MOVE, 0.001f, 0, 86);
     camera_look_source(regs); camera_look_vector(regs);
@@ -413,13 +424,13 @@ static void test_actual_observer_ratio_read(void) {
     check("cached physical-stick provenance preserves the native candidate", pair[0] == virtual_axis && pair[1] == 0);
 
     test_frame = 88; pair[0] = virtual_axis; pair[1] = 0;
-    test_hid_sample = (dm_hid_look_sample){.frame=89, .source=DM_HID_LOOK_VIRTUAL,
+    test_hid_sample = (dm_hid_look_sample){.frame=89, .source=DM_HID_LOOK_RELATIVE,
         .selected_rx=16384, .virtual_rx=16384};
     camera_look_source(regs); camera_look_vector(regs);
     check("a future HID sample cannot be paired with an older in-flight getter", pair[0] == virtual_axis && pair[1] == 0);
 
     test_frame = 90; pair[0] = virtual_axis; pair[1] = 0;
-    test_hid_sample = (dm_hid_look_sample){.frame=90, .source=DM_HID_LOOK_VIRTUAL,
+    test_hid_sample = (dm_hid_look_sample){.frame=90, .source=DM_HID_LOOK_RELATIVE,
         .selected_rx=10000, .virtual_rx=10000};
     float replacement_axis; native_stick_pair(10000, 0, &replacement_axis, &virtual_y);
     memcpy(child + 0x128, &replacement_axis, sizeof replacement_axis);
@@ -432,6 +443,14 @@ static void test_actual_observer_ratio_read(void) {
     dm_look_test_input_at(DM_LOOK_MOVE, 0.001f, 0, 93);
     camera_look_source(regs); camera_look_vector(regs);
     check("getter three frames after the last HID poll uses that cached source only while raw still matches", near(pair[0], 0.12f) && pair[1] == 0);
+
+    dm_look_test_input_at(DM_LOOK_CANCEL, 0, 0, 93);
+    test_frame = 94;
+    test_hid_sample = (dm_hid_look_sample){.frame=94, .source=DM_HID_LOOK_VIRTUAL,
+        .selected_rx=10000, .virtual_rx=10000};
+    pair[0] = .3f; pair[1] = -.1f;
+    camera_look_source(regs); camera_look_vector(regs);
+    check("the manual stick resumes after cancelling a relative gesture", pair[0] == .3f && pair[1] == -.1f);
 }
 
 static void test_native_stick_float_mapping(void) {

@@ -338,6 +338,29 @@ Gameplay retains the pad; actual tutorials, dialogue, menus and loading keep
 their existing input ownership. Headshot and shield-surf notifications require
 the user's in-game check; no attempt was made to trigger either automatically.
 
+**Resolved on Mac: item pickup hid controls and the backup right stick did not turn the camera (2026-10-31).**
+The supplied `before-mushroom` save reproduces this with a Sunshroom.
+`PickUpWin_00` retains its shown/input-owned state over live gameplay; its
+Inventory hint is not a modal menu. Classifying it as one hid the pad even
+after the corner notification faded. It now shares the passive corner-tip
+policy, including rejection from focused and cursorless menu routing.
+The separate [ordinary-stick/relative-look source fix](../../../docs/reference/services.md#ordinary-virtual-sticks-while-relative-look-is-enabled)
+preserves the backup pad's right-stick input.
+
+`pickup-controls-20261031/` in the game's work folder records the independent
+save copies, source/host identities and before/after audits: the baseline
+reported a menu over live gameplay in 60 pickup snapshots; the fixed run's
+21 recorded snapshots retained gameplay with no menu ownership. The Mac pad
+remains visible, native virtual right-stick input turns the camera, and a
+relative-look gesture still reaches the shared getter. Native tests, the
+UIKit gesture harness and iPhone arm64 compilation of the changed input
+files pass. Source-save hashes are unchanged. Gameplay uses the current host
+input code with retained `371ad45` graphics and matching `07b0ea547435`
+shaders; the complete current Mac host builds separately. The scoped BOTW
+`regress.py check --quick` stops at the existing Metal compiler mismatch
+(`32023.883` installed, `32023.921` required). Physical iPhone acceptance
+remains pending.
+
 **Resolved: full-health Eat/Cancel dialog ignored touches (2026-10-29).**
 The native screen is `PauseMenuMantan_00`, with two registered `Pa_Btn_*`
 entries. Only the exact `PauseMenu_00` and recipe screen were classified as
@@ -824,6 +847,8 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 - The frame step under load: `DM_TEST_PRESENT_LAG=1,12` (12 ms added to every frame: 30 fps at 1.000 of real time).
 
 ## Found on this game
+
+- **Resolved in code and Mac gameplay, iPhone acceptance pending:** [Ordinary virtual sticks while relative look is enabled](../../../docs/reference/services.md#ordinary-virtual-sticks-while-relative-look-is-enabled). The pickup/backup-pad reproduction and runtime evidence are recorded above.
 
 - **Resolved in code, iPhone acceptance pending:** [Guest calls made by observation callbacks](../../../docs/reference/threads.md#guest-calls-made-by-observation-callbacks). The iPhone inventory-category crash log from build `895cecbc` matches the current gate-stack CPU reproduction. It now passes with the same native category entry points retained. Before/after logs and the supplied iPhone log are in `inventory-category-crash-20261030/` in the game's work folder.
 

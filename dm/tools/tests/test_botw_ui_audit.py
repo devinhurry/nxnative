@@ -56,6 +56,7 @@ class TouchAudit(unittest.TestCase):
 
     def test_policy_precedence_and_resource_presence_are_not_acceptance(self):
         self.assertEqual(ui.role('MessageTipsRunTime_00'), 'TIP')
+        self.assertEqual(ui.role('PickUpWin_00'), 'TIP')
         self.assertEqual(ui.role('MessageTips_00'), 'MENU')
         self.assertEqual(ui.role('PauseMenuInfo_00'), 'PASSIVE')
         self.assertEqual(ui.role('AppMap_00'), 'SLATE')
