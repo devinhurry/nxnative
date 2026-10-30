@@ -8,6 +8,7 @@
 static pthread_mutex_t g_look_mu = PTHREAD_MUTEX_INITIALIZER;
 static int g_available, g_held, g_have_pending, g_have_snapshot, g_suppress_snapshot;
 static uint64_t g_snapshot_frame, g_pending_frame;
+static uint64_t g_owned_frame = UINT64_MAX;
 static float g_dx, g_dy, g_sample_x, g_sample_y, g_gain;
 static int g_trace;
 static uint64_t g_injections;
@@ -33,6 +34,13 @@ int dm_look_enabled(void) {
     return enabled;
 }
 
+int dm_look_owns_stick(uint64_t frame) {
+    pthread_mutex_lock(&g_look_mu);
+    int owned = g_available && (g_held || g_have_pending || frame == g_owned_frame);
+    pthread_mutex_unlock(&g_look_mu);
+    return owned;
+}
+
 static void dm_look_set_available(int available) {
     if (available != 0 && available != 1) die("[RED] look: available must be 0 or 1");
     pthread_mutex_lock(&g_look_mu);
@@ -41,6 +49,7 @@ static void dm_look_set_available(int available) {
         g_held = g_have_pending = g_have_snapshot = g_suppress_snapshot = 0;
         g_dx = g_dy = g_sample_x = g_sample_y = 0;
         g_snapshot_frame = g_pending_frame = 0;
+        g_owned_frame = UINT64_MAX;
     }
     pthread_mutex_unlock(&g_look_mu);
 }
@@ -54,6 +63,7 @@ static void look_input_at(int phase, float dx, float dy, uint64_t frame) {
     // next snapshot while the producer waits here, this event is fresh even when its timestamp
     // is one frame behind. Retimestamp it at the snapshot boundary so the next getter can consume it.
     uint64_t event_frame = g_have_snapshot && frame < g_snapshot_frame ? g_snapshot_frame : frame;
+    g_owned_frame = event_frame;
     switch (phase) {
     case DM_LOOK_BEGIN:
         if (g_held) { pthread_mutex_unlock(&g_look_mu); die("[RED] look: nested BEGIN"); }
@@ -170,8 +180,10 @@ static void native_stick_pair(int32_t rx, int32_t ry, float *out_x, float *out_y
     *out_y = y;
 }
 
-static int raw_matches_virtual(void) {
-    if (!g_raw_call.valid || g_raw_call.hid.source != DM_HID_LOOK_VIRTUAL) return 0;
+static int raw_matches_relative(void) {
+    // A manual virtual stick and keyboard/script axes keep their native curve.
+    // Only a sample owned by a relative gesture can be replaced or cancelled.
+    if (!g_raw_call.valid || g_raw_call.hid.source != DM_HID_LOOK_RELATIVE) return 0;
     // Match the exact BOTW native stick normalization; unmatched provider candidates remain native.
     float expected_x, expected_y;
     native_stick_pair(g_raw_call.hid.selected_rx, g_raw_call.hid.selected_ry, &expected_x, &expected_y);
@@ -187,7 +199,7 @@ static void camera_look_vector(const uint64_t *regs) {
     uint64_t frame = g_raw_call.valid ? g_raw_call.frame : dm_guest_frame();
     int sample_valid = g_raw_call.valid;
     int physical = sample_valid && g_raw_call.hid.source == DM_HID_LOOK_PHYSICAL;
-    int raw_match = sample_valid && raw_matches_virtual();
+    int raw_match = sample_valid && raw_matches_relative();
     int drag_active;
     pthread_mutex_lock(&g_look_mu); drag_active = g_held || g_have_pending; pthread_mutex_unlock(&g_look_mu);
     int needs_ratio = drag_active && sample_valid && raw_match && !physical;

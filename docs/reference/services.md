@@ -325,6 +325,14 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Check:** `dm/host/tests/t_hid.c` (`t_script`) runs the scripted publisher with a controller update during the hold: buttons survive repeated reads after the latch is consumed, the scripted stick wins over drift, shake continues, and release preserves physical input. Short presses are latched once, all four axes reach the handheld npad, and player 2 stays separate.
 - **Found on:** Batman: Arkham Knight (`0100ACD0163D0000`), reported in [PR #326](https://github.com/seedds/nxnative/pull/326) while driving the opening route with `DM_KEYS` and a DualShock 4. Reproduced independently in the host HID test without game files; its game profile is not in this checkout.
 
+### Ordinary virtual sticks while relative look is enabled
+
+- **Symptom:** a manually revealed virtual right stick is visible and publishes nonzero axes, but the camera does not turn; scripted and keyboard right-stick input can fail too.
+- **Cause:** the relative-look adapter treated every virtual Npad source as a relative pointer. Its shared post-filter getter replaced a matching ordinary stick with the queued pointer displacement, which is zero without a pointer gesture.
+- **Fix:** freeze ordinary virtual, physical and relative-gesture sources separately with each Npad sample (`hle_hid.c`, `dm_input.h`). Only a proven relative source is replaced by `hle_look.c`. The release/cancel frame remains owned by that gesture, so delayed getters cannot revive its synthetic velocity; a later ordinary stick keeps its native response.
+- **Check:** `t_look` exercises the actual source/vector observers before and after a cancelled gesture. `t_device_motion` checks ownership through real Npad reads, immutable same-frame sources, pending release and cancellation. The UIKit harness checks three-finger backup activation and nonzero right-stick output separately.
+- **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) (1.9.0, supplied `before-mushroom` save).
+
 ### Touch gestures recognized from the touch points
 
 - **Symptom:** taps in handheld mode do nothing, though the game reads the touch screen (the title's PRESS ANY BUTTON, the menus' cards).

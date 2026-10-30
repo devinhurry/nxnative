@@ -39,7 +39,7 @@ separate from the acceptance results below.
   reopening the chest shows Inventory Plus. Tapping its label opens Inventory
   focused on the newly acquired Eightfold Blade. Card-body A still continues.
 
-The native menu suite, 74 relative-look checks and 188-file iOS compile check
+The native menu suite, 76 relative-look checks and 188-file iOS compile check
 pass. The UIKit harness reports zero failures across 36 look sessions. The Mac
 game runs the recorded host snapshot with these touch changes and retained graphics
 (`371ad45`, chain `07b0ea547435`); host source hashes are recorded alongside

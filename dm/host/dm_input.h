@@ -35,7 +35,7 @@ uint32_t dm_player_npad(int player);  // the npad id the game reads player p + 1
 
 // BOTW relative-look adapter: the latest immutable right-stick source frozen by a valid
 // connected Npad read at or before the requested guest frame. A newer valid read supersedes it.
-enum { DM_HID_LOOK_NONE, DM_HID_LOOK_VIRTUAL, DM_HID_LOOK_PHYSICAL };
+enum { DM_HID_LOOK_NONE, DM_HID_LOOK_VIRTUAL, DM_HID_LOOK_PHYSICAL, DM_HID_LOOK_RELATIVE };
 typedef struct {
     uint64_t frame;
     int32_t virtual_rx, virtual_ry, physical_rx, physical_ry;

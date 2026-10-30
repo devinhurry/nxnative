@@ -59,7 +59,7 @@ Implementation and verification are independent. `blocked` means a save, story/D
 | `horse.name_entry` — ShopHorse + KeyBoradTextArea; name editor active | Enter/erase name; change character page; accept/cancel back to registration | implemented | not_run / none |
 | `horse.hud` — MainHorse; horse HUD active | Respect native owner prompts and retain gameplay button routing | not_required | not_required / not required |
 | `guide.shrine` — SousaGuide; prompt-only shrine action | Touch native confirm/back prompt, exclude ordinary gameplay hint | implemented | passed / game state |
-| `notice.ack` — PickUpWin/ChallengeWin; notice/award shown | Acknowledge only when input-owning; ignore passive notifications | implemented | passed / handler test |
+| `notice.ack` — ChallengeWin; challenge notice shown | Acknowledge only when input-owning; keep pickup notifications passive | implemented | passed / handler test |
 | `system.error_viewer` — ErrorViewer; error dialog shown | Dismiss/continue with native action | implemented | not_run / none |
 | `ending.continue_skip` — StaffRollDLC_00; DLC credit roll with live B guide and page arrows | Tap native B prompt to skip; tap up/down page arrows to scroll credits. | implemented | passed / handler test |
 | `intro.advance_mode` — HardMode_00; mode choice dialog with live PaCommonBtnThin_00 left/right registered hit targets | Tap either native option button to choose its corresponding game mode. | implemented | not_run / none |
@@ -415,13 +415,12 @@ A complete shared or screen-specific code path is present; verification status s
 
 A complete shared or screen-specific code path is present; verification status separately records whether this exact guest state has been exercised.
 
-- [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `selector_message_prompt_view`: Publishes visible dialogue body/continuation arrow.
-- [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `generic_action_prompts_to_view`: Publishes the live key-hint parts nested in PaPickUpWin_00 and PaChallengeWin_00 only while their prompt owner is active.
-- [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `selector_cursorless_prompt_view`: Routes visible A/B guide prompts from PickUpWin and ChallengeWin only when the corresponding screen owns the active native input group.
+- [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `generic_action_prompts_to_view`: Publishes visible native challenge guide prompts under their live owner.
+- [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `selector_cursorless_prompt_view`: Routes ChallengeWin guides only when the screen owns its native input group; PickUpWin uses the passive TIP policy.
 
-**Verification (passed; handler test):** Native owner-bound prompt test passed for PickUpWin_00 and ChallengeWin_00; Pickup A tap emits the native action.
+**Verification (passed; handler test):** Native owner-bound ChallengeWin acknowledgement and PickUpWin passive-owner rejection pass.
 
-- [dm/host/tests/t_botw_touch_menu.c](../dm/host/tests/t_botw_touch_menu.c) `test_cursorless_help_prompts`: Native peer reports the focused BOTW touch-menu test passed; asserts exact PickUpWin/ChallengeWin owner binding and pickup A tap output.
+- [dm/host/tests/t_botw_touch_menu.c](../dm/host/tests/t_botw_touch_menu.c) `test_cursorless_help_prompts`: Asserts the live ChallengeWin acknowledgement and rejects PickUpWin even when a visible guide glyph is cached.
 
 ### system.error_viewer
 
@@ -1001,7 +1000,7 @@ Every scanned layout is listed, including passive HUDs, backgrounds and shared p
 | `PauseMenuRecipe_00` | interactive screen | applet.album, applet.picture_book, core.back, core.native_target.dispatch, inventory.actions, inventory.category, inventory.sort_rotate_recipe, map.stamp_warp_header, options.rows_values, pause.home, quest.rows_categories |
 | `PaWarpEfDLC_00` | reusable component | No independent menu action |
 | `PaWeather_00` | reusable component | No independent menu action |
-| `PickUpWin_00` | interactive screen | notice.ack |
+| `PickUpWin_00` | passive layer | No independent menu action |
 | `ReadyGo_00` | passive layer | No independent menu action |
 | `Rupee_00` | passive layer | No independent menu action |
 | `SaveTransferWindow_00` | interactive screen | core.back, core.dialogue.choices, system.save_transfer |
