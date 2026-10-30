@@ -489,6 +489,14 @@ then commits through `0xe3b9f0` last. Refreshing after commit restarted a
 transition and disabled focus. Exact 1.9.0 build and instruction checks cover
 these native contracts; Quest/Sell keep their existing setter.
 
+Compendium category touch cells share inventory's expansion around the native
+glyphs, capped by neighboring category centers and the item-list clip. The native
+pane identities and immediate setter remain unchanged. BOTW's default shoulder
+positions are exchanged: ZR takes the former inward R position, and R takes the
+former outer ZR position. The shared geometry, C defaults and launcher defaults
+agree for Mac, UIKit and the editor preview. Focused menu/geometry checks and
+18 launcher settings/storage tests pass; physical iPhone acceptance is pending.
+
 R3 Scope owns a guide bar inside `MainScreen_00`, under
 `Pa_CameraPointer_00`, rather than an independent menu screen. Its visible
 capture-backed guide plates and native glyphs supply Place pin, Quit and Edit

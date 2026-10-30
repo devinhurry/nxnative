@@ -25,6 +25,14 @@ separate from the acceptance results below.
 
 ## Coverage
 
+### Compendium target size and shoulder defaults (2026-10-31)
+
+The [game note](../dm/games/01007EF00011E000/README.md#direct-categories-and-gameplay-hud-prompts)
+records larger Compendium category cells and exchanged default R/ZR positions.
+The focused menu regression selects a category outside the original glyph and
+checks that neighboring cells do not overlap; geometry and 18 launcher
+settings/storage tests pass. These changes have not yet been verified on iPhone.
+
 ### Category jumps and gameplay prompts (2026-10-31)
 
 - Compendium: Mac touch jumps directly from Creatures to Treasure and back,

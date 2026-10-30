@@ -1169,8 +1169,7 @@ static void generic_action_prompts_to_view(uintptr_t root, uint64_t frame,
 // The native category hit panes cover only the small glyphs. Give touch the
 // surrounding category cell as well, capped at neighboring centers so a tap
 // in the gap has one owner. Preserve the live transform's width/height ratio.
-static void inventory_category_touch_rects(dm_botw_touch_menu_view *view) {
-    if (!view->inventory_visible) return;
+static void category_touch_rects(dm_botw_touch_menu_view *view) {
     float raw[DM_BOTW_MENU_MAX_CATEGORIES][4];
     memcpy(raw, view->categories, sizeof raw);
     for (int i = 0; i < view->category_count; i++) {
@@ -1336,7 +1335,7 @@ static dm_botw_touch_menu_view snapshot_native_view_locked(void) {
     view.clip_valid = g_native_view.clip_valid && frame >= g_native_view.clip_seen &&
                       frame - g_native_view.clip_seen <= 2;
     if (view.clip_valid) memcpy(view.clip, g_native_view.clip, sizeof view.clip);
-    inventory_category_touch_rects(&view);
+    if (view.inventory_visible) category_touch_rects(&view);
     if (g_native_view.cursor_visible[0] && g_native_view.cursor_visible[1] &&
         g_native_view.cursor_visible[2] && g_native_view.cursor_visible[3]) {
         float x = 0, y = 0;
@@ -3495,7 +3494,14 @@ static void selector_list_categories_to_view(uintptr_t screen, uintptr_t root,
         view->category_panes[at] = hits[found].pane;
         memcpy(view->categories[at], hits[found].rect, sizeof view->categories[at]);
     }
-    if (view->category_count) view->list_category_widget = widget;
+    if (view->category_count) {
+        view->list_category_widget = widget;
+        uint32_t configured_categories = 0;
+        memcpy(&configured_categories, (const void *)(widget + 0x288), 4);
+        // Compendium's five-category widget has the same small glyph hits as
+        // inventory. Expand its touch cells without changing Quest or Shop.
+        if (configured_categories == 5) category_touch_rects(view);
+    }
 }
 
 static int selector_list_category_setter(uintptr_t *out, int immediate) {

@@ -81,8 +81,8 @@ class LauncherSettingsTests(unittest.TestCase):
             'STICK_X': '0.000', 'STICK_Y': '0.023',
             'ZL_X': '0.000', 'ZL_Y': '0.000', 'ZL_SCALE': '1.000',
             'L_X': '0.021', 'L_Y': '0.000', 'L_SCALE': '1.200',
-            'R_X': '-0.022', 'R_Y': '-0.098', 'R_SCALE': '1.100',
-            'ZR_X': '0.025', 'ZR_Y': '-0.097', 'ZR_SCALE': '1.100',
+            'R_X': '0.025', 'R_Y': '-0.097', 'R_SCALE': '1.100',
+            'ZR_X': '-0.022', 'ZR_Y': '-0.098', 'ZR_SCALE': '1.100',
             'DPAD_X': '0.042', 'DPAD_Y': '0.000', 'DPAD_SCALE': '1.000',
             'FACE_GAP': '1.060', 'BADGES': '0',
         }

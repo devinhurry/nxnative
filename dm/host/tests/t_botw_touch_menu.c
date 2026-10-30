@@ -463,10 +463,15 @@ static void test_quest_category_touch(void) {
     categories.category_count = 0; categories.list_category_widget = 0;
     selector_list_categories_to_view((uintptr_t)selector.screen, (uintptr_t)root, 5000, &categories);
     assert(categories.category_count == 4 && categories.list_category_widget == (uintptr_t)widget);
+    for (int i = 0; i < categories.category_count; i++) {
+        assert(categories.categories[i][2] > .045f && categories.categories[i][3] > .08f);
+        if (i) assert(categories.categories[i-1][0] + categories.categories[i-1][2] <= categories.categories[i][0] + 1e-6f);
+    }
     g_test_list_category_jump = (uintptr_t)mock_category_jump;
     dm_botw_touch_menu_test_publish(&categories);
-    x = categories.categories[3][0] + .0125f;
-    y = categories.categories[3][1] + .0222f;
+    // Touch the surrounding cell, outside the original 32x32 glyph on both axes.
+    x = categories.categories[3][0] + categories.categories[3][2] * .5f + 24.f / 1280;
+    y = categories.categories[3][1] + categories.categories[3][3] * .5f + 24.f / 720;
     tap(x, y);
     assert(selector_apply_list_category((uintptr_t)selector.screen, 5000));
     assert(mock_category_jump_calls == 1 && mock_category_calls == 1 &&
@@ -1444,19 +1449,13 @@ static void test_inventory_category_touch_cells(void) {
     categories.clip_valid = 1; set_rect(categories.clip, 0, .27f, 1, .6f);
     for (int i = 0; i < 3; i++)
         set_rect(categories.categories[i], .2f + .045f * i, .2f, .025f, .044444f);
-    inventory_category_touch_rects(&categories);
+    category_touch_rects(&categories);
     for (int i = 0; i < 3; i++) {
         const float *r = categories.categories[i];
         assert(r[2] > .044f && r[3] > .079f); // finger-sized surrounding cell
         assert(r[1] < .2f && r[1] + r[3] <= categories.clip[1]);
         if (i) assert(categories.categories[i - 1][0] + categories.categories[i - 1][2] <= r[0] + 1e-6f);
     }
-    // Pointer menus such as quests keep their own native category geometry.
-    categories.inventory_visible = 0;
-    float before[sizeof categories.categories / sizeof(float)];
-    memcpy(before, categories.categories, sizeof before);
-    inventory_category_touch_rects(&categories);
-    assert(!memcmp(before, categories.categories, sizeof before));
     // Publication must expand after loading the live item-list clip.
     dm_botw_touch_menu_reset(); current_guest_frame = 7000;
     g_native_view.frame = g_native_view.inventory_seen = g_native_view.clip_seen = 7000;
