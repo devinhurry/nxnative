@@ -1,6 +1,7 @@
-// Virtual gamepad (Nintendo button positions) + physical controllers (GameController). Tap keeps ordinary touches on the game's touch screen; BOTW relative-look mode separates the virtual and physical right-stick sources so the native scene observer can identify the sampled source.
-//   Two layouts, three in handheld mode; one tap on the layout button at the top centre (labelled "2D" / "3D" / "Tap") cycles layouts and persists the choice per game.
-//   Tap sends non-layout touches to the game touch screen in handheld mode. 2D and 3D layouts follow the profile's default layout.
+// Virtual gamepad (Nintendo button positions) + physical controllers (GameController), handed to the host through dm_input_set and dm_pad_set_player (hle_hid.c, bit layout in dm_input.h).
+//   Two layouts, three in handheld mode; one tap on the layout button at the top centre (labelled with the current layout, "2D" / "3D" / "Tap") goes to the next, and the choice is kept in NSUserDefaults (each game is its own app, so per game); the first launch uses the game profile's pad_layout (DM_GAME_PAD_LAYOUT).
+//   Tap (touch): no control but the layout button, every other touch goes to the game's touch screen; offered only while the game is in handheld mode, the only one in which it reads the touch screen (Balatro, played by touch).
+//   2D (simple): top corners ZL above L (one column), ZR above R likewise, teardrops with the tip toward the screen corner; − and + side by side at the top centre; the left stick in the bottom-left corner (fixed ring, tilt measured from the ring centre, small dead zone);
 //     the A (right) B (bottom) X (top) Y (left) diamond in the bottom-right corner, sliding a finger between keys switches keys. Each bottom corner holds a single control, so it sits close in (reaching halfway into the side safe-area inset).
 //   3D (full, Pro Controller style): everything in 2D (left stick and diamond keep their size), plus a D-pad (inward of and below the left stick, 8-way), an invisible right stick
 //     (a touch landing in the right half of the screen on no control holds it: centred where it lands, the centre dragged along once the finger passes the stick radius; games may use relative camera look instead) and L3 / R3.
@@ -8,8 +9,9 @@
 //   Touch-down ownership: locked keys first (shoulders, − / +, the layout button, L3 / R3 where visible), then the D-pad and the diamond, then the left stick for a touch in the
 //     lower-left area (its centre is the touch-down point), then in 3D relative camera look when enabled or the right stick for a touch in the right half.
 //   Everything hugs the edges and corners to leave the picture room; controls sit over the picture, one CAShapeLayer each: a press only swaps the fill, a stick only moves its knob, nothing redraws the whole screen.
-//   Touches no control takes (outside the left stick's area and, in 3D, the right half) go to the game's touch screen (pushGame; Super Mario Galaxy's pointer in handheld mode).
-//   The virtual gamepad (layout button included) hides while a physical controller is connected and comes back when it is removed; meanwhile every touch goes to the game. Physical controllers keep every button (D-pad and right stick included) and map by position: bottom = B, right = A, left = Y, top = X (same positions as on a Switch controller).
+//   Touches no control takes (in 3D, those outside the right third) go to the game's touch screen (pushGame; Super Mario Galaxy's pointer in handheld mode).
+//   The virtual gamepad (layout button included) hides while a physical controller is connected and comes back when it is removed; meanwhile every touch goes to the game. Physical controllers keep every button (D-pad and right stick included) and map by position: bottom = B, right = A, left = Y, top = X (same positions as on a Switch controller); a Nintendo pad maps by its labels (pad_apple.h).
+//   Each physical controller is a player of its own (local co-op), as on the Mac: the first one connected is player 1, together with the touch gamepad, the next player 2, and so on up to 8; see "Physical controllers" below.
 //   Shaking the phone shakes the controller (DM_BTN_SHAKE: its six-axis sensor, hle_hid.c), whichever controls are in use; see "Shaking the phone" below.
 #import <UIKit/UIKit.h>
 #import <GameController/GameController.h>
@@ -34,31 +36,20 @@
 #include "../../host/botw_touch_layout.h"
 #include "motion_apple.h"
 #include "motion_fusion.h"
+#include "pad_apple.h"
+#include "pad_slots.h"
 #include <stdatomic.h>
 
 enum { B_A = 0, B_B, B_X, B_Y, B_LS, B_RS, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_LEFT, B_UP, B_RIGHT, B_DOWN, B_N };
 enum { C_NONE = 0, C_STICK, C_DPAD, C_FACE, C_BTN, C_SWAP, C_GAME, C_LOOK, C_BOTW_MAP, C_SHIELD, C_MENU, C_MENU_EXTRA };
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
-static uint64_t g_touch_btn, g_pad_btn, g_shake_btn;
+static uint64_t g_touch_btn, g_shake_btn;
 static _Atomic int g_any_controller_connected;
-static int32_t g_touch_lx, g_touch_ly, g_touch_rx, g_touch_ry, g_pad_lx, g_pad_ly, g_pad_rx, g_pad_ry;
-static int tilted(int32_t x, int32_t y) { return (int64_t)x * x + (int64_t)y * y > (int64_t)4000 * 4000; }
+static int32_t g_touch_lx, g_touch_ly, g_touch_rx, g_touch_ry;
 static void publish(void) {
     pthread_mutex_lock(&g_mu);
-    int32_t lx = g_touch_lx, ly = g_touch_ly, rx = g_touch_rx, ry = g_touch_ry;
-    if (dm_look_enabled()) {
-        // Keep the legacy whole-vector left-stick choice and buttons on the ordinary input path.
-        // Split only the right stick so BOTW can tell a virtual UI stick from a physical stick.
-        if (tilted(g_pad_lx, g_pad_ly)) { lx = g_pad_lx; ly = g_pad_ly; }
-        dm_input_set(g_touch_btn | g_shake_btn, lx, ly, g_touch_rx, g_touch_ry);
-        dm_pad_set_player(0, g_pad_btn, 0, 0, g_pad_rx, g_pad_ry);
-    } else {
-        if (tilted(g_pad_lx, g_pad_ly)) { lx = g_pad_lx; ly = g_pad_ly; }   // a tilted physical stick wins
-        if (tilted(g_pad_rx, g_pad_ry)) { rx = g_pad_rx; ry = g_pad_ry; }
-        dm_input_set(g_touch_btn | g_pad_btn | g_shake_btn, lx, ly, rx, ry);
-        dm_pad_set_player(0, 0, 0, 0, 0, 0);   // release a previously split physical source if look mode was disabled
-    }
+    dm_input_set(g_touch_btn | g_shake_btn, g_touch_lx, g_touch_ly, g_touch_rx, g_touch_ry);
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -170,9 +161,15 @@ static void motion_device_start(void) {
 // into the Switch frame for the screen's orientation (motion_phone_to_switch, motion_fusion.h): x to the right of the picture, y to its top, z toward the player.
 // The host keeps phone and controller orientations separately, choosing fresh controller data in auto mode and the phone alone in forced mode.
 // DM_PHONE_MOTION: auto (default) while no controller supplies fresh gyro data (a DualSense held apart from the phone uses its own, motion_apple.h), 1 always, 0 never.
-// DM_MOTION=0 (all live motion off; the NSP script's --no-motion builds it in) never starts device motion
+// DM_MOTION=0 (all live motion off; the NSP script's --no-motion builds it in) never starts device motion.
+// Which frame the samples come in: on iOS 27 and later the pad view (full screen, over the picture) is the motion body (CMMotionManager.deviceMotionBody), so Core Motion delivers
+// them in that view's frame for whichever display shows it and however it is turned: x to the right of the picture, y to its top, z toward the player, the Switch frame as it is.
+// Before that they come in the hardware frame, turned here by the interface orientation, which holds only where the hardware frame is the screen's portrait frame: not on iPhone
+// Duo's inner display, whose picture is a quarter turn from it (up / down and left / right swapped, GitHub issue #569). Open: while the scene is not full screen (Split View on the
+// inner display) Core Motion falls back to the hardware frame without saying so, and the samples are then taken as the view's frame
 static _Atomic int g_iface_orient = 3;      // UIInterfaceOrientation, updated on layout
-static void phone_motion_start(void) {
+static BOOL g_motion_body;                  // samples in the body's frame (iOS 27+)
+static void phone_motion_start(UIView *body) {
     const char *e = getenv("DM_MOTION");
     if (e && !atoi(e)) { LOG("front end: motion is off (DM_MOTION=0), the phone's gyro is not used"); return; }
     e = getenv("DM_PHONE_MOTION"); int mode = !e || !strcmp(e, "auto") ? -1 : atoi(e);
@@ -180,12 +177,15 @@ static void phone_motion_start(void) {
     if (!g_motion.deviceMotionAvailable) { LOG("front end: no device motion, the phone's gyro is not used"); return; }
     LOG("front end: the phone's gyro drives the controller's six-axis sensor %s", mode < 0 ? "while no controller supplies fresh motion" : "always (DM_PHONE_MOTION=1)");
     g_motion.deviceMotionUpdateInterval = 1.0 / 100;
+#if defined(__IPHONE_27_0) && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_27_0
+    if (@available(iOS 27.0, *)) { g_motion.deviceMotionBody = body; g_motion_body = YES; LOG("front end: the phone's motion comes in the pad view's frame (deviceMotionBody)"); }
+#endif
     NSOperationQueue *q = [NSOperationQueue new]; q.maxConcurrentOperationCount = 1;
     [g_motion startDeviceMotionUpdatesToQueue:q withHandler:^(CMDeviceMotion *d, NSError *err) {
         (void)err; if (!d) return;
         float a[3] = {(float)(d.gravity.x + d.userAcceleration.x), (float)(d.gravity.y + d.userAcceleration.y), (float)(d.gravity.z + d.userAcceleration.z)};
         float w[3] = {(float)d.rotationRate.x, (float)d.rotationRate.y, (float)d.rotationRate.z}, as[3], ws[3];
-        int o = atomic_load(&g_iface_orient);
+        int o = g_motion_body ? 1 : atomic_load(&g_iface_orient);   // the body's frame is already the picture's: the portrait map, which leaves it as it is
         motion_phone_to_switch(o, a, as); motion_phone_to_switch(o, w, ws);
         dm_motion_set_switch(0, as, ws);
     }];
@@ -249,6 +249,7 @@ void front_botw_rune_icon_changed(void) {
 void front_botw_touch_menu_changed(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ [g_view refreshBotwTouchMenuMode]; [g_view setNeedsLayout]; });
 }
+static void pads_start(void);   // Physical controllers, below
 
 @implementation DmGamepad {
     dm_touchpad_stick_response _moveResponse;
@@ -427,9 +428,10 @@ static BOOL botwTouchHudSupported(void) { return dm_botw_touch_hud_available(); 
         [nc addObserver:self selector:@selector(padsChanged:) name:GCControllerDidDisconnectNotification object:nil];
         [UIDevice.currentDevice beginGeneratingDeviceOrientationNotifications];
         [nc addObserver:self selector:@selector(deviceOrientationChanged) name:UIDeviceOrientationDidChangeNotification object:nil];
+        pads_start();
         [self padsChanged:nil];
         motion_start();
-        if (botwTouchHudSupported()) motion_device_start(); else phone_motion_start();
+        phone_motion_start(self);
     }
     return self;
 }
@@ -1591,43 +1593,84 @@ static CGImageRef botwRuneImage(const dm_botw_rune_icon_state *snapshot) {
 }
 
 // ---- Physical controllers ----
+// Each controller with an extended gamepad profile is a player of its own, as on the Mac (front_mac.m): it holds a slot (pad_slots.h: player 1 first, a reconnected controller
+// gets its player back) and goes to dm_pad_set_player, and hle_hid.c reports player n on its own npad while the slot is held (dm_pad_players). Player 1's controller is ORed
+// with the touch gamepad; a one-player game that supports only No1 / Handheld still sees every controller as player 1 (hle_hid.c). Each player has its controller's rumble and
+// gyro; the phone's gyro is player 1's. With DM_PAD_MERGE=1 every controller is player 1, as before (the last one moved wins)
+static pad_slots g_slots;
+static GCController *g_held[DM_PLAYERS];   // the controller of each slot, kept alive while it holds it (the slot table keys on its pointer)
+static int g_merge;
 static int32_t axis(float v) { return (int32_t)(fmaxf(-1.f, fminf(1.f, v)) * 32767); }
 static void read_pad(GCExtendedGamepad *g) {
-    dm_haptics_apple_controller(0, g.controller);
-    uint64_t m = 0;
+    int p = g_merge ? 0 : pad_slot_of(&g_slots, (__bridge const void *)g.controller); if (p < 0) return;
+    dm_haptics_apple_controller(p, g.controller);
+    _Static_assert(DM_BTN_A == 1u << B_A && DM_BTN_B == 1u << B_B && DM_BTN_X == 1u << B_X && DM_BTN_Y == 1u << B_Y, "face button bits");
+    uint64_t m = dm_pad_face(g);   // by position, a Nintendo pad by its labels
     #define K(btn, bit) if (btn.isPressed) m |= 1ull << bit
-    K(g.buttonB, B_A); K(g.buttonA, B_B); K(g.buttonY, B_X); K(g.buttonX, B_Y);   // by position: right A, bottom B, top X, left Y
     K(g.leftShoulder, B_L); K(g.rightShoulder, B_R); K(g.leftTrigger, B_ZL); K(g.rightTrigger, B_ZR);
     K(g.buttonMenu, B_PLUS); if (g.buttonOptions) K(g.buttonOptions, B_MINUS);
     if (g.leftThumbstickButton) K(g.leftThumbstickButton, B_LS); if (g.rightThumbstickButton) K(g.rightThumbstickButton, B_RS);
     K(g.dpad.left, B_LEFT); K(g.dpad.up, B_UP); K(g.dpad.right, B_RIGHT); K(g.dpad.down, B_DOWN);
     #undef K
-    if (m || fabsf(g.leftThumbstick.xAxis.value) > 0.15f || fabsf(g.leftThumbstick.yAxis.value) > 0.15f ||
-        fabsf(g.rightThumbstick.xAxis.value) > 0.15f || fabsf(g.rightThumbstick.yAxis.value) > 0.15f) motion_first_input();
-    pthread_mutex_lock(&g_mu);
-    g_pad_btn = m; g_pad_lx = axis(g.leftThumbstick.xAxis.value); g_pad_ly = axis(g.leftThumbstick.yAxis.value);
-    g_pad_rx = axis(g.rightThumbstick.xAxis.value); g_pad_ry = axis(g.rightThumbstick.yAxis.value);
-    pthread_mutex_unlock(&g_mu);
-    publish();
+    dm_pad_set_player(p, m, axis(g.leftThumbstick.xAxis.value), axis(g.leftThumbstick.yAxis.value), axis(g.rightThumbstick.xAxis.value), axis(g.rightThumbstick.yAxis.value));
 }
-- (void)padsChanged:(NSNotification *)note {
-    _botwLookTapPending = NO;
-    GCController *gone = [note.name isEqual:GCControllerDidDisconnectNotification] ? note.object : nil;
+// Home and Capture: without this iOS takes them as system gestures (Home opens the Games overlay, Capture a screenshot); the app gives them no function
+static void pad_keep_system_buttons(GCController *c) { for (NSString *b in @[GCInputButtonHome, GCInputButtonShare]) c.physicalInputProfile.buttons[b].preferredSystemGestureState = GCSystemGestureStateDisabled; }
+static const char *pad_name(GCController *c) { return c.vendorName.UTF8String ?: "?"; }
+static void npad_name(int p, char *out, size_t cap) { uint32_t id = dm_player_npad(p); if (id == 0x20) snprintf(out, cap, "handheld"); else snprintf(out, cap, "%u", id); }
+static void pads_start(void) {
+    const char *e = getenv("DM_PAD_MERGE"); g_merge = e && atoi(e);
+    LOG("front end: %s", g_merge ? "every controller is player 1 (DM_PAD_MERGE)" : "each controller is a player of its own, the touch gamepad plays with player 1");
+}
+// Called at start and on every connect / disconnect (gone: the controller that was just removed, nil otherwise); returns whether a controller is in use
+static BOOL pads_merged(GCController *gone) {
     if (gone) { gone.extendedGamepad.valueChangedHandler = nil; dm_motion_detach(gone, 0); }
     BOOL any = NO, anyConnected = NO; int motion = 0;
     for (GCController *c in GCController.controllers) if (c != gone) anyConnected = YES;
     for (GCController *c in GCController.controllers) if (c != gone && c.extendedGamepad) {
         if (c.motion.hasRotationRate) motion = 1;
-        any = YES; c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; read_pad(g); };
-        dm_motion_attach(c, 0);   // all controllers are player 1 on iOS
+        any = YES; pad_keep_system_buttons(c); c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; read_pad(g); };
+        dm_motion_attach(c, 0);   // every controller is player 1: the last one moved drives its six-axis sensor
         read_pad(c.extendedGamepad);
     }
     atomic_store(&g_any_controller_connected, anyConnected);
     if (anyConnected && botwTouchHudSupported()) dm_input_cancel_virtual_latch(DM_BTN_LS | DM_BTN_RS | DM_BTN_MINUS);
-    [self publishTouchHudForController:anyConnected];
     if (!any || !motion) dm_motion_clear(0);   // the phone's gyro (if on) takes over from its next sample
-    if (!any) { dm_haptics_apple_controller(0, nil); pthread_mutex_lock(&g_mu); g_pad_btn = 0; g_pad_lx = g_pad_ly = g_pad_rx = g_pad_ry = 0; pthread_mutex_unlock(&g_mu); publish(); }
-    dispatch_async(dispatch_get_main_queue(), ^{ self->_padOff = any; self->_controls.hidden = any || (self->_botwMenuMode && !self->_botwCameraPadVisible && !self->_manualMenuPad); [self reset]; [self applyLayout]; [self refreshBotwTouchMenuMode]; [self setNeedsLayout]; });
+    if (!any) { dm_haptics_apple_controller(0, nil); dm_pad_set(0, 0, 0, 0, 0); }
+    return any;
+}
+static BOOL pads_slotted(GCController *gone) {
+    NSArray<GCController *> *now = GCController.controllers; char nb[16];
+    for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p] && (g_held[p] == gone || ![now containsObject:g_held[p]])) {
+        npad_name(p, nb, sizeof nb); LOG("controller '%s' disconnected: player %d (npad %s) is free", pad_name(g_held[p]), p + 1, nb);
+        g_held[p].extendedGamepad.valueChangedHandler = nil;
+        dm_motion_detach(g_held[p], p);   // player 1's: the phone's gyro (if on) takes over from its next sample
+        dm_haptics_apple_controller(p, nil);
+        pad_slot_free(&g_slots, (__bridge const void *)g_held[p]); g_held[p] = nil;
+        dm_pad_set_player(p, 0, 0, 0, 0, 0);   // nothing stays pressed
+    }
+    for (GCController *c in now) if (c.extendedGamepad && c != gone && pad_slot_of(&g_slots, (__bridge const void *)c) < 0) {
+        int p = pad_slot_take(&g_slots, (__bridge const void *)c, pad_name(c));
+        if (p < 0) { LOG("controller '%s' connected: all %d players are taken, not used", pad_name(c), DM_PLAYERS); continue; }
+        g_held[p] = c; pad_keep_system_buttons(c);
+        c.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad *g, GCControllerElement *el) { (void)el; read_pad(g); };
+        dm_motion_attach(c, p);
+        npad_name(p, nb, sizeof nb); LOG("controller '%s' connected: player %d (npad %s)%s", pad_name(c), p + 1, nb, c.motion.hasRotationRate ? ", with motion (gyro)" : "");
+        read_pad(c.extendedGamepad);
+    }
+    dm_pad_players(pad_slot_mask(&g_slots));
+    BOOL anyConnected = now.count != 0;
+    atomic_store(&g_any_controller_connected, anyConnected);
+    if (anyConnected && botwTouchHudSupported()) dm_input_cancel_virtual_latch(DM_BTN_LS | DM_BTN_RS | DM_BTN_MINUS);
+    return pad_slot_mask(&g_slots) != 0;
+}
+- (void)padsChanged:(NSNotification *)note {
+    _botwLookTapPending = NO;
+    GCController *c = note.object, *gone = [note.name isEqual:GCControllerDidDisconnectNotification] ? c : nil;
+    if (c && (!c.extendedGamepad || g_merge)) LOG("controller %s: %s%s", gone ? "disconnected" : "connected", pad_name(c), c.extendedGamepad ? "" : " (no extended gamepad profile: not used)");
+    BOOL any = g_merge ? pads_merged(gone) : pads_slotted(gone);
+    [self publishTouchHudForController:atomic_load(&g_any_controller_connected)];
+    dispatch_async(dispatch_get_main_queue(), ^{ self->_padOff = any; self->_controls.hidden = any || (self->_botwMenuMode && !self->_botwCameraPadVisible && !self->_manualMenuPad); [self reset]; [self applyLayout]; [self refreshBotwTouchMenuMode]; [self setNeedsLayout]; });   // the touch gamepad hides while a controller is in use
 }
 @end
 
@@ -1636,7 +1679,10 @@ void dm_gamepad_geometry_changed(UIInterfaceOrientation orientation) {
     motion_update_flip_value(orientation);
     [g_view checkLookGeometry];
 }
+void dm_gamepad_active(void) { dispatch_async(dispatch_get_main_queue(), ^{ for (GCController *c in GCController.controllers) dm_motion_rearm(c); }); }   // On become active: motion_apple.h
 void dm_gamepad_reset(void) {   // On resign active: release everything (a key held while switching away and released in background gets no "release")
     dispatch_async(dispatch_get_main_queue(), ^{ [g_view reset]; });
-    pthread_mutex_lock(&g_mu); g_pad_btn = 0; g_shake_btn = 0; g_pad_lx = g_pad_ly = g_pad_rx = g_pad_ry = 0; pthread_mutex_unlock(&g_mu); publish();
+    pthread_mutex_lock(&g_mu); g_shake_btn = 0; pthread_mutex_unlock(&g_mu); publish();
+    if (g_merge) dm_pad_set(0, 0, 0, 0, 0);
+    else for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p]) dm_pad_set_player(p, 0, 0, 0, 0, 0);
 }

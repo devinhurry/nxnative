@@ -5,6 +5,7 @@
 #include <arm_neon.h>
 #include <mach/mach.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <unistd.h>
 #include "vpx/vpx_decoder.h"
 #include "vpx/vp8dx.h"
@@ -73,13 +74,14 @@ typedef struct {
     int w, h, fmt_sent, started, in_eos;          // in_eos: an end-of-stream packet was sent; no input until Flush / Stop (h_movie_AcqIn)
     uint8_t *in[MD_NIN]; int infree[MD_NIN], ninfree;                     // queue of free input indices
     int inown[MD_NIN]; uint64_t instale[MD_NIN];                          // inown: acquired by the client and not sent yet; instale: when a Flush / Stop found it held (the client may still send it), 0 if not
-    struct { int used, pic; int64_t pts; uint32_t flags; uint8_t *frm; size_t cap, bytes; } out[MD_NOUT];   // pic: frm holds a decoded picture (audio: bytes of PCM); cap: bytes in frm
+    struct { int used, pic, cli; int64_t pts; uint32_t flags; uint8_t *frm; size_t cap, bytes; } out[MD_NOUT];   // pic: frm holds a decoded picture (audio: bytes of PCM); cli: acquired by the client and not released; cap: bytes in frm
     int outq[MD_NOUT], noutq;                                             // queue of ready output indices
     struct { int in, off, size; int64_t pts; uint32_t flags; } pend[MD_NIN]; int npend;   // input packets waiting to be decoded (in arrival order)
     // Decoding: dmu lets only one guest thread take and decode packets at a time (packets enter libvpx in order); wmu / wcv hand one job to the host thread and wait for it
     pthread_mutex_t dmu, wmu; pthread_cond_t wcv; pthread_t wk;
     int job; const uint8_t *jp; int jn, jslot, jgot; int64_t jpts, jpts_out; int jflush;
-    mavc *avc; int avc_drain;                    // H.264 (hle_movie_avc.c); avc_drain: the end-of-stream packet came with pictures still queued, they leave one per free slot
+    mavc *avc; int avc_drain; int64_t drain_pts; // H.264 (hle_movie_avc.c); avc_drain: the end-of-stream packet's output had a picture; the pictures still queued leave one per free slot, then an empty output with the
+                                                 // end-of-stream flag and the packet's time (drain_pts)
     vpx_codec_ctx_t vpx; int vpx_on, red_dec, red_img;
     // Vorbis: the identification and setup headers from Configure's MediaData ("csd-0", "csd-1", as with Android's MediaCodec), the decoder (opened at the first packet), channels / rate, Ogg page sequence
     uint8_t *vhdr[2]; int vhdr_n[2]; stb_vorbis *vb; int ch, rate; uint32_t ogg_seq; int64_t ogg_gran; int red_vb;
@@ -103,6 +105,13 @@ static struct {
     void *(*nvn_sync)(const void *buf);   // used only by the native texture mode; Engage's subsdk0 has it too, but it is not required
 } G;
 
+// A movie is playing while a video decoder hands out pictures. The frame step (hle_nvn.c fps_step_cap) then holds 30 fps, the rate the games it steps run at on the Switch:
+// their players take one picture per game frame rather than by its time. Breath of the Wild's movies (VP9 1080p, 30 fps) went at twice their speed at 60 and left their sound
+// behind (GitHub issue #636: 3,507 pictures in about 3,300 presents); Tears of the Kingdom's, from the same SDK build, had rewriter stubs at its movie start and end for this.
+// Half a second without a picture ends it (a 30 fps movie gives one every 33 ms), as does stopping or destroying the decoder
+#define MD_PLAYING_NS 500000000ull
+static _Atomic uint64_t g_movie_pic_ns;   // when a video decoder last handed out a picture (0 = stopped since)
+int dm_movie_playing(void) { uint64_t t = atomic_load_explicit(&g_movie_pic_ns, memory_order_relaxed); return t && now_ns() - t < MD_PLAYING_NS; }
 static void *msym(const char *n) { void *p = guest_sym(n); if (!p) die("movie: missing SDK symbol %s", n); return p; }
 static void md_syms(void) {
     if (G.signal) return;
@@ -422,14 +431,14 @@ static void md_pump(mdec_t *d) {
     dm_host_lock(&d->dmu);
     for (;;) {
         dm_host_mutex_lock(&d->mu);
-        if (d->avc_drain) {   // H.264 end of stream: the pictures still queued leave one per free slot; the last carries the end-of-stream flag
+        if (d->avc_drain) {   // H.264 end of stream: the pictures still queued leave one per free slot, then an output without a picture carries the end-of-stream flag
             int s = -1; for (int k = 0; k < d->nout; k++) if (!d->out[k].used) { s = k; break; }
             if (s < 0) { pthread_mutex_unlock(&d->mu); break; }
             d->out[s].used = 1; pthread_mutex_unlock(&d->mu);
-            d->jslot = s; d->jflush = 1; md_job(d, MDJ_TAKE); int got = d->jgot, left = d->avc ? mavc_queued(d->avc) : 0;
+            d->jslot = s; d->jflush = 1; md_job(d, MDJ_TAKE); int got = d->jgot;
             dm_host_mutex_lock(&d->mu);
-            d->out[s].pic = got; d->out[s].pts = got ? d->jpts_out : 0; d->out[s].flags = left ? 0 : 4; d->outq[d->noutq++] = s;
-            if (!left) d->avc_drain = 0;
+            d->out[s].pic = got; d->out[s].pts = got ? d->jpts_out : d->drain_pts; d->out[s].flags = got ? 0 : 4; d->outq[d->noutq++] = s;
+            if (!got) d->avc_drain = 0;
             pthread_mutex_unlock(&d->mu);
             md_event(d, 1);
             continue;
@@ -445,16 +454,17 @@ static void md_pump(mdec_t *d) {
         int eos = (pk.flags & 4) != 0;   // MediaCodec BUFFER_FLAG_END_OF_STREAM
         if (eos && (pk.pts < 0 || (uint32_t)pk.size >= MD_INCAP)) pk.size = 0;   // Monster Hunter Rise ends a stream with time -1 and the whole input buffer (4 MB) as its length: no data (decoding it gave VideoToolbox -12909 and AudioToolbox -50); an end-of-stream packet as long as the whole buffer is the same, with a real time (from PR #36)
         // H.264 end of stream: this packet's output takes the first queued picture (jflush). Taking none put a black picture without the flag ahead of the last
-        // `depth` pictures, a black flash before the movie's last frames
+        // `depth` pictures, a black flash before the movie's last frames. No picture carries the flag: CRI Sofdec2 (Catherine: Full Body) drops a picture flagged end-of-stream and then
+        // waits for it for good, so every picture leaves as a frame of the movie and an output without one ends it, as for VP9 and Baseline streams whose end-of-stream packet has no data
         if ((pk.size > 0 && (MD_VPX(d) || MD_AUDIO(d) || avc)) || (avc && eos)) {
             d->jp = d->in[pk.in] + pk.off; d->jn = pk.size; d->jslot = slot; d->jpts = pk.pts; d->jflush = avc && eos; md_job(d, MDJ_DECODE); got = d->jgot; }
-        int more = avc && eos && d->avc && mavc_queued(d->avc) > 0;   // H.264 pictures still queued: they follow this output, the last of them carries the end-of-stream flag
+        int more = avc && eos && got;   // a picture in this output: the queued ones follow it, then the end-of-stream output (the drain)
         dm_host_mutex_lock(&d->mu);
         d->infree[d->ninfree++] = pk.in;
         int ready = got || eos;   // an end-of-stream packet without a picture still yields an output to carry the flag back
         if (ready) { d->out[slot].pic = got; d->out[slot].pts = got && avc ? d->jpts_out : pk.pts; d->out[slot].flags = more ? pk.flags & ~4u : pk.flags; d->outq[d->noutq++] = slot; }
         else d->out[slot].used = 0;
-        if (more) d->avc_drain = 1;
+        if (more) { d->avc_drain = 1; d->drain_pts = pk.pts; }
         int ineos = d->in_eos;
         pthread_mutex_unlock(&d->mu);
         if (!ineos) md_event(d, 0);   // no input is announced after an end-of-stream packet (h_movie_AcqIn)
@@ -505,6 +515,7 @@ HLE_FORCE("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11De
 static void md_free(void **self) {
     mdec_t *d = md_of(self); if (!d) return;
     md_defer_drop(d);
+    if (!MD_AUDIO(d)) atomic_store_explicit(&g_movie_pic_ns, 0, memory_order_relaxed);
     self[1] = NULL;
     LOG("[movie] decoder %p destroyed: %lu packets in, %lu frames out; decoded %llu packets, average %.2f ms per packet, longest %.2f ms", (void *)self, d->ncall[7], d->ncall[8],
         (unsigned long long)d->dec_n, d->dec_n ? d->dec_ns / 1e6 / d->dec_n : 0.0, d->dec_max / 1e6);
@@ -574,7 +585,7 @@ static void md_reset(mdec_t *d, int close) {
     for (int i = 0; i < MD_NIN; i++) { d->infree[i] = i; d->instale[i] = d->inown[i] ? now : 0; d->inown[i] = 0; }
     d->ninfree = MD_NIN; d->noutq = 0; d->npend = 0; d->avc_drain = 0; d->in_eos = 0;
     // a flush keeps each slot's last picture: the same game reads an output it acquired before the flush right after it (a black frame in the loop otherwise)
-    for (int i = 0; i < MD_NOUT; i++) { d->out[i].used = 0; if (close) d->out[i].pic = 0; }
+    for (int i = 0; i < MD_NOUT; i++) { d->out[i].used = 0; d->out[i].cli = 0; if (close) d->out[i].pic = 0; }
     pthread_mutex_unlock(&d->mu);
     pthread_mutex_unlock(&d->dmu);
 }
@@ -583,6 +594,7 @@ HLE_FORCE("_ZN5movie7Decoder4StopEv", "movie decoder stop", int, h_movie_Stop, v
     MD_TRACE(d, 3, "Stop");
     dm_host_lock(&g_dfmu); pthread_mutex_lock(&d->mu); d->started = 0; pthread_mutex_unlock(&d->mu); pthread_mutex_unlock(&g_dfmu);   // the deferred thread signals holding g_dfmu: taking it guarantees no signal afterwards
     md_defer_drop(d);
+    if (!MD_AUDIO(d)) atomic_store_explicit(&g_movie_pic_ns, 0, memory_order_relaxed);   // the movie ended: the frame step's cap need not wait out MD_PLAYING_NS
     md_reset(d, 1); return 0;
 }
 HLE_FORCE("_ZN5movie7Decoder5ResetEv", "movie decoder reset", int, h_movie_Reset, void **self) {
@@ -667,9 +679,10 @@ HLE_FORCE("_ZN5movie7Decoder24AcquireOutputBufferIndexEPiPlPjS1_", "movie decode
     int r = MD_NO_OUTPUT; *idx = -1; *left = 0;
     if (d->noutq && d->started) {
         int s = d->outq[0]; memmove(d->outq, d->outq + 1, --d->noutq * sizeof *d->outq);
-        *idx = s; *pts = d->out[s].pts; *flags = d->out[s].flags; *left = d->noutq; r = 0;
+        *idx = s; *pts = d->out[s].pts; *flags = d->out[s].flags; *left = d->noutq; d->out[s].cli = 1; r = 0;
     }
     pthread_mutex_unlock(&d->mu);
+    if (!r && !MD_AUDIO(d)) atomic_store_explicit(&g_movie_pic_ns, now_ns(), memory_order_relaxed);
     if (!r) MD_TRACE(d, 8, "AcquireOutputBufferIndex → index %d time %lld flags %#x left %d", *idx, (long long)*pts, *flags, *left);
     return r;
 }
@@ -720,6 +733,7 @@ HLE_FORCE("_ZN5movie7Decoder19GetOutputBufferSizeEPiS1_", "movie decoder: output
 // In the SDK, NnCodecConsumer draws the decoded frame into that texture on the GPU and signals the sync when done; the host writes the texture storage on the CPU (as WriteTexels; the replay layer re-uploads dirty pages), and the sync counts as done once written
 int nvn_host_write_texture(const void *nvntex, const void *src, int w, int h, size_t row, int *tw, int *th);
 int nvn_host_signal_sync(void *nvnsync);
+static int md_rel(mdec_t *d, int i);
 static int md_out_tex(mdec_t *d, int i, void *buf) {
     // SDK 4's Buffer has no sync object (Dark Souls Remastered's subsdk0 exports no GetNvnSync): the game reads the texture once GetOutputBuffer returns, which the CPU write already satisfies
     static int sync_looked; if (!sync_looked) { G.nvn_sync = guest_sym("_ZNK5movie6Buffer10GetNvnSyncEv"); sync_looked = 1; }
@@ -734,6 +748,10 @@ static int md_out_tex(mdec_t *d, int i, void *buf) {
     if (d->out[i].pic && d->out[i].frm) nvn_host_write_texture(tex, d->out[i].frm, w, h, (size_t)d->w * 4, NULL, NULL);
     void *sy = G.nvn_sync ? G.nvn_sync(buf) : NULL; if (sy && nvn_host_signal_sync(sy) && !d->red_dec++) LOG("[RED] movie: the buffer's sync object %p is not an NVNsync", sy);
     MD_TRACE(d, 12, "GetOutputBuffer index %d → texture %p (%d×%d format %#x)%s", i, tex, tw, th, f, d->out[i].pic ? "" : " (no picture: the texture keeps its last frame)");
+    // The SDK's texture mode returns the output index here: DecoderImpl::GetOutputBuffer calls CopyOutputBufferToClientTextureAndRelease (MediaCodec::renderOutputBufferAndRelease),
+    // so a client never has to release it. Super Mario Party Jamboree's player (SDK 17.5.9) never calls ReleaseOutputBufferIndex: holding all 16 video slots, the decoder stopped and
+    // the opening movie froze on its 16th picture. Metroid Dread (SDK 11.4.3, which does the same) still releases each index; md_rel ignores that second release, as the SDK does
+    md_rel(d, i);
     return 0;
 }
 HLE_FORCE("_ZN5movie7Decoder15GetOutputBufferEiPNS_6BufferE", "movie decoder: get a frame", int, h_movie_GetOut, void **self, int i, void *buf) {
@@ -767,17 +785,25 @@ HLE_FORCE("_ZN5movie7Decoder15GetOutputBufferEiPNS_6BufferEPNS_9MediaDataE", "mo
     if (md) md_format(d, md);
     return h_movie_GetOut(self, i, buf);
 }
+// Return output slot i to the decoder, if the client holds it. One it does not hold (released already, or returned by a Flush) is left alone: MediaCodec refuses it (-EACCES),
+// and the SDK's texture mode reports that as success (DecoderImpl::ReleaseOutputBufferIndex, SDK 17.5.9 subsdk0+0x123a0c), which Metroid Dread's release after GetOutputBuffer meets.
+// Releasing it anyway freed a slot the decoder may have filled again since. → 1 when released
+static int md_rel(mdec_t *d, int i) {
+    dm_host_mutex_lock(&d->mu);
+    int held = d->out[i].cli;
+    if (held) { d->out[i].used = 0; d->out[i].pic = 0; d->out[i].cli = 0; }
+    int queued = d->npend, drain = d->avc_drain;
+    pthread_mutex_unlock(&d->mu);
+    MD_TRACE(d, 13, "release output index %d%s (%d packets queued%s)", i, held ? "" : ": not held by the client, nothing to release", queued, drain ? ", H.264 pictures draining" : "");
+    // An H.264 drain waits for a free slot too: AI: THE SOMNIUM FILES (Unity 2017.4) held all 16 video slots when its logo movie's end-of-stream packet came, the drain stopped
+    // with no packet queued, the last pictures and the end-of-stream flag never came out, and the game waited for the movie's end for good
+    if (held && (queued || drain)) md_pump(d);
+    return held;
+}
 HLE_FORCE("_ZN5movie7Decoder24ReleaseOutputBufferIndexEi", "movie decoder: release an output index (decodes queued packets again)", int, h_movie_RelOut, void **self, int i) {
     mdec_t *d = md_of(self); if (!d) return 0x1000;
     if (i < 0 || i >= d->nout) return 0x100b;
-    dm_host_mutex_lock(&d->mu);
-    d->out[i].used = 0; d->out[i].pic = 0;
-    int queued = d->npend, drain = d->avc_drain;
-    pthread_mutex_unlock(&d->mu);
-    MD_TRACE(d, 13, "ReleaseOutputBufferIndex index %d (%d packets queued%s)", i, queued, drain ? ", H.264 pictures draining" : "");
-    // An H.264 drain waits for a free slot too: AI: THE SOMNIUM FILES (Unity 2017.4) held all 16 video slots when its logo movie's end-of-stream packet came, the drain stopped
-    // with no packet queued, the last pictures and the end-of-stream flag never came out, and the game waited for the movie's end for good
-    if (queued || drain) md_pump(d);
+    md_rel(d, i);
     return 0;
 }
 HLE_FORCE("_ZN5movie7Decoder12GetLastErrorEv", "movie decoder: last error (none)", int, h_movie_LastErr, void **self) { (void)self; return 0; }

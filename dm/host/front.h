@@ -70,6 +70,7 @@ void front_botw_touch_action_changed(void);
 // The host converts to the panel coordinates the game reads, 1280x720 (x·1280, y·720), and latches short taps (a down and up between two reads is reported at least once). May be called from any thread.
 typedef struct { uint32_t id; float x, y; } dm_touch;
 void dm_touch_set(const dm_touch *t, int n);
+void dm_touch_script(const dm_touch *t, int n);   // scripted touches (DM_KEYS, DM_CTL; hle_hid.c): as dm_touch_set, but never recorded by DM_REC
 
 // Relative pointer look (implemented by the host's hle_look.c; Mac and iOS front ends):
 // deltas are normalized by the smaller logical view dimension, with right and down positive.

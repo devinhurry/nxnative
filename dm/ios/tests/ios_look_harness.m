@@ -127,6 +127,9 @@ static uint64_t g_pad_buttons;
 static int32_t g_pad_lx, g_pad_ly, g_pad_rx, g_pad_ry;
 static int g_pad_player;
 static int g_input_sets, g_pad_sets;
+typedef struct { uint64_t buttons; int32_t lx, ly, rx, ry; } test_pad_source;
+static test_pad_source g_pad_sources[DM_PLAYERS];
+static uint32_t g_pad_player_mask;
 static int g_virtual_latch_cancels;
 static uint64_t g_virtual_latch_cancel_mask;
 static uint64_t g_input_history[512];
@@ -224,7 +227,11 @@ void dm_pad_set_player(int player, uint64_t buttons, int32_t lx, int32_t ly, int
     ++g_pad_sets;
     g_pad_player = player;
     g_pad_buttons = buttons; g_pad_lx = lx; g_pad_ly = ly; g_pad_rx = rx; g_pad_ry = ry;
+    if (player >= 0 && player < DM_PLAYERS)
+        g_pad_sources[player] = (test_pad_source){buttons, lx, ly, rx, ry};
 }
+void dm_pad_players(uint32_t mask) { g_pad_player_mask = mask; }
+uint32_t dm_player_npad(int player) { return player == 0 ? 0x20u : (uint32_t)(player - 1); }
 void dm_pad_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     dm_pad_set_player(0, buttons, lx, ly, rx, ry);
 }
@@ -517,14 +524,19 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
           "the L edge presses immediately without capturing the shield stick");
     ended(view,lEdgeTouch,lOverlapEdge.x,lOverlapEdge.y);
 
-    g_input_sets = g_pad_sets = 0; g_input_history[0] = g_input_history[1] = 0;
-    g_pad_buttons = 0;
+    g_input_sets = 0; g_input_history[0] = g_input_history[1] = 0;
+    g_pad_sets = 0;
+    dm_pad_set_player(0, DM_BTN_A, 1234, -2345, 3456, -4567);
+    int physical_sets_before = g_pad_sets;
     [view dm_testPulseBotwL3];
     CHECK(g_input_sets == 2 && (g_input_history[0] & DM_BTN_LS) && !(g_input_history[1] & DM_BTN_LS) &&
           !(g_buttons & DM_BTN_LS),
           "virtual L3 publishes one press edge and immediately releases its source");
-    CHECK(!(g_pad_buttons & DM_BTN_LS) && g_pad_sets == 2,
-          "virtual L3 pulse is not copied into the separate physical controller channel");
+    CHECK(g_pad_sets == physical_sets_before && g_pad_sources[0].buttons == DM_BTN_A &&
+          g_pad_sources[0].lx == 1234 && g_pad_sources[0].ly == -2345 &&
+          !(g_pad_sources[0].buttons & DM_BTN_LS),
+          "virtual L3 pulse leaves player 1's physical controller channel untouched");
+    dm_pad_set_player(0, 0, 0, 0, 0, 0);
 
     CHECK([view dm_testSetBotwMapRectValid:YES x:0.05 y:0.16 width:0.36 height:0.40],
           "active BOTW mode accepts the live relocated-map clip as a hit region");
@@ -1305,11 +1317,21 @@ static void test_look_drag(DmGamepad *view) {
     CHECK(g_rx == 32767 && g_ry == 0, "look right-stick value clamps at full tilt when the finger passes its radius");
     moved(view, t, 701, 150);
     CHECK(g_rx == 32767 && g_ry == 0, "look right-stick centre recentres with the finger beyond its radius");
+    dm_pad_set_player(0, DM_BTN_Y, -1111, 2222, -3333, 4444);
     int input_sets_before_republish = g_input_sets, pad_sets_before_republish = g_pad_sets;
     front_look_mode_changed();
-    CHECK(g_input_sets == input_sets_before_republish + 1 && g_pad_sets == pad_sets_before_republish + 1 &&
-          g_rx == 32767 && g_pad_player == 0 && g_pad_rx == 0,
-          "look-mode installation republishes the current virtual and physical source split");
+    CHECK(g_input_sets == input_sets_before_republish + 1 && g_pad_sets == pad_sets_before_republish &&
+          g_rx == 32767 && g_pad_sources[0].buttons == DM_BTN_Y && g_pad_sources[0].lx == -1111 &&
+          g_pad_sources[0].ly == 2222 && g_pad_sources[0].rx == -3333 && g_pad_sources[0].ry == 4444,
+          "look-mode installation republishes touch input while the physical player channel stays live");
+    g_look_enabled = NO;
+    input_sets_before_republish = g_input_sets; pad_sets_before_republish = g_pad_sets;
+    front_look_mode_changed();
+    CHECK(g_input_sets == input_sets_before_republish + 1 && g_pad_sets == pad_sets_before_republish &&
+          g_rx == 32767 && g_pad_sources[0].buttons == DM_BTN_Y && g_pad_sources[0].rx == -3333,
+          "look-mode removal republishes touch input without merging or dropping physical player input");
+    g_look_enabled = YES;
+    dm_pad_set_player(0, 0, 0, 0, 0, 0);
     ended(view, t, 701, 150);
     CHECK(g_rx == 0 && g_ry == 0, "ending look clears the virtual right-stick axes after the final relative delta");
 
