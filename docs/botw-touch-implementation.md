@@ -8,19 +8,19 @@ This is the implementation record for BOTW touch menus. It covers the supplied b
 
 | Implementation | Count |
 | --- | ---: |
-| implemented | 49 |
+| implemented | 48 |
 | partial | 0 |
 | missing | 0 |
-| not required | 5 |
+| not required | 6 |
 
 | Verification of required action groups | Count |
 | --- | ---: |
-| passed | 32 |
+| passed | 31 |
 | failed | 0 |
 | not run | 15 |
 | blocked | 2 |
 
-Passed results include 27 game-state checks and 5 handler tests. A handler test checks synthetic native owners or frontend gesture delivery; it does not prove that story/vendor/DLC state was reached in the game.
+Passed results include 27 game-state checks and 4 handler tests. A handler test checks synthetic native owners or frontend gesture delivery; it does not prove that story/vendor/DLC state was reached in the game.
 
 Implementation and verification are independent. `blocked` means a save, story/DLC state or hardware is unavailable; it never excuses a missing implementation. `passed` uses the evidence named in that row and does not imply every conditional variant or physical iPhone was tested. Runtime observations and per-target replay assertions are tracked separately in [UI coverage](botw-ui-coverage.md) and [acceptance progress](botw-menu-touch-progress.md).
 
@@ -59,7 +59,7 @@ Implementation and verification are independent. `blocked` means a save, story/D
 | `horse.name_entry` — ShopHorse + KeyBoradTextArea; name editor active | Enter/erase name; change character page; accept/cancel back to registration | implemented | not_run / none |
 | `horse.hud` — MainHorse; horse HUD active | Respect native owner prompts and retain gameplay button routing | not_required | not_required / not required |
 | `guide.shrine` — SousaGuide; prompt-only shrine action | Touch native confirm/back prompt, exclude ordinary gameplay hint | implemented | passed / game state |
-| `notice.ack` — ChallengeWin; challenge notice shown | Acknowledge only when input-owning; keep pickup notifications passive | implemented | passed / handler test |
+| `notice.ack` — PickUpWin/ChallengeWin; corner notification shown | Retain gameplay controls; no modal acknowledgement | not_required | not_required / not required |
 | `system.error_viewer` — ErrorViewer; error dialog shown | Dismiss/continue with native action | implemented | not_run / none |
 | `ending.continue_skip` — StaffRollDLC_00; DLC credit roll with live B guide and page arrows | Tap native B prompt to skip; tap up/down page arrows to scroll credits. | implemented | passed / handler test |
 | `intro.advance_mode` — HardMode_00; mode choice dialog with live PaCommonBtnThin_00 left/right registered hit targets | Tap either native option button to choose its corresponding game mode. | implemented | not_run / none |
@@ -413,14 +413,9 @@ A complete shared or screen-specific code path is present; verification status s
 
 ### notice.ack
 
-A complete shared or screen-specific code path is present; verification status separately records whether this exact guest state has been exercised.
+Pickup and quest updates are passive corner notifications. Their Plus hints use the visible gameplay pad and do not own a touch menu.
 
-- [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `generic_action_prompts_to_view`: Publishes visible native challenge guide prompts under their live owner.
-- [dm/host/hle_botw_touch_menu.c](../dm/host/hle_botw_touch_menu.c) `selector_cursorless_prompt_view`: Routes ChallengeWin guides only when the screen owns its native input group; PickUpWin uses the passive TIP policy.
-
-**Verification (passed; handler test):** Native owner-bound ChallengeWin acknowledgement and PickUpWin passive-owner rejection pass.
-
-- [dm/host/tests/t_botw_touch_menu.c](../dm/host/tests/t_botw_touch_menu.c) `test_cursorless_help_prompts`: Asserts the live ChallengeWin acknowledgement and rejects PickUpWin even when a visible guide glyph is cached.
+**Verification (not_required; not required):** Native layouts place both notices at the right corner with a Plus glyph. The shared TIP policy excludes their lifecycle and cached guides from menu ownership.
 
 ### system.error_viewer
 
@@ -697,7 +692,7 @@ Every scanned layout is listed, including passive HUDs, backgrounds and shared p
 | `BootUp_00` | passive layer | No independent menu action |
 | `BtnDialog_00` | reusable component | core.native_target.dispatch |
 | `BtnScrollBar_07` | reusable component | No independent menu action |
-| `ChallengeWin_00` | interactive screen | notice.ack |
+| `ChallengeWin_00` | passive layer | No independent menu action |
 | `ChangeController_00` | passive layer | system.controller_pairing |
 | `ChangeControllerNN_00` | passive layer | system.controller_pairing |
 | `ControllerWindow_00` | interactive screen | core.back, core.dialogue.choices, system.controller_pairing, system.controller_manual |

@@ -361,6 +361,29 @@ shaders; the complete current Mac host builds separately. The scoped BOTW
 (`32023.883` installed, `32023.921` required). Physical iPhone acceptance
 remains pending.
 
+**Quest notifications and climbing/slipping tips (2026-10-31).**
+The native `ChallengeWin_00` is another passive corner notification: its part
+is at `(590,106)`, beside the pickup part at `(590,50)`, and both contain the
+same Plus glyph (`U+E04B`). There is no A acknowledgement. The old `MENU`
+classification hid the pad and allowed the hint to take menu ownership.
+It now shares the `TIP` policy with pickups. Native regression coverage
+rejects its cached, visible Plus guide and keeps controls visible through
+entering, shown and exiting notification states. Actual dialogue, tutorial,
+loading and controller-wait ownership stays covered by the existing tests.
+
+The English slippery-climbing and shield-surf messages belong to
+`LayoutMsg/MessageTipsRunTime_00.msbt`, already excluded from menu detection.
+Mac climbing with the native Jump/Let go hints retains the virtual pad and
+publishes gameplay with no menu ownership. Loading-screen climbing advice
+and centered tutorials remain separate blocking presentations.
+
+Evidence is in `pickup-controls-20261031/quest-controls-fix-20261031/`:
+the new native check fails before the policy change and passes after it;
+UI audit/progress checks and the compatible Mac host build pass. The Impa
+replay did not reach a quest notification, so a natural quest-update event
+and physical iPhone acceptance remain pending. The scoped BOTW regression
+is still blocked before boot by the required Metal compiler version.
+
 **Resolved: full-health Eat/Cancel dialog ignored touches (2026-10-29).**
 The native screen is `PauseMenuMantan_00`, with two registered `Pa_Btn_*`
 entries. Only the exact `PauseMenu_00` and recipe screen were classified as

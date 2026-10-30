@@ -1029,38 +1029,25 @@ static void test_cursorless_help_prompts(void) {
     dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 9006);
     assert(camera_axes[0] == 0 && camera_axes[1] == 0 && !(camera_buttons & DM_BTN_ZL));
     // A replacement screen cannot inherit pose axes or its ZL modifier.
-    // Challenge notices retain their own live acknowledgement guide. Pickup
-    // hints are passive gameplay notifications, even when their A glyph is shown.
-    fake_pane(91, "Pa_GuideA_00", 80, 180, 40, 400, -318);
-    uint8_t *notice_icon = fake_pane(92, "T_Icon_00", 91, 32, 32, 400, -318);
-    uint8_t *notice_label = fake_pane(93, "T_Guide_00", 91, 120, 24, 382, -318);
-    uint16_t notice_glyph = 0xe040;
+    // Native pickup/quest corner hints contain Plus, not an A acknowledgement.
+    // A cached glyph and enabled input group must not turn either into a menu.
+    uint8_t *notice_guide = fake_pane(91, "N_Guide_00", 80, 180, 40, 400, -318);
+    uint8_t *notice_icon = fake_pane(92, "T_Icon_00", 91, 34, 34, 400, -318);
+    uint8_t *notice_label = fake_pane(93, "T_Guide_00", 91, 150, 27, 382, -318);
+    uint16_t notice_glyph = 0xe04b;
     put_ptr(notice_icon + 0xe0, (uintptr_t)&notice_glyph);
+    link_child(notice_guide, notice_icon); link_child(notice_guide, notice_label);
     generic_back_prompt_observe(notice_icon, 1);
     generic_back_prompt_observe(notice_label, 1);
-    const char *notice_screens[] = {"ChallengeWin_00"};
-    for (unsigned i = 0; i < sizeof notice_screens / sizeof notice_screens[0]; i++) {
+    float notice_hint[4];
+    assert(generic_action_prompt_snapshot((uintptr_t)root, 9000, DM_BTN_PLUS, notice_hint));
+    const char *notice_screens[] = {"PickUpWin_00", "ChallengeWin_00"};
+    for (unsigned i = 0; i < sizeof notice_screens / sizeof *notice_screens; i++) {
         strcpy((char *)selector.screen + 0x200, notice_screens[i]);
         dm_botw_touch_menu_view notice = {0};
-        assert(selector_cursorless_prompt_view((uintptr_t)selector.manager, 9000,
+        assert(!selector_cursorless_prompt_view((uintptr_t)selector.manager, 9000,
             (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &notice));
-        int acknowledge = -1;
-        for (int j = 0; j < notice.footer_action_count; j++)
-            if (notice.footer_action_buttons[j] == DM_BTN_A) acknowledge = j;
-        assert(acknowledge >= 0 && notice.prompt_owner_screen == (uintptr_t)selector.screen);
-        if (!i) {
-            notice.render_frame = notice.prompt_owner_frame = 9008;
-            dm_botw_touch_menu_test_publish(&notice);
-            tap(notice.footer_actions[acknowledge][0] + notice.footer_actions[acknowledge][2] * .5f,
-                notice.footer_actions[acknowledge][1] + notice.footer_actions[acknowledge][3] * .5f);
-            assert(sample(9008) == DM_BTN_A); // only the live challenge guide owns acknowledgement
-            sample(9009);
-        }
     }
-    strcpy((char *)selector.screen + 0x200, "PickUpWin_00");
-    dm_botw_touch_menu_view pickup = {0};
-    assert(!selector_cursorless_prompt_view((uintptr_t)selector.manager, 9000,
-        (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &pickup));
     pthread_mutex_lock(&g_generic_hits_mu);
     memset(g_generic_back_prompts, 0, sizeof g_generic_back_prompts);
     pthread_mutex_unlock(&g_generic_hits_mu);
@@ -1629,15 +1616,15 @@ static void test_menu_animation_visibility(void) {
     // Corner notifications can enter, remain and leave over the gameplay HUD
     // without becoming a menu. Full tutorials and dialogues still own input.
     selector.active[1] = 0;
-    const char *messages[] = {"MessageTipsRunTime_00", "MessageTipsPauseMenu_00", "PickUpWin_00", "MessageTips_00", "MessageDialog_00"};
+    const char *messages[] = {"MessageTipsRunTime_00", "MessageTipsPauseMenu_00", "PickUpWin_00", "ChallengeWin_00", "MessageTips_00", "MessageDialog_00"};
     for (unsigned i = 0; i < sizeof messages / sizeof *messages; i++) {
         strcpy((char *)selector.map_screen + 0xa0, messages[i]);
-        assert(selector_pointer_screen_name(messages[i]) == (i >= 3));
+        assert(selector_pointer_screen_name(messages[i]) == (i >= 4));
         for (int mode = 1; mode <= 3; mode++) {
             selector.map_screen[0xfe] = mode;
             selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
-            assert(dm_botw_touch_menu_visible() == (i >= 3));
-            assert(dm_botw_touch_controls_visible() == (i < 3));
+            assert(dm_botw_touch_menu_visible() == (i >= 4));
+            assert(dm_botw_touch_controls_visible() == (i < 4));
         }
     }
     selector.active[1] = 0x80;
@@ -2005,7 +1992,7 @@ static void test_message_advance_owner(void) {
     uint8_t *body = fake_pane(84, "W_Base_00", 83, 800, 160, 0, -240);
     generic_hit_observe(body, 1);
     assert(selector_message_prompt_view((uintptr_t)selector.manager, 7000, &message));
-    const char *corner_tips[] = {"MessageTipsRunTime_00", "MessageTipsPauseMenu_00", "PickUpWin_00"};
+    const char *corner_tips[] = {"MessageTipsRunTime_00", "MessageTipsPauseMenu_00", "PickUpWin_00", "ChallengeWin_00"};
     for (unsigned i = 0; i < sizeof corner_tips / sizeof *corner_tips; i++) {
         strcpy((char *)selector.screen + 0x200, corner_tips[i]);
         assert(!selector_message_prompt_view((uintptr_t)selector.manager, 7000, &message));
@@ -3311,7 +3298,7 @@ int main(void) {
 
     // A live action hint on a non-modal corner tip must not create a generic
     // menu either: visibility and focused-prompt routing share the classifier.
-    const char *corner_tips[] = {"MessageTipsRunTime_00", "MessageTipsPauseMenu_00", "PickUpWin_00"};
+    const char *corner_tips[] = {"MessageTipsRunTime_00", "MessageTipsPauseMenu_00", "PickUpWin_00", "ChallengeWin_00"};
     for (unsigned i = 0; i < sizeof corner_tips / sizeof *corner_tips; i++) {
         strcpy((char *)selector.screen + 0x200, corner_tips[i]);
         selector_tick();
