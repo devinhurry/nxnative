@@ -65,19 +65,20 @@
         "0xe046": "ZL",
         "0xe047": "ZR",
         "0xe04c": "Minus",
-        "0xe057": "RS"
+        "0xe057": "RS",
+        "0xe04b": "Plus"
       },
       "owner_specific_or_compound_glyphs": {
         "0xe05e": "compound Move/stick hint; deliberately no button pulse, gesture path owns movement",
         "0xe064": "AppHome live Back/Forward guide signal",
         "0xe065": "AppHome live Change Speed guide signal"
       },
-      "unresolved_candidate": {
-        "input_button": "DM_BTN_PLUS exists in dm/host/dm_input.h and physical/frontend input mapping",
-        "native_glyph": "not confirmed from scanned key-hint resources/runtime owner evidence",
-        "implementation": "generic guide adapter currently has no Plus glyph mapping; confirm whether any in-scope screen publishes it before adding a mapping"
-      },
-      "interaction_policy": "Tap authored native button glyphs; translate stick/compound movement and zoom prompts into gestures; BoxCursor/focus display metadata is not itself a touch target."
+      "interaction_policy": "Tap authored native button glyphs; translate stick/compound movement and zoom prompts into gestures; BoxCursor/focus display metadata is not itself a touch target.",
+      "item_card_plus": {
+        "native_glyph": "0xe04b",
+        "implementation": "The live MessageGet T_PauseGuide_00/T_Icon_00 pair publishes Plus; private capture copies and hidden/stale hints are rejected.",
+        "source": "MessageGet_00 native layout and test_new_item_inventory_prompt"
+      }
     },
     "verification_level_policy": {
       "game_state": "An actual Mac/user-in-game state or accepted runtime replay proves the named state/action.",
@@ -90,7 +91,7 @@
     "layouts": 339,
     "reusable_components": 250,
     "top_level_layouts": 89,
-    "requirements": 52,
+    "requirements": 54,
     "control_types": 5,
     "interaction_surface_types": 3
   },
@@ -389,25 +390,26 @@
       "id": "inventory.category",
       "screen": "PauseMenu inventory",
       "state": "inventory tab active",
-      "action": "Select categories directly",
+      "action": "Select categories directly with immediate page positioning and cursor focus",
       "implementation_status": "implemented",
       "implementation_evidence": [
         {
           "file": "dm/host/hle_botw_touch_menu.c",
-          "function": "selector_list_categories_to_view",
-          "why": "Publishes native category controls."
-        },
-        {
-          "file": "dm/host/hle_botw_touch_menu.c",
-          "function": "selector_native_list_select",
-          "why": "Selects through native list/setter entry point."
+          "function": "selector_request_category",
+          "why": "Native category refresh runs before final commit; slot zero is staged after refresh so page and focus finish together."
         }
       ],
       "verification_status": "passed",
-      "verification_reason": "Categories including armor, food and key items are recorded.",
+      "verification_reason": "Mac category tap from a nonzero weapon column immediately selects first Food item with matching description; native order/transition tests pass. Physical iPhone pending.",
       "implementation_status_reason": "A complete shared or screen-specific code path is present; verification status separately records whether this exact guest state has been exercised.",
       "verification_evidence": [],
-      "verification_level": "game_state"
+      "verification_level": "game_state",
+      "verification_artifacts": [
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/touch-menu-fixes-20261030/acceptance.json",
+          "why": "Current-host retained-graphics Mac case and before/final screenshots."
+        }
+      ]
     },
     {
       "id": "inventory.actions",
@@ -606,7 +608,7 @@
       "id": "applet.picture_book",
       "screen": "AppPictureBook",
       "state": "grid/detail state",
-      "action": "Select entries and navigate pages/details/back",
+      "action": "Select categories immediately; select entries and navigate pages/details/back",
       "implementation_status": "implemented",
       "implementation_evidence": [
         {
@@ -618,10 +620,15 @@
           "file": "dm/host/hle_botw_touch_menu.c",
           "function": "selector_native_list_select",
           "why": "Selects through native list/setter entry point."
+        },
+        {
+          "file": "dm/host/hle_botw_touch_menu.c",
+          "function": "selector_apply_list_category",
+          "why": "Validated five-category widget calls the native immediate completion mode instead of the animated stick wrapper."
         }
       ],
       "verification_status": "not_run",
-      "verification_reason": "Shared native hit/focus/action path is present; the remaining conditional screen states have no independent end-to-end run evidence.",
+      "verification_reason": "Mac actual category clicks jump Creatures to Treasure and back with native immediate completion. Registered-entry details remain pending.",
       "implementation_status_reason": "A complete shared or screen-specific code path is present; verification status separately records whether this exact guest state has been exercised.",
       "verification_evidence": [],
       "verification_level": "none"
@@ -1988,6 +1995,83 @@
           }
         ]
       }
+    },
+    {
+      "id": "scope.native_actions",
+      "screen": "MainScreen_00 / R3 Scope",
+      "state": "Scope guide bar visible beside gameplay controls",
+      "action": "Tap Place pin, Quit and Edit pins native hints while preserving virtual controls and relative-look gestures",
+      "implementation_evidence": [
+        {
+          "file": "dm/host/hle_botw_touch_menu.c",
+          "function": "selector_scope_prompts_to_view",
+          "why": "Maps live capture-backed guide rectangles under the shown Scope bar to native glyph actions."
+        },
+        {
+          "file": "dm/host/hle_botw_touch_menu.c",
+          "function": "dm_botw_touch_scope_prompt_at",
+          "why": "Only native hint rectangles request pointer ownership; the ordinary gameplay controls and free-area look keep their input."
+        }
+      ],
+      "verification_evidence": [
+        {
+          "file": "dm/host/tests/t_botw_touch_menu.c",
+          "function": "test_scope_native_prompts",
+          "why": "Checks native scope ownership, action output and coexistence; runtime acceptance recorded separately."
+        },
+        {
+          "file": "dm/ios/tests/ios_look_harness.m",
+          "function": "test_botw_scope_pointer",
+          "why": "Zero-failure UIKit run checks all three hints, control priority, concurrent owners, R3 and controller suppression."
+        }
+      ],
+      "implementation_status": "implemented",
+      "implementation_status_reason": "Concrete native and platform handlers are present; handler and game-state acceptance are tracked independently.",
+      "verification_status": "passed",
+      "verification_level": "game_state",
+      "verification_reason": "Current-host retained-graphics Mac window clicks Quit, Place pin and Edit pins; pad remains visible and free-area drag rotates. UIKit coexistence checks pass; physical iPhone pending.",
+      "verification_artifacts": [
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/touch-menu-fixes-20261030/acceptance.json",
+          "why": "Mac actions and exact source/runtime evidence with retained-graphics validation boundary."
+        }
+      ]
+    },
+    {
+      "id": "item_get.inventory",
+      "screen": "MessageGet_00",
+      "state": "New-item card with visible Inventory Plus hint",
+      "action": "Tap the native Plus glyph or its label to open Inventory; card body and arrow continue normally with A",
+      "implementation_evidence": [
+        {
+          "file": "dm/host/hle_botw_touch_menu.c",
+          "function": "generic_back_prompt_observe",
+          "why": "Recognizes the live T_PauseGuide_00/T_Icon_00 pair and native Plus glyph."
+        },
+        {
+          "file": "dm/host/hle_botw_touch_menu.c",
+          "function": "selector_message_prompt_view",
+          "why": "Publishes owner-bound native hints before the broad continuation surface."
+        }
+      ],
+      "verification_evidence": [
+        {
+          "file": "dm/host/tests/t_botw_touch_menu.c",
+          "function": "test_new_item_inventory_prompt",
+          "why": "Checks Plus glyph/label/body overlap and hidden/stale/capture/controller/owner-loss rejection."
+        }
+      ],
+      "implementation_status": "implemented",
+      "implementation_status_reason": "Concrete native and platform handlers are present; handler and game-state acceptance are tracked independently.",
+      "verification_status": "passed",
+      "verification_level": "game_state",
+      "verification_reason": "Mac supplied shrine save: after freeing one slot in the disposable copy, the Eightfold Blade card shows Inventory Plus; clicking its label emits native Plus and opens Inventory focused on the new item. Full-bag hidden hint is not published. Physical iPhone pending.",
+      "verification_artifacts": [
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/touch-menu-fixes-20261030/acceptance.json",
+          "why": "Native Plus emission and current-host retained-graphics screenshots before/after the actual label click."
+        }
+      ]
     }
   ],
   "layouts": [
@@ -6907,7 +6991,9 @@
           "resolution": "exact"
         }
       ],
-      "requirement_ids": [],
+      "requirement_ids": [
+        "scope.native_actions"
+      ],
       "reuse_disposition": "referenced_component",
       "reuse_reason": "At least one scanned owner prt1 PartName points to this exact component; owner paths are listed.",
       "interaction_surfaces": [
@@ -15453,7 +15539,8 @@
         "core.back",
         "core.dialogue.body",
         "core.dialogue.choices",
-        "message.variants"
+        "message.variants",
+        "item_get.inventory"
       ],
       "interaction_surfaces": [
         "key-hint"
@@ -21574,8 +21661,8 @@
       "name": "MainScreen_00",
       "source": "Pack/Bootup.pack!Layout/Common.sblarc!blyt/MainScreen_00.bflyt",
       "sha256": "40cc302ffe67e2350c54dae5e6f9c6e5c729b2759691245ca0d121da4b97cbe6",
-      "disposition": "passive_layer",
-      "classification_reason": "HUD/background/status/support layer; catalogue has no independent input owner for this resource.",
+      "disposition": "interactive_screen",
+      "classification_reason": "Gameplay HUD also owns the embedded R3 Scope native action bar; only that live bar accepts menu touches.",
       "evidence": {
         "catalogue_component": false,
         "pane_count": 27,
@@ -21766,8 +21853,12 @@
         }
       ],
       "reused_by": [],
-      "requirement_ids": [],
-      "interaction_surfaces": []
+      "requirement_ids": [
+        "scope.native_actions"
+      ],
+      "interaction_surfaces": [
+        "key-hint"
+      ]
     },
     {
       "layout_id": "ShopBtnList20_00",
@@ -24389,10 +24480,14 @@
           "resolution": "exact"
         }
       ],
-      "requirement_ids": [],
+      "requirement_ids": [
+        "scope.native_actions"
+      ],
       "reuse_disposition": "referenced_component",
       "reuse_reason": "At least one scanned owner prt1 PartName points to this exact component; owner paths are listed.",
-      "interaction_surfaces": []
+      "interaction_surfaces": [
+        "key-hint"
+      ]
     },
     {
       "layout_id": "PaCommonBtnThinIcon_00",

@@ -51,6 +51,9 @@ void dm_botw_touch_menu_pinch(float ratio);
 // The native AppCamera is owned by the touch menu when its live A/B prompts
 // belong to the focused AppCamera screen. Frontends use this to route pinch.
 int dm_botw_touch_camera_active(void);
+// Scope hints share the gameplay HUD. Only their live native rectangles take
+// pointer ownership; the visible pad and ordinary relative-look area keep it.
+int dm_botw_touch_scope_prompt_at(float x, float y);
 // Owner-scoped AppCamera pose input, normalized to native left-stick range.
 // Set (0,0) on gesture release or cancellation.
 void dm_botw_touch_camera_pose(float x, float y);
@@ -101,6 +104,7 @@ typedef struct {
     int inventory_arrow_valid[2];
     float inventory_arrows[2][4]; // Live previous/next carousel arrows.
     int map_visible;
+    int scope_visible; // MainScreen's live telescope guide bar, alongside gameplay controls.
     int hero_path;
     int popup_visible;
     int cursor_valid;

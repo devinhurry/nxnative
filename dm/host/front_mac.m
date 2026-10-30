@@ -547,8 +547,11 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     dm_touchpad_point fc = [self faceCenter], dc = [self dpadCenter]; float u = self.u;
     float fd = preview_distance(NSMakePoint(p.x,p.y), NSMakePoint(fc.x,fc.y));
     float dd = preview_distance(NSMakePoint(p.x,p.y), NSMakePoint(dc.x,dc.y));
+    float canvas[4]; dm_aspect_touch_rect(self.bounds.size.width,self.bounds.size.height,canvas);
+    BOOL scopePrompt = _active && canvas[2] > 0 && canvas[3] > 0 &&
+        dm_botw_touch_scope_prompt_at((p.x-canvas[0])/canvas[2],(p.y-canvas[1])/canvas[3]);
     BOOL faceHit = fd <= self.faceGap + self.faceRadius*1.6f;
-    if (_cameraPadVisible) {
+    if (_cameraPadVisible || scopePrompt) {
         faceHit = NO;
         for (int b=0;b<4;b++) {
             dm_touchpad_point c=[self facePosition:b];
@@ -569,6 +572,11 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
         // must not be mistaken for the fresh collapsed-map publication.
         dm_botw_touch_hud_map_tapped();
         g_preview_buttons |= DM_BTN_MINUS; push(); g_preview_buttons &= ~DM_BTN_MINUS; push();
+        return;
+    }
+    if (scopePrompt) {
+        _lookTapPending = NO; _owner = PREVIEW_MENU; _menuPointerActive = YES;
+        [self sendBotwMenuPointer:DM_BOTW_MENU_BEGIN point:p];
         return;
     }
     if (_cameraPadVisible && (e.modifierFlags & NSEventModifierFlagOption)) {

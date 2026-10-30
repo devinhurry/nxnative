@@ -711,6 +711,12 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     CGPoint normalized = CGPointMake((p.x - rect[0]) / rect[2], (p.y - rect[1]) / rect[3]);
     return CGRectContainsPoint(_botwMapRect, normalized);
 }
+- (BOOL)botwScopePromptOwnsPoint:(CGPoint)p {
+    if (![self botwTouchControlsActive]) return NO;
+    float rect[4]; dm_aspect_touch_rect((float)self.bounds.size.width, (float)self.bounds.size.height, rect);
+    return rect[2] > 0 && rect[3] > 0 &&
+        dm_botw_touch_scope_prompt_at((p.x-rect[0])/rect[2],(p.y-rect[1])/rect[3]);
+}
 - (int)btnAt:(CGPoint)p {   // locked keys (tested on touch-down only, then locked)
     CGFloat u = self.u;
     if ([self botwTouchControlsActive] && dist(p, [self runeButtonCenter]) <= [self dropR:B_L] * 1.45) return B_L;
@@ -1057,7 +1063,8 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         if (_tap) { _botwLookTapPending = NO; game |= [self gameBegin:t]; continue; }
         // Choose the nearest control in its grab radius, then route the open right half to relative look or the native right stick.
         CGFloat best = 1; int kind = C_NONE, idx = 0;
-        if (_botwCameraPadVisible) {
+        BOOL scopePrompt = [self botwScopePromptOwnsPoint:p];
+        if (_botwCameraPadVisible || scopePrompt) {
             for (int b = B_A; b <= B_Y; b++) {
                 CGPoint center = [self facePos:b];
                 CGFloat faceHit = dist(p, center) / (self.faceR * 1.25);
@@ -1071,6 +1078,15 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         }
         if (_full) { CGFloat d = dist(p, self.dpadCenter) / (self.dpadR * K_DPAD_GRAB); if (d < best) { best = d; kind = C_DPAD; } }
         if (!_stick[0]) { CGFloat sl = dist(p, self.stickHome) / ([self stickR:0] * K_STICK_GRAB); if (sl < best) { best = sl; kind = C_STICK; } }
+        if (scopePrompt && kind != C_FACE && kind != C_DPAD && kind != C_STICK) {
+            _botwLookTapPending = NO;
+            if (!_botwMenuTouch) {
+                _botwMenuTouch = t; _botwMenuLast = p; _botwMenuPointerActive = YES;
+                [_owner setObject:@(C_MENU) forKey:t];
+                [self sendBotwMenuPointer:DM_BOTW_MENU_BEGIN point:p];
+            } else [_owner setObject:@(C_MENU_EXTRA) forKey:t];
+            continue;
+        }
         if ([self botwTouchControlsActive] && _botwCameraPadVisible &&
             kind != C_FACE && kind != C_DPAD && kind != C_STICK) {
             _botwLookTapPending = NO;

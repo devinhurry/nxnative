@@ -1,6 +1,6 @@
 # BOTW menu touch progress
 
-Updated: 2026-10-30 (Asia/Shanghai).
+Updated: 2026-10-31 (Asia/Shanghai).
 
 This is the acceptance tracker. Update it after each verified feature or new failure. `HANDOFF.md` is historical context, not the current status.
 
@@ -24,6 +24,29 @@ separate from the acceptance results below.
 - Keep implementation checks, Mac runtime evidence and iPhone validation separate.
 
 ## Coverage
+
+### Category jumps and gameplay prompts (2026-10-31)
+
+- Compendium: Mac touch jumps directly from Creatures to Treasure and back,
+  using the native immediate mode instead of scrolling across intermediate pages.
+- Inventory: a category tap from a nonzero weapon column now selects the new
+  category's first item and updates its description without the old focus delay.
+- R3 Scope: Mac clicks Place pin, Quit and Edit pins while the virtual pad stays
+  visible; camera dragging remains functional. UIKit checks also cover concurrent
+  movement/look/hint touches, control priority, releases and controller suppression.
+- New-item Plus: Mac verified with the supplied shrine save. Its full weapon
+  bag initially hid the hint; freeing a slot only in the disposable copy and
+  reopening the chest shows Inventory Plus. Tapping its label opens Inventory
+  focused on the newly acquired Eightfold Blade. Card-body A still continues.
+
+The native menu suite, 74 relative-look checks and 188-file iOS compile check
+pass. The UIKit harness reports zero failures across 36 look sessions. The Mac
+game runs the recorded host snapshot with these touch changes and retained graphics
+(`371ad45`, chain `07b0ea547435`); host source hashes are recorded alongside
+screenshots and native logs in `01007EF00011E000-work/touch-menu-fixes-20261030/`.
+The full current shader regression stops on the baseline's existing Metal
+compiler mismatch, before gameplay comparison; physical iPhone acceptance is
+pending. [Native cause and contracts](../dm/games/01007EF00011E000/README.md#direct-categories-and-gameplay-hud-prompts).
 
 ### Inventory category crash on iPhone (2026-10-30)
 
@@ -155,6 +178,7 @@ source builds above are separate evidence.
 | Map/Runes header hints | Mac verified | L/R hints use their final rendered positions. R opens the empty album; its Back text returns to gameplay without a cursor selection. AppHome prompts are published from live guide/header panes even when BoxCursor updates stop. |
 | Startup and loading controls | Mac and UIKit verified | Gameplay controls start hidden and require a fresh, shown, input-enabled MainScreen HUD. Title and loading keep the Mac preview in menu routing; gameplay alone restores the artwork. Physical-controller and non-BOTW routing remain unchanged. |
 | Non-modal gameplay tips | Code corrected; user acceptance pending | The shared screen classification excludes `MessageTipsRunTime_00` and `MessageTipsPauseMenu_00` from modal visibility and touch-menu routing. Headshot/shield-surf corner notifications should keep the gamepad visible; centered tutorials still hide it. The user will verify these events in-game. |
+| Item pickup controls and backup right stick | Mac gameplay and native/UIKit checks passed; physical iPhone pending | `before-mushroom` reproduces the Sunshroom notification hiding the pad. `PickUpWin_00` now uses the passive TIP policy, and Npad samples distinguish ordinary virtual sticks from relative gestures. The fixed Mac run retains the pad and turns the camera with native right-stick input. Original save hashes are unchanged. Evidence: `pickup-controls-20261031/`; current host and iPhone input-file compilation pass, while the scoped full regression is blocked by the existing Metal compiler mismatch. |
 | First start with a completely empty save | Mac verified | The constructor observation retains the native cursor manager before its registry exists. Link waking up restores controls without visiting Title or opening a menu. See the [game note](../dm/games/01007EF00011E000/README.md#what-it-needs) for the cause. |
 | Map drag | Mac verified; iPhone pending | Replaced held-stick velocity with native position updates. Horizontal/vertical displacement follows the finger, holding still does not drift, release stops, reverse drag restores the map. Uses the inverse rendered transform for zoom/rotation. |
 | Map pinch zoom | UIKit and Mac backend verified; physical iPhone pending | Two-finger spread/contraction and release reach the host. Zoom now crosses the native stick-direction threshold; the old 20% spread produced only 3200, below 16384. Injecting the same host ratios into the Mac runtime visibly zooms in and back out. Uses the game's native zoom levels. |

@@ -454,6 +454,35 @@ host also compiles.
 
 No `tex_flush_upload` (a minute's boot saw it flush 32 CPU-filled textures with data, and it needs none).
 
+### Direct categories and gameplay HUD prompts
+
+Touch category selection uses the native completion paths, rather than
+intermediate stick navigation. Compendium's five-category widget calls
+`main+0xd6bfa0(widget, 0, category, 1)`; mode 1 synchronizes its current/target
+position and first selection. The ordinary `0xd6c244` wrapper always requests
+animated mode 0. Inventory stages the destination page, requests and refreshes
+the category, stages slot zero after refresh preserves the old cursor column,
+then commits through `0xe3b9f0` last. Refreshing after commit restarted a
+transition and disabled focus. Exact 1.9.0 build and instruction checks cover
+these native contracts; Quest/Sell keep their existing setter.
+
+R3 Scope owns a guide bar inside `MainScreen_00`, under
+`Pa_CameraPointer_00`, rather than an independent menu screen. Its visible
+capture-backed guide plates and native glyphs supply Place pin, Quit and Edit
+pins targets. Only those rectangles request pointer ownership alongside the
+gamepad; visible controls retain priority and free space keeps ordinary
+relative look and R3 double-tap. Hiding the guide bar invalidates pending
+actions even when the HUD root and input group remain unchanged.
+
+New-item cards pair `T_PauseGuide_00` with `T_Icon_00`. Their native `0xe04b`
+glyph maps to Plus, so the Inventory hint takes precedence over the broader A
+continuation area. Card body/arrow taps still send A. Hidden/stale guides and
+private capture copies remain ineligible. These adapters require BOTW touch
+mode and the validated native owner; controller input is unchanged.
+
+Validation and evidence for this follow-up are recorded in the
+[acceptance tracker](../../../docs/botw-menu-touch-progress.md#category-jumps-and-gameplay-prompts-2026-10-31).
+
 ## Frame rate
 
 ### The frame step (current)
