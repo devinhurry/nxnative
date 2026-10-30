@@ -20,10 +20,11 @@ class Startup(unittest.TestCase):
         cls.tools = tempfile.TemporaryDirectory(); cls.addClassCleanup(cls.tools.cleanup)
         root = Path(cls.tools.name)
         main = (REPO / 'dm/ios/Sources/main.m').read_text()
-        locator = main[main.index('static int romfs_image_complete'):main.index('// Boot prerequisites')]
+        locator = main[main.index('static int romfs_image_complete'):main.index('static void romfs_identity_report')]
         source = root / 'locator.m'
         source.write_text('#import <Foundation/Foundation.h>\n#include <stdio.h>\n#include "romfs_image.h"\n#include "romfs_identity.h"\n'
                           'static NSString *fixture_doc, *fixture_tmp, *fixture_bundle;\n#define DM_GAME_ROMFS_MARKER "marker"\n'
+                          'static bool dm_imported_game_ready(void) { return false; }\n'
                           '@interface FixtureBundle : NSObject\n+ (instancetype)mainBundle;\n- (NSString *)resourcePath;\n@end\n'
                           '@implementation FixtureBundle\n+ (instancetype)mainBundle { return [self new]; }\n'
                           '- (NSString *)resourcePath { return fixture_bundle; }\n@end\n#define NSBundle FixtureBundle\n'

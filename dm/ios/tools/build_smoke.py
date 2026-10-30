@@ -32,6 +32,11 @@ def main():
     gen = project / 'Gen'
     tables = gen / 'dm'
     tables.mkdir(parents=True)
+    localizations = gen / 'Localizations'
+    localizations.mkdir()
+    if profile.id == '01007EF00011E000':
+        for source in (ios / 'Sources').glob('*.lproj'):
+            shutil.copytree(source, localizations / source.name)
     for name in ('Sources', 'tools'):
         (project / name).symlink_to(ios / name, target_is_directory=True)
     shutil.copyfile(ios / 'project.yml', project / 'project.yml')

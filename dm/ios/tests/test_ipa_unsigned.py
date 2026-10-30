@@ -25,7 +25,8 @@ CAN_SIGN = sys.platform == 'darwin' and shutil.which('codesign') and shutil.whic
 
 def run_step(script, root, **extra):
     env = {k: v for k, v in os.environ.items() if not k.startswith('DM_') and k not in ('IOS_PULL', 'AOC', 'PSO')}
-    env.update(GAME=GAME, DM=str(root / 'dm'), PROFILE_TOOL=str(REPO / 'dm/games/game.py'), **extra)
+    env.update(GAME=GAME, DM=str(root / 'dm'), IOS=str(root), PROFILE_TOOL=str(REPO / 'dm/games/game.py'), DM_SEPARATE_ROM='0')
+    env.update(extra)
     return subprocess.run(['/bin/bash', '-c', PREAMBLE + script], cwd=root, env=env, capture_output=True, text=True)
 
 
@@ -34,7 +35,8 @@ class UnsignedIpaTests(unittest.TestCase):
         header = root / 'dm/host/gen' / GAME / 'game_profile.h'
         header.parent.mkdir(parents=True)
         header.write_text(game.header(game.Game(REPO / 'dm/games' / GAME)))
-        for folder in ('DmIOS.app', 'shaders/b-fixture', 'romfs', 'aoc/0', 'pkg'): (root / folder).mkdir(parents=True)
+        for folder in ('DmIOS.app', 'Gen/dm', 'shaders/b-fixture', 'romfs', 'aoc/0', 'pkg'): (root / folder).mkdir(parents=True)
+        (root / 'Gen/dm/launcher.json').write_text('{}')
         (root / 'shaders/b-fixture/fixture_b.metallib').write_text('lib')
         (root / 'romfs/marker').write_text('romfs')
         (root / 'aoc/0/file').write_text('aoc')
@@ -58,6 +60,7 @@ class UnsignedIpaTests(unittest.TestCase):
         names = self.pack()
         self.assertIn('Payload/DmIOS.app/romfs/marker', names)
         self.assertIn('Payload/DmIOS.app/aoc/0/file', names)
+        self.assertIn('Payload/DmIOS.app/dm/launcher.json', names)
 
     def test_copy_romfs_no_leaves_the_game_files_out_and_keeps_the_rest(self):
         names = self.pack(DM_COPY_ROMFS='NO')

@@ -1,9 +1,12 @@
 // Current host implementation: display changes must affect the camera only at its guest projection gate.
 #include "../hle.h"
 // This fixture describes the camera under test, independent of the profile used to build the rest of the host tests.
+#undef DM_GAME_ID
 #undef DM_GAME_ASPECT_NATIVE
 #undef DM_GAME_CAMERA_ASPECT
 #undef DM_GAME_CAMERA_UI_ASPECT
+#undef DM_GAME_CAMERA_WORLD_ASPECT
+#define DM_GAME_ID "01007EF00011E000"
 #define DM_GAME_ASPECT_NATIVE 1
 #define DM_GAME_CAMERA_ASPECT "cd57b23fa4bbad65803d9788c01821ee:0x1e39d10:0x38:0x1d05380:0xb0:0x8"
 #define DM_GAME_CAMERA_UI_ASPECT "19:0xa0:0xa8:0x74"

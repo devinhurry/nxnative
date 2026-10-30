@@ -44,7 +44,7 @@ class Registry(unittest.TestCase):
     def test_observation_gate_after_direct_or_indirect_call(self):
         # Execute the production classifier: BLR returns through the same ABI
         # as BL, while BR, RET and plain branches do not establish a call site.
-        nodes = [n for n in ast.walk(tree) if isinstance(n, ast.Assign) and
+        nodes: list[ast.stmt] = [n for n in ast.walk(tree) if isinstance(n, ast.Assign) and
                  any(isinstance(t, ast.Name) and t.id in ('previous', 'after_bl') for t in n.targets)]
         nodes = nodes[:2]   # Explicit profile loop; later SDK discovery has its own call-site rule.
         code = compile(ast.Module(body=nodes, type_ignores=[]), str(source), 'exec')

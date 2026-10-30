@@ -129,7 +129,7 @@ class Nvn(Base):
     def test_split_pairs_invalidate_shader_reuse(self):
         # A registered profile may have no pso_pairs.tsv: the split's copy feeds vs_pad.
         def fingerprint(*args, **kwargs):
-            path = next(x[1][0] for x in args if isinstance(x, tuple) and x[0] == 'files' and x[1] and x[1][0].name == 'pso_pairs.tsv')
+            path = next(p for x in args if isinstance(x, tuple) and x[0] == 'files' for p in x[1] if p.name == 'pso_pairs.tsv')
             return str(path.read_bytes() if path.is_file() else b'missing')
         with mock.patch.object(nsp, 'fingerprint', side_effect=fingerprint):
             self.build(True); self.assertEqual(len(self.ran), 1)

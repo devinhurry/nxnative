@@ -1,3 +1,7 @@
+#include "../hle.h"
+// Installer tests use this BOTW fixture regardless of CI's selected profile.
+#undef DM_GAME_CAMERA_LOOK
+#define DM_GAME_CAMERA_LOOK "cd57b23fa4bbad65803d9788c01821ee:0xd5801c:0x128:0x1e93890:0x3c:60"
 #include "../hle_look.c"
 #include <assert.h>
 #include <math.h>
