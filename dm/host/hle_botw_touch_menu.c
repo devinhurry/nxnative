@@ -222,6 +222,7 @@ static struct {
     uintptr_t pane, root;
 } g_map_axis_trace;
 static int g_active_notified;
+static int g_camera_notified_active;
 typedef struct {
     uintptr_t manager, focus, screen, vtable, root;
     int group, input_active, inventory_screen, popup_active;
@@ -5443,7 +5444,16 @@ static int camera_owner_live_locked(uint64_t frame) {
         !g_view.prompt_owner_valid || !selector_range(g_view.generic_screen, 0x100)) return 0;
     uintptr_t screen = g_view.generic_screen, state = selector_read_ptr(screen, 0x38), root = 0;
     char name[64];
-    return selector_screen_name(screen, name) && !strcmp(name, "AppCamera_00") &&
+    int capture = 0;
+    for (int i = 0; i < g_view.footer_action_count; i++) {
+        capture |= g_view.footer_action_buttons[i] == DM_BTN_A;
+    }
+    // Camera touch gestures are valid only in the viewfinder. The native
+    // photo save/delete confirmation can reuse AppCamera's screen and root,
+    // but it has selectable dialog rows instead of the live Capture/Quit
+    // guide pair, so it must release camera gestures and controls.
+    return !g_view.generic_count && capture && g_view.back_valid &&
+        selector_screen_name(screen, name) && !strcmp(name, "AppCamera_00") &&
         selector_range(state, 0x39) && (((const uint8_t *)state)[0x38] & 2) &&
         ((const int8_t *)screen)[0xfd] >= 0 && ((const uint8_t *)screen)[0xfe] == 2 &&
         selector_read_ptr(selector_read_ptr(screen, 0x30), 0x18) == g_view.generic_root &&
@@ -5457,7 +5467,9 @@ static int camera_bound_to_view_locked(const dm_botw_touch_menu_view *view) {
 }
 
 static void camera_clear_locked(void) {
+    int owned_pointer = g_camera_screen || g_camera_drag_active;
     g_camera_drag_active = g_camera_dragged = 0;
+    if (owned_pointer) g_pointer_down = g_pointer_dragged = 0;
     g_camera_screen = g_camera_root = 0; g_camera_page = 0; g_camera_group = -1;
     g_camera_rx = g_camera_ry = g_camera_pose_lx = g_camera_pose_ly = 0;
     g_camera_pose_modifier = 0;
@@ -5568,6 +5580,18 @@ void dm_botw_touch_menu_observe(const dm_botw_touch_menu_view *view) {
     }
     int is_active = menu_active_locked(frame);
     if (had_menu_dpad != (is_active && g_view.map_visible && g_view.hero_path)) notify = 1;
+    int camera_active = camera_owner_live_locked(frame);
+    if (g_camera_notified_active && !camera_active) {
+        // A camera confirmation can retain the exact native screen identity.
+        // Drop gestures and same-sample HID overrides as soon as its live
+        // viewfinder prompts disappear.
+        camera_clear_locked();
+        g_last_apply_valid = 0;
+    }
+    if (g_camera_notified_active != camera_active) {
+        g_camera_notified_active = camera_active;
+        notify = 1;
+    }
     if (g_ui_audit || view) report = g_view;
     if (!is_active) menu_clear_queue_locked();
     if (was_active != is_active || g_active_notified != is_active) {
@@ -6092,7 +6116,7 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
     int page_direction = 0;
     if (carousel && g_pointer_dragged && g_view.clip_valid &&
         point_in_rect(g_pointer_start[0], g_pointer_start[1], g_view.clip) &&
-        point_in_rect(x, y, g_view.clip) && fabs(end_dx) >= 40.0 && fabs(end_dx) >= 1.5 * fabs(end_dy)) {
+        fabs(end_dx) >= 40.0 && fabs(end_dx) >= 1.5 * fabs(end_dy)) {
         page_direction = end_dx < 0 ? 1 : -1;
         if (g_view.generic_mode && !g_view.inventory_arrow_valid[page_direction > 0]) page_direction = 0;
     } else if (carousel && !g_pointer_dragged) {
@@ -6656,7 +6680,7 @@ void dm_botw_touch_menu_reset(void) {
     pthread_mutex_lock(&g_menu_mu);
     g_message_published_screen = g_message_published_root = 0;
     g_map_pan_active = 0; g_map_ax = g_map_ay = 0; g_map_ry = 0;
-    notify = g_active_notified || g_presented_menu;
+    notify = g_active_notified || g_presented_menu || g_camera_notified_active;
     g_presented_menu = 0; g_presented_menu_frame = 0; g_presented_menu_root = 0;
     g_presented_gameplay = 0; g_presented_gameplay_root = 0; g_presented_loadout = g_presented_quick_select = 0;
     atomic_store_explicit(&g_presentation_observed_frame, UINT64_MAX, memory_order_release);
@@ -6670,6 +6694,7 @@ void dm_botw_touch_menu_reset(void) {
     g_map_left_owned = g_map_right_owned = 0;
     memset(&g_map_axis_trace, 0, sizeof g_map_axis_trace);
     g_active_notified = 0;
+    g_camera_notified_active = 0;
     pthread_mutex_unlock(&g_menu_mu);
     memset(&g_map_validation_cache, 0, sizeof g_map_validation_cache);
     pthread_mutex_lock(&g_native_view_mu);

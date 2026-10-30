@@ -311,7 +311,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     dm_botw_trackpad_scroll _menuScroll;
     dm_botw_trackpad_pose _menuPose;
     NSPoint _menuPoseStart;
-    BOOL _hasTouch;
+    BOOL _hasTouch, _cameraPadVisible;
     NSImage *_runeIcon, *_buttonIcons[12];
     uint64_t _runeIconGeneration;
     BOOL _runeIconValid;
@@ -355,11 +355,15 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     dm_botw_touch_menu_pointer(phase, _menuLastX, _menuLastY);
 }
 - (void)setBotwMenuActive:(BOOL)active {
-    if (_menuMode == active) {
+    BOOL cameraPadVisible = active && _active && GCController.controllers.count == 0 &&
+        dm_botw_touch_camera_active();
+    BOOL cameraPadChanged = _cameraPadVisible != cameraPadVisible;
+    if (_menuMode == active && !cameraPadChanged) {
         if (_menuPose.active && !dm_botw_touch_camera_active()) [self cancelInput];
         if (active && _owner == PREVIEW_DPAD && !dm_botw_touch_menu_dpad_visible()) [self cancelInput];
         [self setNeedsDisplay:YES]; return;
     }
+    _cameraPadVisible = cameraPadVisible;
     [self cancelInput];
     if (dm_botw_touch_hud_available()) dm_input_cancel_virtual_latch(0xffffull);
     _menuMode = active;
@@ -511,13 +515,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     dm_touchpad_point p = [self topPoint:e];
     _down = _last = NSMakePoint(p.x, p.y); _hasTouch = YES; _held = _cancelPending; _owner = PREVIEW_NONE;
     [self setBotwMenuActive:_active && !dm_botw_touch_controls_visible()];
-    if (_menuMode) {
-        if (_active && dm_botw_touch_camera_active() && (e.modifierFlags & NSEventModifierFlagOption)) {
-            _owner = PREVIEW_MENU; dm_botw_trackpad_pose_begin(&_menuPose);
-            _menuPoseStart = NSMakePoint(p.x, p.y);
-            dm_botw_touch_camera_pose(0, 0);
-            return;
-        }
+    if (_menuMode && !_cameraPadVisible) {
         if (dm_botw_touch_menu_dpad_visible()) {
             dm_touchpad_point center=self.dpadCenter;
             uint64_t direction = hypotf(p.x-center.x,p.y-center.y)<=self.dpadRadius*DM_TP_DPAD_GRAB ? [self dpadAtTop:p] : 0;
@@ -547,9 +545,20 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
     dm_touchpad_point fc = [self faceCenter], dc = [self dpadCenter]; float u = self.u;
     float fd = preview_distance(NSMakePoint(p.x,p.y), NSMakePoint(fc.x,fc.y));
     float dd = preview_distance(NSMakePoint(p.x,p.y), NSMakePoint(dc.x,dc.y));
-    if (fd <= self.faceGap + self.faceRadius*1.6f && fd <= dd) { _lookTapPending = NO; _owner = PREVIEW_FACE; _held = [self faceAtTop:p]; [self publishButtons]; return; }
+    BOOL faceHit = fd <= self.faceGap + self.faceRadius*1.6f;
+    if (_cameraPadVisible) {
+        faceHit = NO;
+        for (int b=0;b<4;b++) {
+            dm_touchpad_point c=[self facePosition:b];
+            if (preview_distance(NSMakePoint(p.x,p.y),NSMakePoint(c.x,c.y)) <= self.faceRadius*1.25f ||
+                (_touchLayout.badges && dm_botw_button_badge_contains(CGPointMake(p.x,p.y),CGPointMake(c.x,c.y),self.faceRadius))) {
+                faceHit = YES; break;
+            }
+        }
+    }
+    if (faceHit && fd <= dd) { _lookTapPending = NO; _owner = PREVIEW_FACE; _held = [self faceAtTop:p]; [self publishButtons]; return; }
     if (dd <= self.dpadRadius*DM_TP_DPAD_GRAB && dd < fd) { _lookTapPending = NO; _owner = PREVIEW_DPAD; _held = [self dpadAtTop:p]; [self publishButtons]; return; }
-    if ([self mapOwnsTop:p]) {
+    if (!_cameraPadVisible && [self mapOwnsTop:p]) {
         _lookTapPending = NO;
         _owner = PREVIEW_NONE; _hasTouch = NO;
         _mapTapConsumed = YES; _mapInvalidAfterTap = NO; _mapValid = NO; _mapRect = (dm_touchpad_rect){0};
@@ -558,6 +567,17 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
         // must not be mistaken for the fresh collapsed-map publication.
         dm_botw_touch_hud_map_tapped();
         g_preview_buttons |= DM_BTN_MINUS; push(); g_preview_buttons &= ~DM_BTN_MINUS; push();
+        return;
+    }
+    if (_cameraPadVisible && (e.modifierFlags & NSEventModifierFlagOption)) {
+        _owner = PREVIEW_MENU; dm_botw_trackpad_pose_begin(&_menuPose);
+        _menuPoseStart = NSMakePoint(p.x, p.y);
+        dm_botw_touch_camera_pose(0, 0);
+        return;
+    }
+    if (_cameraPadVisible) {
+        _owner = PREVIEW_MENU; _menuPointerActive = YES;
+        [self sendBotwMenuPointer:DM_BOTW_MENU_BEGIN point:p];
         return;
     }
     if (dm_look_enabled() && p.x >= self.bounds.size.width * (1.0f-DM_TP_RSWIPE)) {
@@ -729,9 +749,6 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
         dm_touchpad_point c = [self layoutCenter:_button];
         if (!(_cancelLatched & bit) && dm_touchpad_cancel_outside(release.x,release.y,c.x,c.y,DM_TP_CANCEL_RADIUS*self.u*[self layoutScale:_button])) {
             _cancelLatched |= bit; _cancelPending |= bit; dm_botw_touch_cancel_trigger(bit);
-            const char *feedback = getenv("DM_TOUCH_HAPTICS");
-            if (!feedback || atoi(feedback))
-                [NSHapticFeedbackManager.defaultPerformer performFeedbackPattern:NSHapticFeedbackPatternGeneric performanceTime:NSHapticFeedbackPerformanceTimeNow];
         }
     }
     if (_owner == PREVIEW_GAME) dm_touch_set(NULL,0);
@@ -824,7 +841,7 @@ static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot)
 - (void)drawRect:(NSRect)dirtyRect {
     (void)dirtyRect; if (!_active) return;
     float h = self.bounds.size.height, w = self.bounds.size.width, u = self.u;
-    if (_menuMode) {
+    if (_menuMode && !_cameraPadVisible) {
         if (dm_botw_touch_menu_dpad_visible()) {
             dm_touchpad_point d=self.dpadCenter;
             NSColor *color=[NSColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:.8];

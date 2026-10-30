@@ -108,8 +108,9 @@ and passing input/release checks. The movement stick's base anchor is 10 fronten
 up/right of its ordinary home, before the configured default vertical offset of 0.023 canvas height. Its idle artwork is a white circle with four inner
 arrows at alpha 0.15; dragging reveals an unfilled gray ring and an arrow just outside it.
 Dragging beyond the ring retains one direction arrow, without an extra haptic
-or automatic sprint. BOTW camera dragging is silent; camera double-tap retains
-R3 and one pulse.
+or automatic sprint. BOTW movement-stick grabs and L3 double taps are silent;
+camera dragging and its R3 double tap are also silent. Face buttons and the ZL
+shield-stick grab keep their press feedback.
 The map/environment cluster reserves space for + with an 8-point gap. The
 visible Plus cross has the same right-edge padding as the first heart's left
 edge, including the additional 2 frontend points. Both +/- use a white cross over a 40%-opaque black
@@ -181,7 +182,7 @@ The 2026-10-29 touch defaults use the supplied layout offsets and scales in
 agree. Existing saved customization is retained. The current minimap/environment
 cluster and fixed +/- anchor use the symmetric heart/Plus padding described above.
 R/ZR cancellation still happens only on an outside release. Crossing either way
-over the cancel circle emits a haptic pulse, as does the outside release itself.
+over the cancel circle emits a haptic pulse; the release itself adds no pulse.
 Continuous movement on the same side adds no pulse. Cancel rings follow live finger ownership,
 not the virtual trigger retained for native acknowledgement. Release and reset
 invalidate UIKit layout even when the published button bits have not changed,
@@ -639,11 +640,33 @@ On this Mac the background prewarm also ends before the save loads, so the step 
 ### AppCamera touch gestures
 
 In BOTW touch mode, drag with one finger to frame the shot and pinch to zoom.
+The viewfinder also shows the virtual gamepad. A touch on a visible control
+belongs to that control; the remaining area retains camera gestures and native
+footer actions. Face-button priority uses the individual button circles in
+this mode, so their wider gameplay grab region does not cover the native hints.
+The same-owner Save/Delete confirmation hides the pad and releases its input;
+discarding or completing the confirmation restores it in the viewfinder.
 In selfie mode, move two fingers together to change Link's pose without changing
 zoom. On Mac, use Option-drag or Shift plus a two-finger trackpad scroll for the
 pose gesture. Hold a third finger during an iOS pose gesture to add the native
 ZL modifier; on Mac, hold Shift during Option-drag or Option during Shift-scroll.
 The native X prompt switches between selfie and landscape modes.
+
+**Resolved: Album edge swipes were ignored (2026-10-30).** Carousel gestures
+required both their start and release inside the photo. A leftward swipe from
+the left side, or a rightward swipe from the right side, could leave the photo
+and fail. The shared BOTW carousel path now retains ownership after an in-bounds
+start; release may leave the clip. Outside-origin gestures, cancellation and
+disabled native arrows remain rejected. A disposable saved-photo run reproduces
+the old misses and verifies photo 2 to 3 and back with both edge gestures.
+`ui-implementation-20261030/album-regression-current/` retains the source proof,
+before/after images and logs. The [acceptance tracker](../../../docs/botw-menu-touch-progress.md)
+records the checks and retained-graphics boundary.
+
+BOTW R/ZR touch feedback occurs on press and cancel-circle boundary crossings.
+Releasing inside or outside the circle adds no UI haptic; native cancellation
+still occurs only on outside release. UIKit's feedback spy checks these edges,
+camera control/gesture coexistence and physical-controller suppression.
 
 ### Final synchronization and pass validation (2026-10-26, current)
 
