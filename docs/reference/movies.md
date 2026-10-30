@@ -79,6 +79,15 @@ The SDK's movie library (`movie::Decoder`, `movie::Extractor`), which the host t
 - **Found on:** [AI: THE SOMNIUM FILES](../../dm/games/010089B00D09C000/README.md) (Unity 2017.4: the 6 s Spike Chunsoft logo `StreamingAssets/Movie/al_titel_cl_sc_1k_30.mp4`, H.264 High, before the title).
 - **Note:** the audio decoder was never affected: AAC has no reorder queue.
 
+### No picture carries the end-of-stream flag
+
+- **Symptom:** an anime or story movie ends on a black screen; the pause menu still works and skipping lets the game continue.
+- **Cause:** at the end of an H.264 stream the host put the end-of-stream flag on the last picture of its reorder queue. CRI Sofdec2 drops an output flagged end-of-stream without showing it and waits for the picture it counted on: the movie never completes. Catherine's anime intro had 1,140 of its 1,141 pictures delivered, the last only with flag 4. The queue held pictures there for no reason too: `hle_movie_avc.c` held four for every non-Baseline stream, assuming B-frames, but Catherine's High-profile streams use SPS `pic_order_cnt_type = 2`, whose output order is the decode order (H.264 8.2.1.3).
+- **Fix:** the drain hands out every queued picture without the flag, then one output without a picture carries it, with the end-of-stream packet's time (`md_pump` in `hle_movie.c`), as VP9 and Baseline streams whose end-of-stream packet has no data already ended. This holds for every H.264 stream, with or without B-frames. Separately, `avc_reorder_depth` reads the SPS through `pic_order_cnt_type` (emulation-prevention bytes removed, the High-profile chroma fields and scaling lists skipped): POC type 2 needs no reorder queue in any profile; other POC types keep a depth of 4 (0 for Baseline), as does an SPS cut short. No timeout or movie skip is involved; the intro delivers all 1,141 pictures and goes on to Golden Playhouse by itself.
+- **Found on:** [Catherine: Full Body](../../dm/games/0100BF00112C0000/README.md) (1.0.1a, CRI Sofdec2, H.264 High, NV12).
+- **Check:** `t_movie_avc` (`dm/host/tests`) runs the drain through `md_pump` with synthetic pictures, with all output slots free and with two, and checks the SPS reader (POC types, scaling lists, chroma formats, truncated input). The game's `smoke.tsv` lets its intro finish without a skip press. On the Mac from a fresh save, the host before this fix never closed the intro's decoder in 180 s; the drain alone (with the old reorder depth of 4) and the drain with POC type 2's depth of 0 both had all 1,141 pictures out and the decoder closed, and the latter's screenshot shows Golden Playhouse.
+- **Open:** CRI hands the decoder zero timestamps, so the reorder queue, sorted by time, cannot reorder a CRI stream that has B-frames; none has been found yet. Catherine's later story movies and its movies on the iPhone have not been checked one by one.
+
 ## Output slots
 
 ### Output slot counts per decoder kind
@@ -156,6 +165,13 @@ A decoder hands out as many outputs as it has slots, and while every slot is tak
 - **Cause:** the game reads the buffers of the end-of-stream output (no picture) and of an output it acquired before the flush, and the host painted its texture black for both.
 - **Fix** (`hle_movie.c`): a flush now keeps each slot's last picture, and in native-texture mode an output with no picture leaves the texture as it was, as the SDK's GPU consumer has nothing to draw.
 - **Found on:** [Big Brain Academy: Brain vs. Brain](../../dm/games/0100620012D6E000/README.md) (the same looped activity previews, Flush and Start).
+
+### `GetOutputBuffer` returns the output index in native-texture mode
+
+- **Symptom:** a native-texture movie freezes on its 16th picture while the game keeps running; `DM_MOVIE_TRACE=1` shows 16 `AcquireOutputBufferIndex` / `GetOutputBuffer` pairs and no `ReleaseOutputBufferIndex`.
+- **Cause:** in native-texture mode (output 3, mode 2) the SDK's `DecoderImpl::GetOutputBuffer` calls `CopyOutputBufferToClientTextureAndRelease`, which renders the picture into the client's texture with MediaCodec's `renderOutputBufferAndRelease`: the index goes back to the decoder there, and a client need not release it. The host kept the slot until a release, so a client that never releases held all 16 video slots and the decoder stopped. A client that releases anyway gets success from the SDK, whose texture-mode `ReleaseOutputBufferIndex` turns MediaCodec's "not owned" (-13) into 0 (SDK 17.5.9 `subsdk0+0x123a0c`).
+- **Fix** (`hle_movie.c`): the host tracks which output slots the client holds (taken by `AcquireOutputBufferIndex`, returned by a release or a flush). A texture-mode `GetOutputBuffer` returns its slot after writing the texture, and a release of a slot the client does not hold changes nothing and returns 0. Before, such a second release freed a slot the decoder might have filled again.
+- **Found on:** [Super Mario Party Jamboree](../../dm/games/0100965017338000/README.md) (SDK 17.5.9: the opening movie and the mode previews). Metroid Dread (SDK 11.4.3) has the same copy-and-release and still releases each index itself, the case the second rule covers.
 
 ## Demuxers and codecs
 
