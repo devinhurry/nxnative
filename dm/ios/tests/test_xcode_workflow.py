@@ -30,7 +30,7 @@ class XcodePipelineTests(unittest.TestCase):
                 with self.subTest(graphics=graphics, derived=derived):
                     self.prepare_fixture(graphics, derived)
 
-    def test_prepare_separates_romfs_and_keeps_dlc(self):
+    def test_prepare_separates_romfs_and_dlc(self):
         self.prepare_fixture('gl', False, external_romfs=True)
 
     def prepare_fixture(self, graphics, derived, external_romfs=False):
@@ -52,12 +52,15 @@ class XcodePipelineTests(unittest.TestCase):
             extraction = root / 'extracted' / version
             (extraction / 'RomFS').mkdir(parents=True)
             (extraction / 'ExeFS').mkdir()
+            combined = root / 'game-data/RomFS.img'; combined.parent.mkdir(); combined.write_bytes(b'combined fixture')
+            aoc = root / 'aoc'; aoc.mkdir(); (aoc / '1.img').touch()
             mocks = {}
             for name, value in {
                 'scan_nsps': (int(registered.id, 16), fam), 'check_prereqs': None, 'check_metal': None,
                 'free_gb': 10000, 'build_nx_extract': root / 'nx_extract',
                 'extract': extraction, 'can_clone': False, 'build_mismatch': [],
-                'extract_aoc': None, 'rewrite': profile, 'split_shaders': 'fixture-key',
+                'extract_aoc': aoc if external_romfs else None, 'rewrite': profile, 'split_shaders': 'fixture-key',
+                'separate_game_image': combined,
                 'build_shaders': root / 'shaders', 'build_vk_shaders': root / 'shaders',
                 'build_gl_shaders': root / 'shaders', 'provisional_prep': None, 'chain_header': None,
                 'refine_after_rewrite': profile, 'derive_profile': '1.0.0', 'run': None,
@@ -91,7 +94,12 @@ class XcodePipelineTests(unittest.TestCase):
             environment = mocks['run'].call_args.kwargs['env']
             self.assertEqual(environment['DM_LANG'], 'ja')
             self.assertEqual(environment['DM_SHOW_FPS'], '0')
-            if external_romfs: self.assertEqual(environment['DM_COPY_ROMFS'], 'NO')
+            if external_romfs:
+                self.assertEqual(environment['DM_COPY_ROMFS'], 'NO')
+                self.assertEqual(environment['ROMFS'], str(combined))
+                self.assertEqual(environment['AOC'], '')
+                mocks['separate_game_image'].assert_called_once()
+                self.assertTrue(any(str(combined) in event.get('msg', '') and 'push_romfs.sh' in event.get('msg', '') for event in events))
             self.assertIn('DM_ENV_FILE', environment)   # --no-motion bakes DM_MOTION=0 into the app's dm/env.txt
             self.assertEqual(Path(environment['DM_ENV_FILE']).read_text(), 'DM_MOTION=0\n')
             self.assertEqual(environment['GFXAPI'], graphics)
@@ -179,7 +187,13 @@ for directory in ('romfs', 'aoc', 'dm'):
                         names = archive.namelist()
                         self.assertIn('Payload/DmIOS.app/msl/gl/gl_shaders.metallib', names)
                         self.assertEqual('Payload/DmIOS.app/romfs/System/Resource/file' in names, excluded == '0')
-                        self.assertIn('Payload/DmIOS.app/aoc/1/file', names)
+                        self.assertEqual('Payload/DmIOS.app/aoc/1/file' in names, excluded == '0')
+                        if excluded == '1':
+                            import romfs as rfs
+                            image = root / 'work/game-data/RomFS.img'
+                            self.assertEqual((rfs.Path(image) / 'romfs/System/Resource/file').read_bytes(), b'game')
+                            self.assertEqual((rfs.Path(image) / 'aoc/1/file').read_bytes(), b'dlc')
+                            self.assertFalse(any('/aoc/' in name for name in names))
                         self.assertNotIn('Payload/DmIOS.app/romfs/stale', names)
                         self.assertNotIn('Payload/DmIOS.app/aoc/stale', names)
 
@@ -216,7 +230,11 @@ for directory in ('romfs', 'aoc', 'dm'):
             environment['DM_COPY_ROMFS'] = 'NO'
             result = subprocess.run(['bash', str(REPO / 'dm/ios/tools/stage_resources.sh')], env=environment, capture_output=True)
             self.assertEqual(result.returncode, 0); self.assertFalse((app / 'romfs').exists())
-            self.assertTrue((app / 'msl/gl/fixture.metallib').is_file()); self.assertTrue((app / 'aoc/1/content').is_file())
+            self.assertTrue((app / 'msl/gl/fixture.metallib').is_file()); self.assertFalse((app / 'aoc').exists())
+            import romfs as rfs
+            combined = ios / 'Gen/game-data/RomFS.img'
+            self.assertEqual((rfs.Path(combined) / 'romfs/marker').read_text(), 'game')
+            self.assertEqual((rfs.Path(combined) / 'aoc/1/content').read_text(), 'dlc')
             environment.pop('DM_COPY_ROMFS')
             result = subprocess.run(['bash', str(REPO / 'dm/ios/tools/stage_resources.sh')], env=environment, capture_output=True)
             self.assertEqual(result.returncode, 0); self.assertEqual((app / 'romfs/marker').read_text(), 'game')

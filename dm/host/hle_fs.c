@@ -37,7 +37,7 @@ _Static_assert(sizeof(DirectoryEntry) == 0x310, "DirectoryEntry layout");
 // Host: at mount, the committed directory commit (= $DM_SAVE) is clonefile'd as a whole tree into the working directory <commit>.work (APFS copy-on-write, nearly zero cost), and the mount points at the working directory,
 // all game reads and writes happen in the working directory; Commit = clonefile(work → <commit>.new), then renamex_np(RENAME_SWAP) swaps it atomically with commit, then the swapped-out old version is deleted.
 // Killed at any moment, commit is either the old version or the new version, never half-written / a mix of old and new; the next mount discards leftover .work / .new.
-// RomFS image (dm/tools/romfs_image.py): DM_ROMFS may name one image file instead of a folder. Its index is read at mount; a file handle is then an entry of the image
+// RomFS image (dm/tools/romfs_image.py): DM_ROMFS may name one image file or a directory inside it instead of a folder. Its index is read at mount; a file handle is then an entry of the image
 // (IMG_HANDLE, bit 58 set, never a valid fd), read with pread at its offset in the one descriptor kept open, and a directory lists its consecutive child entries.
 // One file instead of a few hundred thousand copies to an iPhone at full speed: a folder copy of Tears of the Kingdom's 304,000 files ran the phone's file service out of open files
 #define IMG_HANDLE(mi, k) ((1ull << 58) | ((uint64_t)(mi) << 32) | (uint64_t)(k))
@@ -51,7 +51,7 @@ _Static_assert(sizeof(DirectoryEntry) == 0x310, "DirectoryEntry layout");
 #define FH_IN(h) ((uint64_t)(h) >> 4)
 typedef struct {
     char name[32]; char dir[1024]; char overlay[4096]; char commit[1024];
-    romfs_img *img;                  // non-NULL: dir is a RomFS image file
+    romfs_img *img;                  // non-NULL: dir is a RomFS image file or a directory view inside one
     int ro;
     int txn_root;                    // canonical mount entry for this backing transaction, or -1
     _Atomic int poison;              // failure state belongs to this backing, not to the process
@@ -136,30 +136,6 @@ static romfs_img *img_open(const char *path) {
     else LOG("[RED] fs RomFS image %s is not a complete image (copied in part? errno=%d)", path, errno);
     return m;
 }
-// The entry a path names in an image: each component is a binary search of its directory's children, which the packer sorted by name (bytes, a shorter prefix first)
-static int64_t img_find(const romfs_img *m, const char *rest) {
-    uint64_t k = 0;
-    while (*rest) {
-        while (*rest == '/') rest++;
-        if (!*rest) break;
-        const char *end = strchr(rest, '/'); if (!end) end = rest + strlen(rest);
-        size_t len = end - rest;
-        if (!(len == 1 && rest[0] == '.')) {
-            if (m->e[k].type) { errno = ENOTDIR; return -1; }
-            uint64_t lo = m->e[k].a, hi = lo + m->e[k].b; int found = 0;
-            while (lo < hi) {
-                uint64_t mid = lo + (hi - lo) / 2; const img_ent *x = &m->e[mid];
-                int c = memcmp(m->names + x->name, rest, x->nlen < len ? x->nlen : len);
-                if (!c) c = (x->nlen > len) - (x->nlen < len);
-                if (!c) { k = mid; found = 1; break; }
-                if (c < 0) lo = mid + 1; else hi = mid;
-            }
-            if (!found) { errno = ENOENT; return -1; }
-        }
-        rest = end;
-    }
-    return (int64_t)k;
-}
 // Horizon's file system accessor turns each backslash in a path into a slash before it normalizes the path (FileSystemAccessor::SetUpPath, InitializeWithReplaceBackslash),
 // on every mount but the PC host's: Metroid Prime 4 (SDK 19) names its RomFS files rom:\StartupUI.pak. Each guest path resolver takes p through here first: p itself, or
 // its copy in buf with slashes (a path too long for buf is left as it is, and is not found)
@@ -177,14 +153,15 @@ static int img_path(const char *p, int *mi, int64_t *k) {
     for (int i = 0; i < g_nmnt; i++) {
         if (strlen(g_mnt[i].name) != ln || strncmp(g_mnt[i].name, p, ln)) continue;
         if (!g_mnt[i].img) return 0;
-        char normed[1024]; const char *rest = c + 1; *mi = i;
-        if (strstr(rest, "/.")) { if (!norm_rest(rest, normed, sizeof normed)) { *k = -1; return 1; } rest = normed; }
+        char normed[1024]; *mi = i;
+        if (!romfs_image_normalize(c + 1, normed, sizeof normed)) { *k = -1; return 1; }
+        const char *rest = normed;
         char ov[1024]; if (g_mnt[i].overlay[0] && rom_overlay_path(&g_mnt[i], rest, ov, sizeof ov)) return 0;
-        *k = img_find(g_mnt[i].img, rest); return 1;
+        *k = romfs_image_find(g_mnt[i].img, rest); return 1;
     }
     return 0;
 }
-static Result mount_ex(const char *name, const char *dir, int ro, int txn) {
+static Result mount_ex(const char *name, const char *dir, int ro, int txn, int rom) {
     pthread_once(&g_txn_lock_once, txn_locks_init);
     PATH_LOCK(); pthread_mutex_lock(&g_lock);
     for (int i = 0; i < g_nmnt; i++)
@@ -225,9 +202,18 @@ static Result mount_ex(const char *name, const char *dir, int ro, int txn) {
     if (ro && !txn) {   // game files: a RomFS folder, or a RomFS image file in its place
         // A path that is neither is a stale or mistyped one (an old run command still naming the RomFS folder a rebuild replaced with RomFS.img): stop here, not at the game's
         // first failed read (Echoes of Wisdom crashed 0.3 s after nnMain, GitHub issue #615). Add-on content and system data check their own paths before they mount
-        if (stat(dir, &ist) || !(S_ISDIR(ist.st_mode) || S_ISREG(ist.st_mode)))
-            die("the game files %s (%s:) are missing: neither a folder nor a RomFS image (the rom mount is DM_ROMFS, or $DM_ROOT/romfs when DM_ROMFS is unset)", dir, name);
-        if (S_ISREG(ist.st_mode) && !(g_mnt[g_nmnt].img = img_open(dir))) die("the game files %s are not a complete RomFS image", dir);
+        if (stat(dir, &ist) || !S_ISDIR(ist.st_mode))
+            if (!(g_mnt[g_nmnt].img = img_open(dir)))
+                die("the game files %s (%s:) are missing or not a complete RomFS image (the rom mount is DM_ROMFS, or $DM_ROOT/romfs when DM_ROMFS is unset)", dir, name);
+        romfs_img *m = g_mnt[g_nmnt].img; uint64_t base;
+        if (rom && m && !m->root && romfs_image_combined(m, &base, NULL)) m->root = base;
+        // The mount table is permanent. Views of one combined image share an identical validated index, rather than copying its base-file table for every DLC.
+        for (int i = 0; m && i < g_nmnt; i++) {
+            const romfs_img *old = g_mnt[i].img;
+            if (old && m->device == old->device && m->inode == old->inode && m->n == old->n && m->index_size == old->index_size && !memcmp(m->e, old->e, (size_t)m->index_size)) {
+                free(m->e); m->e = old->e; m->names = old->names; m->shared_index = 1; break;
+            }
+        }
     }
     g_nmnt++;
     pthread_mutex_unlock(&g_lock);
@@ -236,7 +222,7 @@ static Result mount_ex(const char *name, const char *dir, int ro, int txn) {
     LOG("fs mount %s: → %s%s%s", name, txn ? g_mnt[g_nmnt - 1].dir : dir, ro || txn_err ? " (read-only)" : txn ? " (transactional save: work directory, swapped in atomically on Commit)" : "", g_mnt[g_nmnt - 1].overlay[0] ? " (overlay first)" : "");
     return RES_OK;
 }
-static Result mount(const char *name, const char *dir, int ro) { return mount_ex(name, dir, ro, 0); }
+static Result mount(const char *name, const char *dir, int ro) { return mount_ex(name, dir, ro, 0, 0); }
 
 // APFS is case-insensitive by default, Horizon paths are case-sensitive: every component is looked up exactly by guest name.
 // Ordinary host names are unchanged; only when a name collides on the host is a separate physical name chosen, with the guest name stored in an xattr.
@@ -356,26 +342,7 @@ static int rom_overlay_path(const mount_t *m, const char *rest, char *out, size_
 }
 // The path after the mount name is normalized lexically as Horizon's PathNormalizer does: "." is dropped, ".." goes up one level, and going above the root is an error (ResultDirectoryUnobtainable on hardware, reported here as not found).
 // Metroid Dread's stream sound paths are "rom:/system/snd/../../sounds/streams/...": ".." used to be reported as not found, and Atk's stream load task got an unexpected error code and aborted (main+0x1225a8c)
-static int norm_rest(const char *rest, char *out, size_t n) {
-    size_t len = 0; out[0] = 0;
-    while (*rest) {
-        while (*rest == '/') rest++;
-        if (!*rest) break;
-        const char *end = strchr(rest, '/'); if (!end) end = rest + strlen(rest);
-        size_t k = end - rest;
-        if (k == 2 && rest[0] == '.' && rest[1] == '.') {
-            if (!len) { errno = ENOENT; return 0; }
-            while (len && out[len - 1] != '/') len--;
-            if (len) len--;
-            out[len] = 0;
-        } else if (!(k == 1 && rest[0] == '.')) {
-            if (len + 1 + k + 1 > n) { errno = ENAMETOOLONG; return 0; }
-            out[len++] = '/'; memcpy(out + len, rest, k); len += k; out[len] = 0;
-        }
-        rest = end;
-    }
-    return 1;
-}
+static int norm_rest(const char *rest, char *out, size_t n) { return romfs_image_normalize(rest, out, n); }
 // create only allows the last component to not exist yet; intermediate directories still need an exact match.
 static int host_path_ex(const char *p, char *out, size_t n, int *ro, int create) {
     char fwd[1024]; p = fwd_slashes(p, fwd, sizeof fwd); const char *c = strchr(p, ':');
@@ -433,7 +400,7 @@ static Result err_res(const char *op, const char *path) {
 HLE_FORCE("_ZN2nn2fs22QueryMountRomCacheSizeEPm", "fsp-srv; rom reads the host directory directly, the cache gets only the minimum size", Result, h_fs_QueryRomCache, size_t *out) { *out = 0x1000; return RES_OK; }
 HLE_FORCE("_ZN2nn2fs8MountRomEPKcPvm", "fsp-srv; rom → host RomFS directory", Result, h_fs_MountRom, const char *name, void *cache, size_t sz) {
     (void)cache; (void)sz; char b[1024];
-    Result r = mount(name, envdir("DM_ROMFS", "romfs", b, sizeof b), 1);
+    Result r = mount_ex(name, envdir("DM_ROMFS", "romfs", b, sizeof b), 1, 0, 1);
     if (r == RES_OK && getenv("DM_ROMFS_OVERLAY")) {
         PATH_LOCK();
         for (int i = 0; i < g_nmnt; i++) if (!strcmp(g_mnt[i].name, name)) {
@@ -442,18 +409,12 @@ HLE_FORCE("_ZN2nn2fs8MountRomEPKcPvm", "fsp-srv; rom → host RomFS directory", 
     }
     return r;
 }
-// Add-on content (DLC) RomFS: DM_AOC_DIR/<index>/, extracted from the player's DLC NSPs by the packing script; mounted read-only, using the directory index like rom.
+// Add-on content (DLC) RomFS: DM_AOC_DIR/<index>/, physical directories or views inside a combined image; absent DM_AOC_DIR uses DM_ROMFS's combined aoc view. Mounted read-only.
 // The owned index list is reported by the aoc calls in hle_misc.c from the same directory; the game only mounts indices it was given, and a missing directory answers "target not found" (fs 2-1002, as on hardware without that DLC)
 #define RES_TARGET_NOT_FOUND 0x7D402u   // fs module 2, description 1002
 // The cache a Query…CacheSize asks for is, on Horizon, the RomFS's file table as RomFsFileSystem::GetRequiredWorkingMemorySize sizes it: the directory and file hash tables (4 bytes a bucket)
 // and entries (0x18 / 0x20 bytes plus the name, padded to 4). The host reads the files directly and needs no cache, but games take it from heaps sized for the real answer:
 // Mario Kart 8 Deluxe mounts its add-on content (two files) with a cache from its 0x3130-byte AocHeap, and with a 4 KB answer the decryption buffer that follows came back null (main+0x87376c).
-static size_t romfs_buckets(size_t n) {   // the hash table size of the RomFS builder: 3 below 3 entries, odd below 19, else the next number with no prime factor up to 17
-    if (n < 3) return 3;
-    if (n < 19) return n | 1;
-    while (!(n % 2 && n % 3 && n % 5 && n % 7 && n % 11 && n % 13 && n % 17)) n++;
-    return n;
-}
 static void romfs_tables(const char *dir, size_t *ndir, size_t *dbytes, size_t *nfile, size_t *fbytes, int depth) {
     DIR *d = opendir(dir); struct dirent *e; char hp[1280], g[256];
     if (!d) return;
@@ -470,22 +431,25 @@ static void romfs_tables(const char *dir, size_t *ndir, size_t *dbytes, size_t *
 static size_t romfs_work_size(const char *dir) {
     size_t ndir = 1, dbytes = 0x18, nfile = 0, fbytes = 0;   // the root directory has an entry with an empty name
     struct stat st;
-    if (!stat(dir, &st) && S_ISREG(st.st_mode)) {
-        romfs_img *m = img_open(dir);
-        if (!m) return 0x1000;
-        for (uint64_t k = 1; k < m->n; k++) {
-            const img_ent *e = &m->e[k]; size_t name = (e->nlen + 3) & ~(size_t)3;
-            if (e->type) { nfile++; fbytes += 0x20 + name; }
-            else { ndir++; dbytes += 0x18 + name; }
-        }
-        romfs_image_close(m);
-    } else romfs_tables(dir, &ndir, &dbytes, &nfile, &fbytes, 0);
-    return 4 * romfs_buckets(ndir) + dbytes + 4 * romfs_buckets(nfile) + fbytes;
+    if (!stat(dir, &st) && S_ISDIR(st.st_mode)) {
+        romfs_tables(dir, &ndir, &dbytes, &nfile, &fbytes, 0);
+        return 4 * romfs_image_buckets(ndir) + dbytes + 4 * romfs_image_buckets(nfile) + fbytes;
+    }
+    romfs_img *m = img_open(dir);
+    if (!m) return 0x1000;
+    size_t size = romfs_image_work_size(m);
+    romfs_image_close(m); return size;
 }
 static int aoc_dir(char *dir, size_t n, int index) {
-    const char *base = getenv("DM_AOC_DIR"); struct stat st;
+    const char *base = getenv("DM_AOC_DIR"); char derived[PATH_MAX]; struct stat st;
+    if (!base && romfs_image_aoc_path(getenv("DM_ROMFS"), derived, sizeof derived)) base = derived;
+    if (index < 1 || index > 2000) return 0;
     if (base && *base && snprintf(dir, n, "%s/%d.img", base, index) < (int)n && !stat(dir, &st) && S_ISREG(st.st_mode)) return 1;
-    return base && *base && snprintf(dir, n, "%s/%d", base, index) < (int)n && !stat(dir, &st) && S_ISDIR(st.st_mode);
+    if (!base || !*base || snprintf(dir, n, "%s/%d", base, index) >= (int)n) return 0;
+    if (!stat(dir, &st) && S_ISDIR(st.st_mode)) return 1;
+    romfs_img *m = romfs_image_open(dir);
+    if (!m) return 0;
+    romfs_image_close(m); return 1;
 }
 HLE_FORCE("_ZN2nn2fs31QueryMountAddOnContentCacheSizeEPmi", "fsp-srv; add-on content reads the host directory directly, the cache is the size of its RomFS file table", Result, h_fs_QueryAocCache, size_t *out, int index) {
     char dir[1024];
@@ -602,7 +566,7 @@ HLE_FORCE("_ZN2nn2fs13MountSaveDataEPKcRKNS_7account3UidE", "fsp-srv; save data 
     if (!d) die("DM_SAVE is not set: point it at a writable copy of a save directory");
     char dd[1024]; strlcpy(dd, d, sizeof dd); size_t L = strlen(dd); while (L > 1 && dd[L - 1] == '/') dd[--L] = 0;   // strip trailing slashes (.work / .new are appended at the same level)
     save_sync_mount(dd, DM_GAME_ID);   // DM_SAVE_SYNC: the cloud's save comes in before the work directory is cloned from the committed one (save_sync.h)
-    return mount_ex(name, dd, 0, 1);
+    return mount_ex(name, dd, 0, 1, 0);
 }
 // Device save data: one save for the console instead of one per user. Animal Crossing: New Horizons keeps its island there (3.0.3's main mounts no account save data at all); the host
 // has one player, so it is the host save directory with its transaction, as the account save. Its size and extension follow the account save's.
@@ -616,7 +580,7 @@ HLE_FORCE("_ZN2nn2fs19MountDeviceSaveDataEPKc", "fsp-srv; device save data → t
     char dd[1024]; strlcpy(dd, d, sizeof dd); size_t L = strlen(dd); while (L > 1 && dd[L - 1] == '/') dd[--L] = 0;
     save_sync_mount(dd, DM_GAME_ID);   // the cloud's save holds both, so it comes in at whichever of the two mounts first
     strlcat(dd, "_device", sizeof dd);
-    return mount_ex(name, dd, 0, 1);
+    return mount_ex(name, dd, 0, 1, 0);
 }
 HLE_FORCE("_ZN2nn2fs21GetDeviceSaveDataSizeEPlS1_", "fsp-srv; device save data size: 256 MB data + 256 MB journal", Result, h_fs_DeviceSaveSize, int64_t *size, int64_t *journal) { return h_fs_SaveSize(size, journal, NULL); }
 HLE_FORCE("_ZN2nn2fs20ExtendDeviceSaveDataEll", "fsp-srv; extend device save data: the host directory has no size limit", Result, h_fs_ExtendDeviceSave, int64_t size, int64_t journal) { return h_fs_ExtendSave(NULL, size, journal); }
@@ -944,7 +908,7 @@ static void dir_snapshot(dirh_t *h, const mount_t *m, const char *rest) {
         }
         closedir(x);
     }
-    size_t nov = nn; int64_t dk = m->img ? img_find(m->img, rest) : -1;
+    size_t nov = nn; int64_t dk = m->img ? romfs_image_find(m->img, rest) : -1;
     if (dk >= 0 && !m->img->e[dk].type)   // the image's own entries of this directory, after the overlay folders' (only those can repeat a name)
         for (uint64_t j = 0; j < m->img->e[dk].b; j++) {
             const img_ent *c = &m->img->e[m->img->e[dk].a + j]; size_t l = c->nlen < 0x300 ? c->nlen : 0x300;
@@ -961,7 +925,7 @@ static void dir_snapshot(dirh_t *h, const mount_t *m, const char *rest) {
         snprintf(rel, 2048, "%s/%s", rest, names[j]);
         struct stat st; int64_t k;
         if (rom_overlay_path(m, rel, resolved, 1024)) { if (!stat(resolved, &st)) { h->snap[j].type = S_ISDIR(st.st_mode) ? ENT_DIR : ENT_FILE; h->snap[j].size = S_ISDIR(st.st_mode) ? 0 : st.st_size; } }
-        else if (m->img && (k = img_find(m->img, rel)) >= 0) { h->snap[j].type = m->img->e[k].type ? ENT_FILE : ENT_DIR; h->snap[j].size = m->img->e[k].type ? (int64_t)m->img->e[k].b : 0; }
+        else if (m->img && (k = romfs_image_find(m->img, rel)) >= 0) { h->snap[j].type = m->img->e[k].type ? ENT_FILE : ENT_DIR; h->snap[j].size = m->img->e[k].type ? (int64_t)m->img->e[k].b : 0; }
     }
     free(resolved); free(rel); free(guest); free(parent); free(all); free(names); free(roots);
 }

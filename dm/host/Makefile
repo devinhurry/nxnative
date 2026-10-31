@@ -51,7 +51,7 @@ endif
 endif
 .PHONY: FORCE
 FORCE:
-dmhost: file_backed_heap.h memory_mode.h $(SRC) $(GFX) ../third_party/stb_vorbis/stb_vorbis.c dm.h hle.h romfs_image.h save_sync.h build_info_apple.h dm_input.h touchpad_geometry.h botw_stick_settings.h botw_touch_layout.h pad_slots.h hle_haptics.h haptics_apple.h motion_fusion.h motion_apple.h motion_pro.h motion_pro_mac.h pad_apple.h front.h botw_touch_actions.h botw_touch_menu.h botw_touch_screens.inc botw_ui_audit.inc botw_rune_icon.h botw_touch_style.h $(GFX_H) $(GAME_H) $(GAME_STAMP) $(VPX_LIB)
+dmhost: file_backed_heap.h memory_mode.h $(SRC) $(GFX) ../third_party/stb_vorbis/stb_vorbis.c dm.h hle.h romfs_image.h save_sync.h dm_input.h touchpad_geometry.h botw_stick_settings.h botw_touch_layout.h pad_slots.h hle_haptics.h haptics_apple.h motion_fusion.h motion_apple.h motion_pro.h motion_pro_mac.h pad_apple.h front.h botw_touch_actions.h botw_touch_menu.h botw_touch_screens.inc botw_ui_audit.inc botw_rune_icon.h botw_touch_style.h $(GFX_H) $(GAME_H) $(GAME_STAMP) $(VPX_LIB)
 	clang $(CFLAGS) -I../gfx/nvn/include -I../third_party/vulkan-headers/include -I$(dir $(GAME_H)) -I$(VPX) -I../third_party/stb_vorbis -fobjc-arc -o $@ $(SRC) $(GFX) $(VPX_LIB) -framework Cocoa -framework QuartzCore -framework Metal -framework MetalFX -framework GameController -framework CoreHaptics -framework IOKit -framework AudioToolbox -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework ImageIO -framework UniformTypeIdentifiers
 clean:   # the host and everything make generates for it (gen/: the profile headers, the game stamp and the libvpx build; dmhost_* and *.dSYM beside them, as in .gitignore)
 	rm -rf gen dmhost dmhost_* *.dSYM

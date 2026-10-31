@@ -49,8 +49,8 @@ separate from the acceptance results below.
 
 Implementation, Apple API references and the exact validation boundary are in the
 [game note](../dm/games/01007EF00011E000/README.md#rendering). Evidence is in
-`duo-adaptation-20261031/` in the game's external work folder. Work is isolated on
-`codex/botw-duo-adaptation`; no main-branch changes are required to test it.
+`duo-adaptation-20261031/` in the game's external work folder. Implementation was
+developed on `codex/botw-duo-adaptation` before integration into main.
 
 ### Narrow displays and optional portrait controls (2026-10-31)
 

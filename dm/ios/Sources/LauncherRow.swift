@@ -61,3 +61,24 @@ struct SettingRow: View {
         .disabled(locked)
     }
 }
+
+// Build identity is shown at the bottom of both startup menus.
+struct AboutSection: View {
+    private func info(_ key: String) -> String {
+        Bundle.main.object(forInfoDictionaryKey: key) as? String ?? "unknown"
+    }
+
+    static func shortCommit(_ commit: String) -> String {
+        guard commit.range(of: "^[0-9a-fA-F]{6}", options: .regularExpression) != nil else { return "unknown" }
+        return String(commit.prefix(6)) + (commit.hasSuffix("+dirty") ? "+dirty" : "")
+    }
+
+    var body: some View {
+        Section("About") {
+            LabeledContent("Repository", value: info("DMRepository"))
+            LabeledContent("Commit", value: Self.shortCommit(info("DMCommit")))
+            LabeledContent("Built (UTC)", value: info("DMBuildTime"))
+        }
+        .accessibilityIdentifier("nxnative.about")
+    }
+}

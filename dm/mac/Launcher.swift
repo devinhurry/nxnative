@@ -46,6 +46,7 @@ struct LauncherView: View {
                         Text("Brings back all settings this game was tested with.")
                     }
                 }
+                AboutSection()
             }
             .formStyle(.grouped)
             .onScrollGeometryChange(for: CGFloat.self) {

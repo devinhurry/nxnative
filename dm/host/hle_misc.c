@@ -2,28 +2,53 @@
 // On the real device each goes through IPC or a system applet; the host gives results as single-player offline. Pure-computation SDK parts (hash, util, software Opus) are not taken over, the original implementation is used directly.
 #include "hle.h"
 #include <dirent.h>
+#include "romfs_image.h"
 
 // ---------- aoc add-on content (the DLC NSPs in the player's folder) / ec shop (excluded) ----------
 // Owned add-on content indices (ascending), fixed at the first query:
-//   numeric subdirectories of DM_AOC_DIR: each is one DLC's RomFS, which the packing script extracts only from DLC NSPs really in the player's folder (title ID = base + 0x1000 + index).
+//   numeric subdirectories of DM_AOC_DIR (physical or inside a combined image): each is one DLC's RomFS, included only from DLC NSPs really in the player's folder (title ID = base + 0x1000 + index).
 //     Engage: F001 → 1 (E0), F002 → 2 (H0); the content itself is in the 2.0.0 update's RomFS and each DLC package holds one empty marker file; the game calls MountAddOnContent for each index ListAddOnContent returns (hle_fs.c).
-//   No DM_AOC_DIR: none (on a Switch 2 Mario 1.2.1 uses it to tell whether the upgrade pack is owned, and the user has no Mario add-on content files).
+//   No DM_AOC_DIR: a combined DM_ROMFS image's aoc view, otherwise none (Mario 1.2.1 uses this to tell whether the Switch 2 upgrade pack is owned).
 //   DM_AOC_OWNED=0: always none (test switch, for runs without the DLC).
 // Room for every index the scan accepts (1..2000): Super Smash Bros. Ultimate has 99 DLC, and a cap below the folder count dropped whichever readdir returned last (fighters among them).
 static int g_aoc[2000], g_naoc = -1;
 static int aoc_int_cmp(const void *a, const void *b) { return *(const int *)a - *(const int *)b; }
+static int aoc_index(const char *name, size_t len, int allow_image) {
+    if (!len || name[0] < '1' || name[0] > '9') return 0;
+    size_t j = 0; int index = 0;
+    for (; j < len && name[j] >= '0' && name[j] <= '9'; j++) {
+        index = index * 10 + name[j] - '0';
+        if (index > 2000) return 0;
+    }
+    return j == len || (allow_image && len - j == 4 && !memcmp(name + j, ".img", 4)) ? index : 0;
+}
 static void aoc_load(void) {
     if (g_naoc >= 0) return;
     g_naoc = 0;
     const char *e = getenv("DM_AOC_OWNED"), *dir = getenv("DM_AOC_DIR"); const char *why = "no DM_AOC_DIR";
+    char derived[PATH_MAX];
+    if (!dir && romfs_image_aoc_path(getenv("DM_ROMFS"), derived, sizeof derived)) dir = derived;
     if (e && !strcmp(e, "0")) why = "DM_AOC_OWNED=0";
     else if (dir && *dir) {
         why = dir; DIR *d = opendir(dir); struct dirent *ent;
         while (d && (ent = readdir(d)) && g_naoc < (int)(sizeof g_aoc / sizeof *g_aoc)) {
-            char *end; long i = strtol(ent->d_name, &end, 10);
-            if (ent->d_name[0] >= '1' && ent->d_name[0] <= '9' && (!*end || !strcmp(end, ".img")) && i <= 2000) g_aoc[g_naoc++] = (int)i;
+            int i = aoc_index(ent->d_name, strlen(ent->d_name), 1); char path[PATH_MAX]; struct stat st;
+            if (i && snprintf(path, sizeof path, "%s/%s", dir, ent->d_name) < (int)sizeof path && !stat(path, &st) &&
+                (strchr(ent->d_name, '.') ? S_ISREG(st.st_mode) : S_ISDIR(st.st_mode))) g_aoc[g_naoc++] = i;
         }
         if (d) closedir(d);
+        else {
+            romfs_img *m = romfs_image_open(dir);
+            if (m) {
+                const img_ent *root = &m->e[m->root];
+                for (uint64_t j = 0; j < root->b && g_naoc < (int)(sizeof g_aoc / sizeof *g_aoc); j++) {
+                    const img_ent *x = &m->e[root->a + j];
+                    int i = !x->type ? aoc_index(m->names + x->name, x->nlen, 0) : 0;
+                    if (i) g_aoc[g_naoc++] = i;
+                }
+                romfs_image_close(m);
+            }
+        }
         qsort(g_aoc, g_naoc, sizeof *g_aoc, aoc_int_cmp);
         int unique = 0; for (int i = 0; i < g_naoc; i++) if (!i || g_aoc[i] != g_aoc[i - 1]) g_aoc[unique++] = g_aoc[i];
         g_naoc = unique;   // a legacy directory and its replacement image report the same DLC once

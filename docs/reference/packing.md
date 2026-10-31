@@ -27,6 +27,15 @@
 
 ## RomFS images
 
+### Separate game images include installed DLC
+
+- **Symptom:** `--romfs separate` makes the base game external but still packs large DLC into the IPA and the prepared Xcode app.
+- **Cause:** RomFS exclusion and add-on content mapping were separate steps; both resource stagers always included AOC, and iOS selected only the bundled AOC directory.
+- **Fix:** with DLC, `dm/tools/game_image.py` combines base/update and installed add-ons in one existing-format DMROMFS1 image, under `romfs/` and `aoc/<index>/`. Images are read and copied in bounded ranges without expanding files. A source/output metadata stamp reuses unchanged results and detects DLC additions, removals and changed sources. The host mounts read-only directory views of that same image, reports only its installed DLC indices and keeps base/DLC paths isolated. The app validates the whole image identity before selecting its views. IPA and Xcode staging exclude both resources and remove stale bundled DLC; their identity and deployment command name the combined image. `push_romfs.sh` transfers one file; startup never unpacks it. Default bundled builds remain supported. The identity retains its existing size/index check, not a full payload hash.
+- **Directory compatibility:** a missing or rejected image falls back to an existing `Documents/game-data/romfs` import, then the older `Documents/romfs` and bundled resources. DLC precedence is the combined image's `aoc` view, `Documents/game-data/aoc`, then bundled `aoc`; a base-only image continues along that same DLC lookup. A combined build carries an optional `romfs.base.id` for its original base image, recorded by the packer and emitted only while the output metadata still matches its stamp. This preserves strict version checks for both supported image layouts. No `.nxrom` importer, conversion or file moves are needed, and old receipts stay in place. Explicit `DM_AOC_DIR` keeps precedence. Resolving a missing image through an existing parent directory preserves `ENOENT`, avoiding an invalid-image report during normal folder startup.
+- **Missing-data screen:** when no usable image or folder remains, the iOS front end shows the file location and an image picker, plus a retry button for manually copied files. The picked image is read through `NSFileCoordinator` with its security scope held, copied by `NSFileManager` on a background queue, and validated before replacing `Documents/romfs.img` by rename. Failures remove only the incomplete staging copy and preserve old data; success retries preparation and continues to the normal launcher without restarting. No source files are unpacked or removed.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game), with both installed DLCs; synthetic image, filesystem, ownership, startup and packaging tests also exercise empty add-ons and unchanged rebuilds. Physical iPhone acceptance remains pending.
+
 ### Mac test shader preparation looks stalled without progress
 
 - **Symptom:** `run_mac.py --test` stays on `[2/0] Mac shaders ...` for minutes with no counts, elapsed time or updated status.

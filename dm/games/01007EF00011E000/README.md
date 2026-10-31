@@ -806,6 +806,12 @@ is not an SDK build. Building with iOS 27.1 and physical Duo display/fold/gyro
 acceptance remain pending on the user's other machine. The reserved-region path
 uses both SDK and runtime availability guards; older systems keep existing behavior.
 
+Integration with main `a97cb376`: 190 iOS source files and the aspect/HUD
+fixtures pass. The geometry fixture's original portrait minimum-spacing assertion
+fails identically on that main revision and the merge after main's compact-spacing
+change; this integration preserves the new positions rather than changing that
+unrelated layout. No GPU tests were repeated during the exclusive measurement pause.
+
 **Resolved: minimap disappeared in very wide windows (2026-10-29).**
 The D-pad center is published relative to the centered 16:9 UI canvas. At 32:9,
 its valid position beside that canvas has a negative normalized x. Rejecting
@@ -1074,6 +1080,10 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 - The frame step under load: `DM_TEST_PRESENT_LAG=1,12` (12 ms added to every frame: 30 fps at 1.000 of real time).
 
 ## Found on this game
+
+- **Implemented; physical iPhone acceptance pending:** [Separate game images include installed DLC](../../../docs/reference/packing.md#separate-game-images-include-installed-dlc). `--romfs separate` now keeps both installed DLCs in the same directly readable image as the base/update, outside the IPA and Xcode app. Unchanged data reuses that image.
+  Existing `Documents/game-data` imports remain usable without an image. Missing data opens an import/check screen before the launcher; see the same packing entry for directory selection and failure-preserving import behavior.
+  The real combined image is 16,521,938,617 bytes. A headless current-source `scripts/run_mac.py --test` run with a save copy mounted the base and DLC 1 from that image, reported owned indices `{1,2}`, and passed frame 3,300 without a `[RED]` line or crash. Evidence is in `combined-image-20261031/` in the game's work folder. The independent chain-regression command was blocked by the existing local Metal compiler/lock mismatch before shader comparison; this is not an iPhone delivery check.
 
 - **Experimental, switch-controlled:** [File-backed guest heap](../../../docs/reference/memory.md#experimental-file-backed-guest-heap), on `experiment/file-backed-memory`. The launcher defaults the preset from available memory; a saved manual On/Off takes priority. Mac probes check actual page residency separately from memory-limit accounting, including real GPU reads/writes. The experiment note records the retained-graphics game comparison and the current-graphics/iPhone validation boundary.
 

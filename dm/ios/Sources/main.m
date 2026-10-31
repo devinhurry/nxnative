@@ -1,5 +1,5 @@
 // iOS App entry: set the environment (game files, saves, shader libraries), write the host log to Documents/log.txt, create the window (front_ios.m), then run the host's dm_main on a big-stack thread.
-// The game files (RomFS) ship inside the App at <App>/romfs; Documents/romfs.img (one image, scripts/push_romfs.sh; its name in any letter case) or a Documents/romfs folder is also accepted (lets you swap them without reinstalling).
+// The game files (RomFS) ship inside the App at <App>/romfs; Documents/romfs.img (plain or combined base + DLC), Documents/romfs and previously imported Documents/game-data/romfs are also accepted.
 #import <UIKit/UIKit.h>
 #include <pthread.h>
 #include <signal.h>
@@ -11,6 +11,7 @@
 #include "front.h"
 #include "romfs_image.h"
 #include "romfs_identity.h"
+#import "GameFiles.h"
 #include "player_env.h"
 #ifndef DM_PLAYER_BUILD
 #define DM_PLAYER_BUILD 0
@@ -27,20 +28,45 @@ static char *g_argv[4]; static int g_argc;
 static int g_boot_ok;
 
 // Documents/romfs.img, one RomFS image file (dm/tools/romfs_image.py, scripts/push_romfs.sh): only a complete one counts. Its index is written last and ends the file, so a copy cut off partway is skipped
-static int romfs_image_complete(NSString *path) {
+static int romfs_image_complete(NSString *path, romfs_img **out) {
     romfs_img *m = romfs_image_open(path.fileSystemRepresentation);
     if (!m) {
         if (errno != ENOENT) fprintf(stderr, "[RED] boot: invalid RomFS image %s (errno=%d); trying the folders\n", path.fileSystemRepresentation, errno);
         return 0;
     }
-    romfs_image_close(m); return 1;
+    *out = m; return 1;
 }
 // A build made with DM_COPY_ROMFS=NO carries <App>/romfs.id (dm/host/romfs_identity.h): only a Documents/romfs.img with that identity is used. No romfs.id (the default build): any complete image
 static int romfs_identity_accepts(NSString *img) {
     romfs_id want, got;
     int rc = romfs_id_check([NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"romfs.id"].fileSystemRepresentation, img.fileSystemRepresentation, &want, &got);
+    if (rc == ROMFS_ID_DIFFERENT) {
+        romfs_id base, actual;
+        if (romfs_id_check([NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"romfs.base.id"].fileSystemRepresentation,
+                           img.fileSystemRepresentation, &base, &actual) == ROMFS_ID_OK) return 1;   // the same build's original base-only image
+    }
     if (rc != ROMFS_ID_OK && rc != ROMFS_ID_NONE) fprintf(stderr, "[RED] boot: Documents/%s is not the image this build needs (verdict %d); not used\n", img.lastPathComponent.UTF8String, rc);
     return rc == ROMFS_ID_OK || rc == ROMFS_ID_NONE;
+}
+// The identity above covers the physical image, including all DLC. Only after that check may its romfs directory become the game mount.
+static NSString *romfs_image_view(NSString *path, romfs_img *m) {
+    uint64_t root;
+    if (romfs_image_combined(m, &root, NULL)) {
+        m->root = root;
+        if (romfs_image_find(m, DM_GAME_ROMFS_MARKER) >= 0) return [path stringByAppendingPathComponent:@"romfs"];
+    } else if (romfs_image_find(m, DM_GAME_ROMFS_MARKER) >= 0) return path;
+    fprintf(stderr, "[RED] boot: RomFS image %s lacks this game's marker; not used\n", path.fileSystemRepresentation);
+    return nil;
+}
+NSString *front_ios_game_image_error(NSString *path) {
+    romfs_img *m = NULL;
+    if (!romfs_image_complete(path, &m))
+        return NSLocalizedString(@"This is not a complete RomFS image. Choose the .img created with this app.", nil);
+    int accepted = romfs_identity_accepts(path);
+    NSString *view = accepted ? romfs_image_view(path, m) : nil; romfs_image_close(m);
+    if (!accepted) return NSLocalizedString(@"This image does not match this app's game, update or DLC. Choose the .img produced with this build.", nil);
+    if (!view) return NSLocalizedString(@"This image does not contain this game's files.", nil);
+    return nil;
 }
 // The images in Documents: romfs.img in any letter case, romfs.img itself first. The NSP script writes the image as RomFS.img (extract/<version>/RomFS.img) and the Mac's
 // file system ignores letter case, but iOS's does not: a copy made through Finder or the Files app keeps the source's name, which an exact lookup of romfs.img never finds
@@ -58,7 +84,11 @@ static NSString *romfs_locate(void) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
     for (NSString *img in romfs_document_images(doc)) {
-        if (!romfs_image_complete(img) || !romfs_identity_accepts(img)) continue;
+        romfs_img *m = NULL;
+        if (!romfs_image_complete(img, &m)) continue;
+        NSString *view = romfs_identity_accepts(img) ? romfs_image_view(img, m) : nil;
+        romfs_image_close(m);
+        if (!view) continue;
         // A folder copy from before images is now dead weight of up to many GB (often cut off partway). Deleting its 300,000 files here took longer than iOS allows an app to start
         // (Tears of the Kingdom: killed on a black screen), so it is moved aside at once and deleted in the background, leftovers of an interrupted delete included
         NSString *old = [doc stringByAppendingPathComponent:@"romfs"], *tmp = NSTemporaryDirectory();
@@ -68,14 +98,18 @@ static NSString *romfs_locate(void) {
             NSFileManager *bfm = [NSFileManager new];
             for (NSString *n in [bfm contentsOfDirectoryAtPath:tmp error:nil]) if ([n hasPrefix:@"romfs-old-"]) [bfm removeItemAtPath:[tmp stringByAppendingPathComponent:n] error:nil];
         });
-        return img;
+        return view;
     }
     NSString *bundledImage = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"romfs.img"];
-    NSString *documentFolder = [doc stringByAppendingPathComponent:@"romfs"];
-    if ([fm fileExistsAtPath:[documentFolder stringByAppendingPathComponent:@DM_GAME_ROMFS_MARKER]]) return documentFolder;
-    if (romfs_image_complete(bundledImage)) return bundledImage;
-    for (NSString *d in @[[doc stringByAppendingPathComponent:@"romfs"], [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"romfs"]])
-        if ([fm fileExistsAtPath:[d stringByAppendingPathComponent:@DM_GAME_ROMFS_MARKER]]) return d;   // only a directory containing the game profile's romfs_marker path counts (Mario: System/Resource, the resource size table)
+    for (NSString *d in @[[doc stringByAppendingPathComponent:@"game-data/romfs"], [doc stringByAppendingPathComponent:@"romfs"]])
+        if ([fm fileExistsAtPath:[d stringByAppendingPathComponent:@DM_GAME_ROMFS_MARKER]]) return d;
+    romfs_img *m = NULL;
+    if (romfs_image_complete(bundledImage, &m)) {
+        NSString *view = romfs_image_view(bundledImage, m); romfs_image_close(m);
+        if (view) return view;
+    }
+    NSString *bundledFolder = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"romfs"];
+    if ([fm fileExistsAtPath:[bundledFolder stringByAppendingPathComponent:@DM_GAME_ROMFS_MARKER]]) return bundledFolder;   // only a directory containing the game profile's romfs_marker path counts
     return nil;
 }
 
@@ -85,10 +119,22 @@ int front_ios_prepare_game(void) {
     NSString *romfs = romfs_locate();
     if (!romfs) {
         romfs_identity_report(NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0]);
-        fprintf(stderr, "boot: game files not found; copy a matching RomFS image to Documents and restart\n"); return 0;
+        fprintf(stderr, "boot: game files not found; copy a matching RomFS image or unpacked romfs folder to Documents and restart\n"); return 0;
     }
     fprintf(stderr, "boot: game files %s\n", romfs.fileSystemRepresentation);
     setenv("DM_ROMFS", romfs.fileSystemRepresentation, 0);
+    char aoc[PATH_MAX]; const char *configured_aoc = getenv("DM_AOC_DIR");
+    NSString *bundled_aoc = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"aoc"];
+    if (!configured_aoc || !strcmp(configured_aoc, bundled_aoc.fileSystemRepresentation)) {
+        if (romfs_image_aoc_path(romfs.fileSystemRepresentation, aoc, sizeof aoc))
+            setenv("DM_AOC_DIR", aoc, 1);   // the combined image precedes legacy bundled copies
+        else {
+            NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
+            NSString *folder_aoc = [doc stringByAppendingPathComponent:@"game-data/aoc"]; BOOL directory = NO;
+            if ([NSFileManager.defaultManager fileExistsAtPath:folder_aoc isDirectory:&directory] && directory)
+                setenv("DM_AOC_DIR", folder_aoc.fileSystemRepresentation, 1);   // combined image, then imported DLC, then bundled DLC
+        }
+    }   // an explicit different DM_AOC_DIR, including empty, remains authoritative
     dm_host_preload_start(g_argc, g_argv);
     g_boot_ok = 1;
     return 1;
@@ -113,7 +159,7 @@ static int boot_env(void) {
     NSString *res = NSBundle.mainBundle.resourcePath;
     for (NSString *d in @[@"save", @"temp"]) [fm createDirectoryAtPath:[doc stringByAppendingPathComponent:d] withIntermediateDirectories:YES attributes:nil error:nil];
     // Keep game files and scratch data out of device backups (Documents is backed up by default; a RomFS placed there is many GB). Saves, logs and the pipeline list stay in the backup
-    for (NSString *d in [@[@"romfs", @"temp"] arrayByAddingObjectsFromArray:[romfs_document_images(doc) valueForKey:@"lastPathComponent"]]) {
+    for (NSString *d in [@[@"romfs", @"aoc", @"game-data", @"temp"] arrayByAddingObjectsFromArray:[romfs_document_images(doc) valueForKey:@"lastPathComponent"]]) {
         NSURL *u = [NSURL fileURLWithPath:[doc stringByAppendingPathComponent:d]]; NSError *e = nil;
         if ([fm fileExistsAtPath:u.path] && ![u setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:&e]) fprintf(stderr, "boot: %s could not be excluded from backup: %s\n", d.UTF8String, e.localizedDescription.UTF8String);
     }
@@ -168,7 +214,7 @@ static int boot_env(void) {
     if ([fm fileExistsAtPath:pso]) setenv("DM_PSO_BUNDLE", pso.fileSystemRepresentation, 0);
     chdir(doc.fileSystemRepresentation);
     g_argv[0] = strdup("dmhost"); g_argv[1] = strdup(dm.fileSystemRepresentation); g_argc = 2;
-    return front_ios_prepare_game();   // Preload early when files are ready; otherwise the player copies the image and restarts.
+    return front_ios_prepare_game();   // Preload early when files are ready; otherwise the game-files screen imports or rechecks them.
 }
 
 static void *boot_thread(void *p) {

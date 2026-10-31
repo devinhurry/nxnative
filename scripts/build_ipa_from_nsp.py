@@ -42,7 +42,7 @@ PACKAGE = ''                            # version packed into the IPA (empty = t
 OUT_IPA = ''                            # output IPA (empty = <the profile's ipa> in the NSP folder); with PLATFORM 'mac-app' the output app (empty = <game name>.app in the NSP folder)
 APP_NAME = ''                           # app name on the home screen (empty = the game name in the base NSP)
 BUNDLE_ID = ''                          # the app's bundle ID (empty = saved per-game Xcode ID, else org.nxnative.<base game title ID in lowercase>)
-ROMFS = 'bundle'                        # 'bundle' = the game files go into the IPA (or the Xcode app), as always; 'separate' = they stay out (DM_COPY_ROMFS=NO): the IPA is small, and its rebuilds do not pack or send the RomFS again.
+ROMFS = 'bundle'                        # 'bundle' = game files and DLC go into the app; 'separate' = both stay out (DM_COPY_ROMFS=NO), in one external image reused while its inputs are unchanged.
                                         #   Copy it to the phone once per game version with the scripts/push_romfs.sh command printed at the end (the app checks that the image is the one it was built for)
 PREPARE_XCODE = False                   # prepare a per-game Xcode project and add it to the workspace instead of packing an IPA; requires KEEP_EXTRACTED
 PLATFORM = 'ios'                        # 'ios' = the IPA (or the Xcode project); 'mac-app' = a double-clickable Mac app; 'mac' = development: build only what running the game on this Mac needs (Mac shaders, the Mac host), no iOS shaders,
@@ -2302,7 +2302,7 @@ def parse_args(argv):
     ap.add_argument('-o', '--out', help='output IPA, or app with --platform mac-app (default: <the profile\'s ipa>, or <game name>.app, in the NSP folder)')
     ap.add_argument('--app-name', help='app name on the home screen (default: the game name in the base NSP)')
     ap.add_argument('--bundle-id', help='the app\'s bundle ID (default: saved Xcode ID when preparing again, else org.nxnative.<base game title ID in lowercase>)')
-    ap.add_argument('--romfs', choices=('bundle', 'separate'), help='bundle = the game files go into the IPA (default: the ROMFS setting, bundle); separate = they stay out of the IPA and the Xcode app: the build is small and fast, and the RomFS image '
+    ap.add_argument('--romfs', choices=('bundle', 'separate'), help='bundle = game files and DLC go into the IPA (default: the ROMFS setting, bundle); separate = both stay outside the IPA and Xcode app in one image, which '
                     'is copied to the phone once per game version with the scripts/push_romfs.sh command printed at the end (the app refuses an image of another version)')
     ap.add_argument('--prepare-xcode', action='store_true', help='prepare a per-game Xcode project and add it to the shared workspace instead of packing an IPA (requires keeping extracted files)')
     ap.add_argument('--platform', choices=('ios', 'mac', 'mac-app'), help='ios = the IPA (or the Xcode project); mac = for development: build only what running the game on this Mac needs (the Mac shaders and the Mac host, '
@@ -2334,8 +2334,20 @@ def parse_args(argv):
     return ap.parse_args(argv)
 
 
+def separate_game_image(py, repo, work, romfs, aoc, env, logs):
+    """Keep the base game and installed DLC in one directly readable external image."""
+    if not aoc: return romfs
+    PROG.add(1)
+    PROG.stage('separate game image', step='base game and DLC')
+    image = work / 'game-data' / 'RomFS.img'
+    image.parent.mkdir(parents=True, exist_ok=True)
+    run([py, repo / 'dm/tools/game_image.py', '--reuse', romfs, aoc, image], logs / 'game_image.log', env=env)
+    PROG.end(f'{image}, {amount(image.stat().st_size, "B")}')
+    return image
+
+
 def say_push_romfs(image, bundle_id):
-    """The command that puts a --romfs separate build's game files on the phone. The image is the extraction's RomFS.img, which stays where it is while the game files are unchanged (the extraction is reused),
+    """The command that puts a --romfs separate build's game files on the phone. The image includes installed DLC and is reused while its inputs are unchanged,
     so the command is needed once per game and version, and again only when the image changed: the app compares its identity (size and a hash of the index) with the one it was built for and says so when it differs"""
     say('the game files are not in this build. Copy them to the phone once, with the app installed (it is needed again only when the image changed, a new game version or another extraction):')
     PROG.say(f'  scripts/push_romfs.sh <device UDID> {bundle_id} "{image}"')
@@ -2626,10 +2638,11 @@ def main(args=None):
 
     if not prepare_xcode and free_gb(out_ipa.parent) < 5: raise BuildError(f'less than 5 GB free on the volume of {out_ipa.parent}')
     say('preparing the Xcode project' if prepare_xcode else f'building the IPA → {out_ipa}')
-    ipa_env = dict(env, GAME=g.id, W=str(work / 'ipa'), PATCHED=str(patched), ROMFS=str(rfs.source(game)), MSL_IOS=str(ios), GFXAPI=gfx, FONT_PY=py, DM_DISPLAY_NAME=app_name, DM_BUNDLE_ID=bundle_id, AOC=str(aoc or ''), DM_XCODE_DERIVED_DATA=str(work / 'xcode-derived-data'), DM_TEAM_ID=team_id, DM_LANG=lang)
-    if prepare_xcode: ipa_env['DM_XCODE_PROJECT_DIR'] = str(project.parent)
     separate = romfs_mode == 'separate'
-    if separate: ipa_env['DM_COPY_ROMFS'] = 'NO'; say('game files: separate (DM_COPY_ROMFS=NO), left out of the app; the image stays at ' + str(rfs.source(game)))
+    game_image = separate_game_image(py, repo, work, rfs.source(game), aoc, env, logs) if separate else rfs.source(game)
+    ipa_env = dict(env, GAME=g.id, W=str(work / 'ipa'), PATCHED=str(patched), ROMFS=str(game_image), MSL_IOS=str(ios), GFXAPI=gfx, FONT_PY=py, DM_DISPLAY_NAME=app_name, DM_BUNDLE_ID=bundle_id, AOC='' if separate else str(aoc or ''), DM_XCODE_DERIVED_DATA=str(work / 'xcode-derived-data'), DM_TEAM_ID=team_id, DM_LANG=lang)
+    if prepare_xcode: ipa_env['DM_XCODE_PROJECT_DIR'] = str(project.parent)
+    if separate: ipa_env['DM_COPY_ROMFS'] = 'NO'; say('game files and DLC: separate (DM_COPY_ROMFS=NO), left out of the app; the image stays at ' + str(game_image))
     if app_version: ipa_env['DM_APP_VERSION'] = app_version
     if icon: ipa_env['DM_ICON'] = str(icon); say(f'app icon: {icon}')   # app icon (found above)
     else: say('[RED] no game icon in the extraction (an older extraction did not save it: delete extract/ and run again); the home-screen icon will be blank')
@@ -2652,7 +2665,7 @@ def main(args=None):
         say(f'ready: {workspace}')
         say(f'game project: {project}')
         say(f'Xcode derived data: {work / "xcode-derived-data"}')
-        if separate: say_push_romfs(rfs.source(game), bundle_id)
+        if separate: say_push_romfs(game_image, bundle_id)
         say('choose the game scheme in Xcode, select your Team and iPhone or iPad, then Run (Release)')
         report_profile_status(g, reg, pkg_ver, derived, provisional, 'Xcode project', patched)
         return
@@ -2665,7 +2678,7 @@ def main(args=None):
     if not keep:
         say(f'deleting the extracted game files: {ex}'); rmtree(ex)
     say(f'done: {out_ipa} ({out_ipa.stat().st_size / 2**30:.1f} GB)')
-    if separate: say_push_romfs(rfs.source(game), bundle_id)
+    if separate: say_push_romfs(game_image, bundle_id)
     report_profile_status(g, reg, pkg_ver, derived, provisional, patched=patched)
 
 
