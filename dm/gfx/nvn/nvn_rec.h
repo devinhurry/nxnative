@@ -68,6 +68,7 @@ enum {
     RO_C_TABLE, RO_C_PSO, RO_C_DISPATCH, RO_C_DISPATCH_IND, RO_C_COPY_BB, RO_C_COPY_BT, RO_C_COPY_TB, RO_C_COPY_TT, RO_C_FILL,
     RO_T_ADDR, RO_T_TEX, RO_T_SAMP,
     RO_LABEL, RO_R_TS, RO_C_TS,   // diagnostics: DM_NVN_ENC_LABEL, DM_NVN_GPUPROF
+    RO_FX,   // MetalFX on the main command buffer, with this call's textures
     RO_NOTE,   // a[0] an _Atomic uint64_t, a[1] a value: the encode thread has made every call before this one (rec_note_wait)
 };
 typedef struct { uint32_t op, nobj; uint64_t a[15]; } rec_t;   // the first nobj slots hold retained objects (0 for nil), released once the call is made
@@ -112,6 +113,11 @@ static void rec_exec(const rec_t *r) {
     case RO_CB_NEW: g_rx_cb = [g_dev newCommandBuffer]; break;
     case RO_CB_BEGIN: [(id<MTL4CommandBuffer>)g_rx_cb beginCommandBufferWithAllocator:rec_id(a[0])]; break;
     case RO_CB_END: [(id<MTL4CommandBuffer>)g_rx_cb endCommandBuffer]; break;
+    case RO_FX: {
+        id<MTL4FXSpatialScaler> sc = rec_id(a[0]);
+        sc.colorTexture = rec_id(a[1]); sc.outputTexture = rec_id(a[2]);
+        sc.inputContentWidth = a[3]; sc.inputContentHeight = a[4];
+        [sc encodeToCommandBuffer:g_rx_cb]; break; }
     case RO_COMMIT: case RO_COMMIT_REAL: {
         if (r->op == RO_COMMIT) ubc_wait(a[2]);   // the uniform shadows this command buffer reads
         id<MTL4CommandBuffer> buffers[] = {r->op == RO_COMMIT ? g_rx_cb : rec_id(a[1])}; MTL4CommitOptions *o = rec_id(a[0]);
@@ -318,6 +324,15 @@ static inline id rec_table_real(id t) { return [t isKindOfClass:[DmRecTable clas
 
 // The replay's entry points
 static id rec_cb_new(void) { if (!rec_on()) return [g_dev newCommandBuffer]; rec_put(RO_CB_NEW, 0); return [DmRecCB new]; }
+static void rec_fx(id cb, id<MTL4FXSpatialScaler> sc, id<MTLTexture> in, id<MTLTexture> out, NSUInteger w, NSUInteger h) {
+    if ([cb isKindOfClass:[DmRecCB class]]) {
+        rec_t *r = rec_put(RO_FX, 3);
+        r->a[0] = rec_obj(sc); r->a[1] = rec_obj(in); r->a[2] = rec_obj(out); r->a[3] = w; r->a[4] = h;
+    } else {
+        sc.colorTexture = in; sc.outputTexture = out; sc.inputContentWidth = w; sc.inputContentHeight = h;
+        [sc encodeToCommandBuffer:cb];
+    }
+}
 static id rec_table(id t) { if (!rec_on() || !t) return t; DmRecTable *s = [DmRecTable new]; s->real = t; return s; }
 // The replay's main command buffer: committed once the uniform shadows queued so far are made (ubc_wait)
 static void rec_commit(id cb, MTL4CommitOptions *o) {

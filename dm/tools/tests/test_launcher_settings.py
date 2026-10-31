@@ -33,6 +33,12 @@ class LauncherSettingsTests(unittest.TestCase):
                 self.assertEqual((s['kind'], s['section'], s['default']), ('choice', 'Game', 'off'))
                 self.assertEqual(s['options'], [['off', 'Standard'], ['metalfx', 'MetalFX']])
 
+    def test_scene_upscaling_requires_a_verified_profile(self):
+        s = build(BOTW, 'nvn')['DM_SCENE_UPSCALE']
+        self.assertEqual((s['kind'], s['section'], s['default']), ('toggle', 'Game', '0'))
+        for gid in (WONDER, '0100F2C0115B6000'):
+            self.assertNotIn('DM_SCENE_UPSCALE', build(gid, 'nvn'))
+
     def test_frame_buffering_by_graphics_api(self):
         for api, gid in [('nvn', BOTW), ('vulkan', '0100535012974000'), ('gl', '010014E00DB56000'), ('', BOTW)]:
             with self.subTest(api=api):

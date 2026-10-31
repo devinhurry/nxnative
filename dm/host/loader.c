@@ -241,6 +241,11 @@ void dm_fps_state_apply(void) {
     const char *rs = getenv("DM_RENDER_SCALE"); float sc = 1.0f;
     if (rs) { char *end; sc = strtof(rs, &end); if (end == rs || *end || !(sc >= 0.5f && sc <= 1.0f)) { LOG("[RED] DM_RENDER_SCALE=%s: must be 0.5 to 1.0; keeping the game's size", rs); sc = 1.0f; } else LOG("%s: 3D views rendered at %.2f of the game's size (DM_RENDER_SCALE)", g_fps_mod, sc); }
     memcpy(dm_fps_state + 0x10, &sc, sizeof sc);
+    // BOTW's verified budget stub reads this normalization; other state-page
+    // builds leave it unused. A manual scale retains its fixed-size semantics.
+    const char *dr = getenv("DM_DYNAMIC_RESOLUTION");
+    float percent = dr && !strcmp(dr, "1") && sc == 1.0f ? (t == 60 ? 200.0f : 100.0f) : 0;
+    memcpy(dm_fps_state + 0x38, &percent, sizeof percent);
     char cap[32]; snprintf(cap, sizeof cap, ", capped at %d fps", t);
     LOG("%s: frame step %s%s (%s)", g_fps_mod, !t ? "as the game sets it" : "in whole vsyncs decided by the host", t ? cap : "", e ? "DM_FPS_TARGET" : "game profile fps_target");
 }
