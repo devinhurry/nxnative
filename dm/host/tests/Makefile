@@ -12,7 +12,8 @@ QUIET = $(if $(strip $(SAN)),,2>/dev/null)
 GINC = $(if $(strip $(GAME)),-I../gen/$(GAME) -I../../games/$(GAME),$(error GAME is not set: make GAME=<base game title ID>: $(shell python3 ../../games/game.py list | awk -F'\t' '{printf "%s (%s)  ", $$1, $$3}')))
 $(B)/t_fs $(B)/t_fs_case $(B)/t_fs_commit_list $(B)/t_fs_commit_list_tsan: ../romfs_image.h
 GAME_H = ../gen/$(GAME)/game_profile.h
-run: $(B)/t_language $(B)/t_aspect $(B)/t_look $(B)/t_botw_touchhud $(B)/t_botw_touch_actions $(B)/t_botw_touch_menu $(B)/t_botw_touch_trackpad $(B)/t_gate_obs_result $(B)/t_device_motion $(B)/t_motion $(B)/t_heap_size $(B)/t_touch $(B)/t_gesture $(B)/t_oe $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_audio_spsc $(B)/t_swkbd $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pctl $(B)/t_time $(B)/t_shared_font $(B)/t_vorbis $(B)/t_vorbis_divides $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple
+run: $(B)/t_memory_mode $(B)/t_language $(B)/t_aspect $(B)/t_look $(B)/t_botw_touchhud $(B)/t_botw_touch_actions $(B)/t_botw_touch_menu $(B)/t_botw_touch_trackpad $(B)/t_gate_obs_result $(B)/t_device_motion $(B)/t_motion $(B)/t_heap_size $(B)/t_touch $(B)/t_gesture $(B)/t_oe $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_audio_spsc $(B)/t_swkbd $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pctl $(B)/t_time $(B)/t_shared_font $(B)/t_vorbis $(B)/t_vorbis_divides $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple
+	TMPDIR="$(abspath $(B))" $(B)/t_memory_mode
 	$(B)/t_language
 	$(B)/t_aspect
 	$(B)/t_look
@@ -317,3 +318,9 @@ tsan-threads-run: $(addprefix $(B)/,$(TSAN_T))
 	$(B)/t_altstack
 	DM_QOS_MAP=1 $(B)/t_notify_sched
 	DM_QOS_MAP=1 $(B)/t_notify_sched --all-peers
+
+$(B)/t_memory_mode: t_memory_mode.c ../memory_mode.h ../file_backed_heap.h | $(B)
+	$(CLANG) -O1 -Wall -Wextra -Werror -o $@ $<
+.PHONY: memory-mode
+memory-mode: $(B)/t_memory_mode
+	TMPDIR="$(abspath $(B))" $(B)/t_memory_mode

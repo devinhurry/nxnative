@@ -6,7 +6,7 @@ The screen before the game starts shows the settings the game supports. A settin
 - [Game](#game): [Frame rate](#frame-rate), [Render scale](#render-scale), [Console mode](#console-mode), [Upscaling](#upscaling), [Game language](#game-language), [Frame-rate counter](#frame-rate-counter)
 - [Controls](#controls): [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff)
 - [Touch left stick](#touch-left-stick): BOTW movement deadzone, response curve, full movement and size
-- [Performance](#performance): [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
+- [Performance](#performance): [Experimental low-memory mode](#experimental-low-memory-mode), [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
 - [The Mac settings window](#the-mac-settings-window): [Display mode](#display-mode)
 - [Settings in a file](#settings-in-a-file)
 
@@ -107,6 +107,14 @@ If a BOTW menu does not respond to direct touch on iPhone, **double-tap with thr
 ## Performance
 
 These settings change how the app hands frames to the screen and how it prepares the GPU's work. The game's tested defaults are a good start; change them when a game stutters, runs hot, or you want less latency.
+
+### Experimental low-memory mode
+
+BOTW only, on the experimental memory branch; **off** by default. Turn it on before **Play** to try file-backed guest memory, shorter-lived GPU upload sources and a smaller pipeline cache learned during play. The app chooses its own temporary folder; no paths or extra environment options are needed. It remembers the choice for the next launch.
+
+The preset disables whole-game pipeline prebuild and the bundled pipeline archive, so the **Pipeline prebuild** setting is hidden while it is on. Storage activity can increase, and a new scene may pause to compile pipelines. The existing full cache and saves are retained. To compare modes, close and relaunch the app, change the switch and use the same save and scene. It cannot change an already running game's heap.
+
+Mac measurements showed a reduction, but the iPhone result remains unverified. [Preset details, log checks and measurement limits](experiments/file-backed-memory.md#enable-from-the-game-overlay).
 
 ### Frame buffering
 
@@ -252,6 +260,7 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Rumble strength | `DM_RUMBLE_GAIN` | `0` to `3` |
 | Rumble cutoff | `DM_RUMBLE_MIN` | `0` to `0.9` |
 | Upscaling | `DM_PRESENT_UPSCALE` | `off`, `metalfx` |
+| Experimental low-memory mode (BOTW) | `DM_LOW_MEMORY` | `1`, `0` |
 | Frame buffering | `DM_PRESENT_SNAP` | `1`, `0` |
 | Metal 4 pipelines | `DM_PSO_MTL4` | `1`, `0` |
 | Pipeline prebuild | `DM_PSO_PREBUILD` | `1`, `0` |

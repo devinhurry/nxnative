@@ -45,7 +45,7 @@ class LauncherSettingsTests(unittest.TestCase):
 
     def test_sections_keep_the_profile_defaults(self):
         botw, wonder = build(BOTW, 'nvn'), build(WONDER, 'nvn')
-        self.assertEqual([e for e, s in botw.items() if s['section'] == 'Performance'], PERFORMANCE_NVN)
+        self.assertEqual([e for e, s in botw.items() if s['section'] == 'Performance'], ['DM_LOW_MEMORY'] + PERFORMANCE_NVN)
         self.assertEqual(botw['DM_PSO_MTL4']['default'], '1')   # pso_mtl4 on
         self.assertEqual((wonder['DM_PRESENT_SNAP']['default'], wonder['DM_PSO_MTL4']['default']), ('0', '0'))
         self.assertEqual((botw['DM_PSO_PREBUILD']['default'], botw['DM_NVN_ENC_THREAD']['default'], botw['DM_METAL_HUD']['default']), ('1', '1', '0'))   # the host's iOS defaults
@@ -100,6 +100,15 @@ class LauncherSettingsTests(unittest.TestCase):
         self.assertEqual(set(mac) - set(ios), {'DM_FULLSCREEN'})   # the Mac window's Display mode (front_mac.m reads 1 or 0)
         s = mac['DM_FULLSCREEN']
         self.assertEqual((s['kind'], s['default'], s['options'], s['level']), ('choice', '0', [['0', 'Window'], ['1', 'Fullscreen']], 'basic'))
+
+    def test_low_memory_is_a_botw_opt_in(self):
+        for platform in ('ios', 'mac'):
+            botw = build(BOTW, 'nvn', platform)
+            row = botw['DM_LOW_MEMORY']
+            self.assertEqual((row['kind'], row['default'], row['section']), ('toggle', '0', 'Performance'))
+            self.assertIn('Play', row['note'])
+            self.assertEqual(botw['DM_PSO_PREBUILD']['needs'], 'DM_LOW_MEMORY=0')
+            self.assertNotIn('DM_LOW_MEMORY', build(WONDER, 'nvn', platform))
 
     def test_defaults_follow_each_platform_host(self):
         # nvn_mtl.m pso4_on: Mac defaults on, iOS follows the profile. nvn_rec.h rec_on: iOS on, Mac off.
