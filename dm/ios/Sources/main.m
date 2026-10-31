@@ -22,7 +22,6 @@ int dm_main(int argc, char **argv);   // dm/host/main.c compiled in with -Dmain=
 UIViewController *front_ios_root(void);
 void front_ios_focus_event(int ev);
 void dm_gamepad_geometry_changed(UIInterfaceOrientation orientation);
-bool dm_imported_game_ready(void);   // GameDataImport.swift: validates the installed data receipt
 
 static char *g_argv[4]; static int g_argc;
 static int g_boot_ok;
@@ -58,8 +57,6 @@ static NSArray<NSString *> *romfs_document_images(NSString *doc) {
 static NSString *romfs_locate(void) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
-    if ([fm fileExistsAtPath:[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"dm/game-data.json"]])
-        return dm_imported_game_ready() ? [NSString stringWithUTF8String:getenv("DM_ROMFS")] : nil;
     for (NSString *img in romfs_document_images(doc)) {
         if (!romfs_image_complete(img) || !romfs_identity_accepts(img)) continue;
         // A folder copy from before images is now dead weight of up to many GB (often cut off partway). Deleting its 300,000 files here took longer than iOS allows an app to start
@@ -88,7 +85,7 @@ int front_ios_prepare_game(void) {
     NSString *romfs = romfs_locate();
     if (!romfs) {
         romfs_identity_report(NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0]);
-        fprintf(stderr, "boot: game files not found; waiting for import or a matching RomFS image\n"); return 0;
+        fprintf(stderr, "boot: game files not found; copy a matching RomFS image to Documents and restart\n"); return 0;
     }
     fprintf(stderr, "boot: game files %s\n", romfs.fileSystemRepresentation);
     setenv("DM_ROMFS", romfs.fileSystemRepresentation, 0);
@@ -171,7 +168,7 @@ static int boot_env(void) {
     if ([fm fileExistsAtPath:pso]) setenv("DM_PSO_BUNDLE", pso.fileSystemRepresentation, 0);
     chdir(doc.fileSystemRepresentation);
     g_argv[0] = strdup("dmhost"); g_argv[1] = strdup(dm.fileSystemRepresentation); g_argc = 2;
-    return front_ios_prepare_game();   // Preload early when files are ready; otherwise the import UI calls it after installation.
+    return front_ios_prepare_game();   // Preload early when files are ready; otherwise the player copies the image and restarts.
 }
 
 static void *boot_thread(void *p) {

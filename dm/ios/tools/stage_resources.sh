@@ -11,14 +11,9 @@ APP="${TARGET_BUILD_DIR:?}/${UNLOCALIZED_RESOURCES_FOLDER_PATH:?}"
 case "$APP" in /*.app) ;; *) die "Unexpected app resource destination: $APP";; esac
 # Validate every source before copying or removing anything (the external drive may be disconnected).
 resource_dm=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().parents[2])' "$0")
-if [ "$DM_RESOURCE_SEPARATE_ROM" = 0 ]; then
-    python3 "$resource_dm/tools/romfs.py" "$DM_RESOURCE_ROMFS" "$DM_RESOURCE_MARKER" || die "Game files unavailable: $DM_RESOURCE_ROMFS/$DM_RESOURCE_MARKER"
-    [ -z "$DM_RESOURCE_AOC" ] || [ -d "$DM_RESOURCE_AOC" ] || die "Add-on content unavailable: $DM_RESOURCE_AOC"
-elif [ "$DM_RESOURCE_SEPARATE_ROM" != 1 ]; then die 'DM_RESOURCE_SEPARATE_ROM must be 0 or 1'; fi
+python3 "$resource_dm/tools/romfs.py" "$DM_RESOURCE_ROMFS" "$DM_RESOURCE_MARKER" || die "Game files unavailable: $DM_RESOURCE_ROMFS/$DM_RESOURCE_MARKER"
+[ -z "$DM_RESOURCE_AOC" ] || [ -d "$DM_RESOURCE_AOC" ] || die "Add-on content unavailable: $DM_RESOURCE_AOC"
 [ -d "$SRCROOT/Gen/dm" ] || die 'Missing generated game tables; prepare the game again.'
-if [ "$DM_RESOURCE_SEPARATE_ROM" = 1 ]; then
-    [ -f "$SRCROOT/Gen/dm/game-data.json" ] || die 'Missing external game-data descriptor; prepare the game again.'
-fi
 [ -d "$DM_RESOURCE_SHADERS" ] || die "Shader libraries unavailable: $DM_RESOURCE_SHADERS"
 DM_RESOURCE_PSO=${DM_RESOURCE_PSO:-}   # (a project prepared before the pipeline archive has none)
 [ -z "$DM_RESOURCE_PSO" ] || [ -f "$DM_RESOURCE_PSO/prebuilt.tsv" ] || die "Pipeline archive unavailable: $DM_RESOURCE_PSO"
@@ -31,12 +26,10 @@ esac
 echo 'Copy game resources (the first build copies the complete game; later builds sync changes)'
 mkdir -p "$APP/msl/$DM_RESOURCE_MSLDIR"
 mkdir -p "$APP/dm"
-# Remove stale descriptors when switching a prepared project back to a bundled build.
+# Keep generated tables synchronized with the current build.
 /usr/bin/rsync -a --delete -- "$SRCROOT/Gen/dm/" "$APP/dm/"
 # DM_COPY_ROMFS=NO: the game files stay out of the app (main.m takes Documents/romfs first, copied there once): a reinstall then sends the code and shaders, not the whole game
-if [ "$DM_RESOURCE_SEPARATE_ROM" = 1 ]; then
-    rm -rf "$APP/romfs" "$APP/romfs.img" "$APP/romfs.id" "$APP/aoc"
-elif [ "${DM_COPY_ROMFS:-YES}" = NO ]; then
+if [ "${DM_COPY_ROMFS:-YES}" = NO ]; then
     rm -rf "$APP/romfs" "$APP/romfs.img" "$APP/romfs.id"
     # the image's identity (dm/host/romfs_identity.h): main.m uses only a Documents/romfs.img that matches it; a RomFS folder has none yet (push_romfs.sh packs it), so no identity is written for it
     if [ -f "$DM_RESOURCE_ROMFS" ]; then
@@ -54,7 +47,7 @@ fi
 for old in "$APP/msl/"*; do
     [ "$old" = "$APP/msl/$DM_RESOURCE_MSLDIR" ] || rm -rf "$old"
 done
-if [ "$DM_RESOURCE_SEPARATE_ROM" = 0 ] && [ -n "$DM_RESOURCE_AOC" ]; then
+if [ -n "$DM_RESOURCE_AOC" ]; then
     mkdir -p "$APP/aoc"
     /usr/bin/rsync -a --delete -- "$DM_RESOURCE_AOC/" "$APP/aoc/"
 else

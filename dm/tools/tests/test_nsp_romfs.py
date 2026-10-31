@@ -21,6 +21,11 @@ class RomfsOption(unittest.TestCase):
         self.assertEqual(nsp.parse_args(['--romfs', 'separate']).romfs, 'separate')
         with self.assertRaises(SystemExit), mock.patch('sys.stderr'): nsp.parse_args(['--romfs', 'maybe'])
 
+    def test_removed_separate_rom_option_is_rejected(self):
+        for flag in ('--separate-rom', '--no-separate-rom'):
+            with self.subTest(flag=flag), self.assertRaises(SystemExit), mock.patch('sys.stderr'):
+                nsp.parse_args([flag])
+
     def test_separate_cannot_be_a_mac_build(self):
         with tempfile.TemporaryDirectory() as t, mock.patch.object(nsp, 'apple_silicon', return_value=True):
             with self.assertRaises(nsp.BuildError) as e: nsp.main(nsp.parse_args(['--platform', 'mac', '--romfs', 'separate', '-k', t, t]))
