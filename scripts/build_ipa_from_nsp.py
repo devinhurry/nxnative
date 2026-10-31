@@ -2430,8 +2430,6 @@ def main(args=None):
     want_lang = language_code(lang_in) if lang_in else 'en-US'
     if not want_lang: raise BuildError(f'unknown game language {lang_in!r}; give one of {language_list([c for c, _ in nacp.LANGUAGES])}, by code or by name')
     env = dict(os.environ, PATH=os.pathsep.join(TOOL_PATHS + [os.environ.get('PATH', '/usr/bin:/bin:/usr/sbin:/sbin')]))
-    dotnet = shutil.which('dotnet', path=env['PATH'])
-    if dotnet: env.setdefault('DOTNET_ROOT', str(Path(dotnet).resolve().parent))   # dmsh_xlate is an apphost: it finds a dotnet installed outside its default paths only through DOTNET_ROOT
     env.setdefault('USER', getpass.getuser())   # xcodegen fails without USER (Couldn't find current username)
     configure_dotnet(env)
     env.setdefault('J', str(os.cpu_count() or 8))   # shader_split.py's and dmsh_build.py's workers (their default is 8)

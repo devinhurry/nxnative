@@ -6,8 +6,8 @@
 
 - **Symptom:** the first extraction stops with `nx_extract exit code 131` and `.NET location: Not found`, even though `dotnet` is on `PATH`. The shader translator can fail the same way.
 - **Cause:** standalone .NET apphosts search runtime roots and registered installations, not `PATH` ([.NET runtime discovery](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-environment-variables#dotnet_root-dotnet_rootx86-dotnet_root_x86-dotnet_root_x64)). Homebrew's formula installs the runtime under `libexec` and its `bin/dotnet` can be a wrapper that sets `DOTNET_ROOT` only for its own child ([Homebrew caveat](https://formulae.brew.sh/formula/dotnet)). Resolving that wrapper's symlink gives `bin`, not the runtime root.
-- **Fix:** `scripts/build_ipa_from_nsp.py` `configure_dotnet` derives the root from the `Microsoft.NETCore.App` entry in `dotnet --list-runtimes`, using the build's environment, before any extraction or survey. It exports `DOTNET_ROOT` both to that environment and to `os.environ`, for tools launched with an explicit environment and those that inherit it. Caller-supplied roots, including architecture-specific overrides, retain precedence. A failed or malformed probe leaves the environment unchanged rather than guessing the wrapper's directory.
-- **Found on:** [Balatro](../../dm/games/0100CD801CE5E000/README.md), first extraction with Homebrew .NET ([PR #284](https://github.com/seedds/nxnative/pull/284)). Applies to every game's build on that installation setup.
+- **Fix:** `scripts/build_ipa_from_nsp.py` `configure_dotnet` derives the root from the `Microsoft.NETCore.App` entry in `dotnet --list-runtimes`, using the build's environment, before any extraction or survey. It exports `DOTNET_ROOT` both to that environment and to `os.environ`, for tools launched with an explicit environment and those that inherit it. Caller-supplied roots, including architecture-specific overrides, retain precedence. A failed or malformed probe leaves the environment unchanged rather than guessing the wrapper's directory. The builder no longer sets a guessed root before this probe, which prevented discovery. `run_mac.py --test` uses the same setup and checks native Python and the actual translator before its NVN shader split; retained shaders and release launches do not need .NET. A private SDK must expose `dotnet` on `PATH` or supply its runtime root explicitly; no machine-specific SDK path is built into the scripts.
+- **Found on:** [Balatro](../../dm/games/0100CD801CE5E000/README.md), first extraction with Homebrew .NET ([PR #284](https://github.com/seedds/nxnative/pull/284)); [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game), Mac test preparation with an unregistered .NET 10 SDK. Applies to every game's build on that installation setup.
 
 ### The shader step stops with an empty `xlate_source`
 
@@ -26,6 +26,13 @@
 - **Found on:** synthetic IPA inputs while reviewing [PR #279](https://github.com/seedds/nxnative/pull/279); no game files required.
 
 ## RomFS images
+
+### Mac test shader preparation looks stalled without progress
+
+- **Symptom:** `run_mac.py --test` stays on `[2/0] Mac shaders ...` for minutes with no counts, elapsed time or updated status.
+- **Cause:** importing the NSP builder leaves its `Progress` in the default `off` mode. Its normal entry point enables terminal or line progress, but the Mac launcher called the shader helpers directly without that setup or a stage plan. A quiet log is not evidence that translation or compilation has stopped.
+- **Fix:** test shader preparation selects the builder's existing automatic progress mode, announces extraction inspection, plans the required shader stages and closes the progress renderer on success or failure. The standard shader watcher reports cache lookup, translation and output counts. Native Python is checked before extraction inspection.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game), missing current-chain shaders on the Mac. The interrupted run had written all 19,592 translation outputs; its log only held the compiler-override note.
 
 ### Mac test shader preparation reports an ambiguous build layout
 

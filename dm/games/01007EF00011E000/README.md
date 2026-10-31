@@ -1028,6 +1028,10 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 
 - **Resolved in code and Mac gameplay, iPhone acceptance pending:** [Ordinary virtual sticks while relative look is enabled](../../../docs/reference/services.md#ordinary-virtual-sticks-while-relative-look-is-enabled). The pickup/backup-pad reproduction and runtime evidence are recorded above.
 
+- **Resolved in code:** [Mac test shader preparation looks stalled without progress](../../../docs/reference/packing.md#mac-test-shader-preparation-looks-stalled-without-progress). The launcher's missing progress setup hid the cache and translation work behind a static `[2/0]` stage line.
+
+- **Resolved in code, translator startup and sample shader build checked:** [Runtime discovery for standalone .NET tools](../../../docs/reference/packing.md#homebrew-net-is-on-path-but-apphosts-cannot-find-the-runtime). Mac test shader preparation now initializes the runtime and checks the translator before splitting. The private external SDK remains outside the repository; a complete shader rebuild and gameplay were not part of this environment check.
+
 - **Resolved in code, iPhone acceptance pending:** [Guest calls made by observation callbacks](../../../docs/reference/threads.md#guest-calls-made-by-observation-callbacks). The iPhone inventory-category crash log from build `895cecbc` matches the current gate-stack CPU reproduction. It now passes with the same native category entry points retained. Before/after logs and the supplied iPhone log are in `inventory-category-crash-20261030/` in the game's work folder.
 
 - **Implemented, cache equivalence validated:** [Operation-specific shader caches](../../../docs/reference/shaders.md#shader-caches-follow-each-operations-inputs) and [fixed Metal input names](../../../docs/reference/shaders.md#metal-cache-entries-require-a-fixed-compiler-input-name); the cache-validation note above records the real Mac/iOS output comparisons and the supported-toolchain/gameplay validation boundary.

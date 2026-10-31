@@ -259,6 +259,21 @@ def resolve(args, env, repo):
 
 def refresh_shaders(plan, env, repo, builder, logs):
     """Reuse the NSP builder's shader preparation, writing only into the test work folder."""
+    progress = builder.PROG
+    previous_mode = progress.mode
+    progress.mode = builder.progress_mode('auto')
+    progress.plan(1)
+    progress.stage('Shader inputs', step='inspecting the extraction')
+    success = False
+    try:
+        _refresh_shaders(plan, env, repo, builder, logs)
+        success = True
+    finally:
+        progress.close(ok=success)
+        progress.mode = previous_mode
+
+
+def _refresh_shaders(plan, env, repo, builder, logs):
     from importlib.util import spec_from_file_location, module_from_spec
     spec = spec_from_file_location('test_profile_guess', repo / 'dm/games/profile_guess.py')
     assert spec is not None and spec.loader is not None
@@ -266,8 +281,14 @@ def refresh_shaders(plan, env, repo, builder, logs):
     builder.pg = pg
     g, work = plan['game'], plan['work']
     py = Path(sys.executable)
+    builder.check_native_python()
     sources = pg.build_sources(plan['exefs'], plan['romfs'], g.words('modules'))
     api = sources['graphics'][0]
+    if api == 'nvn':
+        builder.configure_dotnet(env)
+        builder.check_translator(repo / 'dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate', env)
+    stages = 2 + sum(bool(sources[k][0]) for k in ('glslc_capture', 'ue_decode')) if api == 'nvn' else 1 + bool(sources['vk_capture' if api == 'vulkan' else 'gl_capture'][0])
+    builder.PROG.add(stages)
     sh = work / 'shader'
     dirs = {}
     versions = g.words('shader_versions') or [plan['version']]
@@ -329,6 +350,7 @@ def launch(plan, args, env, repo, rewrite_call=None, host_call=None, exec_call=N
     work = plan['work']
     logs = work / 'logs'
     env = profile_environment(dict(env, DM_GAME=plan['game'].id, DM_ROOT=str(plan['base']), WORK=str(work / 'tmp')), plan['game'], repo)
+    if getattr(args, 'allow_other_metal', False): env['DM_ALLOW_OTHER_METAL'] = '1'
     if not args.check:
         logs.mkdir(parents=True, exist_ok=True)
         try: builder.chain_header(Path(sys.executable), repo, env, logs)
@@ -458,6 +480,7 @@ def parser():
     p.add_argument('--save-copy', metavar='DIR', help='start from an independent copy of DIR under the game build/run/save-copies; original save unchanged, overrides DM_SAVE for this run')
     p.add_argument('--windowed', action='store_true', help='disable fullscreen; DM_ASPECT_RATIO still sets the window size')
     p.add_argument('--touch-preview', action='store_true', help='BOTW-only Mac preview of the iOS virtual touch controls and relocated touch HUD')
+    p.add_argument('--allow-other-metal', action='store_true', help='allow an untested local Metal compiler when preparing test shaders; keeps the toolchain lock unchanged')
     p.add_argument('--check', action='store_true', help='report resolved paths and rewrite freshness without changing files or building')
     return p
 

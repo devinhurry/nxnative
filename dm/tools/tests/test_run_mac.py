@@ -41,6 +41,8 @@ class MacLauncherTests(unittest.TestCase):
         self.assertEqual(run_mac.parser().parse_args([]).mode, 'test')
         self.assertEqual(run_mac.parser().parse_args(['--test']).mode, 'test')
         self.assertEqual(run_mac.parser().parse_args(['--release']).mode, 'release')
+        self.assertFalse(run_mac.parser().parse_args([]).allow_other_metal)
+        self.assertTrue(run_mac.parser().parse_args(['--allow-other-metal']).allow_other_metal)
         for args in (['--quick'], ['--test', '--release']):
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 run_mac.parser().parse_args(args)
@@ -51,7 +53,7 @@ class MacLauncherTests(unittest.TestCase):
             root = Path(t) / f'{g.id}_build'
             exefs, romfs, release_patched, _ = self.make_layout(root, g)
             sentinel = release_patched/'main.patched.bin'; sentinel.write_bytes(b'fixed release')
-            args = run_mac.parser().parse_args(['--game', str(root), '--test'])
+            args = run_mac.parser().parse_args(['--game', str(root), '--test', '--allow-other-metal'])
             plan = run_mac.resolve(args, {}, REPO)
             self.assertEqual(plan['work'], root.resolve().with_name(f'{g.id}-work')/'mac-test')
             self.assertFalse(plan['patched'].is_relative_to(root))
@@ -60,6 +62,7 @@ class MacLauncherTests(unittest.TestCase):
                 counts['rewrite'] += 1
                 self.fill_outputs(repo,source,output,env,game)
             def shaders(plan, env, repo, builder, logs):
+                self.assertEqual(env['DM_ALLOW_OTHER_METAL'], '1')
                 counts['shader'] += 1
                 msl = plan['work']/'shader/cache'; lib = msl/f'b-{plan["chain"]}'
                 lib.mkdir(parents=True); (lib/'test_b.metallib').write_bytes(b'current shaders'); stamp_nvn(lib,g)
@@ -105,15 +108,34 @@ class MacLauncherTests(unittest.TestCase):
             sources = dict(graphics=('nvn', ''), **{key: (False, '') for key in ('glslc_capture', 'ue_decode', 'oodle_packs', 'ue_legacy')})
             guess = SimpleNamespace(build_sources=Mock(return_value=sources))
             builder = Mock()
+            env = {}
+            builder.configure_dotnet.side_effect = lambda e: e.setdefault('DOTNET_ROOT', '/detected/runtime')
             builder.build_shaders.return_value = plan['work'] / 'shader/cache'
+            original_mode = builder.PROG.mode
             # Stub binary inspection and compilation; exercise real layout selection and input links.
             with patch('importlib.util.spec_from_file_location', return_value=Mock()), \
                  patch('importlib.util.module_from_spec', return_value=guess):
-                run_mac.refresh_shaders(plan, {}, REPO, builder, plan['work'] / 'logs')
+                run_mac.refresh_shaders(plan, env, REPO, builder, plan['work'] / 'logs')
+                builder.check_translator.assert_called_once_with(REPO / 'dm/gfx/tools/dmsh_xlate_bin/dmsh_xlate', env)
+                self.assertEqual(builder.split_shaders.call_args.args[3], [plan['work'] / 'extract' / plan['version'] / 'ExeFS/main'])
+                self.assertEqual(builder.split_shaders.call_args.args[5]['DOTNET_ROOT'], '/detected/runtime')
+                self.assertEqual(builder.build_shaders.call_args.args[4]['DOTNET_ROOT'], '/detected/runtime')
+                builder.progress_mode.assert_called_once_with('auto')
+                builder.PROG.plan.assert_called_once_with(1)
+                builder.PROG.add.assert_called_once_with(2)
+                builder.PROG.close.assert_called_once_with(ok=True)
+                self.assertIs(builder.PROG.mode, original_mode)
+                builder.reset_mock()
+                builder.check_translator.side_effect = RuntimeError('translator runtime missing')
+                with self.assertRaisesRegex(RuntimeError, 'translator runtime missing'):
+                    run_mac.refresh_shaders(plan, env, REPO, builder, plan['work'] / 'logs')
+                builder.split_shaders.assert_not_called()
+                builder.build_shaders.assert_not_called()
+                builder.PROG.close.assert_called_once_with(ok=False)
+                self.assertIs(builder.PROG.mode, original_mode)
             extraction = plan['work'] / 'extract' / plan['version']
             self.assertEqual((extraction / 'ExeFS').resolve(), exefs.resolve())
             self.assertEqual((extraction / 'RomFS.img').resolve(), image.resolve())
-            self.assertEqual(builder.split_shaders.call_args.args[3], [extraction / 'ExeFS/main'])
             self.assertEqual(plan['graphics'], 'nvn')
 
     def test_release_runtime_uses_matched_artifacts_and_preserves_save(self):
