@@ -11,6 +11,12 @@ static void value(const char *key, const char *want) {
 }
 
 int main(void) {
+    const uint64_t gib = UINT64_C(1) << 30;
+    assert(!dm_low_memory_default(0)); // unavailable, not a measured low budget
+    assert(dm_low_memory_default(4 * gib));
+    assert(dm_low_memory_default(4 * gib + gib / 2 - 1));
+    assert(!dm_low_memory_default(4 * gib + gib / 2));
+    assert(!dm_low_memory_default(8 * gib));
     const char *scratch = getenv("TMPDIR"); assert(scratch && scratch[0] == '/');
     char root[PATH_MAX], cache[PATH_MAX], marker[PATH_MAX];
     assert(snprintf(root, sizeof root, "%s/memory-mode.XXXXXX", scratch) < (int)sizeof root);
@@ -26,6 +32,8 @@ int main(void) {
     unsetenv("DM_LOW_MEMORY"); unsetenv("DM_TEMP");
     assert(dm_low_memory_apply() == 0);
     setenv("DM_LOW_MEMORY", "0", 1);
+    assert(dm_low_memory_apply() == 0);
+    setenv("DM_LOW_MEMORY", "unexpected", 1);
     assert(dm_low_memory_apply() == 0);
     value("DM_FILE_HEAP", "/existing-heap"); value("DM_PSO_ARCHIVE", "/existing-archive");
     value("DM_PSO_BUNDLE", "/existing-bundle"); value("DM_PSO_PREBUILD", "1");

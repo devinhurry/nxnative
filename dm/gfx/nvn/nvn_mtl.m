@@ -59,6 +59,7 @@ static inline uint64_t tex_slot_h(const uint64_t *tex, const uint64_t *img, unsi
 static uint64_t c2_handle(int stage, unsigned b);   // the handle c2 holds at byte b (defined with the draw state, TEXA / SAMPA)
 #include "nvn_hmap.h"
 #include "../../host/dm.h"
+#include "../../host/memory_mode.h"
 #include "../../host/botw_rune_icon.h"
 #import <CommonCrypto/CommonDigest.h>
 #include <stdarg.h>
@@ -610,6 +611,14 @@ static int pool_find(uint64_t addr, uint64_t len) {
 // is the original guest address. CPU-only hits must not populate the GPU cache:
 // the first later GPU lookup still needs to execute pool_res.
 static const uint8_t *mtl_cpu_ptr(uint64_t addr, uint64_t len) {
+    // With the experiment off, preserve the original mtl_addr lookup, including
+    // its pool registration, residency and GPU-cache side effects.
+    if (!up_transient_sources()) {
+        void *buffer; uint64_t off;
+        if (!mtl_addr(addr, len, &buffer, &off)) return NULL;
+        const uint8_t *base = [(__bridge id<MTLBuffer>)buffer contents];
+        return base ? base + off : NULL;
+    }
     if (!addr || !len || addr > UINT64_MAX - len) return NULL;
     if (pc_get(addr, len)) return (const uint8_t *)(uintptr_t)addr;
     pthread_mutex_lock(&g_mu);
@@ -2060,7 +2069,7 @@ static NSMutableArray<NvUploadSource *> *g_up_sources;
 static int up_transient_sources(void) {
     static _Atomic int on = -1;
     int value = atomic_load_explicit(&on, memory_order_relaxed);
-    if (value < 0) { const char *e = getenv("DM_NVN_TRANSIENT_UPLOADS"); value = e && atoi(e) > 0; atomic_store_explicit(&on, value, memory_order_relaxed); }
+    if (value < 0) { const char *e = getenv("DM_NVN_TRANSIENT_UPLOADS"); value = dm_low_memory_enabled() && e && atoi(e) > 0; atomic_store_explicit(&on, value, memory_order_relaxed); }
     return value;
 }
 // Limit overflow staging per batch. The three upload slots bound in-flight
@@ -2078,7 +2087,7 @@ static int up_lost_take(id tex) {   // This texture's upload was dropped: take i
     if (!tex) return 0; os_unfair_lock_lock(&g_up_lost_lk); int hit = [g_up_lost containsObject:tex]; if (hit) { [g_up_lost removeObject:tex]; atomic_store(&g_up_lost_n, (int)g_up_lost.allObjects.count); atomic_fetch_add(&g_up_lost_redo, 1); } os_unfair_lock_unlock(&g_up_lost_lk); return hit;
 }
 static void up_diag(void);
-static void up_flush(void) { @autoreleasepool {
+static void up_flush_body(void) {
     up_owner_check("up_flush");
     if (!g_up_cb) return;
     if (g_up_ce) {
@@ -2137,9 +2146,13 @@ static void up_flush(void) { @autoreleasepool {
     up_diag();
     g_nup_blits = 0;
     [g_up_texs removeAllObjects];
-} }
+}
+static void up_flush(void) {
+    if (up_transient_sources()) { @autoreleasepool { up_flush_body(); } }
+    else up_flush_body();
+}
 
-static void up_begin(void) { @autoreleasepool {
+static void up_begin_body(void) {
     up_owner_check("up_begin");
     if (g_up_cb) return;
     unsigned slot = g_up_seq++ % 3;
@@ -2158,7 +2171,11 @@ static void up_begin(void) { @autoreleasepool {
     [g_up_ce setArgumentTable:g_up_ct];
     if (!g_up_texs) g_up_texs = [NSMutableArray array];
     if (!g_up_keep) g_up_keep = [NSMutableArray array];
-} }
+}
+static void up_begin(void) {
+    if (up_transient_sources()) { @autoreleasepool { up_begin_body(); } }
+    else up_begin_body();
+}
 
 static NvUploadSource *up_source_new(const void *mem, size_t n, uint64_t *off) __attribute__((ns_returns_retained));
 static NvUploadSource *up_source_new(const void *mem, size_t n, uint64_t *off) {
@@ -4746,22 +4763,27 @@ static uint64_t vbuf_unaligned(uint64_t addr, uint64_t size, uint64_t need, int 
             || (c->npend != g_npend && pend_last(addr, size) >= c->npend));
         if (!dirty) { c->epoch = g_wr_epoch; c->writes = g_vbuf_write_epoch; c->sbw = g_sbw_gen; c->npend = g_npend; return c->gpu; }
     }
-    const uint8_t *cpu_base = size ? mtl_cpu_ptr(addr, size) : NULL;
-    if (!len || len > VBUF_COPY_MAX || (size && !cpu_base)) {
+    void *mb = NULL; uint64_t mo = 0;
+    int transient = up_transient_sources();
+    const uint8_t *cpu_base = NULL;
+    if (!len || len > VBUF_COPY_MAX || (size && (transient
+            ? !(cpu_base = mtl_cpu_ptr(addr, size)) : !mtl_addr(addr, size, &mb, &mo)))) {
         if (need) RED_ONCE(121, "a draw reads %llu bytes of the vertex stream at %#llx, bound with %llu: no copy padded with zeros, so Metal reads past the bound range", (unsigned long long)need, (unsigned long long)addr, (unsigned long long)size);
         else RED_ONCE(120, "vertex stream at an address not 4-byte aligned (%#llx, %llu bytes) could not be copied: bound as it is, which Metal reads from the aligned address below", (unsigned long long)addr, (unsigned long long)size);
         return 0;
     }
+    id<MTLBuffer> src = (__bridge id<MTLBuffer>)mb;
     int cpu = !size || (!pend_hits(addr, size) && !g_sbw_over && !sbw_hits(addr, addr + size) && !gw_live(addr, addr + size)
-        && !nvn_sparse_gen() && nvn_host_readable(addr, size) && cpu_base);   // a sparse mapping may alias this physical range
+        && !nvn_sparse_gen() && nvn_host_readable(addr, size) && (transient ? cpu_base : src.contents));   // a sparse mapping may alias this physical range
     if (!cpu && !prepare) MDIE("unaligned vertex stream was not prepared before its render encoder");
     id<MTLBuffer> ab; size_t off = arena_alloc((size_t)len, &ab);
     if (len > size) memset((uint8_t *)ab.contents + off + size, 0, (size_t)(len - size));   // the bytes past the bound range read as zeros
-    if (cpu) { if (size) memcpy((uint8_t *)ab.contents + off, cpu_base, (size_t)size); }
+    if (cpu) { if (size) memcpy((uint8_t *)ab.contents + off, transient ? cpu_base : (const uint8_t *)src.contents + mo, (size_t)size); }
     else {
-        void *mb; uint64_t mo;
-        if (!mtl_addr(addr, size, &mb, &mo)) MDIE("vertex copy source pool disappeared");
-        id<MTLBuffer> src = (__bridge id<MTLBuffer>)mb;
+        if (transient) {
+            if (!mtl_addr(addr, size, &mb, &mo)) MDIE("vertex copy source pool disappeared");
+            src = (__bridge id<MTLBuffer>)mb;
+        }
         g_blit_alias = 1;
         id<MTL4ComputeCommandEncoder> e = blit();   // lands deferred updates and orders all preceding GPU writes, including aliases
         g_blit_alias = 1;
@@ -6858,6 +6880,10 @@ static int tex_storage_live(const tex_t *t) {
     const pool_t *p = t->pool;
     if (p && p->magic != MAGIC('P', 'O', 'O', 'L')) return 0;
     if (p && nvn_sparse_pool(p)) return 1;
+    if (!up_transient_sources()) {
+        void *mb; uint64_t mo;
+        return mtl_addr((uint64_t)(uintptr_t)t->mem, t->L.size ? t->L.size : 1, &mb, &mo);
+    }
     return mtl_cpu_ptr((uint64_t)(uintptr_t)t->mem, t->L.size ? t->L.size : 1) != NULL;
 }
 static uint64_t pool_gpu(int samp, int dtt, int dpf, int base, __unsafe_unretained id<MTLBuffer> *out) {
@@ -8762,7 +8788,7 @@ static int fz_p2_draw(NvProg *pr, const p_draw *dw, const p_draw_idx *di, uint8_
 // Run the same switch once on the Mac and once on the device and compare item by item to see which input differs on the device (Super Mario 3D World + Bowser's Fury's magenta squares in 1-1: particle 5e4de7561c670fee, iPhone only, not reproducible on the Mac)
 static void kd_floats(const char *what, int reg, uint64_t addr, uint64_t size, uint64_t cap) {
     if (!addr || !size) { fprintf(stderr, "[kd]   %s r%d unbound\n", what, reg); return; }
-    const uint8_t *base = mtl_cpu_ptr(addr, MIN(size, cap));
+    const uint8_t *base = mtl_cpu_ptr(addr, up_transient_sources() ? MIN(size, cap) : 1);
     if (!base) { fprintf(stderr, "[kd]   %s r%d addr=%#llx not in a memory pool\n", what, reg, (unsigned long long)addr); return; }
     uint64_t n = MIN(size, cap) / 4; const float *v = (const float *)base;
     fprintf(stderr, "[kd]   %s r%d addr=%#llx size=%llu%s\n", what, reg, (unsigned long long)addr, (unsigned long long)size, pend_hits(addr, size) ? " (pending writes in this submission)" : "");

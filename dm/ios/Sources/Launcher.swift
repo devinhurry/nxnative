@@ -101,9 +101,10 @@ private struct LauncherView: View {
         NavigationStack {
             GeometryReader { geometry in
                 HStack(spacing: 0) {
-                    VStack(spacing: 16) {
+                    VStack(spacing: m.lowMemoryEnabled ? 10 : 16) {
                         if let icon = appIcon() {
-                            Image(uiImage: icon).resizable().frame(width: 96, height: 96)
+                            let size: CGFloat = m.lowMemoryEnabled ? 80 : 96
+                            Image(uiImage: icon).resizable().frame(width: size, height: size)
                                 .clipShape(RoundedRectangle(cornerRadius: 22))
                                 .accessibilityHidden(true)
                         }
@@ -112,6 +113,12 @@ private struct LauncherView: View {
                         Text(String(format: NSLocalizedString("Version %@", comment: "Game version"), (info("CFBundleShortVersionString") as? String) ?? ""))
                             .font(.callout).foregroundStyle(.secondary)
                         playButton
+                        if m.lowMemoryEnabled {
+                            Text(LocalizedStringKey(LauncherModel.lowMemoryNotice))
+                                .font(.caption).foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("botw.low-memory.notice")
+                        }
                     }
                     .padding(16)
                     .frame(width: geometry.size.width / 3, height: geometry.size.height)
@@ -159,6 +166,7 @@ private struct LauncherView: View {
         .task {
             while !Task.isCancelled {
                 memory = os_proc_available_memory()
+                m.refreshMemoryDefault(available: UInt64(memory))
                 try? await Task.sleep(for: .seconds(2))
             }
         }

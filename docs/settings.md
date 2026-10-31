@@ -14,7 +14,7 @@ The screen before the game starts shows the settings the game supports. A settin
 
 Each game comes with the settings it was tested with: its profile in this repository says, for example, that Breath of the Wild runs with Frame buffering and Metal 4 pipelines on, because that combination held a steady 60 fps on an iPhone 17 Pro Max. Those are the defaults the settings screen shows the first time.
 
-When you change a setting and tap **Play**, the app keeps your choice, also when a later build of the app ships other defaults. A setting you leave at its default is not stored: it follows the defaults of the build you have, so a newer build's tested settings reach you without doing anything. **Reset to tested defaults** at the bottom sets every setting back to its default, and **Play** then forgets your choices, so the game's defaults apply again. For testing, a line in `Documents/env.txt` overrides any setting ([Settings in a file](#settings-in-a-file)).
+When you change a setting and tap **Play**, the app keeps your choice, also when a later build of the app ships other defaults. A setting you leave at its default is not stored: it follows the defaults of the build you have, so a newer build's tested settings reach you without doing anything. BOTW's low-memory switch is the exception: manual On and Off are saved immediately, while an automatic choice is recalculated at launch. **Reset to tested defaults** at the bottom sets every setting back to its default, and **Play** then forgets your choices, so the game's defaults apply again. For testing, a line in `Documents/env.txt` overrides any setting ([Settings in a file](#settings-in-a-file)).
 
 A Mac app carries the same list (`Contents/Resources/dm/launcher.json`), without the iPhone's own Frame-rate counter and Touch feedback, for a front end that starts the app with the chosen values ([Front ends](frontends.md)).
 
@@ -110,9 +110,15 @@ These settings change how the app hands frames to the screen and how it prepares
 
 ### Experimental low-memory mode
 
-BOTW only, on the experimental memory branch; **off** by default. Turn it on before **Play** to try file-backed guest memory, shorter-lived GPU upload sources and a smaller pipeline cache learned during play. The app chooses its own temporary folder; no paths or extra environment options are needed. It remembers the choice for the next launch.
+BOTW only, on the experimental memory branch. With no saved manual choice, the launcher selects **on below 4.5 GiB of available memory** and **off at or above 4.5 GiB**. iPhone uses the current app's memory headroom (`os_proc_available_memory`), rather than installed RAM; Mac estimates reclaimable memory from free and inactive pages. If detection is unavailable, the default is off. Physical-iPhone validation of this threshold is still needed.
+
+Manual **On or Off is remembered immediately**, including a choice equal to the automatic default, and takes priority on later launches. Automatic choices are not saved. **Reset to tested defaults**, followed by **Play**, clears the override and returns to automatic selection. Existing launch/environment-file overrides keep their usual priority. When enabled, a notice below **Play** explains that the mode helps keep the game running and may affect performance.
+
+The mode uses file-backed guest memory, shorter-lived GPU upload sources and a smaller pipeline cache learned during play. The app chooses its own temporary folder; no paths or extra environment options are needed.
 
 The preset disables whole-game pipeline prebuild and the bundled pipeline archive, so the **Pipeline prebuild** setting is hidden while it is on. Storage activity can increase, and a new scene may pause to compile pipelines. The existing full cache and saves are retained. To compare modes, close and relaunch the app, change the switch and use the same save and scene. It cannot change an already running game's heap.
+
+With the switch off, the original heap, GPU pool handling and pipeline/cache settings remain in use. Older experiment environment flags cannot enable the memory changes on their own.
 
 Mac measurements showed a reduction, but the iPhone result remains unverified. [Preset details, log checks and measurement limits](experiments/file-backed-memory.md#enable-from-the-game-overlay).
 

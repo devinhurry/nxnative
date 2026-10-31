@@ -56,6 +56,7 @@
 "Metal 4 pipelines" = "Metal 4 pipelines";
 "Performance" = "Performance";
 "Experimental low-memory mode" = "Experimental low-memory mode";
+"Low-memory mode is enabled to help keep the game running. Performance may be affected." = "Low-memory mode is enabled to help keep the game running. Performance may be affected.";
 "May reduce memory use at the cost of more storage activity and pauses in new scenes. Applies when you press Play." = "May reduce memory use at the cost of more storage activity and pauses in new scenes. Applies when you press Play.";
 "Performance HUD" = "Performance HUD";
 "Pipeline prebuild" = "Pipeline prebuild";

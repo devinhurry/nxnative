@@ -256,7 +256,7 @@ tsan: $(B)/t_audio_spsc_tsan $(B)/t_hid_tsan
 MEM_FLAGS = -O1 -Wall -Werror -Wno-unused-function -Imemory_profile -I..
 $(B)/bench_file_heap: bench_file_heap.m ../file_backed_heap.h | $(B)
 	$(CLANG) -O2 -g -Wall -Wextra -Werror -fobjc-arc -o $@ $< -framework Foundation -framework Metal
-MEM_DEPS = t_svc_memory.c memory_profile/game_profile.h ../hle_svc.c ../file_backed_heap.h ../hle_guestthread.c ../hle.h ../dm.h
+MEM_DEPS = t_svc_memory.c memory_profile/game_profile.h ../hle_svc.c ../file_backed_heap.h ../memory_mode.h ../hle_guestthread.c ../hle.h ../dm.h
 $(B)/t_svc_memory: $(MEM_DEPS) | $(B)
 	$(CLANG) $(MEM_FLAGS) -fsanitize=undefined -o $@ t_svc_memory.c
 $(B)/t_svc_memory_unlimited: $(MEM_DEPS) | $(B)
@@ -321,6 +321,11 @@ tsan-threads-run: $(addprefix $(B)/,$(TSAN_T))
 
 $(B)/t_memory_mode: t_memory_mode.c ../memory_mode.h ../file_backed_heap.h | $(B)
 	$(CLANG) -O1 -Wall -Wextra -Werror -o $@ $<
-.PHONY: memory-mode
+.PHONY: memory-mode memory-isolation
 memory-mode: $(B)/t_memory_mode
 	TMPDIR="$(abspath $(B))" $(B)/t_memory_mode
+memory-isolation: $(B)/t_svc_memory
+	env -u DM_LOW_MEMORY DM_FILE_HEAP=/dev/null/not-a-directory $(B)/t_svc_memory --heap-probe
+	DM_LOW_MEMORY=0 DM_FILE_HEAP=/dev/null/not-a-directory $(B)/t_svc_memory --heap-probe
+	DM_LOW_MEMORY=1 DM_FILE_HEAP="$(abspath $(B))" $(B)/t_svc_memory --heap-probe
+run: memory-isolation

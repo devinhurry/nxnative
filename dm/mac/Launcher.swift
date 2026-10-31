@@ -60,6 +60,13 @@ struct LauncherView: View {
                 Button("Play") { done(true) }.keyboardShortcut(.defaultAction)
             }
             .padding(20)
+            if m.lowMemoryEnabled {
+                Text(LocalizedStringKey(LauncherModel.lowMemoryNotice))
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 20).padding(.bottom, 12)
+                    .accessibilityIdentifier("botw.low-memory.notice")
+            }
         }
         .frame(minWidth: 520, idealWidth: 560)
         .sheet(isPresented: $showTouchSettings) {

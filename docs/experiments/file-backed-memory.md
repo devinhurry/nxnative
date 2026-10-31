@@ -1,15 +1,28 @@
 # File-backed guest heap experiment
 
 Experimental branch: `experiment/file-backed-memory`, based on `e1b4196c`.
-The experiments are off by default. Enable the BOTW overlay preset below, or
-select individual mechanisms with their environment options.
+The BOTW overlay selects the preset from available memory unless the player
+has made a manual choice. All experimental mechanisms remain behind its switch.
 This is an experiment, not a default memory policy or a shipped iPhone result.
 
 ## Enable from the game overlay
 
 Build from this branch, then turn on **Performance → Experimental low-memory
 mode** before pressing **Play**. In Chinese the switch is **实验性低内存模式**.
-The launcher remembers the choice; **Reset to tested defaults** turns it off.
+Without a manual choice, the launcher enables it below 4.5 GiB of available memory
+and disables it at or above that threshold. This is the selected initial cutoff,
+not a demonstrated iPhone memory guarantee.
+iPhone uses Apple's current per-app headroom; Mac estimates free plus inactive
+memory. A zero/unavailable reading leaves it off. The query is repeated at each
+launch and when Reset selects a fresh default. The iPhone overlay also refreshes
+an automatic selection as its memory readout updates. A manual choice stops
+these updates, and no setting change remaps a running game's heap.
+
+Manual On and Off are saved immediately and always beat subsequent detection,
+even when equal to the current automatic value. Automatic choices are never
+stored. **Reset to tested defaults**, followed by **Play**, restores automatic
+selection. An existing launch/env-file override remains fixed as before.
+A localized notice below Play is shown whenever low-memory mode is enabled.
 It applies after launcher choices and host preload, before the first guest
 instruction or GPU pool. It does not remap a live heap.
 
@@ -27,14 +40,23 @@ The preset owns these component options while enabled. `DM_TEMP` must already
 be an absolute existing directory; the iOS app supplies its container's
 `Documents/temp`, excluded from backup. The preset creates only its own cache
 directory, preserves the normal cache and `DM_SAVE`, and leaves Metal 4's
-on/off choice unchanged. The individual file-heap option still accepts an
-existing absolute directory when the preset is off.
+on/off choice unchanged.
+
+The switch is the master gate: only `DM_LOW_MEMORY=1` enables experimental
+behaviour. Unset, `0` or any other value preserves the original anonymous heap,
+eager Metal buffer creation, CPU lookup residency and upload autorelease scope.
+Older `DM_FILE_HEAP` and `DM_NVN_TRANSIENT_UPLOADS` options cannot bypass it.
+With the switch off, the preset does not alter pipeline/cache settings, create
+its cache folder or print experimental boot messages. Relaunch after changing
+the switch; there is no live-mode transition.
 
 The log must contain `[mem] experimental low-memory mode on`, followed by the
 resolved heap and runtime-cache paths. The existing heap and GPU logs report
-their actual activation. An `off` line means the preset was not selected;
+their actual activation. With the switch off there is no experimental boot line;
 merely building this branch does not enable it. The first reported iPhone test
-used default settings and therefore did not test these experiments.
+used default settings, so file backing and transient upload sources were not
+active. CPU-only lookup changes were still unconditional at that time; the
+strict off-path isolation below was added after that report.
 
 For an iPhone comparison, fully close and relaunch the app between modes, use
 the same save and scene, and keep the render settings unchanged. Keep both
@@ -51,6 +73,40 @@ and the enabled choice surviving a process relaunch. The full BOTW regression re
 blocked before gameplay by this Mac's pinned Metal compiler mismatch
 (installed 32023.883, required 32023.921). The report is under
 `file-heap-toggle-20261031/regress/` in the external game work folder.
+
+Automatic-default verification covers the 4.5 GiB boundary, absent memory data,
+both manual overrides across changing budgets, automatic choices not being
+stored, reset, fixed env values and the skipped-launcher path. Native Mac
+preference tests also verify explicit On/Off without the window. The real
+Simulator launcher shows the English/Chinese notice below Play, hides it when
+switched off and retains manual Off after a process relaunch without Play.
+The Mac Form layout check includes the enabled notice. Current Mac and iPhone
+SDK source builds pass; full gameplay remains blocked by the toolchain above.
+Artifacts are under `file-heap-auto-default-20261031/` in the game work folder.
+
+### Strict off-path isolation verification
+
+An audit found that CPU-only pool queries and upload-local autorelease pools
+were not gated by the original component option. Both now require the master
+switch. Off uses the original `mtl_addr` residency/cache side effects and upload
+autorelease scope. Heap replacement also checks the master switch at its use
+site, so stale component environment values cannot activate it.
+
+The native heap probe succeeds with the switch absent or off even when
+`DM_FILE_HEAP` points inside `/dev/null`; on successfully creates real file
+backing. GPU tests explicitly check absent/off with the old transient flag set:
+the original CPU lookup keeps the controlled 64 MiB pool resident, whereas on
+allows all 64 MiB to be evicted, with identical data. Upload-budget (261 checks)
+and vertex-buffer (103 checks) tests pass in both modes; temporary upload owners
+also retire correctly. These are controlled resource tests, not whole-game
+iPhone memory measurements.
+
+The current Mac build and all 188 iOS source compile checks pass. The BOTW
+regression against original main `1056dc9e` is still blocked by the same pinned
+Metal compiler mismatch. Artifacts are under `file-heap-isolation-20261031/` in
+the external game work folder. Earlier measurements predate this strict
+off-path guarantee; future A/B runs should compare the switch on and off on the
+same revision.
 
 ## Mechanism
 
@@ -131,7 +187,7 @@ is a measurement checkpoint, not a proposed host synchronization mechanism.
 To opt in a current-source host built from this worktree:
 
 ```sh
-DM_FILE_HEAP="$FILE_HEAP_WORK" python3 scripts/run_mac.py --test --game /path/to/game
+DM_LOW_MEMORY=1 python3 scripts/run_mac.py --test --game /path/to/game
 ```
 
 Use a disposable save copy and `DM_MEMSTAT=<output.tsv>` for comparisons. The
@@ -214,14 +270,12 @@ reduced guest mapping residency (median 951 to 475 MiB) but increased footprint
 under `stage1-*` with its source snapshot, rather than presented as a net memory
 win. The subsequent lazy-registration comparison is recorded separately.
 
-Enable the combined experiment in a current-source test host with:
-
-```sh
-DM_FILE_HEAP="$FILE_HEAP_WORK" DM_NVN_TRANSIENT_UPLOADS=1 python3 scripts/run_mac.py --test --game /path/to/game
-```
+The [overlay preset](#enable-from-the-game-overlay) now enables the combined
+experiment. Historical measurements below used separately selected component
+flags; these flags alone no longer enable experimental behaviour.
 
 The shader/toolchain requirements above still apply. Transient uploads and lazy
-persistent buffer creation are off by default. Creating a persistent buffer on
+persistent buffer creation require the enabled preset. Creating a persistent buffer on
 its first GPU binding can shift work to that binding, so long-session frame-time
 and device acceptance remain required before considering a default change.
 

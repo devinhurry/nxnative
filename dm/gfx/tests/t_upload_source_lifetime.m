@@ -18,6 +18,7 @@ static size_t resident(void *p, size_t n) {
     free(v); return count * page;
 }
 int main(void) { @autoreleasepool {
+    setenv("DM_LOW_MEMORY", "1", 1);
     setenv("DM_NVN_TRANSIENT_UPLOADS", "1", 1);
     const size_t n = 64u << 20; const char *dir = getenv("TMPDIR");
     size_t page = (size_t)getpagesize();
