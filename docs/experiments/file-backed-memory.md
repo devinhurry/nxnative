@@ -1,8 +1,56 @@
 # File-backed guest heap experiment
 
 Experimental branch: `experiment/file-backed-memory`, based on `e1b4196c`.
-The feature is off unless `DM_FILE_HEAP` names an existing absolute directory.
+The experiments are off by default. Enable the BOTW overlay preset below, or
+select individual mechanisms with their environment options.
 This is an experiment, not a default memory policy or a shipped iPhone result.
+
+## Enable from the game overlay
+
+Build from this branch, then turn on **Performance → Experimental low-memory
+mode** before pressing **Play**. In Chinese the switch is **实验性低内存模式**.
+The launcher remembers the choice; **Reset to tested defaults** turns it off.
+It applies after launcher choices and host preload, before the first guest
+instruction or GPU pool. It does not remap a live heap.
+
+`DM_LOW_MEMORY=1` selects the same preset without the overlay:
+
+| Component | Preset value |
+|---|---|
+| File-backed guest heap | `DM_FILE_HEAP=$DM_TEMP` |
+| Transient GPU upload sources | `DM_NVN_TRANSIENT_UPLOADS=1` |
+| Whole-game pipeline prebuild | `DM_PSO_PREBUILD=0` |
+| Bundled pipeline archive | `DM_PSO_BUNDLE=off` |
+| Runtime pipeline archive | `DM_PSO_ARCHIVE=$DM_TEMP/pso-low-memory` |
+
+The preset owns these component options while enabled. `DM_TEMP` must already
+be an absolute existing directory; the iOS app supplies its container's
+`Documents/temp`, excluded from backup. The preset creates only its own cache
+directory, preserves the normal cache and `DM_SAVE`, and leaves Metal 4's
+on/off choice unchanged. The individual file-heap option still accepts an
+existing absolute directory when the preset is off.
+
+The log must contain `[mem] experimental low-memory mode on`, followed by the
+resolved heap and runtime-cache paths. The existing heap and GPU logs report
+their actual activation. An `off` line means the preset was not selected;
+merely building this branch does not enable it. The first reported iPhone test
+used default settings and therefore did not test these experiments.
+
+For an iPhone comparison, fully close and relaunch the app between modes, use
+the same save and scene, and keep the render settings unchanged. Keep both
+`Documents/log.txt` files. Cold runtime-cache runs can compile more pipelines;
+measure a second run as well. This switch does not establish a physical iPhone
+memory reduction or protection from Jetsam. [Mac results and their boundary](#overall-charged-memory-including-gpu-2026-10-31).
+
+Preset validation: the native check covers disabled defaults, invalid paths,
+cache preservation and actual file-backed writes. The Swift model check covers
+saved choices, reset and the prebuild row's visibility; the iPhone SDK source
+compile and current Mac host build pass. The Simulator fixture verifies the
+English and Chinese switch, hidden prebuild row, `DM_LOW_MEMORY=1` after Play
+and the enabled choice surviving a process relaunch. The full BOTW regression remains
+blocked before gameplay by this Mac's pinned Metal compiler mismatch
+(installed 32023.883, required 32023.921). The report is under
+`file-heap-toggle-20261031/regress/` in the external game work folder.
 
 ## Mechanism
 

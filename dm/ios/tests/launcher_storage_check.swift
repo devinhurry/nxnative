@@ -118,6 +118,22 @@ import Foundation
         launched.reset(); launched.apply()
         expect(launched.values["DM_OPMODE"] == "0" && d.string(forKey: "launcher.DM_OPMODE") == "1", "Reset then Play keeps the saved choice of a setting fixed at launch")
         unsetenv("DM_OPMODE"); setenv("DM_ENV_LAUNCH_KEYS", "", 1); d.removeObject(forKey: "launcher.DM_OPMODE")
+        // The memory preset is chosen before Play, saved for relaunch, and reset
+        // like other settings. Its component prebuild row is hidden while on.
+        let memoryDomain = "org.nxnative.launcher-memory-test.\(UUID().uuidString)"
+        let memoryDefaults = UserDefaults(suiteName: memoryDomain)!
+        defer { memoryDefaults.removePersistentDomain(forName: memoryDomain) }
+        let memory = LauncherModel(file.settings, defaults: memoryDefaults)
+        expect(memory.values["DM_LOW_MEMORY"] == "0", "memory preset defaults off")
+        memory.values["DM_LOW_MEMORY"] = "1"
+        expect(!memory.rows(in: "Performance").contains { $0.env == "DM_PSO_PREBUILD" }, "memory preset hides whole-game prebuild")
+        memory.apply()
+        expect(String(cString: getenv("DM_LOW_MEMORY")) == "1" && memoryDefaults.string(forKey: "launcher.DM_LOW_MEMORY") == "1", "Play applies and saves the memory preset")
+        let memoryReloaded = LauncherModel(file.settings, defaults: memoryDefaults)
+        expect(memoryReloaded.values["DM_LOW_MEMORY"] == "1", "memory preset is restored on relaunch")
+        memoryReloaded.reset(); memoryReloaded.apply()
+        expect(String(cString: getenv("DM_LOW_MEMORY")) == "0" && memoryDefaults.string(forKey: "launcher.DM_LOW_MEMORY") == nil, "Reset and Play disable the memory preset")
+        expect(memoryReloaded.rows(in: "Performance").contains { $0.env == "DM_PSO_PREBUILD" }, "normal prebuild choice returns when memory preset is off")
         failed += checkLauncherLayout(LauncherModel(mac.settings, defaults: d), defaults: d)
         print("launcher storage: \(failed) failed")
         exit(failed == 0 ? 0 : 1)
