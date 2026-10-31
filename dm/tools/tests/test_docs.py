@@ -135,7 +135,7 @@ class Gallery(unittest.TestCase):
             (root / '.gitattributes').write_bytes((REPO / '.gitattributes').read_bytes())
 
             def git(*args, check=True):
-                return subprocess.run(['git', '-c', 'user.name=seedds', '-c', 'user.email=seedds@gmail.com',
+                return subprocess.run(['git', '-c', 'user.name=Test Author', '-c', 'user.email=test@example.com',
                                        '-c', 'commit.gpgSign=false', '-c', 'core.hooksPath=/dev/null', *args],
                                       cwd=root, check=check, capture_output=True, text=True)
 
