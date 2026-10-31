@@ -19,7 +19,8 @@ struct BotwTouchSettingsView: View {
 
     private var previewViewport: CGSize {
         let short = min(viewport.width, viewport.height), long = max(viewport.width, viewport.height)
-        return portrait ? CGSize(width: short, height: long) : CGSize(width: long, height: short)
+        if portrait { return CGSize(width: short, height: long) }
+        return viewport.width >= 600 ? viewport : CGSize(width: long, height: short)
     }
     private var previewInsets: EdgeInsets {
         portrait ? EdgeInsets(top: max(safeInsets.top, max(safeInsets.leading, safeInsets.trailing)), leading: 0,
@@ -62,7 +63,10 @@ struct BotwTouchSettingsView: View {
             y: Double(r.y) + Double(r.height) * (1-size) / 2, width: Double(r.width)*size, height: Double(r.height)*size)
     }
     var body: some View {
-        HStack(spacing: 16) {
+        GeometryReader { geometry in
+            let stacked = geometry.size.width < 650
+            let panels = stacked ? AnyLayout(VStackLayout(spacing: 16)) : AnyLayout(HStackLayout(spacing: 16))
+            panels {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     #if os(iOS)
@@ -95,6 +99,7 @@ struct BotwTouchSettingsView: View {
                 Text("Select a control, then drag to move or pinch to resize. Outlines show its size. Changes are saved when you tap Play.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+            .frame(height: stacked ? max(200, geometry.size.height * 0.42) : nil)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if let row = m.settings.first(where: { $0.env == "DM_BOTW_PORTRAIT" }) { SettingRow(s: row, m: m) }
@@ -137,9 +142,10 @@ struct BotwTouchSettingsView: View {
                     Text(LocalizedStringKey(portrait ? "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately." : "Send these values to use this layout as the default. Offsets are fractions of the game UI area; positive X moves right and positive Y moves down."))
                         .font(.footnote).foregroundStyle(.secondary)
                 }.padding(.vertical, 8)
-            }.frame(width: 285)
+            }.frame(width: stacked ? nil : 285)
+            }
+            .padding(16)
         }
-        .padding(16)
         .onChange(of: m.values) { _, _ in copied = false }
         .onChange(of: portrait) { _, _ in copied = false }
         #if os(iOS)

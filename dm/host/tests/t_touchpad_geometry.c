@@ -294,7 +294,9 @@ static void test_portrait_layout(void) {
         assert(p[2].y<p[0].y && p[3].y<p[1].y);
         assert(r[9].x<r[7].x && r[9].y>r[7].y && r[9].y+r[9].height<cy+p[3].y);
     }
-    setenv("DM_BOTW_PORTRAIT","0",1); assert(!dm_botw_compact_mode(390,844,0,0));
+    // Orientation permission does not stop a system-resized narrow window
+    // from selecting the compact control bank.
+    setenv("DM_BOTW_PORTRAIT","0",1); assert(dm_botw_compact_mode(390,844,0,0));
     setenv("DM_BOTW_PORTRAIT","1",1);
     const float modes[][5]={{390,844,0,0,1},{599.9f,1000,0,0,1},{600,1000,0,0,0},
         {600.1f,1000,0,0,0},{626,890,0,0,0},{744,1133,0,0,0},
@@ -311,7 +313,22 @@ static void test_portrait_layout(void) {
     unsetenv("DM_BOTW_PORTRAIT_MOVE_DEADZONE"); unsetenv("DM_BOTW_PORTRAIT_PAD_FACE_X"); unsetenv("DM_BOTW_PORTRAIT");
 }
 
+static void test_fold_regions(void) {
+    dm_touchpad_rect area={0,0,795,1100},picture,controls;
+    assert(!dm_touchpad_seated_split(area,(dm_touchpad_rect){392,0,11,1100},&picture,&controls));
+    assert(!memcmp(&picture,&area,sizeof area) && !memcmp(&controls,&area,sizeof area));
+    assert(dm_touchpad_seated_split(area,(dm_touchpad_rect){0,540.25f,795,19.5f},&picture,&controls));
+    nearf(picture.height,540.25f,.001f); nearf(controls.y,559.75f,.001f); nearf(controls.height,540.25f,.001f);
+    assert(dm_touchpad_seated_split(area,(dm_touchpad_rect){0,550,795,0},&picture,&controls));
+    assert(!dm_touchpad_seated_split(area,(dm_touchpad_rect){0,0,795,10},&picture,&controls));
+    assert(!dm_touchpad_seated_split(area,(dm_touchpad_rect){0,NAN,795,10},&picture,&controls));
+    dm_touchpad_rect map=dm_touchpad_seated_map(controls),plus=dm_touchpad_seated_menu(controls,0),minus=dm_touchpad_seated_menu(controls,1);
+    assert(map.y>=controls.y && map.y+map.height<=controls.y+controls.height);
+    assert(plus.x>map.x+map.width && minus.x==plus.x && minus.y>plus.y);
+    nearf(map.width,166.f*430/720,.001f);
+}
 int main(void) {
+    test_fold_regions();
     test_configurable_stick();
     test_custom_layout();
     test_portrait_layout();

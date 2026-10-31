@@ -12,7 +12,9 @@ static inline int dm_botw_portrait_enabled(void) {
     return value && !strcmp(value, "1");
 }
 static inline int dm_botw_compact_mode(float width, float height, float left, float right) {
-    return dm_botw_portrait_enabled() && height > width && width-left-right < 600;
+    // Orientation permission is separate: the system can resize a scene even
+    // when the player has not enabled portrait rotation.
+    return height > width && width-left-right < 600;
 }
 static inline const char *dm_botw_control_name(int id) {
     switch (id) {

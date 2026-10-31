@@ -25,6 +25,33 @@ separate from the acceptance results below.
 
 ## Coverage
 
+### iPhone Duo and Seated layout (2026-10-31)
+
+- [x] Detect an active horizontal fold through UIKit reserved regions, including
+  changes at unchanged window bounds; leave vertical/book folds alone.
+- [x] Keep the picture and native menus above the fold, with touch controls below.
+  In Seated mode the lower pad stays available in menus; upper direct touch still works.
+- [x] Put the visible minimap/environment cluster at the top of the lower pane.
+  Map hits and plus/minus share the same geometry; hearts stay above the fold.
+- [x] Preserve native game canvases and cached 3D/menu pictures; composite dock
+  draws separately at final output. Keep fixed picture aspects inside the upper pane.
+- [x] Refresh display scale and release virtual input on geometry changes while
+  preserving physical controllers and cancelled menu-finger ownership.
+- [x] Select compact/normal controls by the usable pane's width, retaining the
+  600pt boundary and separate settings. Stack the touch editor in narrow windows.
+- [x] Native fixtures, 191 NVN checks, 201 graphics checks, 188 iOS source checks,
+  SwiftUI/settings storage and the UIKit harness (40 look sessions) pass.
+- [x] Mac: lower A/B in menus, upper direct categories/Back, top-dock minimap hits,
+  complete inventory rendering and Seated/whole-window/Seated restoration.
+- [ ] Build with the actual iOS 27.1 SDK; test physical Duo folding/display changes,
+  safe areas and gyro. Local SDK 26.5 and a declaration-only syntax check do not
+  complete this acceptance. Shader regression remains blocked by the compiler pin.
+
+Implementation, Apple API references and the exact validation boundary are in the
+[game note](../dm/games/01007EF00011E000/README.md#rendering). Evidence is in
+`duo-adaptation-20261031/` in the game's external work folder. Work is isolated on
+`codex/botw-duo-adaptation`; no main-branch changes are required to test it.
+
 ### Narrow displays and optional portrait controls (2026-10-31)
 
 - [x] Preserve centered 16:9 menu content while anchoring hearts and the collapsed

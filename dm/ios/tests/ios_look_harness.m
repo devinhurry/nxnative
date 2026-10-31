@@ -17,6 +17,8 @@ void dm_test_motion_reset(void);
 void dm_test_motion_recenter(void);
 void dm_test_motion_publish(CMQuaternion q, CMAcceleration a, CMRotationRate r);
 void dm_gamepad_geometry_changed(UIInterfaceOrientation orientation);
+void dm_gamepad_surface_changed(void);
+void dm_test_phone_motion_publish(const float a[3],const float w[3],int body_frame,int orientation);
 void front_look_mode_changed(void);
 int dm_botw_touch_hud_available(void);
 void dm_botw_touch_hud_publish(int active, float center_x, float center_y, float dpad_scale);
@@ -250,12 +252,29 @@ void dm_touch_set(const dm_touch *touches, int count) {
     g_touch_count = count; ++g_touch_sets;
     if (count > 0 && touches) g_last_touch = touches[0];
 }
-void dm_aspect_touch_rect(float w, float h, float rect[4]) { rect[0] = rect[1] = 0; rect[2] = w; rect[3] = h; }
-void dm_aspect_hud_rect(float w, float h, float rect[4]) { dm_aspect_touch_rect(w,h,rect); }
+static int g_seated;
+void dm_aspect_touch_rect(float w, float h, float rect[4]) {
+    rect[0]=rect[1]=0; rect[2]=w; rect[3]=h;
+    if (g_seated) {
+        float cw=fminf(w,h*.49f*16/9),ch=cw*9/16;
+        rect[0]=(w-cw)*.5f; rect[1]=(h*.49f-ch)*.5f; rect[2]=cw; rect[3]=ch;
+    }
+}
+void dm_aspect_hud_rect(float w, float h, float rect[4]) {
+    rect[0]=0; rect[1]=g_seated ? h*.51f : 0; rect[2]=w; rect[3]=g_seated ? h*.49f : h;
+}
+int dm_aspect_region(int controls,float rect[4]) {
+    rect[0]=rect[1]=0; rect[2]=rect[3]=1;
+    if (g_seated) { rect[1]=controls ? .51f : 0; rect[3]=.49f; }
+    return g_seated;
+}
 float dm_aspect_hud_y_scale(void) { return 1; }
 void dm_motion_set(int p, const float acc[3], const float rot[3]) { (void)p; (void)acc; (void)rot; }
 void dm_motion_clear(int p) { (void)p; }
-void dm_motion_set_switch(int p, const float acc[3], const float rot[3]) { (void)p; (void)acc; (void)rot; }
+static float g_phone_acc[3],g_phone_rot[3];
+void dm_motion_set_switch(int p, const float acc[3], const float rot[3]) {
+    (void)p; memcpy(g_phone_acc,acc,sizeof g_phone_acc); memcpy(g_phone_rot,rot,sizeof g_phone_rot);
+}
 void dm_device_motion_set(const dm_motion *motion) {
     if (g_motion_count >= (int)(sizeof g_motion_samples / sizeof g_motion_samples[0])) abort();
     g_motion_samples[g_motion_count++] = *motion;
@@ -1805,7 +1824,7 @@ static void test_botw_portrait(DmGamepad *original) {
     PortraitInsetGamepad *view=[[PortraitInsetGamepad alloc] initWithFrame:CGRectMake(0,0,390,844)];
     [original.superview addSubview:view];
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view setNeedsLayout]; [view layoutIfNeeded];
-    CHECK(fabs([view facePos:3].y-[view facePos:0].y)<.01,"portrait layout remains off by default on an upright view");
+    CHECK([view facePos:3].y>[view facePos:2].y,"a system-resized narrow view selects compact controls independently of orientation permission");
     setenv("DM_BOTW_PORTRAIT","1",1); [view setNeedsLayout]; [view layoutIfNeeded];
     CGPoint a=[view facePos:0], b=[view facePos:1], x=[view facePos:2], y=[view facePos:3];
     CGPoint r=[view dm_testDropCenter:7], zr=[view dm_testDropCenter:9];
@@ -1850,6 +1869,60 @@ static void test_botw_portrait(DmGamepad *original) {
     g_botw_touchhud_available=NO; [original dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
 }
 
+static void test_resized_surface(DmGamepad *view) {
+    CGRect original=view.frame;
+    g_botw_touchhud_available=g_botw_gameplay_ready=YES;
+    g_botw_touch_menu_active=g_botw_touch_menu_presented=NO;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+    view.frame=CGRectMake(0,0,795,1100); [view setNeedsLayout]; [view layoutIfNeeded]; reset_look();
+    CGPoint a=[view facePos:0],stick=view.stickHome;
+    FakeTouch *key=touch(a.x,a.y),*move=touch(stick.x,stick.y),*look=touch(500,200);
+    began(view,key); began(view,move); moved(view,move,stick.x+15,stick.y); began(view,look);
+    CHECK((g_buttons&DM_BTN_A) && g_lx>0 && g_look_held,"resizable surface starts independent button, movement and camera owners");
+    dm_pad_set_player(0,DM_BTN_B,123,456,789,100); int pad_sets=g_pad_sets;
+    view.frame=CGRectMake(0,0,805,1100); [view setNeedsLayout]; [view layoutIfNeeded];
+    CHECK(!g_buttons && !g_lx && !g_ly && !g_look_held,"same-profile resize releases all virtual owners");
+    CHECK(g_pad_sets==pad_sets && g_pad_sources[0].buttons==DM_BTN_B && g_pad_sources[0].lx==123,
+          "surface resize preserves physical controller state");
+    g_seated=1; dm_gamepad_surface_changed(); [view setNeedsLayout]; [view layoutIfNeeded];
+    CGPoint positions[]={view.stickHome,view.dpadCenter,[view dm_testShieldHome],[view dm_testRuneButtonCenter],
+        [view dm_testDropCenter:7],[view dm_testDropCenter:9],[view facePos:0],[view facePos:1],[view facePos:2],[view facePos:3]};
+    BOOL lower=YES; for (unsigned i=0;i<sizeof positions/sizeof *positions;i++) lower &= positions[i].y>1100*.51 && positions[i].y<1100;
+    CHECK(lower,"Seated places every touch control below the horizontal division");
+    a=[view facePos:0]; key=touch(a.x,a.y); began(view,key);
+    CHECK(g_buttons==DM_BTN_A,"Seated button hit targets follow the lower-pane artwork"); ended(view,key,a.x,a.y);
+    CGRect plus=[view pillRect:10]; dm_touchpad_rect map=dm_touchpad_seated_map((dm_touchpad_rect){0,561,805,539});
+    CHECK(CGRectGetMinX(plus)>map.x+map.width && fabs(CGRectGetMinY(plus)-map.y)<.01,
+          "Seated plus stays beside the lower map dock");
+    CHECK(fabs(map.y-569)<.01,"Seated minimap anchors to the top of the lower pane");
+    g_botw_gameplay_ready=NO; g_botw_touch_menu_active=g_botw_touch_menu_presented=YES;
+    [view refreshBotwTouchMenuMode]; [view layoutIfNeeded];
+    CHECK(![view dm_testControlsHidden],"Seated keeps the virtual gamepad visible below an open menu");
+    int pointers=g_menu_pointer_count;
+    a=[view facePos:0]; key=touch(a.x,a.y); began(view,key);
+    CHECK(g_buttons==DM_BTN_A && g_menu_pointer_count==pointers,"Seated lower-pane buttons keep native controller input in menus");
+    ended(view,key,a.x,a.y);
+    float menu_rect[4]; dm_aspect_touch_rect(805,1100,menu_rect);
+    key=touch(menu_rect[0]+menu_rect[2]*.5,menu_rect[1]+menu_rect[3]*.5); began(view,key); ended(view,key,key.point.x,key.point.y);
+    CHECK(g_menu_pointer_count==pointers+2,"Seated upper-pane menu targets keep direct touch input beside the persistent pad");
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES]; [view layoutIfNeeded];
+    CHECK([view dm_testControlsHidden],"Seated still hides virtual controls for a connected physical controller");
+    g_botw_gameplay_ready=YES; g_botw_touch_menu_active=g_botw_touch_menu_presented=NO;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+    g_seated=0; dm_gamepad_surface_changed(); view.frame=original; [view setNeedsLayout]; [view layoutIfNeeded];
+    CHECK([view facePos:0].y<original.size.height,"unfolding restores controls inside the full surface");
+    const float acc[]={.25f,.5f,.75f},rate[]={1,2,3};
+    for (int orientation=1;orientation<=4;orientation++) {
+        dm_test_phone_motion_publish(acc,rate,1,orientation);
+        CHECK(!memcmp(g_phone_acc,acc,sizeof acc) && !memcmp(g_phone_rot,rate,sizeof rate),
+              "view-relative motion is not rotated a second time after a display/orientation change");
+    }
+    dm_test_phone_motion_publish(acc,rate,0,UIInterfaceOrientationLandscapeRight);
+    CHECK(g_phone_acc[0]==-.5f && g_phone_acc[1]==.25f && g_phone_rot[0]==-2 && g_phone_rot[1]==1,
+          "older hardware-relative motion keeps its interface rotation");
+    dm_pad_set_player(0,0,0,0,0,0); g_botw_touchhud_available=NO;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+}
 static void run_tests(DmGamepad *view) {
     test_dpad_art_visibility(view);
     test_botw_button_artwork(view);
@@ -1888,6 +1961,7 @@ static void run_tests(DmGamepad *view) {
         test_botw_tunable_stick(view);
         test_botw_custom_layout(view);
         test_botw_portrait(view);
+        test_resized_surface(view);
         NSString *report = [NSString stringWithFormat:@"UIKit handler regression: %d failures; %d look BEGIN sessions\n", g_failures, g_begin_count];
         printf("%s", report.UTF8String);
         fflush(stdout); fflush(stderr);

@@ -31,7 +31,10 @@ float dm_aspect_ui_point_scale(void) { return 1; }
 static float hud_y_scale=1, hud_gain=1;
 float dm_aspect_hud_y_scale(void) { return hud_y_scale; }
 float dm_aspect_hud_gain(void) { return hud_gain; }
-float dm_aspect_hud_top(void) { return 360-(360-DM_TP_BOTW_MAP_TOP)*hud_y_scale*hud_gain; }
+static int seated;
+int dm_aspect_region(int controls,float rect[4]) { rect[0]=rect[1]=0; rect[2]=rect[3]=1; (void)controls; return seated; }
+float dm_aspect_map_gain(void) { return hud_gain; }
+float dm_aspect_hud_top(void) { return seated ? 350 : 360-(360-DM_TP_BOTW_MAP_TOP)*hud_y_scale*hud_gain; }
 void dm_aspect_ui_pane(uint8_t *pane) { if (pane) aspect_pane_calls++; }
 void front_botw_rune_icon_changed(void) {}
 void dm_botw_touch_actions_reset(void) { actions_reset_count++; }
@@ -405,6 +408,19 @@ int main(void) {
     dm_botw_touch_hud_publish(1, NAN, .75f,1);
     assert(!dm_botw_touch_hud_active() && !map_region_valid);
     hud_offset[0] = hud_offset[1] = 0;
+    // Seated display geometry also applies with a physical controller. It
+    // moves the native map/environment, without enabling virtual input.
+    seated=1; hud_gain=.8f;
+    scaled_matrix(cut,hud_gain,510,-240); calculate_entry(cut); calculated_matrix(cut);
+    expect_translation(cut,59*hud_gain,350-83*hud_gain);
+    assert(!map_region_valid && !dm_botw_touch_hud_active());
+    dm_botw_touch_hud_publish(1,.2f,.8f,1);
+    scaled_matrix(cut,hud_gain,510,-240); calculate_entry(cut); calculated_matrix(cut);
+    assert(map_region_valid && fabsf(map_region[0]-(640+(59-83)*hud_gain)/1280)<.001f);
+    assert(fabsf(map_region[1]-10.f/720)<.001f);
+    dm_botw_touch_hud_publish(0,0,0,1); seated=0; hud_gain=1;
+    matrix_translation(cut,510,-240); calculate_entry(cut); calculated_matrix(cut);
+    expect_translation(cut,510,-240);
     // The shared pane hook still services widescreen backgrounds without an
     // installed touch HUD (ordinary Mac/controller mode).
     dm_botw_touchhud_test_clear();

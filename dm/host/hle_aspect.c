@@ -16,6 +16,10 @@ static _Atomic float g_screen = 16.0f / 9.0f;
 static _Atomic float g_hud_safe_left;
 static _Atomic float g_hud_safe_top;
 static _Atomic float g_ui_point_scale = 1;
+static _Atomic float g_display_height = 430;
+static _Atomic int g_seated;
+static pthread_mutex_t g_seated_mu=PTHREAD_MUTEX_INITIALIZER;
+static float g_picture_end, g_controls_begin;
 static module_t *g_main;
 static uint64_t g_single_off, g_proj_off, g_vt_off, g_field_off, g_dirty_off;
 static unsigned g_ui_reg; static uint64_t g_ui_source, g_ui_projection, g_ui_fovy;
@@ -44,18 +48,65 @@ static void aspect_config(void) {
 }
 int dm_aspect_native(void) { pthread_once(&g_config_once, aspect_config); return g_on; }
 float dm_aspect_custom_ratio(void) { pthread_once(&g_config_once, aspect_config); return g_custom; }
-float dm_aspect_ratio(void) { return dm_aspect_native() ? (g_custom ? g_custom : atomic_load(&g_screen)) : 0; }
+void dm_aspect_set_seated(float picture_end, float controls_begin) {
+    int active=!strcmp(DM_GAME_ID,"01007EF00011E000") && dm_aspect_native() &&
+        isfinite(picture_end) && isfinite(controls_begin) && picture_end>0 && picture_end<=controls_begin && controls_begin<1;
+    pthread_mutex_lock(&g_seated_mu);
+    g_picture_end=picture_end; g_controls_begin=controls_begin;
+    atomic_store_explicit(&g_seated,active,memory_order_release);
+    pthread_mutex_unlock(&g_seated_mu);
+}
+int dm_aspect_region(int controls, float rect[4]) {
+    rect[0]=rect[1]=0; rect[2]=rect[3]=1;
+    if (!atomic_load_explicit(&g_seated,memory_order_acquire)) return 0;
+    pthread_mutex_lock(&g_seated_mu);
+    int active=atomic_load_explicit(&g_seated,memory_order_relaxed);
+    if (active) {
+        rect[1]=controls ? g_controls_begin : 0; rect[3]=controls ? 1-g_controls_begin : g_picture_end;
+        // A fixed picture aspect belongs to the upper pane, not the combined
+        // picture and control surface. Keep the lower pane at its real size.
+        if (!controls && g_custom>0) {
+            float ratio=atomic_load(&g_screen)/rect[3];
+            if (ratio>g_custom) { rect[2]=g_custom/ratio; rect[0]=(1-rect[2])*.5f; }
+            else { float height=atomic_load(&g_screen)/g_custom; rect[1]=(rect[3]-height)*.5f; rect[3]=height; }
+        }
+    }
+    pthread_mutex_unlock(&g_seated_mu);
+    return active;
+}
+float dm_aspect_ratio(void) {
+    if (!dm_aspect_native()) return 0;
+    if (g_custom) return g_custom;
+    float region[4]; dm_aspect_region(0,region);
+    return atomic_load(&g_screen)*region[2]/region[3];
+}
+float dm_aspect_control_ratio(void) {
+    float region[4];
+    return dm_aspect_region(1,region) ? atomic_load(&g_screen)*region[2]/region[3] : dm_aspect_ratio();
+}
 float dm_aspect_hud_y_scale(void) {
-    float ratio = dm_aspect_ratio();
+    float ratio = dm_aspect_control_ratio();
     return ratio > 0 && ratio < GAME_ASPECT ? ratio / GAME_ASPECT : 1;
 }
 float dm_aspect_hud_gain(void) {
-    float ratio = dm_aspect_ratio();
+    float ratio = dm_aspect_control_ratio();
     // Keep HUD size tied to the shorter display edge, rather than the height
     // of a tiny fitted 16:9 menu in portrait. 16:9 and wider stay unchanged.
     return ratio > 0 && ratio < GAME_ASPECT ? GAME_ASPECT*fminf(1,1/ratio) : 1;
 }
+float dm_aspect_map_gain(void) {
+    float region[4];
+    if (!dm_aspect_region(1,region)) return dm_aspect_hud_gain();
+    // Keep the native map at its usual 430pt-landscape size in the dock,
+    // independently of the lower pane's height.
+    float height=atomic_load(&g_display_height)*region[3];
+    float width=height*dm_aspect_control_ratio();
+    dm_touchpad_rect map=dm_touchpad_seated_map((dm_touchpad_rect){0,0,width,height});
+    return map.width*720/(166*height*dm_aspect_hud_y_scale());
+}
 float dm_aspect_hud_top(void) {
+    float region[4];
+    if (dm_aspect_region(1,region)) return 360-DM_TP_BOTW_DOCK_TOP*720/(atomic_load(&g_display_height)*region[3]);
     float scale = dm_aspect_hud_y_scale();
     return scale < 1 ? 360 - (360-DM_TP_BOTW_MAP_TOP)*scale*dm_aspect_hud_gain() - atomic_load(&g_hud_safe_top) : DM_TP_BOTW_MAP_TOP;
 }
@@ -66,10 +117,13 @@ void dm_aspect_set_display(float ratio) {
 
 // The centered, undistorted UI region, including a custom aspect's bars. Touch input uses the same coordinates as UI replay.
 void dm_aspect_touch_rect(float w, float h, float rect[4]) {
-    float cw = w, ch = h, cr = dm_aspect_native() ? dm_aspect_custom_ratio() : 0;
+    float region[4]; dm_aspect_region(0,region);
+    float x=w*region[0],y=h*region[1],cw=w*region[2],ch=h*region[3];
+    float cr = dm_aspect_native() ? dm_aspect_custom_ratio() : 0;
+    float ow=cw,oh=ch;
     if (cr > 0) { if (cw / ch > cr) cw = ch * cr; else ch = cw / cr; }
     if (cw / ch > GAME_ASPECT) cw = ch * GAME_ASPECT; else ch = cw / GAME_ASPECT;
-    rect[0] = (w - cw) / 2; rect[1] = (h - ch) / 2; rect[2] = cw; rect[3] = ch;
+    rect[0] = x+(ow-cw)/2; rect[1] = y+(oh-ch)/2; rect[2] = cw; rect[3] = ch;
 }
 
 // Extra logical space beside the centered UI. The right HUD already has its
@@ -77,25 +131,31 @@ void dm_aspect_touch_rect(float w, float h, float rect[4]) {
 // notch-width gap. This display rule is independent of the input mode.
 // The left side retains its safe inset. Menus still use touch_rect.
 float dm_aspect_hud_offset(int right) {
-    float extra = fmaxf(0, 360 * dm_aspect_ratio() - 640);
+    float extra = fmaxf(0, 360 * dm_aspect_control_ratio() - 640);
     float safe = right ? 0 : atomic_load(&g_hud_safe_left);
     return fmaxf(0, extra - safe);
 }
 float dm_aspect_ui_point_scale(void) { return atomic_load(&g_ui_point_scale); }
 void dm_aspect_set_safe_area(float w, float h, float left, float top, float right) {
     if (!isfinite(w) || !isfinite(h) || !isfinite(left) || !isfinite(top) || !isfinite(right) || w <= 0 || h <= 0) return;
-    float canvas[4]; dm_aspect_touch_rect(w, h, canvas);
-    float frame_width = dm_aspect_native() ? fminf(w, h * dm_aspect_ratio()) : canvas[2];
+    atomic_store(&g_display_height,h);
+    float canvas[4],region[4]; dm_aspect_touch_rect(w, h, canvas); int seated=dm_aspect_region(0,region);
+    float frame_width = dm_aspect_native() ? (seated ? w*region[2] : fminf(w,h*dm_aspect_ratio())) : canvas[2];
     float bar = (w - frame_width) * .5f, scale = 720 / canvas[3];
     atomic_store(&g_ui_point_scale, scale);
     atomic_store(&g_hud_safe_left, fmaxf(0, left - bar) * scale);
-    float picture_height = dm_aspect_native() ? fminf(h, w/dm_aspect_ratio()) : canvas[3];
-    atomic_store(&g_hud_safe_top, fmaxf(0, top-(h-picture_height)*.5f)*720/picture_height);
+    float picture_height = dm_aspect_native() ? fminf(h*region[3], w/dm_aspect_ratio()) : canvas[3];
+    atomic_store(&g_hud_safe_top, fmaxf(0, top-h*region[1]-(h*region[3]-picture_height)*.5f)*720/picture_height);
 }
 void dm_aspect_hud_rect(float w, float h, float rect[4]) {
-    dm_aspect_touch_rect(w, h, rect);
+    float region[4];
+    if (dm_aspect_region(1,region)) {
+        float rw=w*region[2],rh=h*region[3],cw=fminf(rw,rh*GAME_ASPECT);
+        rect[0]=w*region[0]+(rw-cw)*.5f; rect[1]=h*region[1]+(rh-cw/GAME_ASPECT)*.5f;
+        rect[2]=cw; rect[3]=cw/GAME_ASPECT;
+    } else dm_aspect_touch_rect(w,h,rect);
     float yscale = dm_aspect_hud_y_scale();
-    if (yscale < 1) { rect[3] /= yscale; rect[1] = (h-rect[3])*.5f; }
+    if (yscale < 1) { rect[3] /= yscale; rect[1] = h*region[1]+(h*region[3]-rect[3])*.5f; }
     float scale = rect[3] / 720, left = dm_aspect_hud_offset(0) * scale;
     rect[0] -= left;
     rect[2] += left + dm_aspect_hud_offset(1) * scale;
@@ -211,10 +271,16 @@ static int aspect_ui_hud_anchor(uint8_t *pane) {
     return aspect_ui_map_cut(pane) ? 2 : 0;
 }
 static int aspect_ui_hud_pane(uint8_t *pane) {
+    float region[4]; int seated=dm_aspect_region(1,region);
     for (int i=0; pane && i<64; i++,pane=aspect_ui_parent(pane)) {
         int anchor=aspect_ui_hud_anchor(pane);
-        if (anchor==3 && (!dm_botw_touch_hud_active() || dm_aspect_hud_y_scale()==1)) continue;
-        if (anchor==1 && aspect_ui_named(pane,"Pa_Weather_00") && dm_aspect_hud_y_scale()<1) return 3;
+        if (anchor==3) {
+            if (!dm_botw_touch_hud_active()) continue;
+            if (seated) return 5;
+            if (dm_aspect_hud_y_scale()==1) continue;
+        }
+        if (anchor==1 && aspect_ui_named(pane,"Pa_Weather_00") && (seated || dm_aspect_hud_y_scale()<1)) return 3;
+        if (anchor==1 && seated) return 4;
         if (anchor && (anchor!=2 || aspect_ui_map_collapsed(aspect_ui_map_cut(pane)))) return anchor == 2 ? 2 : 1;
     }
     return 0;
@@ -282,7 +348,7 @@ static int aspect_ui_loading_background(uint8_t *pane) {
 }
 static _Thread_local int g_ui_background_drawing, g_ui_hud_drawing;
 int dm_aspect_ui_background_drawing(void) { return g_ui_background_drawing; }
-int dm_aspect_ui_hud_drawing(void) { return g_ui_hud_drawing; } // 1 = edge HUD; 2 = collapsed map; 3 = weather with uniform model scale
+int dm_aspect_ui_hud_drawing(void) { return g_ui_hud_drawing; } // 1 hearts/edge HUD, 2 map, 3 weather, 4 dock gauges, 5 dock equipment
 static void aspect_ui_draw(const uint64_t *regs) {
     // x21 is Pane::Draw's saved this across the DrawSelf virtual call.
     uint8_t *pane=(uint8_t *)(uintptr_t)regs[21];
@@ -290,7 +356,8 @@ static void aspect_ui_draw(const uint64_t *regs) {
     g_ui_background_drawing = ratio > GAME_ASPECT && aspect_ui_background_pane(pane);
     if ((ratio > GAME_ASPECT && aspect_ui_loading_fill(pane)) ||
         (ratio > 0 && ratio < GAME_ASPECT && aspect_ui_loading_background(pane))) g_ui_background_drawing=2;
-    g_ui_hud_drawing = ratio > 0 && ratio != GAME_ASPECT ? aspect_ui_hud_pane(pane) : 0;
+    float region[4];
+    g_ui_hud_drawing = ratio > 0 && (ratio != GAME_ASPECT || dm_aspect_region(1,region)) ? aspect_ui_hud_pane(pane) : 0;
     dm_botw_rune_icon_draw_begin((uint8_t *)(uintptr_t)regs[21]);
 }
 static void aspect_ui_draw_end(const uint64_t *regs) { (void)regs; g_ui_background_drawing = g_ui_hud_drawing = 0; dm_botw_rune_icon_draw_end(); }
@@ -313,15 +380,21 @@ void dm_aspect_ui_pane(uint8_t *pane) {
     pthread_mutex_lock(&g_ui_width_mu);
     aspect_ui_width **found = tfind(&key, &g_ui_widths, aspect_ui_width_order);
     float wide = fmaxf(1, dm_aspect_ratio() / GAME_ASPECT);
-    int narrow = hud && dm_aspect_hud_y_scale()<1 && (hud!=3 || dm_botw_touch_hud_active());
+    float region[4]; int seated=dm_aspect_region(1,region);
+    float ratio=hud==-1 ? dm_aspect_ratio() : dm_aspect_control_ratio();
+    float hud_y=ratio>0 && ratio<GAME_ASPECT ? ratio/GAME_ASPECT : 1;
+    float gain=ratio>0 && ratio<GAME_ASPECT ? GAME_ASPECT*fminf(1,1/ratio) : 1;
+    int dock=seated && (hud==1 || hud==2);
+    int narrow = hud && hud_y<1 && (hud!=3 || dm_botw_touch_hud_active());
     if (hud==2 && !aspect_ui_map_collapsed(aspect_ui_map_cut(pane))) narrow=0;
-    float xscale=narrow ? dm_aspect_hud_gain() : 1;
-    float yscale=narrow ? dm_aspect_hud_y_scale()*xscale : 1;
+    if (hud==2 && !aspect_ui_map_collapsed(aspect_ui_map_cut(pane))) dock=0;
+    float xscale=dock ? dm_aspect_map_gain() : narrow ? gain : 1;
+    float yscale=(dock || narrow) ? hud_y*xscale : 1;
     // Weather's animated pictures do not inherit scale like the flat panes.
     // Leave the component's model geometry intact and resize the whole draw
     // in projection, so its pictures and background keep the same proportions.
     if (hud==1 && aspect_ui_named(pane,"Pa_Weather_00")) xscale=yscale=1;
-    if (!found && wide == 1 && !narrow && hud != -1) { pthread_mutex_unlock(&g_ui_width_mu); return; }
+    if (!found && wide == 1 && !narrow && !dock && hud != -1) { pthread_mutex_unlock(&g_ui_width_mu); return; }
     if (!found) {
         aspect_ui_width *entry = calloc(1, sizeof *entry);
         if (!entry) die("[RED] aspect: cannot allocate background pane state");
@@ -363,7 +436,7 @@ void dm_aspect_ui_pane(uint8_t *pane) {
     }
     // AppMap's ScissorPane::Draw rejects clips outside its native 16:9
     // target before submitting draws. Anchor that subtree during GPU replay.
-    else if (hud == 1 && !dm_botw_touch_hud_active())
+    else if (hud == 1 && !dm_botw_touch_hud_active() && !seated)
         entry->written_x += dm_aspect_hud_offset(1);
     if (title_right) {
         // The native origin is the right edge. Extending width and moving that

@@ -143,6 +143,6 @@
 
 "Enable portrait mode" = "Enable portrait mode";
 
-"Allows portrait orientation. Portrait uses compact controls below 600pt of available width; otherwise it keeps the normal layout." = "Allows portrait orientation. Portrait uses compact controls below 600pt of available width; otherwise it keeps the normal layout.";
+"Allows portrait rotation. Tall windows use compact controls below 600pt of available width; wider windows keep the normal layout." = "Allows portrait rotation. Tall windows use compact controls below 600pt of available width; wider windows keep the normal layout.";
 
 "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately." = "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately.";

@@ -143,6 +143,6 @@
 
 "Enable portrait mode" = "启用竖屏模式";
 
-"Allows portrait orientation. Portrait uses compact controls below 600pt of available width; otherwise it keeps the normal layout." = "允许竖屏。竖屏可用宽度不足 600pt 时使用紧凑布局，否则沿用普通布局。";
+"Allows portrait rotation. Tall windows use compact controls below 600pt of available width; wider windows keep the normal layout." = "允许旋转到竖屏。较高的窗口在可用宽度不足 600pt 时使用紧凑布局，宽度足够时沿用普通布局。";
 
 "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately." = "可发送这些紧凑布局参数作为默认值。偏移以整个屏幕为比例，X 为正向右移动，Y 为正向下移动。普通布局设置单独保存。";

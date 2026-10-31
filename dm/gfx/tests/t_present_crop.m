@@ -40,6 +40,34 @@ static int check_present_resize(id<MTLTexture> src, int w, int h) {
 }
 #endif
 
+static void check_seated_dock(id<MTLTexture> src) {
+    const int w=8,h=20;
+    MTLTextureDescriptor *d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:w height:h mipmapped:NO];
+    d.storageMode=MTLStorageModeShared; d.usage=MTLTextureUsageRenderTarget;
+    id<MTLTexture> out=[g_dev newTextureWithDescriptor:d];
+    id<MTLBuffer> uv=[g_dev newBufferWithLength:32 options:MTLResourceStorageModeShared];
+    const float values[]={0,0,1,1,.5f/8,.5f/8,1-.5f/8,1-.5f/8}; memcpy(uv.contents,values,sizeof values);
+    res_add(src); res_add(out); res_add(uv); res_commit();
+    for (int ll=0;ll<2;ll++) {
+        uint8_t black_pixels[w*h*4]={0}; for (int i=0;i<w*h;i++) black_pixels[4*i+3]=255;
+        [out replaceRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0 withBytes:black_pixels bytesPerRow:w*4];
+        atomic_store(&g_origin_ll,ll); float picture[]={0,.7f,1,.3f}; ui_region_to_render(picture);
+        id<MTL4CommandAllocator> al=[g_dev newCommandAllocator]; id<MTL4CommandBuffer> cb=[g_dev newCommandBuffer];
+        id<MTLSharedEvent> event=[g_dev newSharedEvent]; [cb beginCommandBufferWithAllocator:al];
+        seated_dock_encode(cb,src,out,picture,uv.gpuAddress); [cb endCommandBuffer];
+        [g_q4 commit:&cb count:1]; [g_q4 signalEvent:event value:1];
+        EXPECT("Seated dock GPU completes",1,[event waitUntilSignaledValue:1 timeoutMS:10000]);
+        uint8_t pixels[w*h*4]; [out getBytes:pixels bytesPerRow:w*4 fromRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0];
+        int bad=0; const uint8_t black[]={0,0,0,255};
+        for (int y=0;y<h;y++) for (int x=0;x<w;x++) {
+            int row=y-(ll?0:14);
+            const uint8_t *want=row>=0 && row<6 ? colors[(x>=4)+2*(row>=3)] : black;
+            bad+=memcmp(pixels+4*(y*w+x),want,4)!=0;
+        }
+        EXPECT("Seated composites the whole dock below the fold without overwriting the picture",0,bad);
+    }
+    atomic_store(&g_origin_ll,0); res_remove(out); res_remove(uv); res_remove(src);
+}
 static void check(id<MTLTexture> src, const char *name, const int crop[4], int w, int h, int color) {
     MTLTextureDescriptor *d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:w height:h mipmapped:NO];
     d.storageMode=MTLStorageModeShared;d.usage=MTLTextureUsageRenderTarget;
@@ -71,6 +99,7 @@ int main(void) { @autoreleasepool {
     id<MTLTexture> src=[g_dev newTextureWithDescriptor:d];uint8_t px[8*8*4];
     for(int y=0;y<8;y++)for(int x=0;x<8;x++)memcpy(px+4*(y*8+x),colors[(x>=4)+2*(y>=4)],4);
     [src replaceRegion:MTLRegionMake2D(0,0,8,8) mipmapLevel:0 withBytes:px bytesPerRow:32];
+    check_seated_dock(src);
     int zero[4]={0},tl[4]={0,0,4,4},tr[4]={4,0,4,4},bl[4]={0,4,4,4},br[4]={4,4,4,4},one[4]={3,3,1,1},inset[4]={1,1,4,4};
     check(src,"default whole frame 64 pixels",zero,8,8,-1);
     check(src,"NULL default whole frame 64 pixels",NULL,8,8,-1);
@@ -81,6 +110,23 @@ int main(void) { @autoreleasepool {
     check(src,"single texel scaled up without crossing edges, 256 pixels all red",one,16,16,0);
     check(src,"non-zero x and y offset, 16 pixels byte-identical to a hand-written sub-rectangle",inset,4,4,-2);
     check(src,"aspect of the valid area kept, 128 pixels red in the middle / black on both sides",tl,16,8,4);
+    g_on=1; g_custom=2; dm_aspect_set_display(1); dm_aspect_set_seated(.4f,.6f);
+    check(src,"Seated present keeps the combined picture/dock canvas full size with a fixed picture aspect",NULL,8,8,-1);
+    {
+        MTLTextureDescriptor *target=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:8 height:8 mipmapped:NO];
+        target.storageMode=MTLStorageModeShared; target.usage=MTLTextureUsageRenderTarget;
+        id<MTLTexture> out=[g_dev newTextureWithDescriptor:target];
+        id<MTLBuffer> uv=[g_dev newBufferWithLength:32 options:MTLResourceStorageModeShared];
+        id<MTL4CommandAllocator> al=[g_dev newCommandAllocator]; id<MTL4CommandBuffer> cb=[g_dev newCommandBuffer];
+        id<MTLSharedEvent> event=[g_dev newSharedEvent]; res_add(src); res_add(out); res_add(uv); res_commit();
+        [cb beginCommandBufferWithAllocator:al]; present_encode_m4(cb,src,out,NULL,uv,nil); [cb endCommandBuffer];
+        [g_q4 commit:&cb count:1]; [g_q4 signalEvent:event value:1];
+        EXPECT("Seated M4 fixed-aspect present completes",1,[event waitUntilSignaledValue:1 timeoutMS:10000]);
+        uint8_t pixels[8*8*4]; [out getBytes:pixels bytesPerRow:32 fromRegion:MTLRegionMake2D(0,0,8,8) mipmapLevel:0];
+        EXPECT("Seated M4 present does not letterbox the lower dock",0,memcmp(pixels,px,sizeof px));
+        res_remove(src); res_remove(out); res_remove(uv);
+    }
+    dm_aspect_set_seated(0,0); g_on=0; g_custom=0;
 #ifndef CROP_LEGACY_HEADER
     {
         // sRGB swapchain: present sends the raw bytes (as the Switch's scan-out does) without decoding first; unfixed, 128/64/200 decode to about 55/13/148

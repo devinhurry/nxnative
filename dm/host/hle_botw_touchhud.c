@@ -321,9 +321,10 @@ static int transform_bounds(uint8_t *pane, float *left, float *bottom, float *ri
 static int touchhud_update_cluster_delta(uint8_t *pane) {
     float left, bottom, right, top;
     if (!transform_bounds(pane, &left, &bottom, &right, &top)) return 0;
-    float gain=dm_aspect_hud_gain();
+    float region[4],gain=dm_aspect_map_gain(); int seated=dm_aspect_region(1,region);
     pthread_mutex_lock(&g_touchhud_mu);
-    g_touchhud.map_dx = 640.0f + dm_aspect_hud_offset(1) - gain*dm_touchpad_botw_map_right_inset(dm_aspect_ui_point_scale()/gain) - right;
+    g_touchhud.map_dx = seated ? 59*gain-(left+right)*.5f :
+        640.0f + dm_aspect_hud_offset(1) - gain*dm_touchpad_botw_map_right_inset(dm_aspect_ui_point_scale()/gain) - right;
     g_touchhud.map_dy = dm_aspect_hud_top() - top;
     g_touchhud.delta_valid = 1;
     pthread_mutex_unlock(&g_touchhud_mu);
@@ -345,10 +346,11 @@ static void publish_map_rect(uint8_t *pane) {
     }
     float edge_left = dm_aspect_hud_offset(0), edge_right = dm_aspect_hud_offset(1);
     float hud_width = 1280 + edge_left + edge_right;
+    float region[4],anchor=dm_aspect_region(1,region) ? 0 : edge_right;
     // The map's horizontal edge anchor is applied after native scissor
     // calculation, during GPU replay. Publish hits at that final position.
-    float x0 = fmaxf(0, (left + edge_right + 640.0f + edge_left) / hud_width);
-    float x1 = fminf(1, (right + edge_right + 640.0f + edge_left) / hud_width);
+    float x0 = fmaxf(0, (left + anchor + 640.0f + edge_left) / hud_width);
+    float x1 = fminf(1, (right + anchor + 640.0f + edge_left) / hud_width);
     float y0 = fmaxf(0, (360.0f - top) / 720.0f);
     float y1 = fminf(1, (360.0f - bottom) / 720.0f);
     if (x1 <= x0 || y1 <= y0) { invalidate_map_rect(); return; }
@@ -366,10 +368,11 @@ static void publish_map_rect(uint8_t *pane) {
 
 static void botw_touchhud_pane(const uint64_t *regs) {
     dm_aspect_ui_pane((uint8_t *)(uintptr_t)regs[0]);
+    float region[4]; int seated=dm_aspect_region(1,region);
     int touch=dm_botw_touch_hud_available(), narrow=dm_aspect_hud_y_scale()<1;
-    if (!touch && !narrow) return;
+    if (!touch && !narrow && !seated) return;
     if (touch) dm_botw_touch_menu_pane(regs, 0);
-    int map_active=atomic_load_explicit(&g_touchhud_active,memory_order_acquire) || narrow;
+    int map_active=atomic_load_explicit(&g_touchhud_active,memory_order_acquire) || narrow || seated;
     uint8_t *pane = (uint8_t *)(uintptr_t)regs[0];
     if (!pane) return;
     // The child matrix hook may not run when a parent becomes hidden. Invalidate
@@ -441,13 +444,14 @@ static void botw_touchhud_pane(const uint64_t *regs) {
 }
 
 static void botw_touchhud_matrix(const uint64_t *regs) {
+    float region[4]; int seated=dm_aspect_region(1,region);
     int touch=dm_botw_touch_hud_available(), narrow=dm_aspect_hud_y_scale()<1;
-    if (!touch && !narrow) return;
+    if (!touch && !narrow && !seated) return;
     if (touch) dm_botw_touch_menu_pane(regs, 1);
     uint8_t *pane = (uint8_t *)(uintptr_t)regs[19];
     if (!pane) return;
     int active = atomic_load_explicit(&g_touchhud_active, memory_order_acquire);
-    int map_active=active || narrow;
+    int map_active=active || narrow || seated;
     if (active && main_shortcut_rune_pane(pane)) {
         rune_icon_record(pane);
         return;
@@ -496,7 +500,7 @@ static void botw_touchhud_matrix(const uint64_t *regs) {
         if (!touchhud_update_cluster_delta(pane)) { invalidate_map_rect(); return; }
         pthread_mutex_lock(&g_touchhud_mu); float dx = g_touchhud.map_dx, dy = g_touchhud.map_dy; pthread_mutex_unlock(&g_touchhud_mu);
         float tx, ty; memcpy(&tx, pane + BOTW_TOUCH_MATRIX + 0x0c, 4); memcpy(&ty, pane + BOTW_TOUCH_MATRIX + 0x1c, 4);
-        tx += dx - dm_aspect_hud_offset(1); ty += dy; memcpy(pane + BOTW_TOUCH_MATRIX + 0x0c, &tx, 4); memcpy(pane + BOTW_TOUCH_MATRIX + 0x1c, &ty, 4);
+        tx += dx - (seated ? 0 : dm_aspect_hud_offset(1)); ty += dy; memcpy(pane + BOTW_TOUCH_MATRIX + 0x0c, &tx, 4); memcpy(pane + BOTW_TOUCH_MATRIX + 0x1c, &ty, 4);
         publish_map_rect(pane);
         return;
     }
@@ -506,11 +510,11 @@ static void botw_touchhud_matrix(const uint64_t *regs) {
         float dx = g_touchhud.map_dx, dy = g_touchhud.map_dy;
         pthread_mutex_unlock(&g_touchhud_mu);
         if (apply) {
-            if (!main_environment_pane(pane)) dx -= dm_aspect_hud_offset(1);
+            if (!seated && !main_environment_pane(pane)) dx -= dm_aspect_hud_offset(1);
             // Weather retains its native model geometry. Replay scales the
             // entire draw, including this translation, to the HUD canvas.
             if (pane_named(pane,"Pa_Weather_00")) {
-                float gain=dm_aspect_hud_gain();
+                float gain=dm_aspect_map_gain();
                 dx /= gain; dy /= dm_aspect_hud_y_scale()*gain;
             }
             float tx, ty;

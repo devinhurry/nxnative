@@ -52,6 +52,10 @@ int dm_opmode(void);
 // Native display (hle_aspect.c): the profile's aspect_native / camera_aspect; the front end makes the game view full-screen, nvn_mtl.m stretches the canvas and squeezes the UI
 int dm_aspect_native(void);
 float dm_aspect_ratio(void);
+void dm_aspect_set_seated(float picture_end, float controls_begin);
+int dm_aspect_region(int controls, float rect[4]); // Normalized full-window geometry; 0 when not Seated.
+float dm_aspect_control_ratio(void);
+float dm_aspect_map_gain(void);
 void dm_aspect_set_display(float ratio);
 void dm_aspect_set_safe_area(float w, float h, float left, float top, float right);
 float dm_aspect_hud_y_scale(void);

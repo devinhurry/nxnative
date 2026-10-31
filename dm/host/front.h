@@ -41,6 +41,8 @@ void dm_host_preload_start(int argc, char **argv);
 
 // Native display (hle_aspect.c): the game view fills the screen instead of a centred 16:9 picture; the host stretches the 16:9 canvas and squeezes UI draws.
 int dm_aspect_native(void);
+void dm_aspect_set_seated(float picture_end, float controls_begin);
+int dm_aspect_region(int controls, float rect[4]);
 void dm_aspect_set_display(float ratio);
 void dm_aspect_touch_rect(float w, float h, float rect[4]);
 void dm_aspect_hud_rect(float w, float h, float rect[4]);

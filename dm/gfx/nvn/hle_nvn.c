@@ -920,7 +920,8 @@ static void rec_ui_scope(int32_t *instances, int32_t *base_instance) {
     } else if (dm_aspect_ui_hud_drawing() && !*base_instance) {
         *instances |= NVN_DRAW_UI_BACKGROUND;
         int hud=dm_aspect_ui_hud_drawing();
-        *base_instance = hud == 2 ? INT32_MIN+3 : hud == 3 ? INT32_MIN+4 : INT32_MIN+1;
+        *base_instance = hud == 2 ? INT32_MIN+3 : hud == 3 ? INT32_MIN+4 : hud == 4 ? INT32_MIN+5 :
+            hud == 5 ? INT32_MIN+6 : INT32_MIN+1;
     } else if (dm_aspect_ui_background_drawing()) {
         *instances |= NVN_DRAW_UI_BACKGROUND;
         if (dm_aspect_ui_background_drawing() == 2 && !*base_instance) *base_instance = INT32_MIN+2;

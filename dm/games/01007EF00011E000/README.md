@@ -755,6 +755,57 @@ round trip. The test runs from a copy of the user's save. Evidence is in `portra
 `portrait-live-20261031/` in the game work folder. Physical iPhone rotation
 and safe-area acceptance remain pending.
 
+**iPhone Duo window and Seated layout (2026-10-31).** Following
+[Apple's Duo guidance](https://developer.apple.com/documentation/technologyoverviews/preparing-your-app-for-iphone-duo),
+the iOS surface reads UIKit's active `divisionRegionKind` reserved regions during `updateConstraints`,
+so a fold change is observed even when the window bounds stay unchanged. A
+horizontal division puts the game picture and native menus above the fold;
+the lower pane contains the touch pad and, while the native map is visible,
+the minimap/environment cluster at its top with an 8pt margin. The touch pad
+remains available in menus in Seated mode; direct menu touch stays in the upper
+pane. Connected controllers still hide the virtual pad. Vertical/book folds
+retain the existing whole-window layout. Fixed picture aspects fit inside the
+upper pane without letterboxing or shrinking the lower controls.
+
+The game composites its scene opaquely into its UI canvas and caches menu and
+3D-character pictures there. Keep those game-owned targets in native coordinates:
+scaling them internally causes repeated cropping and duplicate character pictures.
+Only the final canvas-to-swapchain copy and later swapchain draws fit the upper
+picture region. Existing native map, weather, gauge and touch-equipment draw scopes
+instead draw to a transparent host target, composited into the lower pane before
+the ordinary snapshot/present path. The map's native framebuffer blur reads that
+same target. Adjacent dock draws share a render pass; native target changes,
+clears and other draws close it. Shader libraries and the translation chain
+are unchanged. Hearts remain with the upper picture; controller equipment keeps
+its original layout.
+
+Window-size, safe-inset, orientation and fold changes release virtual input before
+relayout, without clearing a physical controller. Cancelled menu fingers retain
+ownership until lift, preventing a resize from becoming a new tap or pinch.
+Display scale comes from the current view traits; Metal drawables, text and icon
+layers refresh after display changes. Compact/normal selection follows the usable
+control pane's geometry and the existing 600pt boundary, independently of the
+portrait rotation-permission switch. The touch editor stacks its preview and
+settings in narrow windows. Core Motion's view-relative samples retain their
+single conversion to Switch axes, with a fixture covering all four orientations.
+
+Validation: native geometry/aspect/HUD fixtures, 191 NVN recording checks,
+201 real-Metal graphics checks, 188 iOS source checks and the SwiftUI/settings
+storage check pass. The UIKit harness passes 40 look sessions, including fold
+input cancellation, persistent lower menu buttons, upper menu pointers and
+controller isolation. The current Mac host with prepared `715bb867230c` shaders
+verifies gameplay, top-of-lower-pane minimap hits, inventory categories, the
+complete inventory character/background, native Back, lower A/B, and
+Seated/whole-window/Seated restoration. Tests use a copied save; evidence and
+the regression report are in `duo-adaptation-20261031/` in the game work folder.
+The BOTW-only `regress.py check --quick` is **ERROR**, blocked before shader
+comparison by Metal `32023.883` versus pinned `32023.921`; other games are not
+runtime-checked because this region/draw routing is BOTW-only. Local SDK 26.5
+checks exclude the new 27.1 APIs; a separate syntax check with Apple's declarations
+is not an SDK build. Building with iOS 27.1 and physical Duo display/fold/gyro
+acceptance remain pending on the user's other machine. The reserved-region path
+uses both SDK and runtime availability guards; older systems keep existing behavior.
+
 **Resolved: minimap disappeared in very wide windows (2026-10-29).**
 The D-pad center is published relative to the centered 16:9 UI canvas. At 32:9,
 its valid position beside that canvas has a negative normalized x. Rejecting

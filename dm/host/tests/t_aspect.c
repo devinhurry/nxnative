@@ -170,6 +170,64 @@ static void test_narrow_hud(void) {
     assert(*(float *)(weather+0x48)==1 && *(float *)(weather+0x4c)==1);
 }
 
+static void test_seated_regions(void) {
+    const float widths[]={795,1200};
+    for (unsigned n=0;n<2;n++) {
+        float w=widths[n],h=1100,picture[4],dock[4],hit[4];
+        dm_aspect_set_display(w/h); dm_aspect_set_seated(.49f,.51f);
+        dm_aspect_set_safe_area(w,h,0,0,0);
+        assert(dm_aspect_region(0,picture) && dm_aspect_region(1,dock));
+        assert(fabsf(dm_aspect_ratio()-w/(h*.49f))<.00001f);
+        assert(fabsf(dm_aspect_control_ratio()-w/(h*.49f))<.00001f);
+        dm_aspect_touch_rect(w,h,hit);
+        assert(hit[1]>=0 && hit[1]+hit[3]<=h*.49f+.001f);
+        dm_aspect_hud_rect(w,h,hit);
+        assert(fabsf(hit[1]-h*.51f)<.001f && fabsf(hit[3]-h*.49f)<.001f);
+        dm_touchpad_rect map=dm_touchpad_seated_map((dm_touchpad_rect){0,h*.51f,w,h*.49f});
+        float gain=dm_aspect_map_gain(),sy=dm_aspect_hud_y_scale();
+        assert(fabsf(166*gain*sy*hit[3]/720-map.width)<.001f);
+        assert(fabsf((360-dm_aspect_hud_top())*hit[3]/720-DM_TP_BOTW_DOCK_TOP)<.001f);
+        uint8_t root[0x100],all[0x100],state[0x100],heart[0x100],weather[0x100],sensor[0x100],equipment[0x100];
+        pane_init(root,"RootPane",0,1280,720); pane_init(all,"N_All_00",0,30,30); pane_child(root,all);
+        pane_init(state,"N_State_00",0,40,40); pane_child(all,state);
+        pane_init(heart,"Pa_HeartGauge_00",-434,312,50); pane_child(state,heart);
+        pane_init(weather,"Pa_Weather_00",0,40,40); pane_child(all,weather);
+        pane_init(sensor,"Pa_Sensor_00",0,40,40); pane_child(all,sensor);
+        pane_init(equipment,"N_MainAll_00",0,40,40); pane_child(all,equipment);
+        uint64_t regs[31]={0}; test_touch_active=1;
+        uint8_t *panes[]={heart,sensor,weather,equipment}; const int scopes[]={1,4,3,5};
+        for (unsigned i=0;i<4;i++) {
+            dm_aspect_ui_pane(panes[i]); regs[21]=(uintptr_t)panes[i]; draw_callback(regs);
+            assert(dm_aspect_ui_hud_drawing()==scopes[i]); draw_end_callback(regs);
+        }
+        assert(fabsf(*(float *)(sensor+0x48)-gain)<.001f);
+        assert(*(float *)(weather+0x48)==1 && *(float *)(weather+0x4c)==1);
+        test_touch_active=0; regs[21]=(uintptr_t)equipment; draw_callback(regs);
+        assert(!dm_aspect_ui_hud_drawing()); draw_end_callback(regs);
+        dm_aspect_set_seated(0,0); dm_aspect_set_display(GAME_ASPECT); dm_aspect_set_safe_area(1280,720,0,0,0);
+        dm_aspect_ui_pane(sensor); assert(*(float *)(sensor+0x48)==1 && *(float *)(sensor+0x4c)==1);
+        assert(!dm_aspect_region(1,dock) && dock[0]==0 && dock[1]==0 && dock[2]==1 && dock[3]==1);
+    }
+    // Fixed aspects fit only the upper picture; lower HUD and input remain full width.
+    dm_aspect_set_display(795.f/1100); dm_aspect_set_seated(.49f,.51f);
+    const float aspects[]={1,2.8f};
+    for (unsigned i=0;i<2;i++) {
+        g_custom=aspects[i]; float picture[4],dock[4],hit[4];
+        dm_aspect_set_safe_area(795,1100,0,30,0);
+        assert(dm_aspect_region(0,picture) && dm_aspect_region(1,dock));
+        assert(fabsf(795*picture[2]/(1100*picture[3])-g_custom)<.00001f);
+        assert(picture[1]>=0 && picture[1]+picture[3]<=.49f+.00001f);
+        assert(dock[0]==0 && dock[2]==1 && dock[1]==.51f && dock[3]==1-.51f);
+        dm_aspect_touch_rect(795,1100,hit);
+        assert(hit[0]>=795*picture[0]-.001f && hit[1]>=1100*picture[1]-.001f);
+        assert(hit[0]+hit[2]<=795*(picture[0]+picture[2])+.001f);
+        assert(hit[1]+hit[3]<=1100*(picture[1]+picture[3])+.001f);
+    }
+    g_custom=0;
+    dm_aspect_set_seated(.5f,.5f); float r[4]; assert(dm_aspect_region(0,r)); // zero-thickness division
+    dm_aspect_set_seated(NAN,.6f); assert(!dm_aspect_region(0,r));
+    dm_aspect_set_seated(.8f,.2f); assert(!dm_aspect_region(0,r));
+}
 static void failure(const char *value, int bad_build, int stale) {
     pid_t pid = fork(); assert(pid >= 0);
     if (!pid) {
@@ -325,5 +383,6 @@ int main(void) {
     test_right_hud_padding();
     test_edge_hud();
     test_narrow_hud();
+    test_seated_regions();
     free(g_mod[0].base); puts("aspect: camera, centered content/hit regions and independent fullscreen backgrounds passed");
 }
