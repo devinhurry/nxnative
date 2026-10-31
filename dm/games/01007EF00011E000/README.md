@@ -528,6 +528,20 @@ used by Camera and Scope. The left-stick ownership check uses the same button
 hit eligibility, and the Mac preview shares the fix. Other games retain their
 existing cluster behavior; button sizes and sliding behavior are unchanged.
 
+**Resolved: landscape movement gap between L and the equipment cross (2026-10-31).**
+Movement touch-down only considered the stick's home grab circle; the existing
+lower-left area predicate was unused. Blank points between L and the D-pad fell
+through as game touchscreen input, so dragging them produced no movement axes.
+UIKit and the Mac preview now let unclaimed space in the lower-left third of
+the control area start the floating movement stick. Buttons, the D-pad, the
+shield grab region, map taps and native camera/scope targets retain ownership;
+an already held movement stick cannot be replaced by another finger.
+The UIKit regression covers four points in the gap, drag/release axes and L/D-pad
+priority. All new checks pass; the full harness retains three pre-existing
+portrait-layout assertion failures. The BOTW-only full game regression stops
+before translation because the pinned x86_64 translator cannot load the local
+arm64 .NET runtime; no game boot was tested. Physical iPhone acceptance remains pending.
+
 R3 Scope owns a guide bar inside `MainScreen_00`, under
 `Pa_CameraPointer_00`, rather than an independent menu screen. Its visible
 capture-backed guide plates and native glyphs supply Place pin, Quit and Edit

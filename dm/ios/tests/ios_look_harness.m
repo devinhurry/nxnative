@@ -1489,6 +1489,34 @@ static void test_botw_face_gaps(DmGamepad *view) {
     g_botw_touchhud_available = NO; [view reset];
 }
 
+static void test_botw_left_stick_gaps(DmGamepad *view) {
+    g_botw_touchhud_available = g_botw_gameplay_ready = YES;
+    g_botw_touch_menu_active = g_botw_touch_menu_presented = NO;
+    g_look_enabled = YES;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+    [view setNeedsLayout]; [view layoutIfNeeded];
+    CGPoint l = [view dm_testRuneButtonCenter], cross = view.dpadCenter;
+    const CGFloat steps[] = {.35, .4, .45, .5};
+    for (unsigned i = 0; i < sizeof steps / sizeof *steps; i++) {
+        [view reset]; reset_look();
+        CGPoint p = CGPointMake(l.x + (cross.x-l.x)*steps[i], l.y + (cross.y-l.y)*steps[i]);
+        CHECK([view dm_testBtnAt:p] < 0, "the landscape L/Cross gap is outside button hit regions");
+        CHECK([view dm_testLeftStickOwnsPoint:p], "the landscape L/Cross gap belongs to the floating left stick");
+        FakeTouch *t = touch(p.x,p.y); began(view,t); moved(view,t,p.x+20,p.y-10);
+        CHECK(g_lx > 0 && g_ly > 0 && !g_buttons && !g_touch_count && !g_look_held,
+              "dragging the landscape L/Cross gap moves the left stick without a game touch or button press");
+        ended(view,t,p.x+20,p.y-10);
+        CHECK(!g_lx && !g_ly, "releasing a left-gap drag clears both movement axes");
+    }
+    FakeTouch *t = touch(l.x,l.y); began(view,t);
+    CHECK(g_buttons == DM_BTN_L && !g_lx && !g_ly, "L keeps button priority beside the open movement area");
+    ended(view,t,l.x,l.y);
+    CGPoint up = CGPointMake(cross.x,cross.y-30); t = touch(up.x,up.y); began(view,t);
+    CHECK((g_buttons & DM_BTN_UP) && !g_lx && !g_ly, "Cross keeps D-pad priority beside the open movement area");
+    ended(view,t,up.x,up.y);
+    g_botw_touchhud_available = NO; [view reset];
+}
+
 static void test_priority_and_multitouch(DmGamepad *view) {
     reset_look(); g_look_enabled = YES; [view setFull:YES];
     CGPoint a = [view facePos:0];
@@ -1937,6 +1965,7 @@ static void run_tests(DmGamepad *view) {
     test_motion_orientation();
     test_look_drag(view);
     test_botw_face_gaps(view);
+    test_botw_left_stick_gaps(view);
     test_priority_and_multitouch(view);
     test_cancel_and_modes(view);
     reset_look(); g_look_enabled = YES;

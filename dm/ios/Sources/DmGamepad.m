@@ -628,7 +628,7 @@ static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPoint
     return (i ? K_RSTICK_R : K_STICK_R) * self.u;
 }
 - (CGFloat)shieldR { CGRect a=[self botwControlArea]; return dm_botw_layout_stick_radius(&_touchLayout,a.size.width,a.size.height) * [self botwLayoutScale:B_ZL]; }
-- (BOOL)inLeftArea:(CGPoint)p { CGRect b = [self botwTouchControlsActive] ? [self botwControlArea] : self.bounds; return p.x < CGRectGetMinX(b)+b.size.width * K_LSWIPE && p.y > CGRectGetMidY(b); }   // lower-left: the left stick starts where the touch lands
+- (BOOL)inLeftArea:(CGPoint)p { CGRect b = [self botwTouchControlsActive] ? [self botwControlArea] : self.bounds; return CGRectContainsPoint(b,p) && p.x < CGRectGetMinX(b)+b.size.width * K_LSWIPE && p.y > CGRectGetMidY(b); }   // lower-left: the left stick starts where the touch lands
 - (BOOL)inRightArea:(CGPoint)p { CGRect b = self.bounds; return p.x >= CGRectGetMaxX(b) - b.size.width * K_RSWIPE; }
 - (CGPoint)dpadCenter { if ([self botwTouchControlsActive] || [self botwMenuDpadActive]) return [self botwLayoutCenter:B_LEFT]; UIEdgeInsets i = self.safeAreaInsets; dm_touchpad_point p = dm_touchpad_dpad_center(self.bounds.size.width, self.bounds.size.height, i.left, i.top, i.right, i.bottom); return CGPointMake(p.x, p.y); }
 - (CGFloat)dpadR {
@@ -833,6 +833,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
 }
 - (BOOL)leftStickOwnsPoint:(CGPoint)p {
     if (![self botwTouchControlsActive] || _tap || [self btnAt:p] >= 0 || [self inSwap:p]) return NO;
+    if (dist(p,self.shieldHome) <= self.shieldR*K_STICK_GRAB) return NO;
     if ([self compactDpadOwnsPoint:p]) return NO;
     if (_touchLayout.portrait && [self faceAt:p]) return NO;
     CGFloat best = 1;
@@ -847,7 +848,11 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
         CGFloat sl = dist(p, self.stickHome) / ([self stickR:0] * K_STICK_GRAB);
         if (sl < best) { kind = C_STICK; }
     }
-    return kind == C_STICK;
+    if (kind == C_STICK) return YES;
+    // Empty space between controls can start the floating stick outside its home circle.
+    return kind == C_NONE && !_stick[0] && ![self faceAt:p] && [self inLeftArea:p] &&
+        ![self botwMapOwnsPoint:p] && ![self botwScopePromptOwnsPoint:p] &&
+        (!_botwCameraPadVisible || botwSeated());
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
     if (gestureRecognizer == _menuPadDoubleTap) {

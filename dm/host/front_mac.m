@@ -456,6 +456,11 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     float x = (p.x - content[0]) / content[2], y = (p.y - content[1]) / content[3];
     return x >= _mapRect.x && x < _mapRect.x + _mapRect.width && y >= _mapRect.y && y < _mapRect.y + _mapRect.height;
 }
+- (BOOL)scopePromptOwnsTop:(dm_touchpad_point)p {
+    float canvas[4]; dm_aspect_touch_rect(self.bounds.size.width,self.bounds.size.height,canvas);
+    return _active && canvas[2] > 0 && canvas[3] > 0 &&
+        dm_botw_touch_scope_prompt_at((p.x-canvas[0])/canvas[2],(p.y-canvas[1])/canvas[3]);
+}
 - (int)buttonAtTop:(dm_touchpad_point)p {
     float u = self.u, w = self.bounds.size.width;
     if (_active) {
@@ -500,6 +505,8 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
 }
 - (BOOL)leftStickOwnsTop:(dm_touchpad_point)p {
     if ([self buttonAtTop:p] >= 0) return NO;
+    dm_touchpad_point shield = [self shieldHome];
+    if (_active && hypotf(p.x-shield.x,p.y-shield.y) <= self.shieldRadius*DM_TP_STICK_GRAB) return NO;
     if ([self compactDpadOwnsTop:p]) return NO;
     dm_touchpad_point face = [self faceCenter], dpad = [self dpadCenter], stick = [self stickHome];
     float f = preview_distance(NSMakePoint(p.x, p.y), NSMakePoint(face.x, face.y)) /
@@ -513,7 +520,12 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
               (self.dpadRadius * DM_TP_DPAD_GRAB);
     float s = preview_distance(NSMakePoint(p.x, p.y), NSMakePoint(stick.x, stick.y)) /
               (self.stickRadius * DM_TP_STICK_GRAB);
-    return s <= 1.0f && s < f && s < d;
+    if (s <= 1.0f && s < f && s < d) return YES;
+    // Match UIKit's floating-stick fallback without taking another control's touch.
+    dm_touchpad_rect a = [self controlArea];
+    return _active && ![self faceAtTop:p] && d > 1 && ![self mapOwnsTop:p] && ![self scopePromptOwnsTop:p] &&
+        (!_cameraPadVisible || preview_seated()) && dm_touchpad_rounded_rect_contains(a,0,p.x,p.y) &&
+        p.x < a.x+a.width*DM_TP_LSWIPE && p.y > a.y+a.height*.5f;
 }
 - (uint64_t)faceAtTop:(dm_touchpad_point)p {
     dm_touchpad_point c = [self faceCenter]; float u = self.u;
@@ -598,9 +610,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     dm_touchpad_point fc = [self faceCenter], dc = [self dpadCenter]; float u = self.u;
     float fd = preview_distance(NSMakePoint(p.x,p.y), NSMakePoint(fc.x,fc.y));
     float dd = preview_distance(NSMakePoint(p.x,p.y), NSMakePoint(dc.x,dc.y));
-    float canvas[4]; dm_aspect_touch_rect(self.bounds.size.width,self.bounds.size.height,canvas);
-    BOOL scopePrompt = _active && canvas[2] > 0 && canvas[3] > 0 &&
-        dm_botw_touch_scope_prompt_at((p.x-canvas[0])/canvas[2],(p.y-canvas[1])/canvas[3]);
+    BOOL scopePrompt = [self scopePromptOwnsTop:p];
     // Only the individual buttons own BOTW touches; gaps remain available to look.
     BOOL faceHit = _active ? [self faceAtTop:p] != 0 : fd <= self.faceGap + self.faceRadius*1.6f;
     if (_active && _touchLayout.portrait && faceHit) fd = 0;
