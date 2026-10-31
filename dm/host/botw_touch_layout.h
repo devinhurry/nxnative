@@ -113,12 +113,12 @@ static inline dm_touchpad_rect dm_botw_layout_control(const dm_botw_touch_layout
         dm_touchpad_rect safe = dm_touchpad_safe_rect(width,height,left,top,right,bottom);
         float base_y = safe.y + safe.height - DM_TP_PAD_Y*u;
         float default_gap = DM_TP_FACE_GAP * 1.060f * 1.100f * u;
-        // Leave both floating sticks' grab regions separate at the default size.
-        float shield_y = base_y - (DM_TP_STICK_R*DM_TP_STICK_GRAB*1.8f + DM_TP_SHIELD_GAP*.5f + 6)*u;
-        float rune_y = shield_y - (DM_TP_STICK_R*DM_TP_STICK_GRAB + DM_TP_L_R*1.2f*1.45f + DM_TP_SHIELD_GAP*.5f)*u;
+        // Halve the full vertical steps, including the expanded grab-region spacing.
+        float shield_y = base_y - 5 - (DM_TP_STICK_R*DM_TP_STICK_GRAB*1.8f + DM_TP_SHIELD_GAP*.5f + 6)*u*.5f;
+        float rune_y = shield_y - (DM_TP_STICK_R*DM_TP_STICK_GRAB + DM_TP_L_R*1.2f*1.45f + DM_TP_SHIELD_GAP*.5f)*u*.5f;
         switch (id) {
             case 0:
-                p = (dm_touchpad_point){safe.x + safe.width - DM_TP_FACE_X*u, base_y - DM_TP_FACE_GAP*3.1f*u};
+                p = (dm_touchpad_point){safe.x + safe.width - DM_TP_FACE_X*u, base_y - DM_TP_FACE_GAP*3.1f*u - 100};
                 rx = (DM_TP_FACE_GAP*layout->face_gap*.5f + DM_TP_FACE_R)*u;
                 ry = (DM_TP_FACE_GAP*layout->face_gap*1.6f + DM_TP_FACE_R)*u;
                 break;
@@ -127,11 +127,11 @@ static inline dm_touchpad_rect dm_botw_layout_control(const dm_botw_touch_layout
             case 6: p = (dm_touchpad_point){safe.x+DM_TP_STICK_X*u, rune_y}; radius=DM_TP_L_R*u; break;
             case 12:
                 p = (dm_touchpad_point){safe.x+DM_TP_STICK_X*u,
-                    rune_y - (DM_TP_L_R*1.2f*1.45f + DM_TP_DPAD_R*DM_TP_DPAD_GRAB + DM_TP_SHIELD_GAP*.5f)*u};
+                    rune_y - (DM_TP_L_R*1.2f*1.45f + DM_TP_DPAD_R*DM_TP_DPAD_GRAB + DM_TP_SHIELD_GAP*.5f)*u*.5f};
                 radius=DM_TP_DPAD_R*u; break;
             case 7: case 9:
                 p = (dm_touchpad_point){safe.x+safe.width-DM_TP_FACE_X*u+(id==7?.5f:-.5f)*default_gap,
-                    base_y-DM_TP_FACE_GAP*3.1f*u-(3.3f+(id==7?.5f:-.5f))*default_gap};
+                    base_y-DM_TP_FACE_GAP*3.1f*u-100-(3.3f+(id==7?.5f:-.5f))*default_gap};
                 radius=DM_TP_ZL_R*u; break;
             default: return (dm_touchpad_rect){0};
         }
