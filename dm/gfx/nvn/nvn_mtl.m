@@ -59,6 +59,7 @@ static inline uint64_t tex_slot_h(const uint64_t *tex, const uint64_t *img, unsi
 static uint64_t c2_handle(int stage, unsigned b);   // the handle c2 holds at byte b (defined with the draw state, TEXA / SAMPA)
 #include "nvn_hmap.h"
 #include "../../host/dm.h"
+#include "../../host/memory_mode.h"
 #include "../../host/botw_rune_icon.h"
 #import <CommonCrypto/CommonDigest.h>
 #include <stdarg.h>
@@ -214,7 +215,8 @@ static void ws_report(uint64_t frame, uint64_t frames) {
 #include "nvn_rec.h"   // deferred encoding (DM_NVN_ENC_THREAD)
 static NSHashTable *g_res_objects;
 static _Atomic unsigned g_image_heap_n;
-static inline MTL4VisibilityOptions resource_vis(void) { return MTL4VisibilityOptionDevice | (g_image_heap_n ? MTL4VisibilityOptionResourceAlias : 0); }
+static _Atomic uint64_t g_up_source_bytes;
+static inline MTL4VisibilityOptions resource_vis(void) { return MTL4VisibilityOptionDevice | (g_image_heap_n || atomic_load(&g_up_source_bytes) ? MTL4VisibilityOptionResourceAlias : 0); }
 // Residency churn by call site (the power line every 300 frames, mtl_res_stats): each commit with changes is a kernel call whose cost grows with what was added or removed
 enum { RS_SITES = 16 }; static struct { int line; uint64_t n, bytes; } g_rs_site[RS_SITES]; static uint64_t g_rs_rm, g_rs_commits, g_rs_commit_ns;
 #define res_add(r) res_add_at((r), __LINE__)
@@ -520,13 +522,10 @@ static _Atomic uint64_t g_reg_gen = 1;   // Change generation of memory pool / t
 // On-demand residency of memory pools: putting a zero-copy buffer into the residency set makes iOS read the whole pool into memory and pin it as wired, even a pool the game never uses
 // (they measured on a 17 Pro Max a 512 MB render-target pool addressed 0 times in a run, with about 530 MB more device wired memory; a 4 GB A14 was ended by the system within seconds of launch because of it).
 // So a pool is not put into the residency set when created; it is put in, and the residency set committed on the spot, the first time the GPU gets its address through mtl_addr / mtl_gpu_addr -- these are the only two ways the GPU gets pool addresses,
-// and committing on the spot is earlier than any command buffer commit that uses it. CPU-side reads of pool contents through mtl_addr trigger it too (conservative, never misses). Caller holds g_mu
-static void pool_res(int i) {
-    if (g_pools[i].res) return;
-    res_add(g_pools[i].buf); res_commit(); g_pools[i].res = 1; g_pool_res_n++;
-}
-void mtl_pool_add(const void *mem, uint64_t size) {
-    mtl_init(); g_reg_gen++;
+// and committing on the spot is earlier than any command buffer commit that uses it. CPU-only inspection uses mtl_cpu_ptr instead. Caller holds g_mu
+static int up_transient_sources(void);
+static id<MTLBuffer> pool_buffer_new(const void *mem, uint64_t size) __attribute__((ns_returns_retained));
+static id<MTLBuffer> pool_buffer_new(const void *mem, uint64_t size) {
     uintptr_t pg = (uintptr_t)getpagesize(), lo = (uintptr_t)mem, hi = lo + size;
     uintptr_t a = lo & ~(pg - 1), b = (hi + pg - 1) & ~(pg - 1);
     id<MTLBuffer> buf = [g_dev newBufferWithBytesNoCopy:(void *)a length:b - a options:MTLResourceStorageModeShared deallocator:nil];
@@ -546,12 +545,29 @@ void mtl_pool_add(const void *mem, uint64_t size) {
         }
         MDIE("memory pool %p+%#llx: failed to create the zero-copy buffer over %#lx..%#lx", mem, (unsigned long long)size, (unsigned long)a, (unsigned long)b);
     }
+    return buf;
+}
+static void pool_res(int i) {
+    if (g_pools[i].res) return;
+    if (!g_pools[i].buf) {
+        id<MTLBuffer> b = pool_buffer_new((const void *)g_pools[i].lo, g_pools[i].hi - g_pools[i].lo);
+        g_pools[i].buf = b; g_pools[i].gpu = b.gpuAddress; [g_keep addObject:b];
+    }
+    res_add(g_pools[i].buf); res_commit(); g_pools[i].res = 1; g_pool_res_n++;
+}
+void mtl_pool_add(const void *mem, uint64_t size) {
+    mtl_init(); g_reg_gen++;
+    uintptr_t pg = (uintptr_t)getpagesize(), lo = (uintptr_t)mem, hi = lo + size;
+    uintptr_t a = lo & ~(pg - 1);
+    // Upload-only pools need bounds and CPU bytes, not a persistent Metal
+    // registration in addition to the temporary source views.
+    id<MTLBuffer> buf = up_transient_sources() ? nil : pool_buffer_new(mem, size);
     pthread_mutex_lock(&g_mu);
     if (g_npool == g_cap) { g_cap = g_cap ? g_cap * 2 : 64; g_pools = realloc(g_pools, g_cap * sizeof *g_pools); }
     g_pidx_ok = 0; g_plast = -1; atomic_fetch_add(&g_pool_gen, 1);   // the address index and the per-thread caches are invalid (pool_find, pc_get)
     g_pools[g_npool++] = (pool_ent){lo, hi, a, buf, buf.gpuAddress, mem, 0};   // not in the residency set yet: put in the first time it is addressed (pool_res)
     g_pool_adds++;
-    [g_keep addObject:buf];
+    if (buf) [g_keep addObject:buf];
     pthread_mutex_unlock(&g_mu);
 }
 
@@ -564,9 +580,12 @@ void mtl_pool_del(const void *mem) {
     // autoreleased there, so every finalized pool buffer stayed alive for good (Ghost Trick: Phantom Detective, 125 buffers and 6.6 GB of GPU allocations 300 frames into the boot, 0 with the pool)
     @autoreleasepool {
     for (int i = 0; i < g_npool; i++)
-        if (g_pools[i].key == mem) { id<MTLBuffer> b = g_pools[i].buf; [g_keep removeObject:b]; defer_obj_release(b); if (g_pools[i].res) g_pool_res_n--;
-            if (!g_dead_pools) g_dead_pools = [NSHashTable weakObjectsHashTable];
-            [g_dead_pools addObject:b]; g_pools[i] = g_pools[--g_npool]; g_pidx_ok = 0; g_plast = -1; atomic_fetch_add(&g_pool_gen, 1); break; }
+        if (g_pools[i].key == mem) { id<MTLBuffer> b = g_pools[i].buf;
+            if (b) { [g_keep removeObject:b]; defer_obj_release(b);
+                if (!g_dead_pools) g_dead_pools = [NSHashTable weakObjectsHashTable];
+                [g_dead_pools addObject:b]; }
+            if (g_pools[i].res) g_pool_res_n--;
+            g_pools[i] = g_pools[--g_npool]; g_pidx_ok = 0; g_plast = -1; atomic_fetch_add(&g_pool_gen, 1); break; }
     }
     pthread_mutex_unlock(&g_mu);
 }
@@ -587,6 +606,25 @@ static int pool_find(uint64_t addr, uint64_t len) {
     if (hit >= 0 && addr + len <= g_pools[g_pidx[hit]].hi) return g_plast = g_pidx[hit];
     for (int i = 0; i < g_npool; i++) if (addr >= g_pools[i].lo && addr + len <= g_pools[i].hi) return g_plast = i;
     return -1;
+}
+// CPU inspection must not request GPU residency. A no-copy pool's CPU address
+// is the original guest address. CPU-only hits must not populate the GPU cache:
+// the first later GPU lookup still needs to execute pool_res.
+static const uint8_t *mtl_cpu_ptr(uint64_t addr, uint64_t len) {
+    // With the experiment off, preserve the original mtl_addr lookup, including
+    // its pool registration, residency and GPU-cache side effects.
+    if (!up_transient_sources()) {
+        void *buffer; uint64_t off;
+        if (!mtl_addr(addr, len, &buffer, &off)) return NULL;
+        const uint8_t *base = [(__bridge id<MTLBuffer>)buffer contents];
+        return base ? base + off : NULL;
+    }
+    if (!addr || !len || addr > UINT64_MAX - len) return NULL;
+    if (pc_get(addr, len)) return (const uint8_t *)(uintptr_t)addr;
+    pthread_mutex_lock(&g_mu);
+    int found = pool_find(addr, len) >= 0;
+    pthread_mutex_unlock(&g_mu);
+    return found ? (const uint8_t *)(uintptr_t)addr : NULL;
 }
 int mtl_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off) {
     const pc_ent *c = pc_get(addr, len);
@@ -2019,6 +2057,21 @@ static NSMutableArray *g_up_texs, *g_up_views;   // Targets and temporary intege
 static id<MTLBuffer> g_up_block;
 static size_t g_up_block_off, g_up_block_size;
 static NSMutableArray *g_up_keep;
+// Experimental upload-only no-copy views: do not promote a whole texture source
+// pool to permanent GPU residency for a one-time deswizzle. Every upload batch
+// retains its source owners; the last completed batch retires the view. Keeping
+// the same owner in multiple batches avoids removing residency during a split.
+@interface NvUploadSource : NSObject { @public id<MTLBuffer> buffer; } @end
+@implementation NvUploadSource
+- (void)dealloc { res_remove(buffer); atomic_fetch_sub(&g_up_source_bytes, buffer.length); }
+@end
+static NSMutableArray<NvUploadSource *> *g_up_sources;
+static int up_transient_sources(void) {
+    static _Atomic int on = -1;
+    int value = atomic_load_explicit(&on, memory_order_relaxed);
+    if (value < 0) { const char *e = getenv("DM_NVN_TRANSIENT_UPLOADS"); value = dm_low_memory_enabled() && e && atoi(e) > 0; atomic_store_explicit(&on, value, memory_order_relaxed); }
+    return value;
+}
 // Limit overflow staging per batch. The three upload slots bound in-flight
 // batches; up_begin publishes queued commits before waiting for a slot. A single
 // texture larger than the budget gets its own block (uploads are not tiled here).
@@ -2034,7 +2087,7 @@ static int up_lost_take(id tex) {   // This texture's upload was dropped: take i
     if (!tex) return 0; os_unfair_lock_lock(&g_up_lost_lk); int hit = [g_up_lost containsObject:tex]; if (hit) { [g_up_lost removeObject:tex]; atomic_store(&g_up_lost_n, (int)g_up_lost.allObjects.count); atomic_fetch_add(&g_up_lost_redo, 1); } os_unfair_lock_unlock(&g_up_lost_lk); return hit;
 }
 static void up_diag(void);
-static void up_flush(void) {
+static void up_flush_body(void) {
     up_owner_check("up_flush");
     if (!g_up_cb) return;
     if (g_up_ce) {
@@ -2054,6 +2107,7 @@ static void up_flush(void) {
     NSMutableArray *staging = g_up_keep;
     if (g_up_block && !up_retained(g_up_block, slot)) [staging addObject:g_up_block];
     NSMutableArray *views = g_up_views; g_up_views = nil;
+    NSMutableArray *sources = g_up_sources; g_up_sources = nil;
     g_up_keep = nil; g_up_block = nil;
     g_up_block_off = g_up_block_size = g_up_staging_bytes = 0;
     NSMutableSet *targets = [NSMutableSet setWithArray:g_up_texs]; for (int i = 0; i < g_nup_blits; i++) if (g_up_blits[i].dst) [targets addObject:g_up_blits[i].dst];
@@ -2074,6 +2128,7 @@ static void up_flush(void) {
             for (id<MTLResource> obj in staging) res_remove(obj);
             [staging removeAllObjects];
             [views removeAllObjects];   // upload-only integer views share their targets' residency
+            [sources removeAllObjects]; // last source owner removes its view's residency
             res_commit();
         }
         atomic_store(&g_up_alloc_busy[slot], 0);
@@ -2092,8 +2147,12 @@ static void up_flush(void) {
     g_nup_blits = 0;
     [g_up_texs removeAllObjects];
 }
+static void up_flush(void) {
+    if (up_transient_sources()) { @autoreleasepool { up_flush_body(); } }
+    else up_flush_body();
+}
 
-static void up_begin(void) {
+static void up_begin_body(void) {
     up_owner_check("up_begin");
     if (g_up_cb) return;
     unsigned slot = g_up_seq++ % 3;
@@ -2112,6 +2171,28 @@ static void up_begin(void) {
     [g_up_ce setArgumentTable:g_up_ct];
     if (!g_up_texs) g_up_texs = [NSMutableArray array];
     if (!g_up_keep) g_up_keep = [NSMutableArray array];
+}
+static void up_begin(void) {
+    if (up_transient_sources()) { @autoreleasepool { up_begin_body(); } }
+    else up_begin_body();
+}
+
+static NvUploadSource *up_source_new(const void *mem, size_t n, uint64_t *off) __attribute__((ns_returns_retained));
+static NvUploadSource *up_source_new(const void *mem, size_t n, uint64_t *off) {
+    uintptr_t page = (uintptr_t)getpagesize(), lo = (uintptr_t)mem & ~(page - 1);
+    if (!n || n > UINTPTR_MAX - (page - 1) || (uintptr_t)mem > UINTPTR_MAX - n - (page - 1)) MDIE("invalid upload source span");
+    uintptr_t hi = ((uintptr_t)mem + n + page - 1) & ~(page - 1);
+    NvUploadSource *owner = [NvUploadSource new];
+    owner->buffer = [g_dev newBufferWithBytesNoCopy:(void *)lo length:hi - lo options:MTLResourceStorageModeShared deallocator:nil];
+    if (!owner->buffer) MDIE("cannot create transient upload source (%zu bytes)", n);
+    atomic_fetch_add(&g_up_source_bytes, owner->buffer.length);
+    res_add(owner->buffer); *off = (uintptr_t)mem - lo;
+    return owner;
+}
+static void up_source_use(NvUploadSource *owner) {
+    if (!owner) return;
+    if (!g_up_sources) g_up_sources = [NSMutableArray new];
+    [g_up_sources addObject:owner];
 }
 
 // Diagnostic readout (low frequency; printed only when the block switch count changed and ≥ 1 second since the last line, at most 200 lines per game): how many times an upload batch ran out of staging block and switched blocks midway; GPU allocated, residency set object count, deferred-release queue length.
@@ -2282,12 +2363,22 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
         total += (size_t)((w + bw - 1) / bw) * bpb * ((h + bh - 1) / bh) * z * layers;
     }
     g_bp_up_bytes += total;
-    void *mb; uint64_t mo;
-    int use_gpu = !rb_shift && !sparse && g_nvn_deswz_gpu && mtl_addr((uint64_t)t->mem, t->L.size, &mb, &mo);   // a sparse pool's texture is gathered through its page table on the CPU
+    void *mb = NULL; uint64_t mo = 0;
+    int transient = up_transient_sources();
+    int use_gpu = !rb_shift && !sparse && g_nvn_deswz_gpu && (transient
+        ? mtl_cpu_ptr((uint64_t)t->mem, t->L.size) != NULL
+        : mtl_addr((uint64_t)t->mem, t->L.size, &mb, &mo));   // sparse textures are gathered on the CPU
     if (g_nvn_deswz_gpu && !use_gpu && !sparse && !rb_shift) RED_ONCE(40, "swizzled texture storage is not in a memory pool; falling back to the CPU");
     if (use_gpu) {
         // The GPU reads the memory pool at execution time, which is closer to a real Switch than a snapshot at CPU upload time; the dirty-page stamp is still taken before encoding, and later writes still trigger a re-upload.
         up_begin();
+        NvUploadSource *source = transient ? up_source_new(t->mem, t->L.size, &mo) : nil;
+        if (source) {
+            mb = (__bridge void *)source->buffer;
+            // The view aliases the original pool and any earlier upload views.
+            // up_begin ran before this view existed, so order those writes here.
+            [g_up_ce barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:resource_vis()];
+        }
         if (direct && !(mo & 7)) {
             id<MTLTexture> view = [mt newTextureViewWithPixelFormat:MTLPixelFormatRGBA16Uint textureType:MTLTextureType2DArray levels:NSMakeRange(0,mt.mipmapLevelCount) slices:NSMakeRange(0,mt.arrayLength)];
             if (view) {
@@ -2295,6 +2386,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
                 int ok=1;
                 for(unsigned l=0;l<d.mipmapLevelCount;l++) {
                     size_t poff;id<MTLBuffer> params=up_param_alloc(&poff);
+                    up_source_use(source);
                     if(nvn_deswz_gpu_direct_m4(g_up_ce,g_up_ct,params,poff,(__bridge id<MTLBuffer>)mb,mo,&t->d,l,view)){ok=0;break;}
                     g_direct_dispatches++;
                 }
@@ -2312,6 +2404,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
             size_t pitch = (size_t)((w + bw - 1) / bw) * bpb, rows = (h + bh - 1) / bh;
             for (unsigned y = 0; y < layers; y++) {
                 size_t poff; id<MTLBuffer> params = up_param_alloc(&poff);   // Metal 4 has no setBytes: the parameter block of each deswizzle is cut from a shared block (no new GPU buffer each time)
+                up_source_use(source);
                 if (nvn_deswz_gpu_encode_m4(g_up_ce, g_up_ct, params, poff, (__bridge id<MTLBuffer>)mb, mo, &t->d, l, y, stg, stg_off + off, pitch)) { enc_ok = 0; break; }
                 up_blit_add(stg, stg_off + off, pitch, pitch * rows, MTLSizeMake(w, h, z), mt, y, l);
                 off += pitch * rows * z;
@@ -4671,19 +4764,26 @@ static uint64_t vbuf_unaligned(uint64_t addr, uint64_t size, uint64_t need, int 
         if (!dirty) { c->epoch = g_wr_epoch; c->writes = g_vbuf_write_epoch; c->sbw = g_sbw_gen; c->npend = g_npend; return c->gpu; }
     }
     void *mb = NULL; uint64_t mo = 0;
-    if (!len || len > VBUF_COPY_MAX || (size && !mtl_addr(addr, size, &mb, &mo))) {
+    int transient = up_transient_sources();
+    const uint8_t *cpu_base = NULL;
+    if (!len || len > VBUF_COPY_MAX || (size && (transient
+            ? !(cpu_base = mtl_cpu_ptr(addr, size)) : !mtl_addr(addr, size, &mb, &mo)))) {
         if (need) RED_ONCE(121, "a draw reads %llu bytes of the vertex stream at %#llx, bound with %llu: no copy padded with zeros, so Metal reads past the bound range", (unsigned long long)need, (unsigned long long)addr, (unsigned long long)size);
         else RED_ONCE(120, "vertex stream at an address not 4-byte aligned (%#llx, %llu bytes) could not be copied: bound as it is, which Metal reads from the aligned address below", (unsigned long long)addr, (unsigned long long)size);
         return 0;
     }
     id<MTLBuffer> src = (__bridge id<MTLBuffer>)mb;
     int cpu = !size || (!pend_hits(addr, size) && !g_sbw_over && !sbw_hits(addr, addr + size) && !gw_live(addr, addr + size)
-        && !nvn_sparse_gen() && nvn_host_readable(addr, size) && src.contents);   // a sparse mapping may alias this physical range
+        && !nvn_sparse_gen() && nvn_host_readable(addr, size) && (transient ? cpu_base : src.contents));   // a sparse mapping may alias this physical range
     if (!cpu && !prepare) MDIE("unaligned vertex stream was not prepared before its render encoder");
     id<MTLBuffer> ab; size_t off = arena_alloc((size_t)len, &ab);
     if (len > size) memset((uint8_t *)ab.contents + off + size, 0, (size_t)(len - size));   // the bytes past the bound range read as zeros
-    if (cpu) { if (size) memcpy((uint8_t *)ab.contents + off, (const uint8_t *)src.contents + mo, (size_t)size); }
+    if (cpu) { if (size) memcpy((uint8_t *)ab.contents + off, transient ? cpu_base : (const uint8_t *)src.contents + mo, (size_t)size); }
     else {
+        if (transient) {
+            if (!mtl_addr(addr, size, &mb, &mo)) MDIE("vertex copy source pool disappeared");
+            src = (__bridge id<MTLBuffer>)mb;
+        }
         g_blit_alias = 1;
         id<MTL4ComputeCommandEncoder> e = blit();   // lands deferred updates and orders all preceding GPU writes, including aliases
         g_blit_alias = 1;
@@ -6775,12 +6875,16 @@ static uint64_t g_stat_pool_builds; static double g_stat_pool_ms;
 // Whether a registered texture's storage still exists, before pool_gpu makes a texture no draw has bound: a game leaves IDs registered after it is done with their textures, and the
 // first pool walk in Mario Party Superstars crashed once in nvn_sparse_protect (pkg_upload ← tex_by_id ← pool_gpu) on a page table pointer that was garbage; which ID it was was not
 // caught. So: its memory pool object is live (nvnMemoryPoolFinalize clears the magic; freed and reused memory does not hold it) and an ordinary pool's storage lies in a pool the host
-// maps (mtl_addr; otherwise the upload would read the guest address on the CPU)
+// maps (mtl_cpu_ptr; otherwise the upload would read an invalid guest address)
 static int tex_storage_live(const tex_t *t) {
-    const pool_t *p = t->pool; void *mb; uint64_t mo;
+    const pool_t *p = t->pool;
     if (p && p->magic != MAGIC('P', 'O', 'O', 'L')) return 0;
     if (p && nvn_sparse_pool(p)) return 1;
-    return mtl_addr((uint64_t)(uintptr_t)t->mem, t->L.size ? t->L.size : 1, &mb, &mo);
+    if (!up_transient_sources()) {
+        void *mb; uint64_t mo;
+        return mtl_addr((uint64_t)(uintptr_t)t->mem, t->L.size ? t->L.size : 1, &mb, &mo);
+    }
+    return mtl_cpu_ptr((uint64_t)(uintptr_t)t->mem, t->L.size ? t->L.size : 1) != NULL;
 }
 static uint64_t pool_gpu(int samp, int dtt, int dpf, int base, __unsafe_unretained id<MTLBuffer> *out) {
     uint64_t rg = atomic_load(&g_reg_gen), sg = atomic_load(&g_ser_gen);
@@ -6943,9 +7047,8 @@ static void ubo_read(int stage, int reg, int off, size_t n, void *out) {
     if (pend_hits(u->addr + off, n)) { int kind; if (pend_read(u->addr + off, n, out, &kind)) return;   // written by an inline update queued in this submission: its data
         RED_ONCE(47, "the uniform buffer holding bindless handles (stage %d slot %d +%#x) has GPU-side writes in this submission (%s): the current value is read", stage, reg, off,
                  kind == 2 ? "a buffer copy" : kind == 3 ? "a fill" : kind == 1 ? "an inline update covering part of it" : "more writes than the host tracks"); }
-    void *mb; uint64_t mo; const uint8_t *base;
-    if (!mtl_addr(u->addr + off, n, &mb, &mo) || !(base = [(__bridge id<MTLBuffer>)mb contents])) return;
-    memcpy(out, base + mo, n);
+    const uint8_t *base = mtl_cpu_ptr(u->addr + off, n);
+    if (base) memcpy(out, base, n);
 }
 static uint32_t ubo_handle(int stage, int reg, int off) { uint32_t h; ubo_read(stage, reg, off, 4, &h); return h; }
 // BOTW's registered ui2d shaders use c3[0..3] for the clip matrix and c13.x
@@ -7459,15 +7562,15 @@ static int attr_read(int a, const p_draw *dw, const p_draw_idx *di, float P[64][
     if (!nc || !sm.stride || sm.divisor || !vb.address) return 8;
     const uint8_t *ib = NULL; int isz = di ? (di->itype == 1 ? 2 : 4) : 0;
     if (di && pend_hits(di->ibuf, (uint64_t)n * isz)) return 10;   // indices written by a copy / update earlier in this submission: the CPU still sees the old ones
-    if (di) { void *m; uint64_t o; if (!mtl_addr(di->ibuf, (uint64_t)n * isz, &m, &o) || !(ib = [(__bridge id<MTLBuffer>)m contents])) return 10; ib += o; }
+    if (di && !(ib = mtl_cpu_ptr(di->ibuf, (uint64_t)n * isz))) return 10;
     for (int k = 0; k < n; k++) {
         int64_t vid = dw ? (int64_t)dw->first + k : (isz == 2 ? (int64_t)((const uint16_t *)ib)[k] : (int64_t)((const uint32_t *)ib)[k]) + di->base_vertex;
         uint64_t off = (uint64_t)vid * sm.stride + at.offset;
         if (vid < 0 || off + 4 * nc > vb.size) return 9;
         if (pend_hits(vb.address + off, 4 * nc)) return 10;   // position written on the GPU earlier in this submission
-        void *mb; uint64_t mo; const uint8_t *base;
-        if (!mtl_addr(vb.address + off, 4 * nc, &mb, &mo) || !(base = [(__bridge id<MTLBuffer>)mb contents])) return 10;
-        float v[4] = {0, 0, 0, 1}; memcpy(v, base + mo, 4 * nc); memcpy(P[k], v, sizeof v);
+        const uint8_t *base = mtl_cpu_ptr(vb.address + off, 4 * nc);
+        if (!base) return 10;
+        float v[4] = {0, 0, 0, 1}; memcpy(v, base, 4 * nc); memcpy(P[k], v, sizeof v);
     }
     return 0;
 }
@@ -8566,9 +8669,9 @@ static int ubo_float(int slot, uint16_t ref, float *out) {   // Component cmp of
     if (slot < 0 || slot >= 6 || sl < 0 || sl >= 16) return 0;
     const p_bind_buf *u = &S.ubo[slot][sl]; uint64_t off = (uint64_t)vec * 16 + (uint64_t)cmp * 4;
     if (!u->addr || off + 4 > u->size || pend_hits(u->addr + off, 4)) return 0;
-    void *mb; uint64_t mo; const uint8_t *base;
-    if (!mtl_addr(u->addr + off, 4, &mb, &mo) || !(base = [(__bridge id<MTLBuffer>)mb contents])) return 0;
-    memcpy(out, base + mo, 4); return 1;
+    const uint8_t *base = mtl_cpu_ptr(u->addr + off, 4);
+    if (!base) return 0;
+    memcpy(out, base, 4); return 1;
 }
 static int zskip_fact_for(const char *key, zskip_fact *out) {
     if (!key) return 0;
@@ -8684,10 +8787,10 @@ static int fz_p2_draw(NvProg *pr, const p_draw *dw, const p_draw_idx *di, uint8_
 // textures with format / view / channel swizzle, samplers with LOD clamps), plus [kd] lines: vertex attribute formats, each vertex stream (first 4 vertices of per-vertex streams, all instances of per-instance streams) and every value of each uniform buffer of both stages.
 // Run the same switch once on the Mac and once on the device and compare item by item to see which input differs on the device (Super Mario 3D World + Bowser's Fury's magenta squares in 1-1: particle 5e4de7561c670fee, iPhone only, not reproducible on the Mac)
 static void kd_floats(const char *what, int reg, uint64_t addr, uint64_t size, uint64_t cap) {
-    void *mb; uint64_t mo; const uint8_t *base;
     if (!addr || !size) { fprintf(stderr, "[kd]   %s r%d unbound\n", what, reg); return; }
-    if (!mtl_addr(addr, 1, &mb, &mo) || !(base = [(__bridge id<MTLBuffer>)mb contents])) { fprintf(stderr, "[kd]   %s r%d addr=%#llx not in a memory pool\n", what, reg, (unsigned long long)addr); return; }
-    uint64_t n = MIN(size, cap) / 4; const float *v = (const float *)(base + mo);
+    const uint8_t *base = mtl_cpu_ptr(addr, up_transient_sources() ? MIN(size, cap) : 1);
+    if (!base) { fprintf(stderr, "[kd]   %s r%d addr=%#llx not in a memory pool\n", what, reg, (unsigned long long)addr); return; }
+    uint64_t n = MIN(size, cap) / 4; const float *v = (const float *)base;
     fprintf(stderr, "[kd]   %s r%d addr=%#llx size=%llu%s\n", what, reg, (unsigned long long)addr, (unsigned long long)size, pend_hits(addr, size) ? " (pending writes in this submission)" : "");
     for (uint64_t i = 0; i < n; i += 16) {
         char line[1024]; size_t o = 0;

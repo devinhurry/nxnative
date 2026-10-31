@@ -11,7 +11,7 @@ GAME_H = ../../host/gen/$(GAME)/game_profile.h
 
 CFLAGS=-O1 -g -Wall -Wno-unused-function -I../nvn/include -I$(dir $(GAME_H))
 GFX=$(filter-out ../nvn/hle_nvn.c,$(sort $(wildcard ../nvn/*.c ../nvn/*.m ../nvn/*.S ../tex/*.c ../tex/*.m)))
-GFX_H=$(wildcard ../nvn/*.h ../nvn/*.inc ../nvn/include/*.h ../tex/*.h) $(GAME_H)
+GFX_H=$(wildcard ../nvn/*.h ../nvn/*.inc ../nvn/include/*.h ../tex/*.h) ../../host/memory_mode.h $(GAME_H)
 .DEFAULT_GOAL := t_nvn   # the profile header rule comes first, so keep the default goal as before
 $(GAME_H):
 	$(MAKE) -C ../../host game_profile GAME=$(GAME)
@@ -140,6 +140,15 @@ check_t_tex_fit_root: t_tex_fit_root
 	MTL_DEBUG_LAYER=1 ./t_tex_fit_root
 t_readback: t_readback.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_readback.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
+t_pool_cpu_read: t_pool_cpu_read.m ../../host/file_backed_heap.h $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pool_cpu_read.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_pool_cpu_read
+check_t_pool_cpu_read: t_pool_cpu_read
+	env -u DM_LOW_MEMORY DM_NVN_TRANSIENT_UPLOADS=1 MTL_DEBUG_LAYER=1 ./t_pool_cpu_read off
+	DM_LOW_MEMORY=0 DM_NVN_TRANSIENT_UPLOADS=1 MTL_DEBUG_LAYER=1 ./t_pool_cpu_read off
+	DM_LOW_MEMORY=1 DM_NVN_TRANSIENT_UPLOADS=1 MTL_DEBUG_LAYER=1 ./t_pool_cpu_read on
+t_upload_source_lifetime: t_upload_source_lifetime.m ../../host/file_backed_heap.h $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_upload_source_lifetime.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_readback
 check_t_readback: t_readback
 	MTL_DEBUG_LAYER=1 ./t_readback

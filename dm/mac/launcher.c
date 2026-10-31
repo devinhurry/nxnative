@@ -26,6 +26,7 @@
 #include <unistd.h>
 #include "romfs_image.h"
 #include "save_sync.h"
+#include "memory_mode.h"
 
 extern char **environ;
 int dm_mac_launcher(void);   // Launcher.swift: 1 = Play (the settings are in the environment), 0 = the player quit, 2 = no window (apply the saved choices here)
@@ -189,7 +190,20 @@ int main(int argc, char **argv) {
     if (!window) fprintf(stderr, "launcher: no settings window (DM_LAUNCHER=0 or --no-launcher)\n");
     int shown = window ? dm_mac_launcher() : 2;
     if (!shown) return 0;   // Quit: no game
-    if (shown == 2) saved_choices();
+    if (shown == 2) {
+        saved_choices();
+        // The skipped window must use the same automatic default as its model.
+        // A manual choice, launch override or env file already set this value.
+        for (CFIndex i = 0; rules && !getenv("DM_LOW_MEMORY") && i < CFArrayGetCount(rules); i++) {
+            char key[128];
+            if (rule_env(CFArrayGetValueAtIndex(rules, i), key, sizeof key) && !strcmp(key, "DM_LOW_MEMORY")) {
+                uint64_t available = dm_low_memory_available();
+                const char *value = dm_low_memory_default(available) ? "1" : "0";
+                setenv(key, value, 0);
+                fprintf(stderr, "launcher: low-memory automatic default %s (%llu bytes available)\n", value, (unsigned long long)available);
+            }
+        }
+    }
     cloud_saves_folder();
     setenv("DM_ROOT", sup, 0); setenv("DM_ROMFS", romfs, 0); setenv("DM_SAVE", save, 0); setenv("DM_TEMP", temp, 0);
     snprintf(p, sizeof p, "%s/msl", res); setenv("DM_MSL_DIR", p, 0);

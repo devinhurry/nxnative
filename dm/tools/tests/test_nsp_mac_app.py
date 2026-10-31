@@ -117,7 +117,7 @@ class PackReuse(unittest.TestCase):
             'font/nintendo_ext.ttf': b'font', 'aoc/1/data': b'dlc', 'pso/gpu.mtl4a': b'archive',
             'pso/prebuilt.tsv': b'prebuilt', 'pso/rest_pairs.tsv': b'rest', 'pso/archive.tsv': b'index',
             'env.txt': b'DM_TEST=1', 'split.tsv': b'split', 'icon.jpg': b'jpeg', 'source/launcher.c': b'launcher',
-            'host/romfs_image.h': b'validator', 'host/save_sync.c': b'sync', 'host/save_sync.h': b'sync api', 'tools/romfs.py': b'reader',
+            'host/romfs_image.h': b'validator', 'host/save_sync.c': b'sync', 'host/save_sync.h': b'sync api', 'host/memory_mode.h': b'memory policy', 'tools/romfs.py': b'reader',
             'source/Launcher.swift': b'window', 'ios/Sources/LauncherSettings.swift': b'model', 'ios/Sources/LauncherRow.swift': b'rows', 'ios/Sources/BotwTouchSettings.swift': b'touch editor',
             'host/botw_touch_layout.h': b'layout', 'host/touchpad_geometry.h': b'geometry', 'host/dm_input.h': b'input', 'host/module.modulemap': b'module',
         }
@@ -213,7 +213,7 @@ class PackReuse(unittest.TestCase):
                  'patched/main.obs.tsv', 'patched/nro.tsv', 'msl/k.metallib', 'msl/k.json', 'msl/inputs.tsv', 'font/nintendo_ext.ttf',
                  'pso/gpu.mtl4a', 'pso/prebuilt.tsv', 'pso/rest_pairs.tsv', 'pso/archive.tsv', 'env.txt', 'icon.jpg', 'source/launcher.c',
                  'source/Launcher.swift', 'ios/Sources/LauncherSettings.swift', 'ios/Sources/LauncherRow.swift', 'ios/Sources/BotwTouchSettings.swift', 'host/botw_touch_layout.h', 'host/touchpad_geometry.h', 'host/dm_input.h', 'host/module.modulemap',
-                 'host/save_sync.c', 'host/save_sync.h']   # launcher/settings sources and cloud-save code linked after host exit
+                 'host/save_sync.c', 'host/save_sync.h', 'host/memory_mode.h']   # launcher/settings sources, memory policy and cloud-save code
         names += ['profile/' + n for n in pack_app.TABLES]
         for name in names:
             with self.subTest(name=name):
@@ -487,7 +487,8 @@ class App(unittest.TestCase):
             {'env': 'DM_FPS_HOLD', 'kind': 'toggle', 'section': 'Performance', 'label': 'Hold', 'note': '', 'default': 'on', 'on': 'on', 'off': 'off'},
             {'env': 'DM_LANG', 'kind': 'choice', 'section': 'Game', 'label': 'Language', 'note': '', 'default': 'fr', 'options': [['fr', 'French'], ['ja', 'Japanese']]},
             {'env': 'DM_BOTH', 'kind': 'choice', 'section': 'Game', 'label': 'Both', 'note': '', 'default': 'bundle', 'options': [['bundle', 'b'], ['player', 'p'], ['saved', 's']]},
-            {'env': 'DM_BAKED', 'kind': 'toggle', 'section': 'Game', 'label': 'Baked', 'note': '', 'default': '1', 'on': '1', 'off': '0'}]}
+            {'env': 'DM_BAKED', 'kind': 'toggle', 'section': 'Game', 'label': 'Baked', 'note': '', 'default': '1', 'on': '1', 'off': '0'},
+            {'env': 'DM_LOW_MEMORY', 'kind': 'toggle', 'section': 'Performance', 'label': 'Low memory', 'note': '', 'default': '0'}]}
         sup = self.tmp / f'home/Library/Application Support/nxnative/{TID}'; sup.mkdir(parents=True, exist_ok=True); (sup / 'env.txt').write_text('DM_BOTH=player\n')
 
         def pack(name, settings):
@@ -519,6 +520,11 @@ class App(unittest.TestCase):
             self.assertEqual(r['DM_ENV_LAUNCH_KEYS'], 'DM_FPS_TARGET DM_RENDER_SCALE')   # the window shows them fixed ("Set at launch")
             r = run(app, args=['--no-launcher'], DM_LAUNCHER='1')   # open <app> --args --no-launcher: no window, the saved choices
             self.assertEqual(r['DM_FPS_TARGET'], '30')
+            save('DM_LOW_MEMORY', '-string', '0')
+            self.assertEqual(run(app)['DM_LOW_MEMORY'], '0')   # explicit Off must beat automatic detection
+            save('DM_LOW_MEMORY', '-string', '1')
+            self.assertEqual(run(app)['DM_LOW_MEMORY'], '1')   # explicit On is also kept without the window
+            self.assertEqual(run(app, DM_LOW_MEMORY='0')['DM_LOW_MEMORY'], '0')   # existing launch-override precedence
             self.assertEqual(subprocess.run(['defaults', 'read', domain, 'launcher.DM_FPS_TARGET'], capture_output=True, text=True).stdout.strip(), '30')
             r = run(app, DM_SAVED_CHOICES='0')
             self.assertEqual((r.get('DM_FPS_TARGET'), r.get('DM_RENDER_SCALE'), r['DM_LANG']), (None, None, 'fr'))

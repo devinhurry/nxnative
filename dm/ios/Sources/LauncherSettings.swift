@@ -1,6 +1,7 @@
 // Launcher settings, validation and persistence. Shared by the iOS UI, the Mac app's settings window (dm/mac/Launcher.swift) and the native storage regression test.
 import Foundation
 import Combine
+import DmTouchPad
 
 struct Setting: Decodable, Identifiable {
     let env, kind, label, note, def: String
@@ -67,6 +68,8 @@ struct BotwTouchControl: Identifiable, Hashable {
 }
 
 final class LauncherModel: ObservableObject {
+    static let lowMemoryKey = "DM_LOW_MEMORY"
+    static let lowMemoryNotice = "Low-memory mode is enabled to help keep the game running. Performance may be affected."
     let settings: [Setting]
     let fixed: Set<String>      // set by an env file or by the launch environment: shown, not changed
     let fromLaunch: Set<String>   // of those, the ones the launch environment set (a front end's launch overrides, Xcode; DM_ENV_LAUNCH_KEYS from launcher.c or main.m)
@@ -74,20 +77,57 @@ final class LauncherModel: ObservableObject {
     @Published var values: [String: String] = [:]
 
     private let defaults: UserDefaults
+    private let availableMemory: () -> UInt64
+    private var automaticLowMemoryValue = "0"
+    private var lowMemoryOverride: String?
 
-    init(_ settings: [Setting], defaults: UserDefaults = .standard) {
+    init(_ settings: [Setting], defaults: UserDefaults = .standard,
+         availableMemory: @escaping () -> UInt64 = { dm_low_memory_available() }) {
         self.defaults = defaults
+        self.availableMemory = availableMemory
         self.settings = settings
         let env = ProcessInfo.processInfo.environment
         fromLaunch = Set((env["DM_ENV_LAUNCH_KEYS"] ?? "").split(separator: " ").map(String.init))
         fixed = fromLaunch.union((env["DM_ENV_FILE_KEYS"] ?? "").split(separator: " ").map(String.init))
         ignoreSaved = env["DM_SAVED_CHOICES"] == "0"
         if ignoreSaved { fputs("launcher: saved choices ignored (DM_SAVED_CHOICES=0)\n", stderr) }
+        if let s = settings.first(where: { $0.env == Self.lowMemoryKey }) {
+            automaticLowMemoryValue = memoryDefault()
+            if !ignoreSaved, let saved = defaults.object(forKey: "launcher." + s.env) as? String, s.accepts(saved) {
+                lowMemoryOverride = saved
+            }
+        }
         for s in settings {
             if fixed.contains(s.env), let v = env[s.env] { values[s.env] = v; continue }
             let saved = ignoreSaved ? nil : defaults.object(forKey: "launcher." + s.env) as? String   // a string, as launcher.c reads it: not string(forKey:), which turns a number into one
-            values[s.env] = saved.flatMap { s.accepts($0) ? $0 : nil } ?? s.def   // a saved choice the game no longer offers: its default
+            values[s.env] = saved.flatMap { s.accepts($0) ? $0 : nil } ?? defaultValue(s)
         }
+    }
+
+    private func memoryDefault() -> String {
+        let bytes = availableMemory(), value = dm_low_memory_default(bytes) != 0 ? "1" : "0"
+        fputs("launcher: low-memory automatic default \(value) (\(bytes) bytes available; threshold \(dm_low_memory_threshold()))\n", stderr)
+        return value
+    }
+    private func defaultValue(_ s: Setting) -> String { s.env == Self.lowMemoryKey ? automaticLowMemoryValue : s.def }
+    var lowMemoryEnabled: Bool { values[Self.lowMemoryKey] == "1" }
+    func refreshMemoryDefault(available bytes: UInt64) {
+        guard lowMemoryOverride == nil, !fixed.contains(Self.lowMemoryKey),
+              settings.contains(where: { $0.env == Self.lowMemoryKey }) else { return }
+        let value = dm_low_memory_default(bytes) != 0 ? "1" : "0"
+        guard automaticLowMemoryValue != value else { return }
+        automaticLowMemoryValue = value; values[Self.lowMemoryKey] = value
+    }
+
+    // Automatic defaults are never saved. An explicit On or Off is remembered
+    // immediately, including a choice equal to this launch's automatic value.
+    func setValue(_ v: String, for s: Setting) {
+        guard !fixed.contains(s.env), s.accepts(v) else { return }
+        if s.env == Self.lowMemoryKey {
+            lowMemoryOverride = v
+            if !ignoreSaved { defaults.set(v, forKey: "launcher." + s.env) }
+        }
+        values[s.env] = v
     }
 
     var sections: [String] {
@@ -148,23 +188,41 @@ final class LauncherModel: ObservableObject {
         }.joined(separator: "\n")
     }
 
-    var changed: Bool { settings.contains { !fixed.contains($0.env) && !$0.isDefault(values[$0.env] ?? $0.def) } }
+    var changed: Bool {
+        settings.contains { s in
+            !fixed.contains(s.env) && (s.env == Self.lowMemoryKey
+                ? lowMemoryOverride != nil || values[s.env] != automaticLowMemoryValue
+                : !s.isDefault(values[s.env] ?? s.def))
+        }
+    }
 
     // Reset every launcher choice to the game's defaults on the screen; values fixed by an env file or at launch stay. The saved choices are forgotten when Play applies
     // the defaults (apply() keeps no default), so Quit after Reset keeps them, and a choice a launch override hides is kept
     func reset(keys: Set<String>? = nil) {
-        for s in settings where !fixed.contains(s.env) && (keys?.contains(s.env) ?? true) { values[s.env] = s.def }
+        if settings.contains(where: { $0.env == Self.lowMemoryKey }), !fixed.contains(Self.lowMemoryKey),
+           keys?.contains(Self.lowMemoryKey) ?? true {
+            automaticLowMemoryValue = memoryDefault(); lowMemoryOverride = nil
+        }
+        for s in settings where !fixed.contains(s.env) && (keys?.contains(s.env) ?? true) { values[s.env] = defaultValue(s) }
         fputs("launcher: settings reset to the game's defaults\n", stderr)
     }
 
     // Before the game starts: every setting not set by an env file goes into the environment (DM_LANG replaces the packed language main.m set as a default). Only a choice that
-    // differs from the game's default is stored: a setting the player left at its default follows the defaults of a later build (the settings it was tested with)
+    // differs from the game's default is stored. The memory switch instead keeps
+    // only its explicit manual override; the automatic selection is never saved.
     func apply() {
         for s in settings {
             let v = values[s.env] ?? s.def
             if fixed.contains(s.env) { fputs("launcher: \(s.env) kept at \(v) (\(fromLaunch.contains(s.env) ? "launch environment" : "env file"))\n", stderr); continue }
-            if !ignoreSaved { if s.isDefault(v) { defaults.removeObject(forKey: "launcher." + s.env) } else { defaults.set(v, forKey: "launcher." + s.env) } }
-            setenv(s.env, v, 1); fputs("launcher: \(s.env)=\(v)\(s.isDefault(v) ? "" : " (changed)")\n", stderr)
+            if !ignoreSaved {
+                if s.env == Self.lowMemoryKey {
+                    if let choice = lowMemoryOverride { defaults.set(choice, forKey: "launcher." + s.env) }
+                    else { defaults.removeObject(forKey: "launcher." + s.env) }
+                } else if s.isDefault(v) { defaults.removeObject(forKey: "launcher." + s.env) }
+                else { defaults.set(v, forKey: "launcher." + s.env) }
+            }
+            let origin = s.env == Self.lowMemoryKey ? (lowMemoryOverride == nil ? " (automatic)" : " (manual)") : (s.isDefault(v) ? "" : " (changed)")
+            setenv(s.env, v, 1); fputs("launcher: \(s.env)=\(v)\(origin)\n", stderr)
         }
     }
 
@@ -172,7 +230,10 @@ final class LauncherModel: ObservableObject {
     func applySaved() {
         for s in settings where !fixed.contains(s.env) {
             let v = values[s.env] ?? s.def
-            if !s.isDefault(v) { setenv(s.env, v, 1); fputs("launcher: \(s.env)=\(v) (saved choice)\n", stderr) }
+            if s.env == Self.lowMemoryKey || !s.isDefault(v) {
+                let origin = s.env == Self.lowMemoryKey ? (lowMemoryOverride == nil ? "automatic" : "manual") : "saved choice"
+                setenv(s.env, v, 1); fputs("launcher: \(s.env)=\(v) (\(origin))\n", stderr)
+            }
         }
     }
 }

@@ -53,9 +53,10 @@ DM_BOTW_PAD_DPAD_Y	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch
 DM_BOTW_PAD_DPAD_SCALE	range	0.5:1.5:0.01	1.000	DM_GAME_ID==01007EF00011E000	Touch layout	D-pad: Size	Applies only to BOTW touch controls.
 DM_BOTW_PAD_FACE_GAP	range	0.5:1.5:0.01	1.060	DM_GAME_ID==01007EF00011E000	Touch layout	XYAB: Button spacing	Changes spacing within the group.
 DM_BOTW_PAD_BADGES	toggle	-	0	DM_GAME_ID==01007EF00011E000	Touch layout	Corner button labels	Shows the small letter circles on L, R, ZR and XYAB.
+DM_LOW_MEMORY	toggle	-	0	DM_GAME_ID==01007EF00011E000	Performance	Experimental low-memory mode	May reduce memory use at the cost of more storage activity and pauses in new scenes. Applies when you press Play.
 DM_PRESENT_SNAP	toggle	-	DM_GAME_PRESENT_SNAP	gfxapi:nvn	Performance	Frame buffering	Up to one frame more display latency.
 DM_PSO_MTL4	toggle	-	DM_GAME_PSO_MTL4|1	gfxapi:nvn	Performance	Metal 4 pipelines	Keeps a pipeline archive; uses more memory.
-DM_PSO_PREBUILD	toggle	-	1	gfxapi:nvn	Performance	Pipeline prebuild	The first start waits a few minutes for it, once.
+DM_PSO_PREBUILD	toggle	-	1	gfxapi:nvn	Performance	Pipeline prebuild	The first start waits a few minutes for it, once.	needs=DM_LOW_MEMORY=0
 DM_NVN_ENC_THREAD	toggle	-	1|DM_GAME_ENC_THREAD	gfxapi:nvn	Performance	Encode thread
 DM_FPS_HOLD	toggle	on/off	DM_GAME_FPS_HOLD	DM_GAME_FPS_TARGET!=0	Performance	Hold frames when late
 DM_METAL_HUD	toggle	-	0	always	Performance	Performance HUD

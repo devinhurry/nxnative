@@ -3,7 +3,7 @@
 import SwiftUI
 
 extension LauncherModel {
-    func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.values[s.env] = $0 }) }
+    func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.setValue($0, for: s) }) }
 }
 
 struct SettingRow: View {
@@ -53,7 +53,7 @@ struct SettingRow: View {
                         .accessibilityValue(percentage)
                 }
             default:
-                Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.values[s.env] = $0 ? s.onValue : s.offValue })) {
+                Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.setValue($0 ? s.onValue : s.offValue, for: s) })) {
                     settingLabel
                 }
             }

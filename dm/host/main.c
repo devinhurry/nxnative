@@ -3,6 +3,7 @@
 #include "front.h"
 #include "botw_touch_actions.h"
 #include "botw_touch_menu.h"
+#include "memory_mode.h"
 #include "../gfx/nvn/dmsh_chain.h"
 #include <CoreFoundation/CoreFoundation.h>
 #include <stdatomic.h>
@@ -146,6 +147,14 @@ int main(int argc, char **argv) {
         void crash_thread_init(void); crash_thread_init();   // The signal alternate stack is per thread: loading installed it on another thread, so add it for this thread
         LOG("host loading already finished early in the background (dm_host_preload_start)");
     } else host_preload(argc, argv);
+    // Preload maps modules but runs no guest code. The iOS launcher has now
+    // applied its choices; install the preset before the first heap or GPU pool.
+    int low_memory = dm_low_memory_apply();
+    if (low_memory < 0) die("[RED] experimental low-memory mode setup failed: %s (DM_TEMP=%s)", strerror(errno), getenv("DM_TEMP") ?: "unset");
+    if (low_memory) {
+        LOG("[mem] experimental low-memory mode on");
+        LOG("[mem] file heap=%s, transient uploads=1, pipeline prebuild=0, bundle=off, runtime archive=%s", getenv("DM_FILE_HEAP"), getenv("DM_PSO_ARCHIVE"));
+    }
     { void dm_fps_state_apply(void); dm_fps_state_apply(); }   // frame rate and render scale into the frame step state page (loader.c): the iOS launcher sets them after the loading began
     front_run(guest_main);
     return 0;

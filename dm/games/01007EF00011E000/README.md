@@ -749,6 +749,8 @@ regression run for this change.
 
 ### Pipelines on a cold start
 
+- **Experimental runtime-only cache policy:** [Learn and restart measurements](../../../docs/experiments/file-backed-memory.md#further-experiment-runtime-captured-pipeline-cache-2026-10-31) preserve archive lookup with a small cache of requested bases. First-use compilation, further cache growth and physical-iPhone acceptance remain open; defaults are unchanged.
+- **Experimental, 2026-10-31:** a retained-graphics Lab-save comparison on the M2 Mac and external SSD reduced kernel footprint from 2888 to 2346 MiB by deriving GPU-only copies of the runtime archives with Apple's `metal-lipo`. Both 115-second runs retained archive hits and produced inspected gameplay screenshots. This is not a new current-graphics or physical-iPhone result. [Cause and reproduction](../../../docs/reference/memory.md#pipeline-archives-copied-from-removable-storage); [full experiment](../../../docs/experiments/file-backed-memory.md#follow-up-pipeline-archive-bytes-2026-10-31).
 - `pso_pairs.tsv`: 3,012 shader pairs from agl's BAHS program variations (the agl / gsys / terrain resource packs), which `shader_pairs.tsv` does not hold. 109 of the 543 pairs drawn on entering Zora's Domain came from them; with the table all 543 are known. The prebuild (15,767 bases) takes 910 MB in 16 files, 187 s with 7 workers for the first 12,755 and 19 s for the 3,012 more; the files open in 2.2 s cold, 0.25 s from the file cache, and add about 850 MB of footprint.
 - Mac (M2 Max), the Zora's Domain save, Metal shader cache empty (a new bundle ID per run):
 
@@ -886,6 +888,8 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 - The frame step under load: `DM_TEST_PRESENT_LAG=1,12` (12 ms added to every frame: 30 fps at 1.000 of real time).
 
 ## Found on this game
+
+- **Experimental, switch-controlled:** [File-backed guest heap](../../../docs/reference/memory.md#experimental-file-backed-guest-heap), on `experiment/file-backed-memory`. The launcher defaults the preset from available memory; a saved manual On/Off takes priority. Mac probes check actual page residency separately from memory-limit accounting, including real GPU reads/writes. The experiment note records the retained-graphics game comparison and the current-graphics/iPhone validation boundary.
 
 - **Resolved in code and Mac gameplay, iPhone acceptance pending:** [Ordinary virtual sticks while relative look is enabled](../../../docs/reference/services.md#ordinary-virtual-sticks-while-relative-look-is-enabled). The pickup/backup-pad reproduction and runtime evidence are recorded above.
 

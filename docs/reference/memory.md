@@ -15,6 +15,17 @@ The guest address space, heaps, pools, virtual address memory and the allocators
 
 ## Heap and application pool
 
+### Experimental file-backed guest heap
+
+- **Symptom:** a large guest heap contributes to the process memory limit; reducing the displayed footprint alone does not establish lower physical RAM use.
+- **Cause:** anonymous dirty pages are charged to the process. File-backed shared pages have different accounting and can be written back and reclaimed, but a live no-copy Metal buffer can keep them physically resident. CPU inspection also promoted full pools, and GPU uploads retained their original source pool beyond upload completion.
+- **Switch-controlled experiment:** with `DM_LOW_MEMORY=1`, `DM_FILE_HEAP=<existing absolute directory>` backs the guest heap with an unlinked shared file before pointers or GPU resources are published. It retains the original addresses and `SetHeapSize` protections. There is no live-heap flush timer. [Mechanism, measurements and reproduction](../experiments/file-backed-memory.md).
+- **Cold-source follow-up:** CPU inspection no longer requests GPU residency. `DM_NVN_TRANSIENT_UPLOADS=1` creates upload-only source views with shared batch ownership, local encoder autorelease pools and alias barriers; persistent pool buffers are created only when a real GPU binding needs them. [Controlled page-eviction tests and Jetsam boundary](../experiments/file-backed-memory.md#follow-up-cold-upload-sources-and-gpu-lifetime-2026-10-31).
+- **Preset selection:** BOTW's pre-game **Experimental low-memory mode** switch (`DM_LOW_MEMORY=1`) selects these mechanisms and a separate runtime-only pipeline cache before guest execution. With no manual choice it defaults on below 4.5 GiB of available memory and off otherwise; manual On/Off persists and overrides detection. It preserves saves and the normal cache, and uses the app's temporary directory. [Activation, component settings and iPhone validation](../experiments/file-backed-memory.md#enable-from-the-game-overlay).
+- **Off-path isolation:** without `DM_LOW_MEMORY=1`, even old experiment flags leave the original heap and CPU/GPU pool behaviour in use. Uploads keep their original autorelease scope; the preset changes no pipeline/cache settings and creates no cache directory.
+- **Check:** the standalone production-helper probe verifies all CPU/GPU data before and after explicit writeback/eviction; the memory SVC tests also run with this opt-in. Mac measurements distinguish footprint, resident pages and cold-read latency. Current-source Mac/iOS compilation passes; current-graphics gameplay is blocked by the pinned compiler mismatch, and physical iPhone validation remains open.
+- **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game), isolated retained-graphics A/B experiment, plus standalone 256 MiB and 1 GiB Mac probes. No production memory-saving claim is made.
+
 ### Provisional Unreal layout leaves no heap
 
 - **Symptom:** `SetHeapSize OOM: req 0x600000 > cap 0`, followed by an SDK abort in `nninitStartup` on the first provisional boot.
@@ -306,6 +317,15 @@ The guest address space, heaps, pools, virtual address memory and the allocators
 - **Found on:** the source names no game.
 
 ## Running out of memory
+
+### Pipeline archives copied from removable storage
+
+- **Symptom:** large host malloc allocations from opening pipeline archives; dropping the archive objects does not reduce footprint on the tested Mac.
+- **Cause:** `pso4_init` opens every archive. The observed Metal loader reads with Foundation's `NSDataReadingMappedIfSafe`; files on the external SSD are copied into malloc storage. [Apple explains the removable-volume restriction](https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/FileSystemAdvancedPT/MappingFilesIntoMemory/MappingFilesIntoMemory.html). This does not establish the same behaviour on internal iPhone storage.
+- **Experiment:** Apple's `metal-lipo -thin` derives a separate GPU-only copy, omitting the intermediate-language slice. Preserve the original portable archives. [Measurements, commands and verification boundary](../experiments/file-backed-memory.md#follow-up-pipeline-archive-bytes-2026-10-31). No default host policy changed.
+- **Cache-policy follow-up:** an initially empty runtime archive with `DM_PSO_PREBUILD=0` keeps the bases requested during play rather than the whole-game prebuild. It saves additional charged memory on the tested Mac while preserving archive hits, but first-use compilation, cache growth and incomplete coverage remain tradeoffs. [Learn and restart measurements](../experiments/file-backed-memory.md#further-experiment-runtime-captured-pipeline-cache-2026-10-31). No default changed.
+- **Check:** allocation stacks identify the archive reads; LLDB confirms the read options. Separate same-save game runs compare kernel footprint and check archived-base hits and gameplay screenshots.
+- **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md#pipelines-on-a-cold-start), retained-graphics Mac experiment. Current-graphics and physical-iPhone validation remain open.
 
 ### A null-pool buffer from a game heap that ran out
 

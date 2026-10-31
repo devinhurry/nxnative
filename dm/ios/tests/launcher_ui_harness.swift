@@ -2,6 +2,12 @@
 // values; Reopen checks saved choices without needing game files or a GPU host.
 import UIKit
 
+// The production launcher reads cloud-save providers through its app bridge.
+// This isolated UI fixture has no shared-folder access or cloud-save storage.
+func dm_clear_cloud_saves() {}
+func dm_store_cloud_saves(_ url: URL) -> Bool { false }
+func dm_cloud_saves_path(_ stale: UnsafeMutablePointer<ObjCBool>?) -> String? { nil }
+
 final class LauncherHarnessRoot: UIViewController {
     private var shown = false
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscape }
@@ -19,7 +25,7 @@ final class LauncherHarnessRoot: UIViewController {
     }
     func showApplied() {
         view.subviews.forEach { $0.removeFromSuperview() }
-        let values = (TouchStickResponse.keys.union(["DM_FPS_TARGET"])).sorted().map { "\($0)=\(ProcessInfo.processInfo.environment[$0] ?? "unset")" }.joined(separator: "\n")
+        let values = (TouchStickResponse.keys.union(["DM_FPS_TARGET", "DM_LOW_MEMORY"])).sorted().map { "\($0)=\(ProcessInfo.processInfo.environment[$0] ?? "unset")" }.joined(separator: "\n")
         let text = UILabel(); text.text = "Applied to the game environment\n\n" + values
         text.textColor = .white; text.numberOfLines = 0; text.font = .monospacedSystemFont(ofSize: 16, weight: .regular)
         let reopen = UIButton(type: .system); reopen.setTitle("Reopen launcher", for: .normal)

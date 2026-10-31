@@ -9,6 +9,8 @@
 #include <time.h>
 #include <stdatomic.h>
 #include <mach/mach.h>
+#include "file_backed_heap.h"
+#include "memory_mode.h"
 
 // Reserve one whole block of guest address space, partitioned the Horizon way (address values are the real addresses returned by the host's mmap).
 // It only takes address space, not memory.
@@ -53,6 +55,12 @@ static void mem_init_once(void) {
     g_alias = g_as + 0x10000000; g_alias_cap = alias;
     g_stack = g_alias + g_alias_cap; g_stack_cap = DM_GAME_MEM_STACK;
     g_heap  = g_stack + g_stack_cap; g_heap_cap  = g_reserve - (size_t)(g_heap - g_as);
+    const char *file_heap = dm_low_memory_enabled() ? getenv("DM_FILE_HEAP") : NULL;
+    if (file_heap && *file_heap) {
+        if (dm_file_heap_back(g_heap, g_heap_cap, file_heap))
+            die("experimental file-backed heap: %s (directory %s)", strerror(errno), file_heap);
+        LOG("[mem] experimental file-backed heap %.2f GB in %s (unlinked shared file)", g_heap_cap / 1073741824.0, file_heap);
+    }
     if (!(g_alias_bits = calloc((g_alias_cap >> 18) + 1, sizeof *g_alias_bits))) die("alias region page bitmap calloc");
     if (!(g_alias_exposed = calloc(g_alias_cap / pg / 64 + 1, sizeof *g_alias_exposed))) die("alias exposure bitmap calloc");
     LOG("guest AS %p +%#llx  heap %p alias %p stack %p", g_as, (unsigned long long)g_reserve, g_heap, g_alias, g_stack);

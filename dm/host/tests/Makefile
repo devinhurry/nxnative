@@ -12,7 +12,8 @@ QUIET = $(if $(strip $(SAN)),,2>/dev/null)
 GINC = $(if $(strip $(GAME)),-I../gen/$(GAME) -I../../games/$(GAME),$(error GAME is not set: make GAME=<base game title ID>: $(shell python3 ../../games/game.py list | awk -F'\t' '{printf "%s (%s)  ", $$1, $$3}')))
 $(B)/t_fs $(B)/t_fs_case $(B)/t_fs_commit_list $(B)/t_fs_commit_list_tsan: ../romfs_image.h
 GAME_H = ../gen/$(GAME)/game_profile.h
-run: $(B)/t_language $(B)/t_aspect $(B)/t_look $(B)/t_botw_touchhud $(B)/t_botw_touch_actions $(B)/t_botw_touch_menu $(B)/t_botw_touch_trackpad $(B)/t_gate_obs_result $(B)/t_device_motion $(B)/t_motion $(B)/t_heap_size $(B)/t_touch $(B)/t_gesture $(B)/t_oe $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_audio_spsc $(B)/t_swkbd $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pctl $(B)/t_time $(B)/t_shared_font $(B)/t_vorbis $(B)/t_vorbis_divides $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple
+run: $(B)/t_memory_mode $(B)/t_language $(B)/t_aspect $(B)/t_look $(B)/t_botw_touchhud $(B)/t_botw_touch_actions $(B)/t_botw_touch_menu $(B)/t_botw_touch_trackpad $(B)/t_gate_obs_result $(B)/t_device_motion $(B)/t_motion $(B)/t_heap_size $(B)/t_touch $(B)/t_gesture $(B)/t_oe $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_audio_spsc $(B)/t_swkbd $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pctl $(B)/t_time $(B)/t_shared_font $(B)/t_vorbis $(B)/t_vorbis_divides $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple
+	TMPDIR="$(abspath $(B))" $(B)/t_memory_mode
 	$(B)/t_language
 	$(B)/t_aspect
 	$(B)/t_look
@@ -253,7 +254,9 @@ tsan: $(B)/t_audio_spsc_tsan $(B)/t_hid_tsan
 	TMPDIR="$(abspath $(B))" $(B)/t_hid_tsan
 
 MEM_FLAGS = -O1 -Wall -Werror -Wno-unused-function -Imemory_profile -I..
-MEM_DEPS = t_svc_memory.c memory_profile/game_profile.h ../hle_svc.c ../hle_guestthread.c ../hle.h ../dm.h
+$(B)/bench_file_heap: bench_file_heap.m ../file_backed_heap.h | $(B)
+	$(CLANG) -O2 -g -Wall -Wextra -Werror -fobjc-arc -o $@ $< -framework Foundation -framework Metal
+MEM_DEPS = t_svc_memory.c memory_profile/game_profile.h ../hle_svc.c ../file_backed_heap.h ../memory_mode.h ../hle_guestthread.c ../hle.h ../dm.h
 $(B)/t_svc_memory: $(MEM_DEPS) | $(B)
 	$(CLANG) $(MEM_FLAGS) -fsanitize=undefined -o $@ t_svc_memory.c
 $(B)/t_svc_memory_unlimited: $(MEM_DEPS) | $(B)
@@ -315,3 +318,14 @@ tsan-threads-run: $(addprefix $(B)/,$(TSAN_T))
 	$(B)/t_altstack
 	DM_QOS_MAP=1 $(B)/t_notify_sched
 	DM_QOS_MAP=1 $(B)/t_notify_sched --all-peers
+
+$(B)/t_memory_mode: t_memory_mode.c ../memory_mode.h ../file_backed_heap.h | $(B)
+	$(CLANG) -O1 -Wall -Wextra -Werror -o $@ $<
+.PHONY: memory-mode memory-isolation
+memory-mode: $(B)/t_memory_mode
+	TMPDIR="$(abspath $(B))" $(B)/t_memory_mode
+memory-isolation: $(B)/t_svc_memory
+	env -u DM_LOW_MEMORY DM_FILE_HEAP=/dev/null/not-a-directory $(B)/t_svc_memory --heap-probe
+	DM_LOW_MEMORY=0 DM_FILE_HEAP=/dev/null/not-a-directory $(B)/t_svc_memory --heap-probe
+	DM_LOW_MEMORY=1 DM_FILE_HEAP="$(abspath $(B))" $(B)/t_svc_memory --heap-probe
+run: memory-isolation
