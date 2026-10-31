@@ -461,6 +461,14 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Found on:** [The Legend of Zelda: Breath of the Wild — upscaling and measurements](../../dm/games/01007EF00011E000/README.md#upscaling-current).
 - **Limit:** the scaler takes the presented frame, including any filtering and HUD drawing the game already performed. Feeding it an earlier scene target would mean replacing a draw of the game's own, and nothing general identifies which draw is a plain upscale. Scaler support is checked at runtime; unsupported devices, sizes and formats use standard scaling.
 
+### Scene upscaling before the HUD
+
+- **Symptom:** reduced-resolution 3D looks soft, and final-picture sharpening processes the HUD after the game has already enlarged the scene.
+- **Cause:** present upscaling sees the final image, rather than the scene before its native composite.
+- **Fix:** `DM_PRESENT_UPSCALE=scene` (the launcher's **Scene MetalFX**) opts into MetalFX at a profile's verified `scene_upscale` shader pair (`scene_upscale_prepare`). Only its distinct single-level 2D color input is replaced, at the output viewport's size. The existing native FXAA/composite, channel masks, alpha and HUD draws remain intact. The native output-texel constants, full viewport and scissor are checked; other shaders and unproven shapes retain their original inputs. It reuses `fx_encode`, and `rec_fx` carries the scaler and that call's textures through the existing encoding queue. Replaced sizes retire behind the rendering fence. Each scaler state owns its compiler, so rendering and presentation do not share mutable compiler state. The same mode selector enables scene scaling or final-picture scaling, never both. No shader translation changes.
+- **Check:** `t_scene_upscale` checks real GPU pixels, queued size changes and native scene eligibility in direct and deferred encoding; `t_present_crop` covers the existing present path. On macOS 26.5.2, Metal API Validation crashes inside MetalFX with a minimal public-API scaler too (`_outputTextureBarrierStages not set`, or `globalTraceObjectID` on its debug encoder). The MetalFX pixel checks run without that validation layer; no private API or production bypass is used.
+- **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md#experimental-resolution-and-scene-upscaling).
+
 ### The NVN present crops by the vi layer crop
 
 - **Symptom:** in handheld mode the picture fills only two thirds of the screen's width and height, in the bottom-left corner (the top-left with the upper-left origin), the rest black.

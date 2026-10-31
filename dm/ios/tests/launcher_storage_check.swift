@@ -183,6 +183,17 @@ import Foundation
         let otherGame = LauncherModel(otherSettings, defaults: memoryDefaults, availableMemory: { fatalError("unrelated game must not query the memory policy") })
         expect(!otherGame.lowMemoryEnabled && otherGame.values[LauncherModel.lowMemoryKey] == nil, "games without the memory setting do not detect or enable it")
         failed += checkLauncherLayout(LauncherModel(mac.settings, defaults: d, availableMemory: { 4 * gib }), defaults: d)
+        for list in [file.settings, mac.settings] {
+            let rows = list.filter { $0.env == "DM_PRESENT_UPSCALE" }
+            expect(rows.count == 1 && !list.contains { $0.env == "DM_SCENE_UPSCALE" }, "one upscaling choice replaces the independent switches")
+            expect(rows[0].options?.map { $0[0] } == ["off", "scene", "metalfx"], "the three upscaling modes are available")
+            let model = LauncherModel(list, defaults: d)
+            for mode in ["scene", "metalfx", "off"] {
+                model.values["DM_PRESENT_UPSCALE"] = mode; model.apply()
+                expect(String(cString: getenv("DM_PRESENT_UPSCALE")) == mode, "the selected upscaling mode reaches the game")
+                expect(LauncherModel(list, defaults: d).values["DM_PRESENT_UPSCALE"] == mode, "the upscaling choice survives reopening")
+            }
+        }
         print("launcher storage: \(failed) failed")
         exit(failed == 0 ? 0 : 1)
     }

@@ -1,7 +1,6 @@
 // Launcher and BOTW touch settings.
 "30 fps" = "30 fps";
 "60 fps" = "60 fps";
-"Adjusts resolution between 70% and 100% under load. Turn off to keep full resolution for the selected console mode." = "Adjusts resolution between 70% and 100% under load. Turn off to keep full resolution for the selected console mode.";
 "Advanced settings" = "Advanced settings";
 "Applies only to BOTW touch controls." = "Applies only to BOTW touch controls.";
 "Brings back all settings this game was tested with." = "Brings back all settings this game was tested with.";
@@ -131,3 +130,7 @@
 "Traditional Chinese" = "Traditional Chinese";
 "Simplified Chinese" = "Simplified Chinese";
 "Brazilian Portuguese" = "Brazilian Portuguese";
+"Adjusts 3D resolution under load to help maintain frame rate. A fixed Render scale takes precedence." = "Adjusts 3D resolution under load to help maintain frame rate. A fixed Render scale takes precedence.";
+"Scene MetalFX" = "Scene MetalFX";
+"Full-screen MetalFX" = "Full-screen MetalFX";
+"Scene MetalFX (experimental) scales 3D only; Full-screen MetalFX also scales text and UI. Uses more GPU time and can increase heat." = "Scene MetalFX (experimental) scales 3D only; Full-screen MetalFX also scales text and UI. Uses more GPU time and can increase heat.";

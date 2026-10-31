@@ -586,6 +586,76 @@ Used at `DM_FPS_TARGET=0` and for the interval the framework keeps while the VFR
 - **Address → memory pool lookups**: the game keeps about 1,760 memory pools alive, and `mtl_addr` / `mtl_gpu_addr` scanned them all for every buffer binding of every draw (about 1,000 samples of a submit-thread profile). Last hit, then a binary search (`pool_find`): host submit time in the shrine 21 → 7 ms a frame (p50), the median frame 38 → 21 ms.
 - Upload staging blocks are reused: the game used to allocate, make resident and free a 32 MB block for each re-upload of a small CPU-written texture, about 3 GB/s.
 
+### Experimental resolution and scene upscaling
+
+Both options default off. `DM_DYNAMIC_RESOLUTION=1` retargets the verified
+1.9.0 native controller to the effective frame-rate cap. Its original GPU-time
+normalization at `main+0x12670ac` becomes 200 at 60 fps, 100 at 30 fps, through
+state `+0x38`; zero keeps the original instruction. This preserves the native
+averaging, 0.05 steps and 0.8 floor. The 175/150 thresholds then correspond to
+14.58/12.5 ms at 60 fps, and retain their original 29.17/25 ms at 30 fps.
+Movies and the thermal cap publish the same effective 30 fps budget. A fixed
+`DM_RENDER_SCALE` takes precedence; target 0 retains the original budget.
+
+`DM_PRESENT_UPSCALE=scene` uses [scene upscaling before the HUD](../../../docs/reference/rendering.md#scene-upscaling-before-the-hud).
+An outdoor pass trace confirms vertex `5e9f57168d89a543` and fragment
+`bd7ffdd435c6c3bc` are the native scene FXAA/upscale from the tone-mapped
+1600x900 image into the 1920x1080 UI canvas, before its layout draws. Their
+vertex constants already describe the output texel grid, including when the
+native controller lowers the input to 1280x720. Only that draw's input is
+substituted; the native FXAA, output alpha/channel mask, and all later HUD,
+inventory and map draws retain their original state. The single **Upscaling**
+choice offers **Standard**, **Scene MetalFX** and
+**Full-screen MetalFX** (`DM_PRESENT_UPSCALE=off|scene|metalfx`); the MetalFX
+modes cannot run together. MetalFX adds GPU work; neither
+option is a measured frame-rate improvement on every scene or device.
+
+Initial validation (`39585d4e`, 2026-10-31, Apple M2): 64 Python checks, the emitted ARM64 budget
+stub, 31 scene-scaling GPU checks in each encoding mode, 168 existing present
+checks, the present snapshot cases, and 188 iOS source files pass. World,
+inventory, map, and return-to-world camera/movement checks retain their HUD.
+The BOTW-only `regress.py check --quick` comparison against `3ae8e2b9` is
+`PASS`: 19,592/19,592 shaders in both, identical MSL and no new red lines.
+Both builds miss the reference machine's 2,500 frames by 60 s gate on this
+M2 (baseline 1,744, candidate 1,770 by the end of the 70 s runs); screenshots
+confirm both reach the outdoor scene. Other games are not runtime-checked:
+only this verified controller and scene pair opt in, and the shared present
+path has the focused GPU coverage above.
+
+The unified selector (2026-10-31) removes the independent scene toggle.
+Settings generation and the shared iOS/Mac storage check cover one choice,
+all three values, applying to the game environment, and reopening saved choices.
+Scene GPU tests pass 36 checks in each encoding mode, including refusal in
+Standard and Full-screen modes; the 171 present checks confirm Scene mode
+keeps final presentation on its standard path. Both localization tables
+validate, and all 188 iOS source files compile. The BOTW-only quick regression against
+`39585d4e` is `PASS`, with identical 19,592-shader outputs and no new red
+lines; both runs still miss the reference-machine frame gate (1,834 and
+1,844 at 70 s). Other games retain their existing Standard / Full-screen
+choices; scene mode requires the verified profile pair.
+
+Exploratory `scripts/bench.py` comparison, using its existing runner with the
+copied post-pickup outdoor save, 60 fps target, the same host and warm pipeline
+archive: two 20 s windows per variant, at 60–80 s after launch. No red lines;
+the source save's digest is unchanged. Medians over the two runs:
+
+| Variant | fps | GPU p50 (ms) |
+|---|---:|---:|
+| Original budget and scaling | 21.40 | 25.72 |
+| Retargeted native budget | 21.25 | 26.15 |
+| Retargeted budget + scene MetalFX | 21.25 | 27.26 |
+
+Other tasks compiled on the same Mac during these runs, so these are not
+isolated performance acceptance numbers. They show no frame-rate improvement
+in this scene. The native controller's 0.8 floor is unchanged; MetalFX has its
+own cost. The two options stay opt-in pending idle-machine and device testing.
+
+Artifacts, including native disassembly, GPU tests and game traces, are in
+`dynres-scene-experiment-20261031/` in the game's NSP work folder. Local shader
+libraries use chain `715bb867230c` and the explicitly experimental Metal
+`32023.883`, rather than the pinned `32023.921`. Physical iPhone acceptance
+remains pending.
+
 ## GPU work
 
 - **Submissions in segments.** The game does not submit frame N+1 until frame N's GPU work is done: in the shrine the main thread sat in `nvnSyncWait` 59% of the time and the render thread in `nvnQueueSubmitCommands` 40%. That submit is the host's translation (about 3,600 draws and 347 passes, 7 ms), so the GPU ran 13–14 ms and then sat idle 7.7 ms a frame. The replay now commits every 64 draws between two passes (`sub_cut`, `DM_NVN_CUT`): GPU idle 7.7 → 3.8 ms, most of the rest the game's own work between its fence wait and the next submit (about 2.5 ms).
@@ -923,6 +993,7 @@ General host changes first needed here; each applies to every game:
 - **Resolved: no rumble on Xbox and DualShock 4-style controllers (Mac)** (`haptics_apple.m`): [Controller haptic engines without advanced players](../../../docs/reference/services.md#controller-haptic-engines-without-advanced-players), [DualShock 4 rumble through its effects report](../../../docs/reference/services.md#dualshock-4-rumble-through-its-effects-report). The charged attack's 0.07 is still not felt on an Xbox controller's motors (open there).
 - **No sound on an iPhone set to silent** (`front_ios_audio_session`): [The ring / silent switch muted the game on iOS](../../../docs/reference/audio.md#the-ring--silent-switch-muted-the-game-on-ios); the device check is open.
 - **Upscaling in the present** (`fx_encode`, `DM_PRESENT_UPSCALE`): [The present upscales through MetalFX](../../../docs/reference/rendering.md#the-present-upscales-through-metalfx).
+- **Experimental scene scaling before UI** (`DM_PRESENT_UPSCALE=scene`, default off): [Scene upscaling before the HUD](../../../docs/reference/rendering.md#scene-upscaling-before-the-hud).
 - **Thermal cap; resolved movie recovery and acquire/present races** (`thermal_capped`, `DM_THERMAL_CAP`): [A thermally serious iPhone holds 30 fps](../../../docs/reference/frame-rate.md#a-thermally-serious-iphone-holds-30-fps).
 - **Resolved in the host: frame-step recovery after a 30 fps cap**: [The frame step after a 30 fps cap ends](../../../docs/reference/frame-rate.md#the-frame-step-after-a-30-fps-cap-ends). Modelled with the measured iPhone GPU times; recovery on the device has not been observed here.
 - **Pipeline keys omit disabled blend factors** (`pso_key_norm`): [Pipeline keys omit unused colour state](../../../docs/reference/shaders.md#pipeline-keys-omit-unused-colour-state).

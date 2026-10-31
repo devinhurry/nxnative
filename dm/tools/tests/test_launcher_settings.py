@@ -31,7 +31,18 @@ class LauncherSettingsTests(unittest.TestCase):
             with self.subTest(api=api):
                 s = build(gid, api)['DM_PRESENT_UPSCALE']
                 self.assertEqual((s['kind'], s['section'], s['default']), ('choice', 'Game', 'off'))
-                self.assertEqual(s['options'], [['off', 'Standard'], ['metalfx', 'MetalFX']])
+                expected = [['off', 'Standard'], ['scene', 'Scene MetalFX'], ['metalfx', 'Full-screen MetalFX']] if gid == BOTW else [['off', 'Standard'], ['metalfx', 'Full-screen MetalFX']]
+                self.assertEqual(s['options'], expected)
+
+    def test_scene_upscaling_requires_a_verified_profile(self):
+        for platform in ('ios', 'mac'):
+            for gid in (BOTW, WONDER, '0100F2C0115B6000'):
+                with tempfile.TemporaryDirectory() as tmp, patch.object(settings.nacp, 'languages', return_value=['en-US']), patch.dict(os.environ, {'SETTINGS_PLATFORM': platform}):
+                    rows = settings.build(gid, tmp, 'unused')['settings']
+                self.assertFalse(any(s['env'] == 'DM_SCENE_UPSCALE' for s in rows))
+                upscale = [s for s in rows if s['env'] == 'DM_PRESENT_UPSCALE']
+                self.assertEqual(len(upscale), 1)
+                self.assertEqual(('scene' in [o[0] for o in upscale[0]['options']]), gid == BOTW)
 
     def test_frame_buffering_by_graphics_api(self):
         for api, gid in [('nvn', BOTW), ('vulkan', '0100535012974000'), ('gl', '010014E00DB56000'), ('', BOTW)]:

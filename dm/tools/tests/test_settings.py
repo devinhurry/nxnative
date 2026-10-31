@@ -12,12 +12,13 @@ class ResolutionSetting(unittest.TestCase):
             for header,supported in [('# BUILD_ID\t3c10ec35c5ef4c3686b4053afb0e58e7\n',False),
                                      ('# DYNAMIC_RESOLUTION\t1\n',True),('',False)]:
                 p.write_text(header)
-                rows=settings.build('010056B015FE8000',tmp,'unused')['settings']
-                dr=[s for s in rows if s['env']=='DM_DYNAMIC_RESOLUTION']
-                self.assertEqual(bool(dr),supported)
-                if dr:self.assertEqual((dr[0]['kind'],dr[0]['default']),('toggle','0'))
-                fps=next(s for s in rows if s['env']=='DM_FPS_TARGET')
-                self.assertEqual(fps['default'],'60')
-                self.assertEqual(fps['options'],[['30','30 fps'],['60','60 fps']])
+                for gid in ('010056B015FE8000','01007EF00011E000'):
+                    rows=settings.build(gid,tmp,'unused')['settings']
+                    dr=[s for s in rows if s['env']=='DM_DYNAMIC_RESOLUTION']
+                    self.assertEqual(bool(dr),supported)
+                    if dr:self.assertEqual((dr[0]['kind'],dr[0]['default']),('toggle','0'))
+                    fps=next(s for s in rows if s['env']=='DM_FPS_TARGET')
+                    self.assertEqual(fps['default'],'60')
+                    self.assertEqual(fps['options'],[['30','30 fps'],['60','60 fps']])
 
 if __name__=='__main__':unittest.main()

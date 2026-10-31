@@ -110,7 +110,24 @@ def frame_step(ctx):
     emit(B(here(), 0x1266880)); emit(B(here(), 0x1266950))   # apply the host's scale; skip: the original branch
     fs_put(0x126686c, [B(0x126686c, start)], 'scale apply block taken every frame when the host render scale is not 1.0')
 
+    # The native controller averages GPU time as a percentage of 1/60 s, lowers
+    # scale above 175 and raises it below 150. Retarget its existing smoothing,
+    # 0.05 steps and 0.8 floor by normalizing to the host cap: 200 at 60 fps,
+    # 100 at 30 fps. Zero keeps the original 100 (opt-in, state +0x38).
+    # x8 and s4 are dead here: the following instructions overwrite both before
+    # reading them. s0/s3 hold the measured GPU time and remain unchanged.
+    fs_site(0x12670ac, '0101271e')
+    start = here(); emit(0x1e270101)   # fmov s1,w8: original 100, before x8 is reused
+    emit(ADRP(8, here(), FS_STATE_OFF))
+    for w in (0xbd403904,   # ldr s4,[x8,#0x38]     host normalization, 0 = original
+              0x1e202088,   # fcmp s4,#0.0
+              0x1e21cc81):  # fcsel s1,s4,s1,gt
+        emit(w)
+    emit(B(here(), 0x12670b0))
+    fs_put(0x12670ac, [B(0x12670ac, start)], 'native dynamic-resolution GPU budget follows the host frame-rate cap')
+
 FRAME_STEP = {'cd57b23fa4bbad65803d9788c01821ee': frame_step}
+CAPABILITIES = {'cd57b23fa4bbad65803d9788c01821ee': ('DYNAMIC_RESOLUTION',)}
 
 # Main's input-vector probes are fixed to the exact 1.9.0 build. Keep the original instructions
 # checked here with the per-game rewrite rules, rather than embedding BOTW addresses in patch_nso.py.
