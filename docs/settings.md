@@ -34,6 +34,10 @@ The size of the 3D picture, from 50 to 100 %. Below 100 % the size is fixed ther
 
 ### Upscaling
 
+BOTW's experimental **Dynamic resolution** option keeps its native 80–100% scale controller but targets the selected frame rate, including the movie and thermal 30 fps caps. A fixed **Render scale** takes precedence. With this option off, BOTW keeps its original resolution policy.
+
+Its separate **Scene upscaling** option applies MetalFX before the native scene composite and HUD. It can improve the appearance of reduced-resolution 3D without processing the HUD. Both experimental options default off. Scene upscaling also costs GPU time; it does not guarantee a higher frame rate. **Upscaling** below remains the independent final-picture option.
+
 A game that renders below the screen's resolution is scaled up to the screen. **Standard**, the default, scales smoothly; **MetalFX** uses Apple's MetalFX upscaler, which sharpens edges and text as it scales.
 
 ```mermaid
@@ -242,6 +246,8 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 |---|---|---|
 | Frame rate | `DM_FPS_TARGET` | `30`, `60` |
 | Render scale | `DM_RENDER_SCALE` | `0.5` to `1.0` |
+| Dynamic resolution | `DM_DYNAMIC_RESOLUTION` | `1`, `0` |
+| Scene upscaling | `DM_SCENE_UPSCALE` | `1`, `0` |
 | Console mode | `DM_OPMODE` | `1` docked, `0` handheld |
 | Game language | `DM_LANG` | a language code, such as `ja` |
 | Display mode (Mac) | `DM_FULLSCREEN` | `1` fullscreen, `0` a window |
