@@ -52,7 +52,7 @@ static inline int dm_botw_layout_number(const char *key, float low, float high, 
 }
 static inline int dm_botw_layout_read_for(dm_botw_touch_layout *out, int portrait) {
     *out = dm_botw_layout_defaults_for(portrait);
-    const char *prefix = portrait ? "DM_BOTW_PORTRAIT_PAD" : "DM_BOTW_PAD";
+    const char *prefix = portrait ? "DM_BOTW_PORTRAIT_PAD_" : "DM_BOTW_PAD_";
     float enabled = 0;
     if (!dm_botw_layout_number("DM_BOTW_PORTRAIT", 0, 1, &enabled) || (enabled != 0 && enabled != 1)) return 0;
     for (int i = 0; i < 16; i++) {
@@ -61,16 +61,16 @@ static inline int dm_botw_layout_read_for(dm_botw_touch_layout *out, int portrai
         const char *fields[] = {"X", "Y", "SCALE"};
         float *values[] = {&out->control[i].x, &out->control[i].y, &out->control[i].scale};
         for (int f = 0; f < (i == 4 ? 2 : 3); f++) {
-            char key[64]; snprintf(key, sizeof key, "%s_%s_%s", prefix, name, fields[f]);
+            char key[64]; snprintf(key, sizeof key, "%s%s_%s", prefix, name, fields[f]);
             if (!dm_botw_layout_number(key, f == 2 ? .5f : -.5f, f == 2 ? 1.5f : .5f, values[f])) return 0;
         }
     }
     float badges = out->badges;
-    char key[64]; snprintf(key, sizeof key, "%s_BADGES", prefix);
+    char key[64]; snprintf(key, sizeof key, "%sBADGES", prefix);
     if (!dm_botw_layout_number(key, 0, 1, &badges) || (badges != 0 && badges != 1)) return 0;
     out->badges = (int)badges;
     if (portrait) return 1;
-    snprintf(key, sizeof key, "%s_FACE_GAP", prefix);
+    snprintf(key, sizeof key, "%sFACE_GAP", prefix);
     return dm_botw_layout_number(key, .5f, 1.5f, &out->face_gap);
 }
 static inline int dm_botw_layout_read(dm_botw_touch_layout *out) {

@@ -36,7 +36,7 @@ def scan():
         if not path.is_file(): continue
         text = path.read_text(errors='replace')
         if p.endswith('.md'):
-            for n in set(re.findall(r'`(' + NAME + r')', text)): docs.setdefault(n, set()).add(p)
+            for n in set(re.findall(r'`(' + NAME + r')(?![A-Z0-9_])', text)): docs.setdefault(n, set()).add(p)
             continue
         if not p.endswith(CODE) and not p.startswith('scripts/'): continue
         # names the code defines as preprocessor macros (the generated profile header's DM_GAME_*, host constants) are not switches, unless something also reads

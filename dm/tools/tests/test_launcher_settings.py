@@ -30,9 +30,12 @@ class LauncherSettingsTests(unittest.TestCase):
         for platform in ('mac', 'ios'):
             rows = build(BOTW, 'nvn', platform)
             self.assertEqual(rows['DM_BOTW_PORTRAIT']['default'], '0')
-            self.assertEqual(rows['DM_BOTW_PORTRAIT_PAD_FACE_X']['default'], '0.000')
+            for button in 'ABXY':
+                for field, default in [('X', '0.000'), ('Y', '0.000'), ('SCALE', '1.100')]:
+                    self.assertEqual(rows[f'DM_BOTW_PORTRAIT_PAD_{button}_{field}']['default'], default)
             self.assertEqual(rows['DM_BOTW_PORTRAIT_MOVE_CURVE']['default'], '0.300')
-            self.assertNotEqual(rows['DM_BOTW_PAD_FACE_X']['default'], rows['DM_BOTW_PORTRAIT_PAD_FACE_X']['default'])
+            self.assertNotEqual(rows['DM_BOTW_PAD_FACE_X']['default'], rows['DM_BOTW_PORTRAIT_PAD_A_X']['default'])
+            self.assertFalse(any(k.startswith('DM_BOTW_PORTRAIT_PAD_FACE_') for k in rows))
         for gid, api in [(WONDER, 'nvn'), ('0100535012974000', 'vulkan'), ('010014E00DB56000', 'gl')]:
             self.assertFalse(any(k.startswith('DM_BOTW_PORTRAIT') for k in build(gid, api)))
 
