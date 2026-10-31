@@ -1,6 +1,5 @@
 #!/bin/bash
-# Build an unsigned IPA: rewritten modules and iOS shaders, plus game files unless DM_SEPARATE_ROM=1.
-# DM_SEPARATE_ROM=1 writes RomFS and DLC to DM_GAME_DATA_OUT (.nxrom beside the IPA by default) for in-app import; also applies to --prepare-xcode.
+# Build an unsigned IPA: rewritten modules and iOS shaders, with RomFS unless DM_COPY_ROMFS=NO; DLC stays bundled.
 # In IPA mode Xcode skips the large resource copy; tools/pack_ipa.py packs the shader libraries, add-on content and RomFS straight from where they are (no Payload/ copy, nothing through the home disk).
 # In --prepare-xcode mode the generated project copies those resources before Xcode signs it with the team the user selects. IPA mode signs only the executable ad-hoc to carry entitlements; this script never installs anything.
 # Prerequisites: the rewriter (patched directory) and the iOS shader build (IOSOUT) have been run as in the README; Xcode and xcodegen are installed.
@@ -30,11 +29,6 @@ if [ -z "${ROMFS:-}" ] && [ -f "$W/data/$PKG/RomFS.img" ]; then ROMFS=$W/data/$P
 PATCHED=${PATCHED:-$W/build/patched_$PKG}; ROMFS=${ROMFS:-$W/data/$PKG/RomFS}; MSL_IOS=${MSL_IOS:-$W/build/ios/dmsh_b}; AOC=${AOC-$W/data/aoc}
 PREPARE_XCODE=NO; [ "${1:-}" != --prepare-xcode ] || PREPARE_XCODE=YES
 OUT_IPA=${1:-$(dirname "$W")/$(gp ipa)}; O=$W/build/ios/pkg; DD=$O/dd
-case "${DM_SEPARATE_ROM:-0}" in 0|1) ;; *) die "DM_SEPARATE_ROM must be 0 or 1";; esac
-export DM_SEPARATE_ROM=${DM_SEPARATE_ROM:-0}
-DATA_IPA=$OUT_IPA; [ "$PREPARE_XCODE" != YES ] || DATA_IPA=$(dirname "$W")/$(gp ipa)
-DATA_OUT=${DM_GAME_DATA_OUT:-${DATA_IPA%.ipa}.nxrom}
-[ "$DATA_OUT" != "$OUT_IPA" ] || die "the game-data package and IPA must have different output paths"
 XCODE_DD=${DM_XCODE_DERIVED_DATA:-$W/build/ios/xcode-dd}
 MODS=$(gp modules); MARKER=$(gp romfs_marker)
 NACP=$W/data/v0/control.nacp; [ -f "$NACP" ] || NACP=$(dirname "$ROMFS")/control.nacp
@@ -110,13 +104,6 @@ if [ "$GFXAPI" = nvn ] && [ -n "$GPUS" ] && [ "$GPUS" != none ] && [ -f "$GD/sha
 else [ "$GFXAPI" != nvn ] || t "no pipeline archive ($([ -n "${DM_PSO_GPUS+set}" ] && echo "DM_PSO_GPUS=${GPUS:-empty}" || echo "the profile does not set pso_mtl4 on; DM_PSO_GPUS=g18p builds one")$([ -f "$GD/shader_pairs.tsv" ] || echo ', no shader_pairs.tsv'))"; fi
 # The launcher's settings for this game (Launcher.swift): dm/games/settings.tsv filtered by the profile, main's rewriter table and the game's languages (dm/games/settings.py)
 L=$(GFXAPI="$GFXAPI" python3 "$DM/games/settings.py" "$GAME" "$PATCHED" "$VNACP" Gen/dm/launcher.json) || die "launcher settings (dm/games/settings.py)"; t "launcher: $L"
-if [ "$DM_SEPARATE_ROM" = 1 ]; then
-  t "pack game data (.nxrom; unchanged sources reuse the existing package)"
-  DATA_ARGS=(); if [ -n "$AOC" ] && [ -d "$AOC" ]; then DATA_ARGS+=(--aoc "$AOC"); fi
-  python3 tools/game_data.py "$DATA_OUT" --romfs "$ROMFS" --title-id "$GAME" --version "$DM_APP_VERSION" --marker "$MARKER" \
-    --metadata Gen/dm/game-data.json --stamp "$W/game-data-stamp.json" "${DATA_ARGS[@]}" || die "pack game data"
-  t "game data ready: $DATA_OUT"
-fi
 # The packed language (DMLanguage) is the Game language row's default, which settings.py makes the game's first language when it lacks DM_LANG: the screen and DM_LAUNCHER=0 then agree
 LD=$(python3 -c 'import json, sys; print(next((s["default"] for s in json.load(open(sys.argv[1]))["settings"] if s["env"] == "DM_LANG"), ""))' Gen/dm/launcher.json) || die "launcher settings (Gen/dm/launcher.json)"
 if [ -n "$LD" ] && [ "$LD" != "$DM_LANG" ]; then t "game language: the game has no $DM_LANG; packing $LD, its first"; export DM_LANG=$LD; fi
@@ -196,9 +183,7 @@ if [ -n "${DM_ENTITLEMENTS-default}" ]; then
 fi
 P=Payload/DmIOS.app
 MAPS=()
-if [ "$DM_SEPARATE_ROM" = 1 ]; then
-  t "game files are in the external .nxrom package"
-elif [ "${DM_COPY_ROMFS:-YES}" = NO ]; then
+if [ "${DM_COPY_ROMFS:-YES}" = NO ]; then
   t "no game files in the IPA (DM_COPY_ROMFS=NO): the app takes Documents/romfs.img (scripts/push_romfs.sh)"
   # The image's identity (dm/host/romfs_identity.h) goes into the app as romfs.id: main.m then uses only a Documents/romfs.img with the same size and index hash, and says so when it is another version or missing.
   # A RomFS folder has no image to name yet (push_romfs.sh packs it on the Mac), so such a build carries no identity and accepts any complete image
@@ -207,7 +192,7 @@ elif [ "${DM_COPY_ROMFS:-YES}" = NO ]; then
     MAPS=("$P/romfs.id=$O/romfs.id"); t "game files identity: $(cat "$O/romfs.id")"
   fi
 elif [ -f "$ROMFS" ]; then MAPS=("$P/romfs.img=$ROMFS"); else MAPS=("$P/romfs=$ROMFS"); fi
-if [ "$DM_SEPARATE_ROM" = 0 ] && [ -n "$AOC" ] && [ -d "$AOC" ]; then MAPS+=("$P/aoc=$AOC"); t "add-on content: $(ls "$AOC" | tr '\n' ' ')"; fi
+if [ -n "$AOC" ] && [ -d "$AOC" ]; then MAPS+=("$P/aoc=$AOC"); t "add-on content: $(ls "$AOC" | tr '\n' ' ')"; fi
 if [ -n "${PSO:-}" ]; then MAPS+=("$P/pso=$PSO"); fi
 MAPS+=("$P=$APP" "$P/dm=$IOS/Gen/dm" "$P/msl/$MSLDIR=$MSL_IOS/$MSLDIR")
 t "pack IPA (already-compressed game files stored, everything else deflated)"

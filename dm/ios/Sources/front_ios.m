@@ -18,8 +18,6 @@ void dm_gamepad_reset(void);
 void dm_gamepad_active(void);
 void front_ios_boot(void);
 int front_ios_boot_ok(void);
-int front_ios_prepare_game(void);
-void dm_show_game_import(void *view_controller, void (*done)(void));
 const char *front_ios_boot_message(void);   // main.m: why a build that keeps the game files off the IPA found none usable (NULL = the generic hint)
 bool dm_show_launcher(void *view_controller, void (*done)(void));   // Launcher.swift: false = no launcher (no dm/launcher.json, or DM_LAUNCHER=0)
 
@@ -61,7 +59,6 @@ static UILabel *front_ios_fps_label(void);
 @end
 static DmRootVC *g_root;
 static void launcher_done(void) { [g_root startGame]; }
-static void import_done(void) { if (front_ios_prepare_game()) [g_root showLauncher]; }
 @implementation DmRootVC
 - (void)viewDidLoad {
     [super viewDidLoad];
@@ -117,16 +114,15 @@ static void import_done(void) { if (front_ios_prepare_game()) [g_root showLaunch
 - (void)viewDidAppear:(BOOL)a {
     [super viewDidAppear:a];
     if (self.launched) return;
-    if (!front_ios_boot_ok() && front_ios_boot_message()) {
+    if (!front_ios_boot_ok()) {
         if (!self.presentedViewController) {
-            UIAlertController *notice = [UIAlertController alertControllerWithTitle:@"Game files" message:@(front_ios_boot_message()) preferredStyle:UIAlertControllerStyleAlert];
+            UIAlertController *notice = [UIAlertController alertControllerWithTitle:@"Game files" message:front_ios_boot_message() ? @(front_ios_boot_message()) : @"Copy the matching romfs.img into this app's Documents folder, then restart the app." preferredStyle:UIAlertControllerStyleAlert];
             [notice addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
             [self presentViewController:notice animated:YES completion:nil];
         }
         return;
     }
     self.launched = YES; g_root = self;
-    if (!front_ios_boot_ok()) { dm_show_game_import((__bridge void *)self, import_done); return; }
     [self showLauncher];
 }
 - (void)showLauncher {

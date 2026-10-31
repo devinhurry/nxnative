@@ -89,6 +89,11 @@ class SymptomIndex(unittest.TestCase):
 
 
 class PatchIndex(unittest.TestCase):
+    def test_deleted_tracked_source_is_not_scanned(self):
+        result = subprocess.CompletedProcess([], 0, stdout='dm/ios/Sources/deleted-fixture.swift\n')
+        with patch.object(docs_patches.subprocess, 'run', return_value=result):
+            self.assertEqual(docs_patches.host_rows({}), {})
+
     def test_index_is_current(self):
         self.assertEqual(docs_patches.OUT.read_text(), docs_patches.page(), 'docs/agents/game-patches.md is out of date: run dm/tools/docs_patches.py')
 

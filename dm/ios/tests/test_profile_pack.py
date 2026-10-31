@@ -36,7 +36,7 @@ class ProfilePackTests(unittest.TestCase):
                 out = root / 'fixture.ipa'
                 env = {k: v for k, v in os.environ.items() if k not in ('IOS_PULL', 'DM_GAMES_DIR', 'DM_GAMES_FIRST')}
                 env.update(GAME=gid, DM=str(dm), IOS=str(root), APP=str(app), MSL_IOS=str(shaders), MSLDIR='b-fixture',
-                           AOC='', ROMFS=str(romfs), OUT_IPA=str(out), DM_SEPARATE_ROM='0', PROFILE_TOOL=str(REPO / 'dm/games/game.py'))
+                           AOC='', ROMFS=str(romfs), OUT_IPA=str(out), PROFILE_TOOL=str(REPO / 'dm/games/game.py'))
                 if override is not None: env['IOS_PULL'] = override
                 if with_pso:
                     pso = root / 'pso'; pso.mkdir(); (pso / 'prebuilt.tsv').write_text('fixture')
