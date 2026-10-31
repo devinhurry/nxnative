@@ -11439,16 +11439,20 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTex
 #define FX_REMAKE_PRESENTS 30
 typedef struct { id<MTL4FXSpatialScaler> sc; id<MTLTexture> in, out; id<MTL4Compiler> compiler; uint64_t made_at; int made; NSUInteger refused[6]; } fx_state;
 static fx_state g_fx_present;   // only the present thread encodes or replaces the scaler
-static int g_fx_mode = -1;   // 1 = metalfx, 0 = off
+static _Atomic int g_fx_mode = -1;   // shared by scene replay and presentation; 0 = standard, 1 = full-screen MetalFX, 2 = scene MetalFX
 static int fx_mode(void) {
-    if (g_fx_mode >= 0) return g_fx_mode;
-    const char *e = getenv("DM_PRESENT_UPSCALE"); int v = 0;
+    int v = atomic_load_explicit(&g_fx_mode, memory_order_relaxed);
+    if (v >= 0) return v;
+    const char *e = getenv("DM_PRESENT_UPSCALE"); v = 0;
     if (e && (!strcmp(e, "metalfx") || !strcmp(e, "1"))) v = 1;
+    else if (e && !strcmp(e, "scene")) v = 2;
     else if (e && (!strcmp(e, "off") || !strcmp(e, "0"))) v = 0;
-    else if (e && *e) MLOG("[RED] DM_PRESENT_UPSCALE=%s: metalfx or off; keeping %s", e, v ? "metalfx" : "off");
+    else if (e && *e) MLOG("[RED] DM_PRESENT_UPSCALE=%s: scene, metalfx or off; keeping off", e);
+    if (v == 2 && !*DM_GAME_SCENE_UPSCALE_PS) { MLOG("scene upscaling: unavailable for this profile; keeping standard scaling"); v = 0; }
     if (v && !(g_q4 && [MTLFXSpatialScalerDescriptor supportsMetal4FX:g_dev])) { MLOG("present upscaling: this GPU has no Metal 4 MetalFX spatial scaler; the present scales bilinearly"); v = 0; }
-    MLOG("present upscaling (DM_PRESENT_UPSCALE): %s", v ? "metalfx, MetalFX's spatial scaler where the picture is shown larger than the game renders it" : "off, bilinear");
-    return g_fx_mode = v;
+    MLOG("upscaling (DM_PRESENT_UPSCALE): %s", v == 2 ? "scene, MetalFX before the HUD" : v == 1 ? "metalfx, MetalFX on the final picture" : "off, bilinear");
+    atomic_store_explicit(&g_fx_mode, v, memory_order_relaxed);
+    return v;
 }
 // MetalFX scales the content (cw x ch) to its rectangle on the canvas (vp) when the rectangle is at least as large in both directions and larger in one
 static int fx_wanted(MTLViewport vp, NSUInteger cw, NSUInteger ch) {
@@ -11508,13 +11512,8 @@ static id<MTLTexture> fx_encode(fx_state *fx, id<MTL4CommandBuffer> cb, id<MTLTe
 // replace its scene input. Its existing vertex constants already describe the
 // output texel grid, which becomes the scaled input's grid as well.
 static void scene_upscale_prepare(NvProg *pr, const p_draw *dw, const p_draw_idx *di) {
-    static int on = -1; static fx_state fx;
-    if (on < 0) {
-        const char *e = getenv("DM_SCENE_UPSCALE");
-        on = e && !strcmp(e, "1") && *DM_GAME_SCENE_UPSCALE_PS != 0 && g_q4 && [MTLFXSpatialScalerDescriptor supportsMetal4FX:g_dev];
-        if (e && !strcmp(e, "1")) MLOG("scene upscaling: %s (DM_SCENE_UPSCALE)", on ? "MetalFX before the HUD" : "unavailable for this profile / GPU");
-    }
-    if (!on || !g_cb || !pr || !pr->sh[0] || !pr->sh[1] || g_fz.active || g_defer_replaying || g_geo_program ||
+    static fx_state fx;
+    if (fx_mode() != 2 || !g_cb || !pr || !pr->sh[0] || !pr->sh[1] || g_fz.active || g_defer_replaying || g_geo_program ||
         strncmp(pr->sh[0]->key, DM_GAME_SCENE_UPSCALE_VS, 16) || strncmp(pr->sh[1]->key, DM_GAME_SCENE_UPSCALE_PS, 16)) return;
     int count = dw ? dw->count : di ? di->count : 0;
     if (count != 3 || (dw ? dw->ind || dw->instances > 1 : di->ind || di->instances > 1) || R.rt.n != 1 || !R.rt.color[0] || R.rt.depth ||

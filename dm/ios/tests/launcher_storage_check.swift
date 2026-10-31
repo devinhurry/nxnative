@@ -119,6 +119,17 @@ import Foundation
         expect(launched.values["DM_OPMODE"] == "0" && d.string(forKey: "launcher.DM_OPMODE") == "1", "Reset then Play keeps the saved choice of a setting fixed at launch")
         unsetenv("DM_OPMODE"); setenv("DM_ENV_LAUNCH_KEYS", "", 1); d.removeObject(forKey: "launcher.DM_OPMODE")
         failed += checkLauncherLayout(LauncherModel(mac.settings, defaults: d), defaults: d)
+        for list in [file.settings, mac.settings] {
+            let rows = list.filter { $0.env == "DM_PRESENT_UPSCALE" }
+            expect(rows.count == 1 && !list.contains { $0.env == "DM_SCENE_UPSCALE" }, "one upscaling choice replaces the independent switches")
+            expect(rows[0].options?.map { $0[0] } == ["off", "scene", "metalfx"], "the three upscaling modes are available")
+            let model = LauncherModel(list, defaults: d)
+            for mode in ["scene", "metalfx", "off"] {
+                model.values["DM_PRESENT_UPSCALE"] = mode; model.apply()
+                expect(String(cString: getenv("DM_PRESENT_UPSCALE")) == mode, "the selected upscaling mode reaches the game")
+                expect(LauncherModel(list, defaults: d).values["DM_PRESENT_UPSCALE"] == mode, "the upscaling choice survives reopening")
+            }
+        }
         print("launcher storage: \(failed) failed")
         exit(failed == 0 ? 0 : 1)
     }

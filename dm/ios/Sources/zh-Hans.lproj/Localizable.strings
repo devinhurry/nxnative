@@ -1,7 +1,6 @@
 // Launcher and BOTW touch settings.
 "30 fps" = "30 帧/秒";
 "60 fps" = "60 帧/秒";
-"Adjusts resolution between 70% and 100% under load. Turn off to keep full resolution for the selected console mode." = "根据负载在 70% 到 100% 之间调整分辨率。关闭后使用所选主机模式的完整分辨率。";
 "Advanced settings" = "高级设置";
 "Applies only to BOTW touch controls." = "仅影响旷野之息的触控操作。";
 "Brings back all settings this game was tested with." = "将所有设置恢复为此游戏已测试的默认值。";
@@ -128,3 +127,7 @@
 "Traditional Chinese" = "繁体中文";
 "Simplified Chinese" = "简体中文";
 "Brazilian Portuguese" = "巴西葡萄牙语";
+"Adjusts 3D resolution under load to help maintain frame rate. A fixed Render scale takes precedence." = "根据负载动态调整 3D 分辨率，以维持帧率。手动设置画面比例时优先使用固定比例。";
+"Scene MetalFX" = "场景 MetalFX";
+"Full-screen MetalFX" = "整屏 MetalFX";
+"Scene MetalFX (experimental) scales 3D only; Full-screen MetalFX also scales text and UI. Uses more GPU time and can increase heat." = "场景 MetalFX（实验）仅放大 3D 画面；整屏 MetalFX 还会处理文字和界面。可能增加图形处理负载和发热。";

@@ -11,7 +11,6 @@ static int checks, fails;
 
 static void check_scene_boundary(void) {
     if (!*DM_GAME_SCENE_UPSCALE_PS) return;
-    setenv("DM_SCENE_UPSCALE", "1", 1);
     tex_t src = {.magic=MAGIC('T','E','X',0), .serial=970001};
     src.d = (nvn_texdesc){.target=NVN_TEXTURE_TARGET_2D, .format=NVN_FORMAT_RGBA8, .width=64, .height=64, .depth=1, .levels=1, .samples=1};
     tex_t dst = src; dst.serial++; dst.d.width=dst.d.height=128;
@@ -31,6 +30,12 @@ static void check_scene_boundary(void) {
     R.has_rt=1; R.rt.n=1; R.rt.color[0]=&dst;
     S.has_vp=1; S.vp[0][2]=S.vp[0][3]=128;
     S.tex[1][0]=300; S.ubo[0][0]=(p_bind_buf){.addr=(uint64_t)(uintptr_t)constants,.size=16};
+    const char *modes[]={"off","metalfx","scene"};
+    for(int i=0;i<3;i++) {
+        setenv("DM_PRESENT_UPSCALE",modes[i],1); g_fx_mode=-1;
+        CHECK(fx_mode()==i,"the single setting selects exactly one scaling mode");
+        if(i<2) { scene_upscale_prepare(pr,&draw,NULL); CHECK(!g_scene_up.output,"standard and full-screen modes leave the scene input unchanged"); }
+    }
     scene_upscale_prepare(pr,&draw,NULL);
     CHECK(g_scene_up.output && g_scene_up.source==source,"verified native scene input is upscaled before its composite");
     CHECK(g_scene_up.output.width==128 && g_scene_up.output.height==128,"scene output matches native composite viewport");
