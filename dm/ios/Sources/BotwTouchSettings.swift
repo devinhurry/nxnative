@@ -16,6 +16,7 @@ struct BotwTouchSettingsView: View {
     @State private var selected = BotwTouchControl.all[1]
     @State private var copied = false
     @State private var portrait = false
+    private var controls: [BotwTouchControl] { portrait ? BotwTouchControl.compact : BotwTouchControl.all }
 
     private var previewViewport: CGSize {
         let short = min(viewport.width, viewport.height), long = max(viewport.width, viewport.height)
@@ -41,14 +42,14 @@ struct BotwTouchSettingsView: View {
         var result = dm_botw_layout_defaults_for(portrait ? 1 : 0)
         withUnsafeMutableBytes(of: &result.control) { bytes in
             let controls = bytes.bindMemory(to: dm_botw_control_transform.self)
-            for control in BotwTouchControl.all {
+            for control in self.controls {
                 let base = controls[control.id]
                 controls[control.id] = .init(x: Float(value(control.env("X", portrait: portrait), fallback: Double(base.x))),
                     y: Float(value(control.env("Y", portrait: portrait), fallback: Double(base.y))),
                     scale: control.id == 4 ? 1 : Float(value(control.env("SCALE", portrait: portrait), fallback: Double(base.scale))))
             }
         }
-        result.face_gap = Float(value(key("DM_BOTW_PAD_FACE_GAP"), fallback: Double(result.face_gap)))
+        if !portrait { result.face_gap = Float(value(key("DM_BOTW_PAD_FACE_GAP"), fallback: Double(result.face_gap))) }
         result.badges = value(key("DM_BOTW_PAD_BADGES"), fallback: Double(result.badges)) == 0 ? 0 : 1
         return result
     }
@@ -83,7 +84,7 @@ struct BotwTouchSettingsView: View {
                     let scale = min(geometry.size.width / previewViewport.width, geometry.size.height / previewViewport.height)
                     ZStack(alignment: .topLeading) {
                         RoundedRectangle(cornerRadius: 16).fill(Color(white: 0.10))
-                        ForEach(BotwTouchControl.all) { control in
+                        ForEach(controls) { control in
                             let r = rect(control)
                             BotwControlPreview(control: control, m: m, selected: $selected, canvas: canvas,
                                 previewScale: scale, rect: r, layout: layout,
@@ -104,17 +105,17 @@ struct BotwTouchSettingsView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     if let row = m.settings.first(where: { $0.env == "DM_BOTW_PORTRAIT" }) { SettingRow(s: row, m: m) }
                     Picker("Control", selection: $selected) {
-                        ForEach(BotwTouchControl.all) { Text(LocalizedStringKey($0.label)).tag($0) }
+                        ForEach(controls) { Text(LocalizedStringKey($0.label)).tag($0) }
                     }.pickerStyle(.menu).accessibilityIdentifier("botw.touch.control")
                     ForEach(["X", "Y", "SCALE"], id: \.self) { field in
                         if let row = m.settings.first(where: { $0.env == selected.env(field, portrait: portrait) }) {
                             BotwLayoutSlider(row: row, title: field == "X" ? "Horizontal offset" : field == "Y" ? "Vertical offset" : "Size", m: m)
                         }
                     }
-                    if selected.id == 0, let row = m.settings.first(where: { $0.env == key("DM_BOTW_PAD_FACE_GAP") }) {
+                    if !portrait, selected.id == 0, let row = m.settings.first(where: { $0.env == key("DM_BOTW_PAD_FACE_GAP") }) {
                         BotwLayoutSlider(row: row, title: "Button spacing", m: m)
                     }
-                    Button("Restore this control") { m.reset(keys: selected.keys(portrait: portrait).union(selected.id == 0 ? [key("DM_BOTW_PAD_FACE_GAP")] : [])) }
+                    Button("Restore this control") { m.reset(keys: selected.keys(portrait: portrait).union(!portrait && selected.id == 0 ? [key("DM_BOTW_PAD_FACE_GAP")] : [])) }
                     Divider()
                     if let row = m.settings.first(where: { $0.env == key("DM_BOTW_PAD_BADGES") }) { SettingRow(s: row, m: m) }
                     Divider()
@@ -147,7 +148,7 @@ struct BotwTouchSettingsView: View {
             .padding(16)
         }
         .onChange(of: m.values) { _, _ in copied = false }
-        .onChange(of: portrait) { _, _ in copied = false }
+        .onChange(of: portrait) { _, _ in copied = false; selected = BotwTouchControl.all[1] }
         #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
         #endif
@@ -223,7 +224,9 @@ private struct BotwControlPreview: View {
     }
     var body: some View {
         ZStack {
-            if control.id == 0 {
+            if portrait && control.id < 4 {
+                button(control.key, diameter: rect.width*previewScale)
+            } else if control.id == 0 {
                 ForEach(0..<4) { i in faceButton(i) }
             } else if control.id == 6 || control.id == 7 || control.id == 9 {
                 button(control.key, diameter: rect.width*previewScale)

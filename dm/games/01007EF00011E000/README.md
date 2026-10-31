@@ -725,10 +725,23 @@ The BOTW touch editor's **Enable portrait mode** switch (`DM_BOTW_PORTRAIT`,
 off by default) permits upright iOS gameplay. The compact touch profile is used
 only when the display is taller than it is wide and its width after left/right
 safe insets is below 600pt. At 600pt or wider, portrait uses the normal profile;
-landscape always retains the normal profile. The compact left column is
-D-pad, L, ZL, movement stick from top to bottom. The right pairs rise toward
-the right: B/A at the bottom, Y/X above, and ZR/R at the top. Normal and compact
-previews each edit, reset and export their own layout and movement response;
+landscape always retains the normal profile. Compact L sits at the bottom-left
+safe-area corner with 10pt left/bottom margins; the D-pad sits to its right at
+the same center height, with a 15pt gap between their edges.
+In compact mode, the D-pad's grab region takes touch-down priority over the
+floating movement stick on both iOS and the Mac preview.
+L and the D-pad have default diameters
+6pt smaller than their original compact sizes. The movement stick is shifted
+another 40pt up; ZL is raised 20pt. The right buttons are 200pt below their previous homes,
+with Y/X lowered another 15pt and ZR/R raised 5pt: ZR takes the former R horizontal position and R sits
+directly above it, with the standard shoulder gap. All six right buttons are
+shifted another 3pt right. Y/X occupy the next row and B/A the bottom row; Y and
+B have an additional 10pt right shift. Y's default diameter is 10pt larger than X; A and B are
+10pt smaller than X. Each compact face button has its own position
+and size in the touch editor (`DM_BOTW_PORTRAIT_PAD_A_*`, `_B_*`, `_X_*`, `_Y_*`).
+The removed compact `FACE_*` group settings are not migrated; adjust individual
+buttons in the editor instead. Normal and compact previews each edit, reset
+and export their own layout and movement response;
 compact keys retain the `DM_BOTW_PORTRAIT_PAD_` and `DM_BOTW_PORTRAIT_MOVE_`
 prefixes. The frontend publishes the selected profile's native D-pad size with
 its position, so the equipment artwork stays consistent in wide portrait too.

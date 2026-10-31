@@ -65,6 +65,10 @@ struct BotwTouchControl: Identifiable, Hashable {
         .init(id: 7, key: "R", label: "R"), .init(id: 9, key: "ZR", label: "ZR"),
         .init(id: 12, key: "DPAD", label: "D-pad")
     ]
+    static let compact: [Self] = [
+        .init(id: 0, key: "A", label: "A"), .init(id: 1, key: "B", label: "B"),
+        .init(id: 2, key: "X", label: "X"), .init(id: 3, key: "Y", label: "Y")
+    ] + all.filter { $0.id != 0 }
     func env(_ field: String, portrait: Bool = false) -> String {
         botwTouchKey(id == 4 && field == "SCALE" ? "DM_BOTW_MOVE_SIZE" : "DM_BOTW_PAD_\(key)_\(field)", portrait: portrait)
     }

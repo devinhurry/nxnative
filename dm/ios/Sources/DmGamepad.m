@@ -591,7 +591,11 @@ static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPoint
 - (CGPoint)faceCenter { if ([self botwTouchControlsActive]) return [self botwLayoutCenter:0]; UIEdgeInsets i = self.safeAreaInsets; dm_touchpad_point p = dm_touchpad_face_center(self.bounds.size.width, self.bounds.size.height, i.left, i.top, i.right, i.bottom); return CGPointMake(p.x, p.y); }
 - (CGFloat)faceGap { return K_FACE_GAP * self.u * ([self botwTouchControlsActive] ? _touchLayout.face_gap*_touchLayout.control[0].scale : 1); }
 - (CGFloat)faceR { return K_FACE_R * self.u * [self botwLayoutScale:0]; }
+- (CGFloat)faceRadiusForButton:(int)b {
+    return [self botwTouchControlsActive] && _touchLayout.portrait ? [self botwLayoutRect:b].size.width*.5 : self.faceR;
+}
 - (CGPoint)facePos:(int)b {
+    if ([self botwTouchControlsActive] && _touchLayout.portrait) return [self botwLayoutCenter:b];
     CGPoint c=self.faceCenter; CGFloat gap=self.faceGap;
     if ([self botwTouchControlsActive]) {
         dm_touchpad_point d=dm_botw_layout_face_offset(&_touchLayout,b,self.u);
@@ -627,12 +631,18 @@ static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPoint
 - (BOOL)inLeftArea:(CGPoint)p { CGRect b = [self botwTouchControlsActive] ? [self botwControlArea] : self.bounds; return p.x < CGRectGetMinX(b)+b.size.width * K_LSWIPE && p.y > CGRectGetMidY(b); }   // lower-left: the left stick starts where the touch lands
 - (BOOL)inRightArea:(CGPoint)p { CGRect b = self.bounds; return p.x >= CGRectGetMaxX(b) - b.size.width * K_RSWIPE; }
 - (CGPoint)dpadCenter { if ([self botwTouchControlsActive] || [self botwMenuDpadActive]) return [self botwLayoutCenter:B_LEFT]; UIEdgeInsets i = self.safeAreaInsets; dm_touchpad_point p = dm_touchpad_dpad_center(self.bounds.size.width, self.bounds.size.height, i.left, i.top, i.right, i.bottom); return CGPointMake(p.x, p.y); }
-- (CGFloat)dpadR { return K_DPAD_R * self.u * ([self botwMenuDpadActive] ? _touchLayout.control[B_LEFT].scale : [self botwLayoutScale:B_LEFT]); }
+- (CGFloat)dpadR {
+    if (_touchLayout.portrait && ([self botwTouchControlsActive] || [self botwMenuDpadActive])) return [self botwLayoutRect:B_LEFT].size.width*.5;
+    return K_DPAD_R * self.u * ([self botwMenuDpadActive] ? _touchLayout.control[B_LEFT].scale : [self botwLayoutScale:B_LEFT]);
+}
 static BOOL isDrop(int b) { return b == B_ZL || b == B_L || b == B_ZR || b == B_R; }
 static BOOL isClick(int b) { return b == B_LS || b == B_RS; }
 - (CGPoint)dropCenter:(int)b { if ([self botwTouchControlsActive]) return [self botwLayoutCenter:b]; CGRect s = self.safe; CGFloat u = self.u; BOOL z = b == B_ZL || b == B_ZR;
     return side(s, b == B_ZR || b == B_R, (z ? K_ZL_X : K_L_X) * u, CGRectGetMinY(s) + (z ? K_ZL_Y : K_L_Y) * u); }
-- (CGFloat)dropR:(int)b { return (b == B_ZL || b == B_ZR || (b == B_R && [self botwTouchControlsActive]) ? K_ZL_R : K_L_R) * self.u * [self botwLayoutScale:b]; }
+- (CGFloat)dropR:(int)b {
+    if ([self botwTouchControlsActive] && _touchLayout.portrait && b == B_L) return [self botwLayoutRect:b].size.width*.5;
+    return (b == B_ZL || b == B_ZR || (b == B_R && [self botwTouchControlsActive]) ? K_ZL_R : K_L_R) * self.u * [self botwLayoutScale:b];
+}
 - (CGPoint)clickCenter:(int)b { CGRect s = self.safe; CGFloat u = self.u; return side(s, b == B_RS, K_CLICK_X * u, CGRectGetMinY(s) + K_ZL_Y * u); }
 - (CGRect)pillRect:(int)b { CGRect s = self.safe; CGFloat u = self.u, w = K_PILL_W * u, h = K_PILL_H * u;
     if ([self botwTouchControlsActive]) return [self botwLayoutRect:b];
@@ -817,8 +827,14 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
         if (hit) return b; }
     return -1;
 }
+- (BOOL)compactDpadOwnsPoint:(CGPoint)p {
+    return [self botwTouchControlsActive] && _touchLayout.portrait && _full &&
+        dist(p,self.dpadCenter) <= self.dpadR*K_DPAD_GRAB;
+}
 - (BOOL)leftStickOwnsPoint:(CGPoint)p {
     if (![self botwTouchControlsActive] || _tap || [self btnAt:p] >= 0 || [self inSwap:p]) return NO;
+    if ([self compactDpadOwnsPoint:p]) return NO;
+    if (_touchLayout.portrait && [self faceAt:p]) return NO;
     CGFloat best = 1;
     int kind = C_NONE;
     CGFloat f = dist(p, self.faceCenter) / (self.faceGap + self.faceR * 1.6);
@@ -879,7 +895,13 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
 - (uint64_t)faceAt:(CGPoint)p {   // keys under the finger in the diamond (between two keys both count)
     if ([self botwTouchControlsActive] && _touchLayout.badges)
         for (int b = B_A; b <= B_Y; b++)
-            if (dm_botw_button_badge_contains(p, [self facePos:b], self.faceR)) return 1ull << b;
+            if (dm_botw_button_badge_contains(p, [self facePos:b], [self faceRadiusForButton:b])) return 1ull << b;
+    if ([self botwTouchControlsActive] && _touchLayout.portrait) {
+        uint64_t bits = 0;
+        for (int b = B_A; b <= B_Y; b++)
+            if (dist(p,[self facePos:b]) <= [self faceRadiusForButton:b]*1.25) bits |= 1ull << b;
+        return bits;
+    }
     CGPoint c = self.faceCenter;
     if ([self botwTouchControlsActive]) return dm_botw_layout_face_buttons(&_touchLayout,p.x,p.y,c.x,c.y,self.u);
     return dm_touchpad_face_buttons((float)p.x, (float)p.y, (float)c.x, (float)c.y,
@@ -1146,9 +1168,10 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         if ([self botwTouchControlsActive]) {
             for (int b = B_A; b <= B_Y; b++) {
                 CGPoint center = [self facePos:b];
-                CGFloat faceHit = dist(p, center) / (self.faceR * 1.25);
+                CGFloat radius = [self faceRadiusForButton:b];
+                CGFloat faceHit = dist(p, center) / (radius * 1.25);
                 if (_touchLayout.badges && dm_botw_button_badge_contains(CGPointMake(p.x,p.y),
-                        CGPointMake(center.x,center.y),self.faceR)) faceHit = fmin(faceHit, .5);
+                        CGPointMake(center.x,center.y),radius)) faceHit = fmin(faceHit, .5);
                 if (faceHit <= best) { best = faceHit; kind = C_FACE; }
             }
         } else {
@@ -1156,6 +1179,8 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
             if (f <= best) { best = f; kind = C_FACE; }
         }
         if (_full) { CGFloat d = dist(p, self.dpadCenter) / (self.dpadR * K_DPAD_GRAB); if (d < best) { best = d; kind = C_DPAD; } }
+        // Compact Rune owns its grab region before the floating movement stick.
+        if (kind != C_FACE && [self compactDpadOwnsPoint:p]) { best = 0; kind = C_DPAD; }
         if (!_stick[0]) { CGFloat sl = dist(p, self.stickHome) / ([self stickR:0] * K_STICK_GRAB); if (sl < best) { best = sl; kind = C_STICK; } }
         if (scopePrompt && kind != C_FACE && kind != C_DPAD && kind != C_STICK) {
             _botwLookTapPending = NO;
@@ -1447,7 +1472,7 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
         }
         setPath(_menuDpad,path);
     }
-    for (int b = B_A; b <= B_Y; b++) { CGPoint c = [self facePos:b]; setPath(_key[b], circlePath(c, self.faceR)); placeLabel(_label[b], c, 20 * u); }
+    for (int b = B_A; b <= B_Y; b++) { CGPoint c = [self facePos:b]; setPath(_key[b], circlePath(c, [self faceRadiusForButton:b])); placeLabel(_label[b], c, 20 * u); }
     BOOL botw = [self botwTouchControlsActive];
     for (int i = 0; i < (int)(sizeof k_btns / sizeof *k_btns); i++) { int b = k_btns[i];
         if (b == B_L && [self botwTouchControlsActive]) {

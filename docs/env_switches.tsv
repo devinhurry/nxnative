@@ -26,6 +26,18 @@ DM_BOTW_PAD_FACE_GAP	player	BOTW touch XYAB spacing multiplier; default 1.060.
 DM_BOTW_PAD_FACE_SCALE	player	BOTW touch XYAB group size multiplier.
 DM_BOTW_PAD_FACE_X	player	BOTW touch XYAB group horizontal offset as a fraction of layout canvas width.
 DM_BOTW_PAD_FACE_Y	player	BOTW touch XYAB group vertical offset as a fraction of layout canvas height.
+DM_BOTW_PORTRAIT_PAD_A_X	player	BOTW compact A horizontal offset as a fraction of screen width.
+DM_BOTW_PORTRAIT_PAD_A_Y	player	BOTW compact A vertical offset as a fraction of screen height.
+DM_BOTW_PORTRAIT_PAD_A_SCALE	player	BOTW compact A size multiplier; default 1.100.
+DM_BOTW_PORTRAIT_PAD_B_X	player	BOTW compact B horizontal offset as a fraction of screen width.
+DM_BOTW_PORTRAIT_PAD_B_Y	player	BOTW compact B vertical offset as a fraction of screen height.
+DM_BOTW_PORTRAIT_PAD_B_SCALE	player	BOTW compact B size multiplier; default 1.100.
+DM_BOTW_PORTRAIT_PAD_X_X	player	BOTW compact X horizontal offset as a fraction of screen width.
+DM_BOTW_PORTRAIT_PAD_X_Y	player	BOTW compact X vertical offset as a fraction of screen height.
+DM_BOTW_PORTRAIT_PAD_X_SCALE	player	BOTW compact X size multiplier; default 1.100.
+DM_BOTW_PORTRAIT_PAD_Y_X	player	BOTW compact Y horizontal offset as a fraction of screen width.
+DM_BOTW_PORTRAIT_PAD_Y_Y	player	BOTW compact Y vertical offset as a fraction of screen height.
+DM_BOTW_PORTRAIT_PAD_Y_SCALE	player	BOTW compact Y size multiplier; default 1.100, with a default diameter 10pt larger than X (A/B are 10pt smaller than X).
 DM_BOTW_PAD_L_SCALE	player	BOTW touch L button size multiplier.
 DM_BOTW_PAD_L_X	player	BOTW touch L button horizontal offset as a fraction of layout canvas width.
 DM_BOTW_PAD_L_Y	player	BOTW touch L button vertical offset as a fraction of layout canvas height.

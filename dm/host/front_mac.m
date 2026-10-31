@@ -424,8 +424,10 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
 - (float)layoutScale:(int)control { return _active ? _touchLayout.control[control].scale : 1; }
 - (float)faceGap { return DM_TP_FACE_GAP*self.u*(_active ? _touchLayout.face_gap*_touchLayout.control[0].scale : 1); }
 - (float)faceRadius { return DM_TP_FACE_R*self.u*[self layoutScale:0]; }
-- (float)dpadRadius { return DM_TP_DPAD_R*self.u*[self layoutScale:12]; }
+- (float)faceRadiusForButton:(int)b { return _active && _touchLayout.portrait ? [self layoutRect:b].width*.5f : self.faceRadius; }
+- (float)dpadRadius { return _active && _touchLayout.portrait ? [self layoutRect:12].width*.5f : DM_TP_DPAD_R*self.u*[self layoutScale:12]; }
 - (dm_touchpad_point)facePosition:(int)button {
+    if (_active && _touchLayout.portrait) return [self layoutCenter:button];
     dm_touchpad_point p=self.faceCenter; float gap=self.faceGap;
     if (_active) {
         dm_touchpad_point d=dm_botw_layout_face_offset(&_touchLayout,button,self.u);
@@ -492,12 +494,21 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     if (fabsf(p.x - plusX) <= (DM_TP_PILL_W * u * .5f + 8 * u) && fabsf(p.y - pillY) <= (DM_TP_PILL_H * u * .5f + 8 * u)) return 10;
     return -1;
 }
+- (BOOL)compactDpadOwnsTop:(dm_touchpad_point)p {
+    dm_touchpad_point center = [self dpadCenter];
+    return _active && _touchLayout.portrait && hypotf(p.x-center.x,p.y-center.y) <= self.dpadRadius*DM_TP_DPAD_GRAB;
+}
 - (BOOL)leftStickOwnsTop:(dm_touchpad_point)p {
     if ([self buttonAtTop:p] >= 0) return NO;
+    if ([self compactDpadOwnsTop:p]) return NO;
     dm_touchpad_point face = [self faceCenter], dpad = [self dpadCenter], stick = [self stickHome];
     float f = preview_distance(NSMakePoint(p.x, p.y), NSMakePoint(face.x, face.y)) /
               (self.faceGap + self.faceRadius * 1.6f);
-    if (_active && ![self faceAtTop:p]) f = INFINITY;
+    if (_active) {
+        BOOL hit = [self faceAtTop:p] != 0;
+        if (!hit) f = INFINITY;
+        else if (_touchLayout.portrait) f = 0;
+    }
     float d = preview_distance(NSMakePoint(p.x, p.y), NSMakePoint(dpad.x, dpad.y)) /
               (self.dpadRadius * DM_TP_DPAD_GRAB);
     float s = preview_distance(NSMakePoint(p.x, p.y), NSMakePoint(stick.x, stick.y)) /
@@ -508,7 +519,15 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     dm_touchpad_point c = [self faceCenter]; float u = self.u;
     if (_active) for (int b=0;b<4;b++) {
         dm_touchpad_point button = [self facePosition:b];
-        if (_touchLayout.badges && dm_botw_button_badge_contains(CGPointMake(p.x,p.y),CGPointMake(button.x,button.y),self.faceRadius)) return 1ull << b;
+        if (_touchLayout.badges && dm_botw_button_badge_contains(CGPointMake(p.x,p.y),CGPointMake(button.x,button.y),[self faceRadiusForButton:b])) return 1ull << b;
+    }
+    if (_active && _touchLayout.portrait) {
+        uint64_t bits = 0;
+        for (int b=0;b<4;b++) {
+            dm_touchpad_point button = [self facePosition:b];
+            if (hypotf(p.x-button.x,p.y-button.y) <= [self faceRadiusForButton:b]*1.25f) bits |= 1ull << b;
+        }
+        return bits;
     }
     if (_active) return dm_botw_layout_face_buttons(&_touchLayout,p.x,p.y,c.x,c.y,self.u);
     return dm_touchpad_face_buttons(p.x, p.y, c.x, c.y, self.faceGap, self.faceRadius * 1.25f);
@@ -584,8 +603,9 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         dm_botw_touch_scope_prompt_at((p.x-canvas[0])/canvas[2],(p.y-canvas[1])/canvas[3]);
     // Only the individual buttons own BOTW touches; gaps remain available to look.
     BOOL faceHit = _active ? [self faceAtTop:p] != 0 : fd <= self.faceGap + self.faceRadius*1.6f;
+    if (_active && _touchLayout.portrait && faceHit) fd = 0;
     if (faceHit && fd <= dd) { _lookTapPending = NO; _owner = PREVIEW_FACE; _held = [self faceAtTop:p]; [self publishButtons]; return; }
-    if (dd <= self.dpadRadius*DM_TP_DPAD_GRAB && dd < fd) { _lookTapPending = NO; _owner = PREVIEW_DPAD; _held = [self dpadAtTop:p]; [self publishButtons]; return; }
+    if ((dd <= self.dpadRadius*DM_TP_DPAD_GRAB && dd < fd) || [self compactDpadOwnsTop:p]) { _lookTapPending = NO; _owner = PREVIEW_DPAD; _held = [self dpadAtTop:p]; [self publishButtons]; return; }
     if (!_cameraPadVisible && [self mapOwnsTop:p]) {
         _lookTapPending = NO;
         _owner = PREVIEW_NONE; _hasTouch = NO;
@@ -905,7 +925,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     }
     for (int b=0;b<4;b++) {
         dm_touchpad_point q = [self facePosition:b];
-        NSPoint center=preview_from_top(q.x,q.y,h); float radius=self.faceRadius;
+        NSPoint center=preview_from_top(q.x,q.y,h); float radius=[self faceRadiusForButton:b];
         [self drawCircle:center radius:radius fill:(_held & (1ull<<b))?.48:.15 label:@""];
         [self drawButtonIcon:b center:center radius:radius];
     }

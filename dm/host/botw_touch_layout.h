@@ -39,7 +39,8 @@ static inline dm_botw_touch_layout dm_botw_layout_defaults_for(int portrait) {
     if (!portrait) return dm_botw_layout_defaults();
     dm_botw_touch_layout layout={.face_gap=1.060f,.badges=0,.portrait=1};
     for (int i=0;i<16;i++) layout.control[i].scale=1;
-    layout.control[0].scale=1.100f; layout.control[6].scale=1.200f;
+    for (int i=0;i<4;i++) layout.control[i].scale=1.100f;
+    layout.control[6].scale=1.200f;
     layout.control[7].scale=layout.control[9].scale=1.100f;
     return layout;
 }
@@ -55,7 +56,8 @@ static inline int dm_botw_layout_read_for(dm_botw_touch_layout *out, int portrai
     float enabled = 0;
     if (!dm_botw_layout_number("DM_BOTW_PORTRAIT", 0, 1, &enabled) || (enabled != 0 && enabled != 1)) return 0;
     for (int i = 0; i < 16; i++) {
-        const char *name = dm_botw_control_name(i); if (!name) continue;
+        const char *name = portrait && i < 4 ? (const char *[]){"A", "B", "X", "Y"}[i] : dm_botw_control_name(i);
+        if (!name) continue;
         const char *fields[] = {"X", "Y", "SCALE"};
         float *values[] = {&out->control[i].x, &out->control[i].y, &out->control[i].scale};
         for (int f = 0; f < (i == 4 ? 2 : 3); f++) {
@@ -67,6 +69,7 @@ static inline int dm_botw_layout_read_for(dm_botw_touch_layout *out, int portrai
     char key[64]; snprintf(key, sizeof key, "%s_BADGES", prefix);
     if (!dm_botw_layout_number(key, 0, 1, &badges) || (badges != 0 && badges != 1)) return 0;
     out->badges = (int)badges;
+    if (portrait) return 1;
     snprintf(key, sizeof key, "%s_FACE_GAP", prefix);
     return dm_botw_layout_number(key, .5f, 1.5f, &out->face_gap);
 }
@@ -81,9 +84,12 @@ static inline float dm_botw_layout_stick_radius(const dm_botw_touch_layout *layo
 }
 static inline dm_touchpad_point dm_botw_layout_face_offset(const dm_botw_touch_layout *layout, int button, float unit) {
     float gap = DM_TP_FACE_GAP * layout->face_gap * layout->control[0].scale * unit;
-    if (layout->portrait)
-        return (dm_touchpad_point){(button == 0 || button == 2 ? .5f : -.5f) * gap,
-            ((button < 2 ? 1.1f : -1.1f) + (button == 0 || button == 2 ? -.5f : .5f)) * gap};
+    if (layout->portrait) {
+        gap = DM_TP_FACE_GAP * 1.060f * 1.100f * unit;
+        // Independent buttons: Y/X on the top row, B/A on the bottom row.
+        return (dm_touchpad_point){(button == 0 || button == 2 ? .8f : -.8f)*gap,
+            (button < 2 ? .8f : -.8f)*gap};
+    }
     switch (button) {
         case 0: return (dm_touchpad_point){gap, 0};
         case 1: return (dm_touchpad_point){0, gap};
@@ -115,25 +121,33 @@ static inline dm_touchpad_rect dm_botw_layout_control(const dm_botw_touch_layout
         dm_touchpad_rect safe = dm_touchpad_safe_rect(width,height,left,top,right,bottom);
         float base_y = safe.y + safe.height - DM_TP_PAD_Y*u;
         float default_gap = DM_TP_FACE_GAP * 1.060f * 1.100f * u;
-        // Halve the full vertical steps, including the expanded grab-region spacing.
-        float shield_y = base_y - 5 - (DM_TP_STICK_R*DM_TP_STICK_GRAB*1.8f + DM_TP_SHIELD_GAP*.5f + 6)*u*.5f;
-        float rune_y = shield_y - (DM_TP_STICK_R*DM_TP_STICK_GRAB + DM_TP_L_R*1.2f*1.45f + DM_TP_SHIELD_GAP*.5f)*u*.5f;
+        float face_x = safe.x + safe.width - DM_TP_FACE_X*u - .3f*default_gap;
+        float face_y = base_y - DM_TP_FACE_GAP*3.1f*u - 100 + .8f*default_gap;
+        float shield_y = face_y + .8f*default_gap;
+        float l_edge = (DM_TP_L_R*u-3.f/1.2f)*layout->control[6].scale+10;
+        float lower_y = safe.y+safe.height-l_edge;
         switch (id) {
-            case 0:
-                p = (dm_touchpad_point){safe.x + safe.width - DM_TP_FACE_X*u, base_y - DM_TP_FACE_GAP*3.1f*u - 100};
-                rx = (DM_TP_FACE_GAP*layout->face_gap*.5f + DM_TP_FACE_R)*u;
-                ry = (DM_TP_FACE_GAP*layout->face_gap*1.6f + DM_TP_FACE_R)*u;
+            case 0: case 1: case 2: case 3: {
+                dm_touchpad_point offset = dm_botw_layout_face_offset(layout,id,u);
+                p = (dm_touchpad_point){face_x+offset.x+(id == 1 || id == 3 ? 10 : 0)+3, face_y+offset.y+200+(id >= 2 ? 15 : 0)};
+                // At the default scale, A/B shrink by 10pt and Y grows by 10pt.
+                radius = DM_TP_FACE_R*u + (id == 3 ? 5.f/1.1f : id < 2 ? -5.f/1.1f : 0);
                 break;
-            case 4: p = (dm_touchpad_point){safe.x+DM_TP_STICK_X*u+10, base_y-10}; radius=dm_botw_layout_stick_radius(layout,width,height); break;
-            case 8: p = (dm_touchpad_point){safe.x+DM_TP_STICK_X*u, shield_y}; radius=dm_botw_layout_stick_radius(layout,width,height); break;
-            case 6: p = (dm_touchpad_point){safe.x+DM_TP_STICK_X*u, rune_y}; radius=DM_TP_L_R*u; break;
+            }
+            case 4: p = (dm_touchpad_point){safe.x+DM_TP_STICK_X*u+10, base_y-50}; radius=dm_botw_layout_stick_radius(layout,width,height); break;
+            case 8: p = (dm_touchpad_point){safe.x+DM_TP_STICK_X*u, shield_y-20}; radius=dm_botw_layout_stick_radius(layout,width,height); break;
+            case 6: {
+                radius = DM_TP_L_R*u - 3.f/1.2f;
+                p = (dm_touchpad_point){safe.x+l_edge, lower_y};
+                break;
+            }
             case 12:
-                p = (dm_touchpad_point){safe.x+DM_TP_STICK_X*u,
-                    rune_y - (DM_TP_L_R*1.2f*1.45f + DM_TP_DPAD_R*DM_TP_DPAD_GRAB + DM_TP_SHIELD_GAP*.5f)*u*.5f};
-                radius=DM_TP_DPAD_R*u; break;
+                p = (dm_touchpad_point){safe.x+2*l_edge-10+15+(DM_TP_DPAD_R*u-3)*layout->control[id].scale,
+                    lower_y};
+                radius=DM_TP_DPAD_R*u-3; break;
             case 7: case 9:
-                p = (dm_touchpad_point){safe.x+safe.width-DM_TP_FACE_X*u+(id==7?.5f:-.5f)*default_gap,
-                    base_y-DM_TP_FACE_GAP*3.1f*u-100-(3.3f+(id==7?.5f:-.5f))*default_gap};
+                p = (dm_touchpad_point){safe.x+safe.width-DM_TP_FACE_X*u+.5f*default_gap+3,
+                    face_y-2*default_gap+195-(id==7 ? (2*DM_TP_ZL_R*1.1f+DM_TP_SHOULDER_GAP)*u : 0)};
                 radius=DM_TP_ZL_R*u; break;
             default: return (dm_touchpad_rect){0};
         }
