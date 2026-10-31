@@ -1,5 +1,6 @@
 """Run the actual iOS RomFS locator on macOS/Foundation with private Documents/temp folders (no device or game files)."""
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -20,20 +21,31 @@ class Startup(unittest.TestCase):
         cls.tools = tempfile.TemporaryDirectory(); cls.addClassCleanup(cls.tools.cleanup)
         root = Path(cls.tools.name)
         main = (REPO / 'dm/ios/Sources/main.m').read_text()
-        locator = main[main.index('static int romfs_image_complete'):main.index('static void romfs_identity_report')]
+        locator = main[main.index('static int romfs_image_complete'):main.index('// Boot prerequisites')]
         source = root / 'locator.m'
-        source.write_text('#import <Foundation/Foundation.h>\n#include <stdio.h>\n#include "romfs_image.h"\n#include "romfs_identity.h"\n'
+        source.write_text('#import <Foundation/Foundation.h>\n#include <stdio.h>\n#include "romfs_image.h"\n#include "romfs_identity.h"\n#import "GameFiles.h"\n'
                           'static NSString *fixture_doc, *fixture_tmp, *fixture_bundle;\n#define DM_GAME_ROMFS_MARKER "marker"\n'
-                          '@interface FixtureBundle : NSObject\n+ (instancetype)mainBundle;\n- (NSString *)resourcePath;\n@end\n'
+                          'static int g_boot_ok, g_argc; static char **g_argv;\n'
+                          'static void dm_host_preload_start(int argc, char **argv) { (void)argc; (void)argv; }\n'
+                          '@interface FixtureBundle : NSObject\n+ (instancetype)mainBundle;\n- (NSString *)resourcePath;\n'
+                          '- (NSString *)localizedStringForKey:(NSString *)key value:(NSString *)value table:(NSString *)table;\n@end\n'
                           '@implementation FixtureBundle\n+ (instancetype)mainBundle { return [self new]; }\n'
-                          '- (NSString *)resourcePath { return fixture_bundle; }\n@end\n#define NSBundle FixtureBundle\n'
+                          '- (NSString *)resourcePath { return fixture_bundle; }\n'
+                          '- (NSString *)localizedStringForKey:(NSString *)key value:(NSString *)value table:(NSString *)table { (void)value; (void)table; return key; }\n@end\n#define NSBundle FixtureBundle\n'
                           '#define NSSearchPathForDirectoriesInDomains(a,b,c) @[fixture_doc]\n#define NSTemporaryDirectory() fixture_tmp\n' + locator +
-                          '\nint main(int argc, char **argv) { @autoreleasepool { if (argc < 3) return 2;\n'
-                          'fixture_doc = @(argv[1]); fixture_tmp = @(argv[2]); fixture_bundle = argc > 3 ? @(argv[3]) : @"/nonexistent-fixture"; NSString *p = romfs_locate();\n'
-                          'if (!p) return 1; puts(p.fileSystemRepresentation); return 0; }}\n')
+                          '\nstatic void romfs_identity_report(NSString *doc) { (void)doc; }\n'
+                          'int main(int argc, char **argv) { @autoreleasepool { if (argc < 3) return 2;\n'
+                          'fixture_doc = @(argv[1]); fixture_tmp = @(argv[2]); fixture_bundle = argc > 3 ? @(argv[3]) : @"/nonexistent-fixture";\n'
+                          'unsetenv("DM_ROMFS"); unsetenv("DM_AOC_DIR"); if (argc > 4) setenv("DM_AOC_DIR", argv[4], 1);\n'
+                          'if (getenv("DM_FIXTURE_PREPARE_MISSING") && front_ios_prepare_game()) return 4;\n'
+                          'const char *picked = getenv("DM_FIXTURE_IMPORT_FILE"); if (picked) { NSError *error = nil;\n'
+                          'if (!dm_import_game_image([NSURL fileURLWithPath:@(picked)], [NSURL fileURLWithPath:fixture_doc], &error)) {\n'
+                          'fprintf(stderr, "import failed:%s\\n", error.localizedDescription.UTF8String); return 3; }}\n'
+                          'if (!front_ios_prepare_game()) return 1; puts(getenv("DM_ROMFS"));\n'
+                          'fprintf(stderr, "fixture aoc:%s\\n", getenv("DM_AOC_DIR") ?: "unset"); return 0; }}\n')
         cls.locator = root / 'locator'
-        subprocess.run(['clang', '-fobjc-arc', '-Wall', '-Werror', '-I', str(REPO / 'dm/host'),
-                        str(source), '-framework', 'Foundation', '-o', str(cls.locator)], check=True)
+        subprocess.run(['clang', '-fobjc-arc', '-Wall', '-Werror', '-I', str(REPO / 'dm/host'), '-I', str(REPO / 'dm/ios/Sources'),
+                        str(source), str(REPO / 'dm/ios/Sources/GameImageImport.m'), '-framework', 'Foundation', '-o', str(cls.locator)], check=True)
 
     def test_invalid_image_preserves_working_folder_and_valid_image_replaces_it(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -91,6 +103,195 @@ class Startup(unittest.TestCase):
             (bundle / 'romfs.id').unlink()   # the default build has no identity: any complete image
             shutil.copy(root / 'other.img', doc / 'romfs.img')
             self.assertEqual(locate().stdout.strip(), str(doc / 'romfs.img'))
+
+    def test_unpacked_base_and_dlc_work_without_an_image_even_with_a_build_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); doc = root / 'Documents'; base = doc / 'romfs'; base.mkdir(parents=True)
+            (base / 'marker').write_text('base resource')
+            dlc = doc / 'game-data/aoc/1'; dlc.mkdir(parents=True); (dlc / 'item').write_text('DLC resource')
+            tmp = root / 'temp'; tmp.mkdir(); bundle = root / 'App'; bundle.mkdir()
+            bundled_base = bundle / 'romfs'; bundled_base.mkdir(); (bundled_base / 'marker').touch()
+            bundled_aoc = bundle / 'aoc'; (bundled_aoc / '99').mkdir(parents=True)
+            wanted = root / 'wanted.img'; image.pack(base, wanted)
+            (bundle / 'romfs.id').write_text(image.identity(wanted, 'T', '1.0', 'v0') + '\n'); wanted.unlink()
+            def start(aoc=None):
+                args = [str(self.locator), str(doc), str(tmp), str(bundle)]
+                if aoc is not None: args.append(str(aoc))
+                result = subprocess.run(args, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr); self.assertNotIn('[RED]', result.stderr)
+                return result
+            for configured in (None, bundled_aoc):
+                result = start(configured)
+                self.assertEqual(result.stdout.strip(), str(base))
+                self.assertIn('fixture aoc:' + str(doc / 'game-data/aoc'), result.stderr)
+            explicit = root / 'explicit-aoc'; explicit.mkdir()
+            self.assertIn('fixture aoc:' + str(explicit), start(explicit).stderr)
+            self.assertIn('fixture aoc:\n', start('').stderr)   # explicitly disabled DLC stays disabled
+            self.assertEqual((base / 'marker').read_text(), 'base resource')
+            self.assertEqual((dlc / 'item').read_text(), 'DLC resource')
+            self.assertEqual(list(root.rglob('*.img')), []); self.assertEqual(list(tmp.iterdir()), [])
+            shutil.rmtree(doc / 'game-data/aoc')
+            self.assertIn('fixture aoc:' + str(bundled_aoc), start(bundled_aoc).stderr)
+            shutil.rmtree(base)
+            result = start(bundled_aoc)
+            self.assertEqual(result.stdout.strip(), str(bundled_base))
+            self.assertIn('fixture aoc:' + str(bundled_aoc), result.stderr)
+
+    def test_existing_game_data_import_is_used_without_reimport_or_an_image(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); doc = root / 'Documents'; data = doc / 'game-data'
+            base = data / 'romfs'; base.mkdir(parents=True); (base / 'marker').write_text('imported base')
+            dlc = data / 'aoc/2'; dlc.mkdir(parents=True); (dlc / 'item').write_text('imported DLC')
+            receipt = data / 'installed.json'; receipt.write_text('{"format":1,"title_id":"T"}')
+            tmp = root / 'temp'; tmp.mkdir(); bundle = root / 'App'; bundle.mkdir()
+            bundled_base = bundle / 'romfs'; bundled_base.mkdir(); (bundled_base / 'marker').touch()
+            bundled_aoc = bundle / 'aoc'; (bundled_aoc / '99').mkdir(parents=True)
+            wanted = root / 'wanted.img'; image.pack(base, wanted)
+            (bundle / 'romfs.id').write_text(image.identity(wanted, 'T', '1.0', 'v0') + '\n'); wanted.unlink()
+            def start():
+                result = subprocess.run([str(self.locator), str(doc), str(tmp), str(bundle), str(bundled_aoc)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr); self.assertNotIn('[RED]', result.stderr)
+                return result
+            result = start()
+            self.assertEqual(result.stdout.strip(), str(base))
+            self.assertIn('fixture aoc:' + str(data / 'aoc'), result.stderr)
+            self.assertEqual(list(root.rglob('*.img')), [])
+            shutil.rmtree(data / 'aoc')   # without external DLC, the bundled DLC remains available
+            self.assertIn('fixture aoc:' + str(bundled_aoc), start().stderr)
+            (base / 'marker').rename(base / 'wrong-marker')
+            result = start(); self.assertEqual(result.stdout.strip(), str(bundled_base))
+            self.assertIn('fixture aoc:' + str(bundled_aoc), result.stderr)
+            (base / 'wrong-marker').rename(base / 'marker')
+            image.pack(base, doc / 'romfs.img')
+            self.assertEqual(start().stdout.strip(), str(doc / 'romfs.img'))   # a matching image retains precedence
+            self.assertEqual((base / 'marker').read_text(), 'imported base')
+            self.assertEqual(receipt.read_text(), '{"format":1,"title_id":"T"}')
+
+    def test_combined_build_accepts_its_base_image_and_obeys_folder_and_dlc_precedence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); doc = root / 'Documents'; doc.mkdir(); tmp = root / 'temp'; tmp.mkdir()
+            bundle = root / 'App'; bundle.mkdir(); base = root / 'base'; base.mkdir(); (base / 'marker').write_text('base')
+            original = root / 'base.img'; image.pack(base, original)
+            aoc = root / 'aoc/1'; aoc.mkdir(parents=True); (aoc / 'item').write_text('DLC')
+            combined = root / 'combined.img'; tool = str(REPO / 'dm/tools/game_image.py')
+            subprocess.run([sys.executable, '-I', tool, str(original), str(aoc.parent), str(combined)], check=True, capture_output=True)
+            subprocess.run([sys.executable, '-I', tool, '--identities', str(combined), str(bundle), 'T', '1.0', 'v0'], check=True, capture_output=True)
+            bundled_aoc = bundle / 'aoc'; (bundled_aoc / '99').mkdir(parents=True)
+            imported_aoc = doc / 'game-data/aoc'; (imported_aoc / '2').mkdir(parents=True)
+            legacy = doc / 'game-data/romfs'; legacy.mkdir(); (legacy / 'marker').touch()
+            old_folder = doc / 'romfs'; old_folder.mkdir(); (old_folder / 'marker').touch()
+            def start(picked=None):
+                env = os.environ | ({'DM_FIXTURE_IMPORT_FILE': str(picked)} if picked is not None else {})
+                result = subprocess.run([str(self.locator), str(doc), str(tmp), str(bundle), str(bundled_aoc)], env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr); self.assertNotIn('[RED]', result.stderr)
+                return result
+            result = start(original); self.assertEqual(result.stdout.strip(), str(doc / 'romfs.img'))
+            self.assertIn('fixture aoc:' + str(imported_aoc), result.stderr)
+            shutil.copy(combined, doc / 'romfs.img')
+            result = start(); self.assertEqual(result.stdout.strip(), str(doc / 'romfs.img/romfs'))
+            self.assertIn('fixture aoc:' + str(doc / 'romfs.img/aoc'), result.stderr)
+            (doc / 'romfs.img').unlink()
+            result = start(); self.assertEqual(result.stdout.strip(), str(legacy))
+            self.assertIn('fixture aoc:' + str(imported_aoc), result.stderr)
+            shutil.copy(original, doc / 'romfs.img'); shutil.rmtree(imported_aoc)
+            self.assertIn('fixture aoc:' + str(bundled_aoc), start().stderr)
+            # A missing optional base identity must never turn a mismatch into an unrestricted match.
+            (bundle / 'romfs.base.id').unlink(); shutil.rmtree(legacy)
+            image.pack(base, doc / 'romfs.img')
+            rejected = subprocess.run([str(self.locator), str(doc), str(tmp), str(bundle)], capture_output=True, text=True)
+            self.assertEqual(rejected.returncode, 1, rejected.stderr); self.assertIn('[RED]', rejected.stderr)
+
+    def test_import_copies_a_combined_image_then_retries_startup_without_restart(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); doc = root / 'Documents'; doc.mkdir(); tmp = root / 'temp'; tmp.mkdir()
+            bundle = root / 'App'; bundle.mkdir(); source = root / 'source'
+            base = source / 'romfs'; base.mkdir(parents=True); (base / 'marker').write_text('base resource')
+            dlc = source / 'aoc/2'; dlc.mkdir(parents=True); (dlc / 'item').write_text('DLC resource')
+            picked = root / 'picked.img'; image.pack(source, picked)
+            (bundle / 'romfs.id').write_text(image.identity(picked, 'T', '1.0', 'v0') + '\n')
+            staging = doc / '.romfs-import.img'; staging.write_bytes(b'interrupted previous copy')
+            env = os.environ | {'DM_FIXTURE_IMPORT_FILE': str(picked), 'DM_FIXTURE_PREPARE_MISSING': '1'}
+            result = subprocess.run([str(self.locator), str(doc), str(tmp), str(bundle)], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('boot: game files not found;', result.stderr)   # initially missing, then ready in the same process
+            self.assertEqual(result.stdout.strip(), str(doc / 'romfs.img/romfs'))
+            self.assertIn('fixture aoc:' + str(doc / 'romfs.img/aoc'), result.stderr)
+            self.assertEqual((doc / 'romfs.img').read_bytes(), picked.read_bytes()); self.assertFalse(staging.exists())
+            self.assertFalse((doc / 'romfs').exists()); self.assertFalse((doc / 'aoc').exists())
+            env.pop('DM_FIXTURE_PREPARE_MISSING'); env['DM_FIXTURE_IMPORT_FILE'] = str(doc / 'romfs.img')
+            again = subprocess.run([str(self.locator), str(doc), str(tmp), str(bundle)], env=env, capture_output=True, text=True)
+            self.assertEqual(again.returncode, 0, again.stderr)   # picking an image already in Documents needs no second copy
+
+    def test_rejected_import_and_publish_failure_preserve_existing_game_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); doc = root / 'Documents'; doc.mkdir(); tmp = root / 'temp'; tmp.mkdir()
+            bundle = root / 'App'; bundle.mkdir(); base = root / 'base'; base.mkdir(); (base / 'marker').write_text('right title')
+            wanted = root / 'wanted.img'; image.pack(base, wanted)
+            (bundle / 'romfs.id').write_text(image.identity(wanted, 'T', '1.0', 'v0') + '\n')
+            installed = doc / 'game-data'; (installed / 'romfs').mkdir(parents=True)
+            (installed / 'romfs/marker').write_text('old base'); (installed / 'installed.json').write_text('keep receipt')
+            destination = doc / 'romfs.img'; destination.write_bytes(b'keep old image')
+            invalid = root / 'invalid.img'; invalid.write_bytes(b'incomplete')
+            other = root / 'other'; other.mkdir(); (other / 'marker').write_text('different build layout')
+            different = root / 'different.img'; image.pack(other, different)
+            def import_image(picked):
+                env = os.environ | {'DM_FIXTURE_IMPORT_FILE': str(picked)}
+                return subprocess.run([str(self.locator), str(doc), str(tmp), str(bundle)], env=env, capture_output=True, text=True)
+            for picked in (invalid, different):
+                result = import_image(picked); self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn('import failed:', result.stderr)
+                self.assertEqual(destination.read_bytes(), b'keep old image')
+                self.assertFalse((doc / '.romfs-import.img').exists())
+            destination.unlink(); destination.mkdir(); (destination / 'keep').touch()   # the final rename must fail
+            result = import_image(wanted); self.assertEqual(result.returncode, 3, result.stderr)
+            self.assertTrue((destination / 'keep').exists()); self.assertFalse((doc / '.romfs-import.img').exists())
+            self.assertEqual((installed / 'romfs/marker').read_text(), 'old base')
+            self.assertEqual((installed / 'installed.json').read_text(), 'keep receipt')
+            self.assertTrue(wanted.is_file())
+            # The same marker check applies even in a bundled build without a version identity.
+            (bundle / 'romfs.id').unlink(); (other / 'marker').unlink(); (other / 'unrelated').touch(); image.pack(other, different)
+            result = import_image(different); self.assertEqual(result.returncode, 3, result.stderr)
+            self.assertIn("does not contain this game's files", result.stderr)
+
+    def test_combined_image_validates_whole_identity_and_supplies_base_and_dlc_views(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); doc = root / 'Documents'; doc.mkdir()
+            tmp = root / 'temp'; tmp.mkdir(); bundle = root / 'App'; bundle.mkdir()
+            legacy = bundle / 'aoc'; (legacy / '99').mkdir(parents=True)
+            source = root / 'source'; base = source / 'romfs'; base.mkdir(parents=True)
+            (base / 'marker').write_text('base resource')
+            dlc = source / 'aoc/2'; dlc.mkdir(parents=True); (dlc / 'item').write_text('DLC resource')
+            wanted = root / 'wanted.img'; image.pack(source, wanted)
+            (bundle / 'romfs.id').write_text(image.identity(wanted, 'T', '1.0', 'v0') + '\n')
+            shutil.copy(wanted, doc / 'romfs.img')
+            def start(aoc=legacy):
+                return subprocess.run([str(self.locator), str(doc), str(tmp), str(bundle), str(aoc)], capture_output=True, text=True)
+            result = start()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), str(doc / 'romfs.img/romfs'))
+            self.assertIn('fixture aoc:' + str(doc / 'romfs.img/aoc'), result.stderr)
+            self.assertFalse((doc / 'romfs').exists()); self.assertFalse((doc / 'aoc').exists())
+            explicit = root / 'explicit-aoc'; explicit.mkdir()
+            self.assertIn('fixture aoc:' + str(explicit), start(explicit).stderr)
+            # Only the DLC's size/layout changes: the existing whole-image size/index identity rejects it before selecting either subtree.
+            (dlc / 'item').write_text('different DLC resource'); image.pack(source, doc / 'romfs.img')
+            fallback = doc / 'romfs'; fallback.mkdir(); (fallback / 'marker').touch()
+            result = start()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), str(fallback))
+            self.assertIn('fixture aoc:' + str(legacy), result.stderr)
+            self.assertIn('[RED]', result.stderr); self.assertTrue(fallback.is_dir())
+
+    def test_complete_image_without_profile_marker_preserves_working_folder(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); doc = root / 'Documents'; fallback = doc / 'romfs'; fallback.mkdir(parents=True)
+            (fallback / 'marker').touch(); tmp = root / 'temp'; tmp.mkdir()
+            source = root / 'source'; (source / 'romfs').mkdir(parents=True); (source / 'aoc').mkdir()
+            (source / 'romfs/unrelated').write_text('another title')
+            image.pack(source, doc / 'romfs.img')
+            result = subprocess.run([str(self.locator), str(doc), str(tmp)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr); self.assertEqual(result.stdout.strip(), str(fallback))
+            self.assertTrue(fallback.is_dir()); self.assertEqual(list(tmp.iterdir()), [])
 
     def test_image_name_in_any_letter_case_on_a_case_sensitive_volume(self):
         # iOS's file system is case-sensitive and the NSP script names its image RomFS.img: a copy through Finder or Files keeps that name

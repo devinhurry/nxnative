@@ -137,6 +137,18 @@
 
 "Layout" = "布局";
 
+"Game files" = "游戏文件";
+"Import RomFS.img, or copy it to Files > On My iPhone/iPad > %@ and tap Check files." = "导入 RomFS.img，或将它放到“文件 > 我的 iPhone/iPad > %@”中，再点“检查文件”。";
+"Import .img" = "导入 .img";
+"Check files" = "检查文件";
+"No usable game files found." = "未找到可用的游戏文件。";
+"No usable game files found. Check the file location and try again." = "未找到可用的游戏文件，请检查存放位置后重试。";
+"Importing…" = "正在导入…";
+"Choose the original .img file, not an unfinished import." = "请选择原始 .img 文件，而不是未完成的导入文件。";
+"This is not a complete RomFS image. Choose the .img created with this app." = "这不是完整的 RomFS 镜像，请选择与此 App 一起生成的 .img。";
+"This image does not match this app's game, update or DLC. Choose the .img produced with this build." = "此镜像的游戏、更新或 DLC 与 App 不匹配，请选择构建此 App 时生成的 .img。";
+"This image does not contain this game's files." = "此镜像不包含当前游戏的文件。";
+
 "Normal layout" = "普通布局";
 
 "Compact layout" = "紧凑布局";

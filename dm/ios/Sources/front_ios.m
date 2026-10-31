@@ -13,13 +13,13 @@
 #include "botw_touch_layout.h"
 #include "build_info_apple.h"
 #import "CloudSaves.h"
+#import "GameFiles.h"
 
 UIView *dm_gamepad_view(CGRect frame);
 void dm_gamepad_reset(void);
 void dm_gamepad_active(void);
 void front_ios_boot(void);
 int front_ios_boot_ok(void);
-const char *front_ios_boot_message(void);   // main.m: why a build that keeps the game files off the IPA found none usable (NULL = the generic hint)
 bool dm_show_launcher(void *view_controller, void (*done)(void));   // Launcher.swift: false = no launcher (no dm/launcher.json, or DM_LAUNCHER=0)
 
 static CAMetalLayer *g_layer;
@@ -61,6 +61,7 @@ static UILabel *front_ios_fps_label(void);
 @end
 static DmRootVC *g_root;
 static void launcher_done(void) { [g_root startGame]; }
+static void game_files_done(void) { [g_root showLauncher]; }
 @implementation DmRootVC
 - (void)viewDidLoad {
     [super viewDidLoad];
@@ -117,15 +118,11 @@ static void launcher_done(void) { [g_root startGame]; }
 - (void)viewDidAppear:(BOOL)a {
     [super viewDidAppear:a];
     if (self.launched) return;
+    self.launched = YES; g_root = self;
     if (!front_ios_boot_ok()) {
-        if (!self.presentedViewController) {
-            UIAlertController *notice = [UIAlertController alertControllerWithTitle:@"Game files" message:front_ios_boot_message() ? @(front_ios_boot_message()) : @"Copy the matching romfs.img into this app's Documents folder, then restart the app." preferredStyle:UIAlertControllerStyleAlert];
-            [notice addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-            [self presentViewController:notice animated:YES completion:nil];
-        }
+        dm_show_game_files((__bridge void *)self, game_files_done);
         return;
     }
-    self.launched = YES; g_root = self;
     [self showLauncher];
 }
 - (void)showLauncher {

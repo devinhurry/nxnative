@@ -314,5 +314,7 @@ mmap = _Mmap()
 if __name__ == '__main__':
     try:
         root = Path(sys.argv[1]); marker = sys.argv[2] if len(sys.argv) > 2 else ''
+        if marker and is_image(root) and not (root / marker).exists() and (root / 'aoc').is_dir():
+            root = root / 'romfs'   # a combined game image keeps base and DLC in separate directory views
         if not root.is_dir() or not (root / marker).exists(): raise FileNotFoundError(f'missing RomFS marker {marker!r} in {root}')
     except (OSError, ValueError, IndexError, struct.error) as error: sys.exit(f'[RED] {error}')

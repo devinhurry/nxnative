@@ -67,7 +67,7 @@ class UnsignedIpaTests(unittest.TestCase):
         self.assertFalse([n for n in names if '/romfs' in n])
         self.assertIn('Payload/DmIOS.app/executable', names)
         self.assertIn('Payload/DmIOS.app/msl/b-fixture/fixture_b.metallib', names)
-        self.assertIn('Payload/DmIOS.app/aoc/0/file', names)   # add-on content has no place outside the app yet
+        self.assertFalse([n for n in names if '/aoc' in n])
 
     def test_slim_ipa_of_an_image_carries_its_identity_and_the_default_does_not(self):
         got = []
@@ -84,6 +84,20 @@ class UnsignedIpaTests(unittest.TestCase):
 
     def test_slim_ipa_of_a_folder_has_no_identity(self):
         self.assertNotIn('Payload/DmIOS.app/romfs.id', self.pack(DM_COPY_ROMFS='NO'))
+
+    def test_combined_slim_ipa_also_accepts_its_original_base_image(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); self.stand_in(root); (root / 'DmIOS.app/executable').write_text('app')
+            base = root / 'base.img'; romfs_image.pack(root / 'romfs', base)
+            combined = root / 'combined.img'
+            subprocess.run([sys.executable, '-I', str(REPO / 'dm/tools/game_image.py'), str(base), str(root / 'aoc'), str(combined)], check=True, capture_output=True)
+            result = run_step(PACKING, root, APP=str(root / 'DmIOS.app'), MSL_IOS=str(root / 'shaders'), MSLDIR='b-fixture',
+                              ROMFS=str(combined), AOC='', OUT_IPA=str(root / 'out.ipa'), O=str(root / 'pkg'), DM_APP_VERSION='1.2.1', PKG='v327680', DM_COPY_ROMFS='NO')
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            with zipfile.ZipFile(root / 'out.ipa') as archive:
+                self.assertTrue(romfs_image.same_identity(archive.read('Payload/DmIOS.app/romfs.id').decode(), romfs_image.identity(combined)))
+                self.assertTrue(romfs_image.same_identity(archive.read('Payload/DmIOS.app/romfs.base.id').decode(), romfs_image.identity(base)))
+                self.assertFalse([n for n in archive.namelist() if n.endswith('.img') or '/aoc/' in n])
 
     @unittest.skipUnless(CAN_SIGN, 'needs macOS codesign and a C compiler')
     def test_executable_carries_the_entitlements(self):

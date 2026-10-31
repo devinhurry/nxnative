@@ -137,6 +137,18 @@
 
 "Layout" = "Layout";
 
+"Game files" = "Game files";
+"Import RomFS.img, or copy it to Files > On My iPhone/iPad > %@ and tap Check files." = "Import RomFS.img, or copy it to Files > On My iPhone/iPad > %@ and tap Check files.";
+"Import .img" = "Import .img";
+"Check files" = "Check files";
+"No usable game files found." = "No usable game files found.";
+"No usable game files found. Check the file location and try again." = "No usable game files found. Check the file location and try again.";
+"Importing…" = "Importing…";
+"Choose the original .img file, not an unfinished import." = "Choose the original .img file, not an unfinished import.";
+"This is not a complete RomFS image. Choose the .img created with this app." = "This is not a complete RomFS image. Choose the .img created with this app.";
+"This image does not match this app's game, update or DLC. Choose the .img produced with this build." = "This image does not match this app's game, update or DLC. Choose the .img produced with this build.";
+"This image does not contain this game's files." = "This image does not contain this game's files.";
+
 "Normal layout" = "Normal layout";
 
 "Compact layout" = "Compact layout";

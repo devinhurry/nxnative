@@ -15,6 +15,7 @@
 static ssize_t fake_pwrite(int fd, const void *buf, size_t n, off_t off);
 #define pwrite fake_pwrite
 #include "../hle_fs.c"
+#include "game_image_fixture.h"
 #undef pwrite
 ssize_t pwrite(int, const void *, size_t, off_t);
 
@@ -113,6 +114,65 @@ int main(void) {
         unsetenv("DM_AOC_DIR"); g_nmnt = 0;
         f = fopen(ip, "wb"); fwrite(img, 1, 39 + 50, f); fclose(f);   // cut off inside the index, as a copy stopped partway
         CHECK(!img_open(ip), "a cut-off image is refused");
+    }
+    printf("Combined game image\n");
+    {
+        char image[1100], base[1200], aoc[1200], dlc[1300];
+        snprintf(image, sizeof image, "%s/game.img", root); CHECK(game_image_fixture(image), "stage one base + DLC image");
+        snprintf(base, sizeof base, "%s/romfs", image); snprintf(aoc, sizeof aoc, "%s/aoc", image);
+        snprintf(dlc, sizeof dlc, "%s/missing.img", root);
+        CHECK(!romfs_image_open(dlc) && errno == ENOENT, "a missing physical image is absent, not an invalid parent directory");
+        CHECK(!romfs_image_open(root) && errno == EISDIR, "a physical directory keeps its usual meaning");
+        romfs_img *m = romfs_image_open(base);
+        CHECK(m && m->root == 2 && romfs_image_find(m, "data/../data/a") == 8 && romfs_image_work_size(m) == 184, "the base view has its own root and file-table size");
+        CHECK(m && romfs_image_find(m, "../aoc/2/data/a") < 0 && romfs_image_find(m, "data/../../aoc") < 0, "shared lookup refuses traversal beyond the selected root");
+        romfs_image_close(m);
+        setenv("DM_ROMFS", base, 1); setenv("DM_AOC_DIR", aoc, 1);
+        CHECK(h_fs_MountRom("rom", NULL, 0) == RES_OK && read_fs("rom:/data/a", got, sizeof got) && !strcmp(got, "base"), "base files read directly from the combined image");
+        uint64_t h = 0; int64_t count = 0; DirectoryEntry de[4]; size_t cache = 0;
+        CHECK(h_fs_OpenDirectory(&h, "rom:/", DIRMODE_DIR | DIRMODE_FILE) == RES_OK && h_fs_ReadDirectory(&count, de, h, 4) == RES_OK && count == 1 && !strcmp(de[0].name, "data"), "the base root lists only its own child, without romfs or aoc"); h_fs_CloseDirectory(h);
+        CHECK(h_fs_QueryAocCache(&cache, 2) == RES_OK && cache == 112, "DLC 2 sizes only its own subtree (112, got %zu)", cache);
+        CHECK(h_fs_QueryAocCache(&cache, 7) == RES_OK && cache == 84, "DLC 7 excludes base and other DLC tables (84, got %zu)", cache);
+        CHECK(h_fs_MountAoc("aoc", 2, NULL, 0) == RES_OK && read_fs("aoc:/data/a", got, sizeof got) && !strcmp(got, "two"), "DLC 2's same-named file is isolated from the base");
+        CHECK(h_fs_MountAoc("other", 7, NULL, 0) == RES_OK && read_fs("other:/item", got, sizeof got) && !strcmp(got, "seven"), "another DLC reads its own subtree");
+        CHECK(g_mnt[0].img->e == g_mnt[1].img->e && g_mnt[1].img->e == g_mnt[2].img->e && g_mnt[0].img->fd != g_mnt[1].img->fd, "base and DLC mounts share one immutable index while retaining their own descriptors");
+        h_fs_Unmount("rom");
+        int many_ok = 1;
+        for (int i = 0; i < 64; i++) {
+            char name[32], path[64]; snprintf(name, sizeof name, "dlc%d", i); snprintf(path, sizeof path, "%s:/%s", name, i & 1 ? "item" : "data/a");
+            if (h_fs_MountAoc(name, i & 1 ? 7 : 2, NULL, 0) != RES_OK || !read_fs(path, got, sizeof got) || strcmp(got, i & 1 ? "seven" : "two") || g_mnt[g_nmnt - 1].img->e != g_mnt[0].img->e) many_ok = 0;
+        }
+        CHECK(many_ok && read_fs("rom:/data/a", got, sizeof got) && !strcmp(got, "base"), "many DLC views stay isolated and share one index; unmount retains the permanent owner");
+        CHECK(h_fs_OpenDirectory(&h, "other:/", DIRMODE_DIR | DIRMODE_FILE) == RES_OK && h_fs_DirCount(&count, h) == RES_OK && count == 1 && h_fs_ReadDirectory(&count, de, h, 4) == RES_OK && count == 1 && !strcmp(de[0].name, "item"), "DLC root listing and count exclude all sibling contents"); h_fs_CloseDirectory(h);
+        CHECK(h_fs_OpenFile(&h, "rom:/aoc/2/data/a", MODE_READ) != RES_OK && h_fs_OpenFile(&h, "rom:/../aoc/2/data/a", MODE_READ) != RES_OK && h_fs_OpenFile(&h, "rom:../aoc/2/data/a", MODE_READ) != RES_OK, "base paths cannot name DLC or traverse out of their view");
+        CHECK(h_fs_OpenFile(&h, "aoc:/../7/item", MODE_READ) != RES_OK && h_fs_OpenFile(&h, "aoc:/../../romfs/data/a", MODE_READ) != RES_OK && h_fs_MountAoc("missing", 3, NULL, 0) == RES_TARGET_NOT_FOUND, "DLC cannot reach siblings or the base, and missing DLC is not mounted");
+        CHECK(h_fs_OpenFile(&h, "rom:/data/a", MODE_WRITE) == RES_FAIL && h_fs_DeleteFile("rom:/data/a") != RES_OK && h_fs_CreateFile("aoc:/new", 0) != RES_OK, "all combined-image mounts stay read-only");
+        CHECK(h_fs_OpenFile(&h, "aoc:/data/a", MODE_READ) == RES_OK && h_fs_SetFileSize(h, 0) == RES_FAIL && h_fs_WriteFile(h, 0, "x", 1, NULL) == RES_FAIL, "DLC handles refuse truncation and writes"); h_fs_CloseFile(h);
+        g_nmnt = 0; unsetenv("DM_AOC_DIR"); setenv("DM_ROMFS", image, 1);
+        CHECK(h_fs_MountRom("rom", NULL, 0) == RES_OK && read_fs("rom:/data/a", got, sizeof got) && !strcmp(got, "base"), "a whole combined DM_ROMFS image selects its base subtree");
+        CHECK(h_fs_MountAoc("auto", 2, NULL, 0) == RES_OK && read_fs("auto:/data/a", got, sizeof got) && !strcmp(got, "two"), "absent DM_AOC_DIR derives DLC from the whole combined image");
+        m = romfs_image_open(image); CHECK(m && m->root == 0 && romfs_image_find(m, "aoc/7/item") == 7, "generic image_open still exposes the physical container root"); romfs_image_close(m);
+        g_nmnt = 0; setenv("DM_ROMFS", base, 1);
+        CHECK(h_fs_MountAoc("view", 7, NULL, 0) == RES_OK && read_fs("view:/item", got, sizeof got) && !strcmp(got, "seven"), "absent DM_AOC_DIR also derives DLC from a base-directory view");
+        setenv("DM_AOC_DIR", rom, 1);
+        CHECK(h_fs_MountAoc("override", 2, NULL, 0) == RES_TARGET_NOT_FOUND, "explicit DM_AOC_DIR takes precedence over combined-image DLC");
+        snprintf(dlc, sizeof dlc, "%s/romfs/data/a", image); CHECK(!romfs_image_open(dlc) && errno == ENOTDIR, "a file cannot become an image directory view");
+        snprintf(dlc, sizeof dlc, "%s/../../outside", base); CHECK(!romfs_image_open(dlc), "view paths cannot traverse beyond the physical image root");
+        setenv("DM_ROMFS", image, 1); int old_slot = g_nmnt;
+        CHECK(h_fs_MountRom("oldrom", NULL, 0) == RES_OK, "keep the original physical image mounted");
+        char replacement[1200]; snprintf(replacement, sizeof replacement, "%s/replacement.img", root);
+        int replaced = game_image_fixture(replacement); FILE *changed = fopen(replacement, "r+b");
+        if (changed) { fseek(changed, 37, SEEK_SET); replaced = fwrite("diff", 1, 4, changed) == 4 && replaced; fseek(changed, 42, SEEK_SET); replaced = fwrite("new", 1, 3, changed) == 3 && replaced; fclose(changed); } else replaced = 0;
+        CHECK(replaced && !rename(replacement, image), "replace the physical image with identical index metadata and different payload bytes");
+        int new_slot = g_nmnt; setenv("DM_AOC_DIR", aoc, 1);
+        CHECK(h_fs_MountRom("replaced", NULL, 0) == RES_OK && read_fs("replaced:/data/a", got, sizeof got) && !strcmp(got, "diff") && g_mnt[new_slot].img->e != g_mnt[old_slot].img->e, "a replacement inode gets its own index and reads its own descriptor");
+        CHECK(read_fs("oldrom:/data/a", got, sizeof got) && !strcmp(got, "base") && h_fs_MountAoc("replacedDlc", 2, NULL, 0) == RES_OK && read_fs("replacedDlc:/data/a", got, sizeof got) && !strcmp(got, "new"), "old mounts retain their original image while new DLC mounts read the replacement");
+        FILE *edit = fopen(image, "r+b"); if (edit) { fseek(edit, 45 + 12 * 24, SEEK_SET); fwrite("boc", 1, 3, edit); fclose(edit); }   // rename the aoc directory, preserving index sort order
+        g_nmnt = 0; setenv("DM_ROMFS", image, 1);
+        CHECK(h_fs_MountRom("rom", NULL, 0) == RES_OK && read_fs("rom:/romfs/data/a", got, sizeof got) && !strcmp(got, "diff") && h_fs_OpenFile(&h, "rom:/data/a", MODE_READ) != RES_OK, "a plain image containing romfs but no aoc keeps its physical root");
+        int fd = open(image, O_WRONLY); CHECK(fd >= 0 && !ftruncate(fd, 60), "truncate the combined image inside its index"); if (fd >= 0) close(fd);
+        CHECK(!romfs_image_open(base) && !romfs_image_open(aoc), "neither subtree accepts an invalid combined image");
+        unsetenv("DM_AOC_DIR"); g_nmnt = 0;
     }
     snprintf(save, sizeof save, "%s/save", root); snprintf(work, sizeof work, "%s.work", save);
     mkdir(save, 0755); snprintf(p, sizeof p, "%s/a", save); put(p, "old");

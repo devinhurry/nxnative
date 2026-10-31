@@ -1024,6 +1024,10 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 
 ## Found on this game
 
+- **Implemented; physical iPhone acceptance pending:** [Separate game images include installed DLC](../../../docs/reference/packing.md#separate-game-images-include-installed-dlc). `--romfs separate` now keeps both installed DLCs in the same directly readable image as the base/update, outside the IPA and Xcode app. Unchanged data reuses that image.
+  Existing `Documents/game-data` imports remain usable without an image. Missing data opens an import/check screen before the launcher; see the same packing entry for directory selection and failure-preserving import behavior.
+  The real combined image is 16,521,938,617 bytes. A headless current-source `scripts/run_mac.py --test` run with a save copy mounted the base and DLC 1 from that image, reported owned indices `{1,2}`, and passed frame 3,300 without a `[RED]` line or crash. Evidence is in `combined-image-20261031/` in the game's work folder. The independent chain-regression command was blocked by the existing local Metal compiler/lock mismatch before shader comparison; this is not an iPhone delivery check.
+
 - **Experimental, switch-controlled:** [File-backed guest heap](../../../docs/reference/memory.md#experimental-file-backed-guest-heap), on `experiment/file-backed-memory`. The launcher defaults the preset from available memory; a saved manual On/Off takes priority. Mac probes check actual page residency separately from memory-limit accounting, including real GPU reads/writes. The experiment note records the retained-graphics game comparison and the current-graphics/iPhone validation boundary.
 
 - **Resolved in code and Mac gameplay, iPhone acceptance pending:** [Ordinary virtual sticks while relative look is enabled](../../../docs/reference/services.md#ordinary-virtual-sticks-while-relative-look-is-enabled). The pickup/backup-pad reproduction and runtime evidence are recorded above.
