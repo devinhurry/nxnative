@@ -3,6 +3,7 @@
 How to build and install a game: [Build instructions](development.md#the-packing-script-in-detail).
 
 - **Settings:** a screen before the game starts sets frame rate, resolution, docked or handheld mode, language, rumble and more. Tap **Play**; your choices are remembered. What each one does: [Settings](settings.md).
+- **About:** while playing, tap the information button beside the top-left controls, or choose **About nxnative** in the Mac game menu. It shows the source repository, six-character commit (`+dirty` means local changes) and build time in UTC.
 - **Saves and logs** are in the Files app, under the game's name: `save/` and `log.txt` (the previous run is `log.prev.txt`). When something goes wrong, send `log.txt`.
 - **Reinstalling:** some sideloading tools give a reinstalled app a new data folder. Copy `save/` and `pso_user.tsv` over from the old one to keep your progress.
 

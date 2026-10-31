@@ -23,6 +23,15 @@ targets:
       - path: Gen/src         # Source files from the compile commands of dm/host/Makefile (linked in by tools/gen_build.py)
       - path: Gen/main/main.c
         compilerFlags: "-Dmain=dm_main"
+    preBuildScripts:
+      - name: Stamp build info
+        script: python3 "$SRCROOT/tools/stamp_build.py" "$SRCROOT/Gen/Info.plist" "$DERIVED_FILE_DIR/StampedInfo.plist"
+        inputFiles:
+          - $(SRCROOT)/Gen/Info.plist
+          - $(SRCROOT)/tools/stamp_build.py
+        outputFiles:
+          - $(DERIVED_FILE_DIR)/StampedInfo.plist
+        basedOnDependencyAnalysis: false   # A timestamp for every build, including an unchanged prepared Xcode project
     postBuildScripts:
       - name: Copy game resources
         script: /bin/bash "${SRCROOT}/tools/stage_resources.sh"
@@ -64,6 +73,7 @@ targets:
               - UISceneConfigurationName: Default
                 UISceneDelegateClassName: SceneDelegate
     settings:
+      INFOPLIST_FILE: $(DERIVED_FILE_DIR)/StampedInfo.plist   # The phase's output, processed and signed by Xcode; the Gen/ template stays untouched
       PRODUCT_BUNDLE_IDENTIFIER: ${DM_BUNDLE_ID}
       PRODUCT_NAME: DmIOS
       MARKETING_VERSION: ${DM_APP_VERSION}         # the game's display version: the packed update's, else the base game's (set by build_ipa.sh)

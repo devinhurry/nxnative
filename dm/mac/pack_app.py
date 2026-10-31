@@ -17,6 +17,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / 'tools'))
 import romfs as rfs
+import build_info
 MODULE_FILES = ('*.patched.bin', '*.fixups.tsv', '*.gates.tsv', '*.cuts.tsv', '*.obs.tsv', 'nro.tsv')   # what the host reads from the module folder (build_ipa.sh copies the same tables)
 MSL_FILES = ('*.metallib', '*.json', '*.tsv')   # what the host reads from msl/ (not the Mac build's .metal sources or _b_build.json)
 # read beside DM_NVN_SHMAP; any of them may be absent (a Vulkan or GL game has no c1_full.tsv). The shader pairs are the pipeline prebuild's (nvn_mtl.m pso_prebuild): without them the
@@ -130,15 +131,6 @@ def info_plist(a, minos, icon):
     return p
 
 
-def source_commit():   # DMCommit: the checkout that packed the app (scripts/bug_report.py reads it), short hash, +dirty with uncommitted changes to tracked files; None outside a checkout
-    repo = HERE.parent.parent
-    try:
-        head = subprocess.run(['git', '-C', repo, 'rev-parse', '--short=12', 'HEAD'], capture_output=True, text=True, check=True).stdout.strip()
-        dirty = subprocess.run(['git', '-C', repo, 'status', '--porcelain', '--untracked-files=no'], capture_output=True, text=True, check=True).stdout.strip()
-    except (OSError, subprocess.CalledProcessError): return None
-    return head + ('+dirty' if dirty else '') if head else None
-
-
 def sign(app, identity, codesign):   # the inner host first, then the bundle (its resources and the launcher); no --options runtime (see the top)
     host = app / 'Contents/MacOS/dmhost'
     for target in (host, app):
@@ -228,8 +220,9 @@ def pack(a):
         codesign = Path(codesign).resolve()
         minos = min_os(a.host)
         localizations = launcher_localizations() if a.title_id.upper() == '01007EF00011E000' else []
-        sources = [Path(__file__).resolve(), HERE / 'launcher.c', HERE.parent / 'host/save_sync.c', HERE.parent / 'host/save_sync.h', HERE.parent / 'host/romfs_image.h', HERE.parent / 'tools/romfs.py'] + swift_sources() + [HERE.parent / 'host' / name for name in ('botw_touch_layout.h', 'touchpad_geometry.h', 'dm_input.h', 'memory_mode.h', 'module.modulemap')] + localizations
-        inputs = {'options': vars(a), 'files': [(str(p), p.stat().st_mode, digest(p), os.readlink(p) if p.is_symlink() else None) for p in files + sources],
+        sources = [Path(__file__).resolve(), Path(build_info.__file__), HERE / 'launcher.c', HERE.parent / 'host/save_sync.c', HERE.parent / 'host/save_sync.h', HERE.parent / 'host/romfs_image.h', HERE.parent / 'tools/romfs.py'] + swift_sources() + [HERE.parent / 'host' / name for name in ('botw_touch_layout.h', 'touchpad_geometry.h', 'dm_input.h', 'memory_mode.h', 'module.modulemap')] + localizations
+        source = build_info.source_info()   # A changed commit or repository invalidates reuse; the changing wall clock does not.
+        inputs = {'options': vars(a), 'source': source, 'files': [(str(p), p.stat().st_mode, digest(p), os.readlink(p) if p.is_symlink() else None) for p in files + sources],
                   'trees': [(p, inventory(Path(p))) for p in (a.romfs, a.aoc) if p],
                   'tools': [[str(c), c.stat().st_mode, c.stat().st_size, c.stat().st_mtime_ns, c.stat().st_ctime_ns, run([c, '--version']).strip()] for c in (clang, swiftc)] + [
                             str(sdk), run(['xcrun', '--sdk', 'macosx', '--show-sdk-version']).strip(),
@@ -274,8 +267,7 @@ def pack(a):
     if icon: step('icon'); make_icns(a.icon, res / 'AppIcon.icns')
     info = info_plist(a, minos, icon)
     info['DMModuleFiles'] = [p.name for p in mods]
-    commit = source_commit()
-    if commit: info['DMCommit'] = commit
+    info.update(source, DMBuildTime=build_info.build_time())   # A reused app retains its original build time.
     if msl_dst.name.startswith('b-'): info['DMChain'] = msl_dst.name[2:]   # the library chain the app carries (a Vulkan or GL game's vk / gl has none)
     (c / 'Info.plist').write_bytes(plistlib.dumps(info))
     (c / 'PkgInfo').write_text('APPL????')

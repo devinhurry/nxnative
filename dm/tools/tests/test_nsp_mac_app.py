@@ -193,6 +193,23 @@ class PackReuse(unittest.TestCase):
         self.assert_reused()
         self.assertEqual((partial / 'leave').read_text(), 'untouched')
 
+    def test_build_metadata_refreshes_on_repack_and_survives_reuse(self):
+        info_path = Path(self.args.out) / 'Contents/Info.plist'
+        with mock.patch.object(pack_app.build_info, 'build_time', return_value='2026-10-31T12:00:00Z'):
+            self.pack()
+        first = plistlib.loads(info_path.read_bytes())
+        self.assertEqual(first['DMBuildTime'], '2026-10-31T12:00:00Z')
+        with mock.patch.object(pack_app.build_info, 'build_time', return_value='2026-10-31T12:00:02Z') as clock:
+            self.assert_reused()
+            clock.assert_not_called()
+            self.assertEqual(plistlib.loads(info_path.read_bytes()), first)
+            with mock.patch.dict(os.environ, {'DM_REPOSITORY': 'other/fork'}):
+                self.assert_repacked()
+                updated = plistlib.loads(info_path.read_bytes())
+                self.assertEqual(updated['DMBuildTime'], '2026-10-31T12:00:02Z')
+                self.assertEqual(updated['DMRepository'], 'other/fork')
+                self.assertEqual(updated['DMCommit'], first['DMCommit'])
+
     def test_botw_localizations_are_scoped_and_invalidate_reuse(self):
         strings = self.tmp / 'ios/Sources/zh-Hans.lproj/Localizable.strings'
         strings.parent.mkdir(); strings.write_text('"Touch" = "localized";\n')
@@ -465,6 +482,8 @@ class App(unittest.TestCase):
         self.assertEqual((p['DMTitleID'], p['DMLanguage'], p['DMRomfsMarker'], p['CFBundleIconFile']), (TID, 'fr', 'region_common/audio/edward.bfsar', 'AppIcon'))
         self.assertEqual(p['DMSettings'], [])   # launcher.json's settings, as the saved choices they accept: none here
         self.assertRegex(p['DMCommit'], r'^[0-9a-f]{12}(\+dirty)?$')   # the packing checkout (scripts/bug_report.py, the host's start line)
+        self.assertEqual(p['DMRepository'], pack_app.build_info.source_info()['DMRepository'])
+        time.strptime(p['DMBuildTime'], '%Y-%m-%dT%H:%M:%SZ')
         self.assertEqual(p['DMChain'], '0123456789ab')   # the chain of the libraries packed (msl/b-<chain>)
 
     def test_packed_language_is_the_lists(self):   # --lang a game lacks: the Game language row's default (settings.py: the game's first), with or without the window
