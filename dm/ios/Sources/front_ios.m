@@ -11,7 +11,6 @@
 #include "haptics_apple.h"
 #include "save_sync.h"
 #include "botw_touch_layout.h"
-#include "build_info_apple.h"
 #import "CloudSaves.h"
 #import "GameFiles.h"
 
@@ -54,7 +53,6 @@ static UILabel *front_ios_fps_label(void);
 @property (nonatomic, strong) DmGameView *game;
 @property (nonatomic, strong) UIView *pad;
 @property (nonatomic, strong) UILabel *fps;
-@property (nonatomic, strong) UIButton *about;
 @property (nonatomic) BOOL launched;
 - (void)startGame;
 - (void)showLauncher;
@@ -85,17 +83,6 @@ static void game_files_done(void) { [g_root showLauncher]; }
     [self.view addSubview:self.pad];
     self.fps = front_ios_fps_label();   // above the pad, which hides while a controller is connected
     if (self.fps) [self.view addSubview:self.fps];
-    self.about = [UIButton buttonWithType:UIButtonTypeSystem];
-    UIButtonConfiguration *aboutStyle = [UIButtonConfiguration plainButtonConfiguration];
-    aboutStyle.image = [UIImage systemImageNamed:@"info.circle"];
-    aboutStyle.baseForegroundColor = UIColor.whiteColor;
-    aboutStyle.background.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
-    aboutStyle.background.cornerRadius = 8;
-    self.about.configuration = aboutStyle;
-    self.about.accessibilityLabel = @"About nxnative";
-    self.about.accessibilityIdentifier = @"nxnative.about";
-    [self.about addTarget:self action:@selector(showAbout) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:self.about];   // A sibling of the pad: still reachable with a physical controller or the Tap layout
     [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     UIApplication.sharedApplication.idleTimerDisabled = YES;
     front_ios_boot();
@@ -113,7 +100,6 @@ static void game_files_done(void) { [g_root showLauncher]; }
     CGRect s = UIEdgeInsetsInsetRect(b, self.view.safeAreaInsets); CGFloat u = MIN(b.size.height / 430.0, 1.3);
     CGFloat x = floor(CGRectGetMinX(s) + 130 * u);
     if (self.fps) self.fps.frame = CGRectMake(x, floor(CGRectGetMinY(s) + 22 * u - 11), 64, 22);
-    self.about.frame = CGRectMake(x + (self.fps ? 72 : 0), floor(CGRectGetMinY(s) + MAX(0, 22 * u - 22)), 44, 44);
 }
 - (void)viewDidAppear:(BOOL)a {
     [super viewDidAppear:a];
@@ -127,14 +113,6 @@ static void game_files_done(void) { [g_root showLauncher]; }
 }
 - (void)showLauncher {
     if (!dm_show_launcher((__bridge void *)self, launcher_done)) [self startGame];   // the settings screen first (Launcher.swift), when the app has one
-}
-- (void)showAbout {
-    if (self.presentedViewController) return;
-    dm_gamepad_reset();   // A touch released while the sheet is up must not leave a game button held.
-    UIAlertController *about = [UIAlertController alertControllerWithTitle:@"About nxnative"
-        message:dm_build_about_message(NSBundle.mainBundle) preferredStyle:UIAlertControllerStyleAlert];
-    [about addAction:[UIAlertAction actionWithTitle:@"Close" style:UIAlertActionStyleCancel handler:nil]];
-    [self presentViewController:about animated:YES completion:nil];
 }
 - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
 - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }   // Edge gestures need two swipes, to avoid accidental exits

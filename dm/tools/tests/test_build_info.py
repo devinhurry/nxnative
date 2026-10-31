@@ -1,9 +1,8 @@
-"""Generated build identity, prepared-project refresh and the six-character About display."""
+"""Generated build identity and prepared-project refresh."""
 from datetime import datetime, timezone
 import os
 from pathlib import Path
 import plistlib
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -74,28 +73,6 @@ class BuildInfoTests(unittest.TestCase):
             self.assertEqual(stamped['DMCommit'], build_info.source_info()['DMCommit'])
             self.assertEqual(stamped['DMRepository'], build_info.source_info()['DMRepository'])
             datetime.strptime(stamped['DMBuildTime'], '%Y-%m-%dT%H:%M:%SZ')
-
-
-@unittest.skipUnless(sys.platform == 'darwin' and shutil.which('clang'), 'About display uses Foundation')
-class AboutDisplayTests(unittest.TestCase):
-    def test_display_shortens_only_the_hash_and_handles_missing_metadata(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source, binary = root / 'about.m', root / 'about'
-            source.write_text('#import "build_info_apple.h"\n'
-                              'int main(int argc, char **argv) { @autoreleasepool {\n'
-                              'NSBundle *bundle = [NSBundle bundleWithPath:@(argv[1])];\n'
-                              'puts(dm_build_about_message(bundle).UTF8String);\n'
-                              '} return 0; }\n')
-            subprocess.run(['clang', '-fobjc-arc', '-I', REPO / 'dm/host', source, '-framework', 'Foundation', '-o', binary], check=True)
-            for index, (commit, displayed) in enumerate((('abcdef012345', 'abcdef'), ('abcdef012345+dirty', 'abcdef+dirty'), ('unknown', 'unknown'), (None, 'unknown'))):
-                bundle = root / f'Fixture{index}.bundle/Contents'
-                bundle.mkdir(parents=True)
-                info = {'CFBundleIdentifier': f'org.nxnative.about-test-{index}', 'DMRepository': 'jack/repo', 'DMBuildTime': '2026-10-31T12:00:00Z'}
-                if commit is not None: info['DMCommit'] = commit
-                (bundle / 'Info.plist').write_bytes(plistlib.dumps(info))
-                message = subprocess.check_output([binary, bundle.parent], text=True)
-                self.assertEqual(message, f'Repository: jack/repo\nCommit: {displayed}\nBuilt (UTC): 2026-10-31T12:00:00Z\n')
 
 
 if __name__ == '__main__':

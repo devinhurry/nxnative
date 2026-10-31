@@ -152,6 +152,7 @@ private struct LauncherView: View {
                                 Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
                             }
                         }
+                        AboutSection()
                     }
                     .listStyle(.insetGrouped)
                     .contentMargins(.horizontal, 12, for: .scrollContent)

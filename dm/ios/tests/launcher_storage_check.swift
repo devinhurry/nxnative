@@ -5,6 +5,9 @@ import Foundation
     static func main() {
         var failed = 0
         func expect(_ c: Bool, _ what: String) { print((c ? "PASS " : "FAIL ") + what); if !c { failed += 1 } }
+        expect(AboutSection.shortCommit("abcdef012345") == "abcdef", "About shows a six-character commit")
+        expect(AboutSection.shortCommit("abcdef012345+dirty") == "abcdef+dirty", "About preserves the local-changes marker")
+        expect(AboutSection.shortCommit("unknown") == "unknown", "About handles missing source metadata")
         let file = try! JSONDecoder().decode(SettingsFile.self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])))
         let suite = "nxnative.launcher-test." + UUID().uuidString
         let d = UserDefaults(suiteName: suite)!
