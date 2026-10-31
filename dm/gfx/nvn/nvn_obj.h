@@ -170,12 +170,13 @@ typedef struct { int32_t prim, itype, count, base_vertex, base_instance, instanc
 // and HUD quads use base-instance zero; negative markers identify their
 // scopes and are restored to zero before the draw reaches any renderer.
 #define NVN_DRAW_UI_BACKGROUND 0x80000000u
-enum { NVN_UI_BACKGROUND = 1, NVN_UI_RUNE = 2, NVN_UI_HUD = 3, NVN_UI_STRETCH = 4, NVN_UI_MAP = 5 };
+enum { NVN_UI_BACKGROUND = 1, NVN_UI_RUNE = 2, NVN_UI_HUD = 3, NVN_UI_STRETCH = 4, NVN_UI_MAP = 5, NVN_UI_WEATHER = 6 };
 static inline void draw_ui_scope(int32_t *instances, int32_t *base_instance, int32_t *scope) {
     if (!((uint32_t)*instances & NVN_DRAW_UI_BACKGROUND)) return;
     *instances &= 0x7fffffff;
     *scope = *base_instance == INT32_MIN ? NVN_UI_RUNE : *base_instance == INT32_MIN+1 ? NVN_UI_HUD :
-        *base_instance == INT32_MIN+2 ? NVN_UI_STRETCH : *base_instance == INT32_MIN+3 ? NVN_UI_MAP : NVN_UI_BACKGROUND;
+        *base_instance == INT32_MIN+2 ? NVN_UI_STRETCH : *base_instance == INT32_MIN+3 ? NVN_UI_MAP :
+        *base_instance == INT32_MIN+4 ? NVN_UI_WEATHER : NVN_UI_BACKGROUND;
     if (*scope != NVN_UI_BACKGROUND) *base_instance = 0;
 }
 static inline const p_draw *draw_rec(const void *a, uint32_t size, p_draw *t) {

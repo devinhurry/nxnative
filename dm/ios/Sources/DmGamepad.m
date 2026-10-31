@@ -94,12 +94,14 @@ static void motion_start(void) {
 // The interface can face either landscape way. A 180-degree turn of the phone between them must not turn the virtual controller: the sample is
 // rotated 180 degrees about the device's Z axis while the interface is in the left landscape orientation, so its frame stays fixed to the screen.
 static CMMotionManager *g_devmotion;
-static _Atomic int g_motion_flip = -1;     // -1 = the interface orientation is not known yet, 0 = right, 1 = left
+static _Atomic int g_motion_flip = -1;     // -1 unknown; 0 landscape right, 1 landscape left, 2 portrait
 static _Atomic int g_motion_recenter;      // the next sample becomes the neutral pose
 static int g_motion_published_first;       // motion_publish runs on one serial queue
 static void motion_update_flip_value(UIInterfaceOrientation o) {
     if (o == UIInterfaceOrientationLandscapeLeft) atomic_store(&g_motion_flip, 1);
     else if (o == UIInterfaceOrientationLandscapeRight) atomic_store(&g_motion_flip, 0);   // portrait during launch: wait for a landscape
+    else if (o == UIInterfaceOrientationPortrait && !strcmp(DM_GAME_ID,"01007EF00011E000") && dm_botw_portrait_enabled())
+        atomic_store(&g_motion_flip, 2);
 }
 static void motion_update_flip(UIWindowScene *scene) {
     if (scene) motion_update_flip_value(scene.effectiveGeometry.interfaceOrientation);
@@ -110,11 +112,17 @@ static void motion_first_input(void) {     // the player is holding the phone as
 }
 static void motion_publish_values(CMQuaternion q, CMAcceleration a, CMRotationRate r, int flip) {
     double w = q.w, x = q.x, y = q.y, z = q.z;
-    if (flip) {   // q' = q * (0, 0, 1, 0); vectors turn with it: (x, y, z) -> (-x, -y, z)
+    if (flip == 1) {   // q' = q * (0, 0, 1, 0); vectors turn with it: (x, y, z) -> (-x, -y, z)
         double w2 = -z, x2 = y, y2 = -x, z2 = w;
         w = w2; x = x2; y = y2; z = z2;
         a.x = -a.x; a.y = -a.y;
         r.x = -r.x; r.y = -r.y;
+    } else if (flip == 2) {
+        // Portrait is one quarter-turn from landscape right. Rotate both the
+        // sample basis and its vectors, without resetting the neutral pose.
+        double w2=(w+z)*M_SQRT1_2, x2=(x-y)*M_SQRT1_2, y2=(x+y)*M_SQRT1_2, z2=(z-w)*M_SQRT1_2;
+        w=w2; x=x2; y=y2; z=z2;
+        double ax=a.x, rx=r.x; a.x=-a.y; a.y=ax; r.x=-r.y; r.y=rx;
     }
     uint32_t flags = atomic_exchange(&g_motion_recenter, 0) ? DM_MOTION_RESET : 0;
     if (!g_motion_published_first) { g_motion_published_first = 1; flags |= DM_MOTION_RESET; }
@@ -252,8 +260,8 @@ void front_botw_touch_menu_changed(void) {
 static void pads_start(void);   // Physical controllers, below
 
 @implementation DmGamepad {
-    dm_touchpad_stick_response _moveResponse;
-    dm_botw_touch_layout _touchLayout;
+    dm_touchpad_stick_response _moveResponse, _moveProfiles[2];
+    dm_botw_touch_layout _touchLayout, _touchProfiles[2];
     NSMapTable<UITouch *, NSNumber *> *_owner;     // touch → control (with the key for C_BTN or the stick for C_STICK, << 8)
     UITouch *_stick[2]; CGPoint _stickNow[2];      // the touch holding each stick and where it is now (0 left, 1 right)
     UITouch *_leftAxisTouch, *_shieldTouch; CGPoint _shieldNow, _shieldOrigin;
@@ -324,9 +332,12 @@ static BOOL botwTouchHudSupported(void) { return dm_botw_touch_hud_available(); 
         _moveResponse = dm_touchpad_botw_move_defaults();
         _touchLayout = dm_botw_layout_defaults();
         if (!strcmp(DM_GAME_ID, "01007EF00011E000")) {
-            if (!dm_botw_layout_read(&_touchLayout)) die("[RED] invalid BOTW touch layout setting");
-            const char *invalid = dm_botw_stick_settings_read(&_moveResponse);
-            if (invalid) die("[RED] %s: invalid touch left-stick setting", invalid);
+            for (int p = 0; p < 2; p++) {
+                if (!dm_botw_layout_read_for(&_touchProfiles[p],p)) die("[RED] invalid BOTW touch layout setting");
+                const char *invalid = dm_botw_stick_settings_read_for(&_moveProfiles[p],p);
+                if (invalid) die("[RED] %s: invalid touch left-stick setting", invalid);
+            }
+            _touchLayout = _touchProfiles[0]; _moveResponse = _moveProfiles[0];
         }
         self.multipleTouchEnabled = YES; self.opaque = NO; self.backgroundColor = UIColor.clearColor;
         const char *feedback = getenv("DM_TOUCH_HAPTICS");
@@ -436,6 +447,7 @@ static BOOL botwTouchHudSupported(void) { return dm_botw_touch_hud_available(); 
     return self;
 }
 - (void)applyLayout {   // show / hide the controls for the current layout
+    [self syncBotwTouchProfile];
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     for (int b = 0; b < B_N; b++) _key[b].hidden = _tap || (fullOnly(b) && !_full);
     BOOL botwActive = [self botwTouchControlsActive];
@@ -461,15 +473,16 @@ static BOOL botwTouchHudSupported(void) { return dm_botw_touch_hud_available(); 
 - (void)publishTouchHudForController:(BOOL)connected {
     BOOL active = botwTouchHudSupported() && _full && !_tap && !connected;
     if (!active || self.bounds.size.width <= 0 || self.bounds.size.height <= 0) {
-        dm_botw_touch_hud_publish(0, 0, 0);
+        dm_botw_touch_hud_publish(0, 0, 0, 1);
         [self setBotwMapRectValid:NO x:0 y:0 width:0 height:0];
         return;
     }
     CGPoint c = self.dpadCenter;
     float rect[4]; dm_aspect_touch_rect((float)self.bounds.size.width, (float)self.bounds.size.height, rect);
+    if (dm_aspect_hud_y_scale()<1) dm_aspect_hud_rect(self.bounds.size.width,self.bounds.size.height,rect);
     float x = (float)((c.x - rect[0]) / rect[2]);
     float y = (float)((c.y - rect[1]) / rect[3]);
-    dm_botw_touch_hud_publish(1, x, y);
+    dm_botw_touch_hud_publish(1, x, y, _touchLayout.control[B_LEFT].scale);
 }
 - (void)refreshTouchHudMode {
     if (botwTouchHudSupported() && (!_full || _tap)) {
@@ -510,7 +523,17 @@ static BOOL botwTouchHudSupported(void) { return dm_botw_touch_hud_available(); 
 // ---- Layout (points; computed inside the safe area) ----
 - (CGRect)safe { return UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets); }
 - (CGRect)corner { UIEdgeInsets i = self.safeAreaInsets; dm_touchpad_rect r = dm_touchpad_corner_rect(self.bounds.size.width, self.bounds.size.height, i.left, i.top, i.right, i.bottom); return CGRectMake(r.x, r.y, r.width, r.height); }   // the rectangle the bottom-corner controls use
-- (CGFloat)u { return dm_touchpad_u((float)self.bounds.size.height); }   // 1 = 430 points tall (iPhone Pro Max landscape)
+- (void)syncBotwTouchProfile {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000")) return;
+    UIEdgeInsets insets=self.safeAreaInsets;
+    int portrait = botwTouchHudSupported() && _full && !_tap && !_padOff &&
+        dm_botw_compact_mode(self.bounds.size.width,self.bounds.size.height,insets.left,insets.right);
+    if (_touchLayout.portrait == portrait) return;
+    _touchLayout = _touchProfiles[portrait]; _moveResponse = _moveProfiles[portrait];
+    [self reset];
+}
+- (CGFloat)u { return ([self botwTouchControlsActive] || [self botwMenuDpadActive]) ?
+    dm_botw_layout_unit(&_touchLayout,self.bounds.size.width,self.bounds.size.height) : dm_touchpad_u((float)self.bounds.size.height); }
 static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPointMake(right ? CGRectGetMaxX(s) - dx : CGRectGetMinX(s) + dx, y); }
 - (CGRect)botwLayoutRect:(int)control {
     UIEdgeInsets i = self.safeAreaInsets; float canvas[4];
@@ -527,6 +550,10 @@ static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPoint
 - (CGFloat)faceR { return K_FACE_R * self.u * [self botwLayoutScale:0]; }
 - (CGPoint)facePos:(int)b {
     CGPoint c=self.faceCenter; CGFloat gap=self.faceGap;
+    if ([self botwTouchControlsActive]) {
+        dm_touchpad_point d=dm_botw_layout_face_offset(&_touchLayout,b,self.u);
+        return CGPointMake(c.x+d.x,c.y+d.y);
+    }
     if (b==B_A) c.x+=gap; else if (b==B_B) c.y+=gap; else if (b==B_X) c.y-=gap; else c.x-=gap;
     return c;
 }
@@ -549,10 +576,10 @@ static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPoint
 }
 - (CGPoint)stickCentre:(int)i { return i ? _rCentre : (_stick[0] ? _lCentre : self.stickHome); }
 - (CGFloat)stickR:(int)i {
-    if (!i && [self botwTouchControlsActive]) return dm_touchpad_botw_stick_radius(self.bounds.size.height) * _moveResponse.size;
+    if (!i && [self botwTouchControlsActive]) return dm_botw_layout_stick_radius(&_touchLayout,self.bounds.size.width,self.bounds.size.height) * _moveResponse.size;
     return (i ? K_RSTICK_R : K_STICK_R) * self.u;
 }
-- (CGFloat)shieldR { return dm_touchpad_botw_stick_radius(self.bounds.size.height) * [self botwLayoutScale:B_ZL]; }
+- (CGFloat)shieldR { return dm_botw_layout_stick_radius(&_touchLayout,self.bounds.size.width,self.bounds.size.height) * [self botwLayoutScale:B_ZL]; }
 - (BOOL)inLeftArea:(CGPoint)p { CGRect b = self.bounds; return p.x < b.size.width * K_LSWIPE && p.y > CGRectGetMidY(b); }   // lower-left: the left stick starts where the touch lands
 - (BOOL)inRightArea:(CGPoint)p { CGRect b = self.bounds; return p.x >= CGRectGetMaxX(b) - b.size.width * K_RSWIPE; }
 - (CGPoint)dpadCenter { if ([self botwTouchControlsActive] || [self botwMenuDpadActive]) return [self botwLayoutCenter:B_LEFT]; UIEdgeInsets i = self.safeAreaInsets; dm_touchpad_point p = dm_touchpad_dpad_center(self.bounds.size.width, self.bounds.size.height, i.left, i.top, i.right, i.bottom); return CGPointMake(p.x, p.y); }
@@ -810,6 +837,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         for (int b = B_A; b <= B_Y; b++)
             if (dm_botw_button_badge_contains(p, [self facePos:b], self.faceR)) return 1ull << b;
     CGPoint c = self.faceCenter;
+    if ([self botwTouchControlsActive]) return dm_botw_layout_face_buttons(&_touchLayout,p.x,p.y,c.x,c.y,self.u);
     return dm_touchpad_face_buttons((float)p.x, (float)p.y, (float)c.x, (float)c.y,
                                     (float)self.faceGap, (float)(self.faceR * 1.25));
 }
@@ -1334,6 +1362,7 @@ static CGImageRef botwRuneImage(const dm_botw_rune_icon_state *snapshot) {
     [super layoutSubviews];
     motion_update_flip(self.window.windowScene);
     [self checkLookGeometry];
+    [self syncBotwTouchProfile];
     UIWindowScene *ws = self.window.windowScene; if (ws) atomic_store(&g_iface_orient, (int)ws.effectiveGeometry.interfaceOrientation);
     CGFloat u = self.u;
     [CATransaction begin]; [CATransaction setDisableActions:YES];

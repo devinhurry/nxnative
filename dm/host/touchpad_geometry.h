@@ -174,7 +174,7 @@ static inline int dm_touchpad_rounded_rect_contains(dm_touchpad_rect r, float ra
 }
 
 // One fixed + anchor beside the relocated minimap, including in shrines.
-// Size follows the aspect canvas; y-offset is in frontend points.
+// Size follows the canvas's shorter edge; y-offset is in frontend points.
 static inline float dm_touchpad_botw_map_right_inset(float points_to_native) {
     return DM_TP_BOTW_HEART_EDGE + (DM_TP_BOTW_MENU_SIZE + DM_TP_BOTW_MENU_GLYPH_SIZE)*.5f +
         (DM_TP_BOTW_EDGE_EXTRA + DM_TP_BOTW_MENU_GAP)*points_to_native;
@@ -182,10 +182,11 @@ static inline float dm_touchpad_botw_map_right_inset(float points_to_native) {
 static inline dm_touchpad_rect dm_touchpad_botw_menu_rect(float canvas_x, float canvas_y,
                                                            float canvas_width, float canvas_height,
                                                            int minus) {
-    float size = DM_TP_BOTW_MENU_SIZE * canvas_height / 720.0f;
+    float scale = fminf(canvas_width, canvas_height) / 720.0f;
+    float size = DM_TP_BOTW_MENU_SIZE * scale;
     return (dm_touchpad_rect){canvas_x + canvas_width -
-        (DM_TP_BOTW_HEART_EDGE + (DM_TP_BOTW_MENU_SIZE + DM_TP_BOTW_MENU_GLYPH_SIZE)*.5f)*canvas_height/720.0f - DM_TP_BOTW_EDGE_EXTRA,
-        canvas_y + (360.0f - DM_TP_BOTW_MAP_TOP) * canvas_height / 720.0f + DM_TP_BOTW_MENU_Y_OFFSET +
+        (DM_TP_BOTW_HEART_EDGE + (DM_TP_BOTW_MENU_SIZE + DM_TP_BOTW_MENU_GLYPH_SIZE)*.5f)*scale - DM_TP_BOTW_EDGE_EXTRA,
+        canvas_y + (360.0f - DM_TP_BOTW_MAP_TOP) * scale + DM_TP_BOTW_MENU_Y_OFFSET +
             (minus ? size + DM_TP_BOTW_MENU_GAP : 0), size, size};
 }
 

@@ -919,7 +919,8 @@ static void rec_ui_scope(int32_t *instances, int32_t *base_instance) {
         *base_instance = INT32_MIN; // unused by the native rune quad; restored before replay
     } else if (dm_aspect_ui_hud_drawing() && !*base_instance) {
         *instances |= NVN_DRAW_UI_BACKGROUND;
-        *base_instance = dm_aspect_ui_hud_drawing() == 2 ? INT32_MIN+3 : INT32_MIN+1;
+        int hud=dm_aspect_ui_hud_drawing();
+        *base_instance = hud == 2 ? INT32_MIN+3 : hud == 3 ? INT32_MIN+4 : INT32_MIN+1;
     } else if (dm_aspect_ui_background_drawing()) {
         *instances |= NVN_DRAW_UI_BACKGROUND;
         if (dm_aspect_ui_background_drawing() == 2 && !*base_instance) *base_instance = INT32_MIN+2;

@@ -134,3 +134,15 @@
 "Scene MetalFX" = "Scene MetalFX";
 "Full-screen MetalFX" = "Full-screen MetalFX";
 "Scene MetalFX (experimental) scales 3D only; Full-screen MetalFX also scales text and UI. Uses more GPU time and can increase heat." = "Scene MetalFX (experimental) scales 3D only; Full-screen MetalFX also scales text and UI. Uses more GPU time and can increase heat.";
+
+"Layout" = "Layout";
+
+"Normal layout" = "Normal layout";
+
+"Compact layout" = "Compact layout";
+
+"Enable portrait mode" = "Enable portrait mode";
+
+"Allows portrait orientation. Portrait uses compact controls below 600pt of available width; otherwise it keeps the normal layout." = "Allows portrait orientation. Portrait uses compact controls below 600pt of available width; otherwise it keeps the normal layout.";
+
+"Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately." = "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately.";

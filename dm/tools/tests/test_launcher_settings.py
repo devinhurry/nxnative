@@ -26,6 +26,16 @@ def build(gid, api, platform=None):
 
 
 class LauncherSettingsTests(unittest.TestCase):
+    def test_portrait_touch_profile_is_opt_in_and_botw_only(self):
+        for platform in ('mac', 'ios'):
+            rows = build(BOTW, 'nvn', platform)
+            self.assertEqual(rows['DM_BOTW_PORTRAIT']['default'], '0')
+            self.assertEqual(rows['DM_BOTW_PORTRAIT_PAD_FACE_X']['default'], '0.000')
+            self.assertEqual(rows['DM_BOTW_PORTRAIT_MOVE_CURVE']['default'], '0.300')
+            self.assertNotEqual(rows['DM_BOTW_PAD_FACE_X']['default'], rows['DM_BOTW_PORTRAIT_PAD_FACE_X']['default'])
+        for gid, api in [(WONDER, 'nvn'), ('0100535012974000', 'vulkan'), ('010014E00DB56000', 'gl')]:
+            self.assertFalse(any(k.startswith('DM_BOTW_PORTRAIT') for k in build(gid, api)))
+
     def test_upscaling_is_opt_in_for_every_graphics_api(self):
         for api, gid in [('nvn', BOTW), ('vulkan', '0100535012974000'), ('gl', '010014E00DB56000')]:
             with self.subTest(api=api):

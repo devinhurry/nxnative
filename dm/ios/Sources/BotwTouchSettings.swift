@@ -15,6 +15,21 @@ struct BotwTouchSettingsView: View {
     var safeInsets = EdgeInsets()
     @State private var selected = BotwTouchControl.all[1]
     @State private var copied = false
+    @State private var portrait = false
+
+    private var previewViewport: CGSize {
+        let short = min(viewport.width, viewport.height), long = max(viewport.width, viewport.height)
+        return portrait ? CGSize(width: short, height: long) : CGSize(width: long, height: short)
+    }
+    private var previewInsets: EdgeInsets {
+        portrait ? EdgeInsets(top: max(safeInsets.top, max(safeInsets.leading, safeInsets.trailing)), leading: 0,
+            bottom: safeInsets.bottom, trailing: 0) : safeInsets
+    }
+    private func key(_ base: String) -> String { botwTouchKey(base, portrait: portrait) }
+    private var previewUnit: CGFloat {
+        var config = layout
+        return CGFloat(dm_botw_layout_unit(&config, Float(previewViewport.width), Float(previewViewport.height)))
+    }
 
     private func value(_ key: String, fallback: Double = 0) -> Double {
         guard let row = m.settings.first(where: { $0.env == key }) else { return fallback }
@@ -22,26 +37,27 @@ struct BotwTouchSettingsView: View {
         return Double(row.accepts(text) ? text : row.def) ?? fallback
     }
     private var layout: dm_botw_touch_layout {
-        var result = dm_botw_layout_defaults()
+        var result = dm_botw_layout_defaults_for(portrait ? 1 : 0)
         withUnsafeMutableBytes(of: &result.control) { bytes in
             let controls = bytes.bindMemory(to: dm_botw_control_transform.self)
             for control in BotwTouchControl.all {
                 let base = controls[control.id]
-                controls[control.id] = .init(x: Float(value(control.env("X"), fallback: Double(base.x))),
-                    y: Float(value(control.env("Y"), fallback: Double(base.y))),
-                    scale: control.id == 4 ? 1 : Float(value(control.env("SCALE"), fallback: Double(base.scale))))
+                controls[control.id] = .init(x: Float(value(control.env("X", portrait: portrait), fallback: Double(base.x))),
+                    y: Float(value(control.env("Y", portrait: portrait), fallback: Double(base.y))),
+                    scale: control.id == 4 ? 1 : Float(value(control.env("SCALE", portrait: portrait), fallback: Double(base.scale))))
             }
         }
-        result.face_gap = Float(value("DM_BOTW_PAD_FACE_GAP", fallback: Double(result.face_gap)))
-        result.badges = value("DM_BOTW_PAD_BADGES", fallback: Double(result.badges)) == 0 ? 0 : 1
+        result.face_gap = Float(value(key("DM_BOTW_PAD_FACE_GAP"), fallback: Double(result.face_gap)))
+        result.badges = value(key("DM_BOTW_PAD_BADGES"), fallback: Double(result.badges)) == 0 ? 0 : 1
         return result
     }
-    private var canvas: dm_touchpad_rect { dm_botw_layout_canvas(Float(viewport.width), Float(viewport.height)) }
+    private var canvas: dm_touchpad_rect { portrait ? dm_touchpad_rect(x: 0, y: 0, width: Float(previewViewport.width), height: Float(previewViewport.height)) :
+        dm_botw_layout_canvas(Float(previewViewport.width), Float(previewViewport.height)) }
     private func rect(_ control: BotwTouchControl) -> CGRect {
         var config = layout
-        let r = dm_botw_layout_control(&config, Int32(control.id), Float(viewport.width), Float(viewport.height),
-            Float(safeInsets.leading), Float(safeInsets.top), Float(safeInsets.trailing), Float(safeInsets.bottom), canvas)
-        let size = control.id == 4 ? value("DM_BOTW_MOVE_SIZE", fallback: 0.8) : 1
+        let r = dm_botw_layout_control(&config, Int32(control.id), Float(previewViewport.width), Float(previewViewport.height),
+            Float(previewInsets.leading), Float(previewInsets.top), Float(previewInsets.trailing), Float(previewInsets.bottom), canvas)
+        let size = control.id == 4 ? value(key("DM_BOTW_MOVE_SIZE"), fallback: 0.8) : 1
         return CGRect(x: Double(r.x) + Double(r.width) * (1-size) / 2,
             y: Double(r.y) + Double(r.height) * (1-size) / 2, width: Double(r.width)*size, height: Double(r.height)*size)
     }
@@ -55,20 +71,25 @@ struct BotwTouchSettingsView: View {
                     #endif
                     Text("Touch layout").font(.headline)
                 }
+                Picker("Layout", selection: $portrait) {
+                    Text("Normal layout").tag(false)
+                    Text("Compact layout").tag(true)
+                }.pickerStyle(.segmented).accessibilityIdentifier("botw.touch.profile")
                 GeometryReader { geometry in
-                    let scale = min(geometry.size.width / viewport.width, geometry.size.height / viewport.height)
+                    let scale = min(geometry.size.width / previewViewport.width, geometry.size.height / previewViewport.height)
                     ZStack(alignment: .topLeading) {
                         RoundedRectangle(cornerRadius: 16).fill(Color(white: 0.10))
                         ForEach(BotwTouchControl.all) { control in
                             let r = rect(control)
                             BotwControlPreview(control: control, m: m, selected: $selected, canvas: canvas,
-                                previewScale: scale, rect: r, gap: Double(layout.face_gap))
+                                previewScale: scale, rect: r, layout: layout,
+                                unit: previewUnit, portrait: portrait)
                                 .frame(width: r.width*scale, height: r.height*scale)
                                 .position(x: r.midX*scale, y: r.midY*scale)
                         }
                     }
                     .coordinateSpace(name: "touch-preview")
-                    .frame(width: viewport.width*scale, height: viewport.height*scale)
+                    .frame(width: previewViewport.width*scale, height: previewViewport.height*scale)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 Text("Select a control, then drag to move or pinch to resize. Outlines show its size. Changes are saved when you tap Play.")
@@ -76,49 +97,51 @@ struct BotwTouchSettingsView: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    if let row = m.settings.first(where: { $0.env == "DM_BOTW_PORTRAIT" }) { SettingRow(s: row, m: m) }
                     Picker("Control", selection: $selected) {
                         ForEach(BotwTouchControl.all) { Text(LocalizedStringKey($0.label)).tag($0) }
                     }.pickerStyle(.menu).accessibilityIdentifier("botw.touch.control")
                     ForEach(["X", "Y", "SCALE"], id: \.self) { field in
-                        if let row = m.settings.first(where: { $0.env == selected.env(field) }) {
+                        if let row = m.settings.first(where: { $0.env == selected.env(field, portrait: portrait) }) {
                             BotwLayoutSlider(row: row, title: field == "X" ? "Horizontal offset" : field == "Y" ? "Vertical offset" : "Size", m: m)
                         }
                     }
-                    if selected.id == 0, let row = m.settings.first(where: { $0.env == "DM_BOTW_PAD_FACE_GAP" }) {
+                    if selected.id == 0, let row = m.settings.first(where: { $0.env == key("DM_BOTW_PAD_FACE_GAP") }) {
                         BotwLayoutSlider(row: row, title: "Button spacing", m: m)
                     }
-                    Button("Restore this control") { m.reset(keys: selected.keys.union(selected.id == 0 ? ["DM_BOTW_PAD_FACE_GAP"] : [])) }
+                    Button("Restore this control") { m.reset(keys: selected.keys(portrait: portrait).union(selected.id == 0 ? [key("DM_BOTW_PAD_FACE_GAP")] : [])) }
                     Divider()
-                    if let row = m.settings.first(where: { $0.env == "DM_BOTW_PAD_BADGES" }) { SettingRow(s: row, m: m) }
+                    if let row = m.settings.first(where: { $0.env == key("DM_BOTW_PAD_BADGES") }) { SettingRow(s: row, m: m) }
                     Divider()
-                    if let response = m.touchStickResponse {
+                    if let response = m.touchStickResponse(portrait: portrait) {
                         Text("Left-stick response").font(.headline)
                         TouchStickPreview(response: response)
-                        ForEach(m.rows(in: TouchStickResponse.section).filter { $0.env != "DM_BOTW_MOVE_SIZE" }) { SettingRow(s: $0, m: m) }
+                        ForEach(m.rows(in: TouchStickResponse.section).filter { m.touchSettingsKeys(portrait: portrait).contains($0.env) && $0.env != key("DM_BOTW_MOVE_SIZE") }) { SettingRow(s: $0, m: m) }
                     }
-                    Button("Restore all touch defaults") { m.reset(keys: m.touchSettingsKeys) }
+                    Button("Restore all touch defaults") { m.reset(keys: m.touchSettingsKeys(portrait: portrait)) }
                     Divider()
                     Button(action: {
                         #if os(iOS)
-                        UIPasteboard.general.string = m.touchSettingsExport
+                        UIPasteboard.general.string = m.touchSettingsExport(portrait: portrait)
                         #else
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(m.touchSettingsExport, forType: .string)
+                        NSPasteboard.general.setString(m.touchSettingsExport(portrait: portrait), forType: .string)
                         #endif
                         copied = true
                     }) { Label(copied ? "Copied" : "Copy all parameters", systemImage: copied ? "checkmark" : "doc.on.doc") }
                         .accessibilityIdentifier("botw.touch.copy")
                     DisclosureGroup("Current parameters") {
-                        Text(m.touchSettingsExport).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                        Text(m.touchSettingsExport(portrait: portrait)).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                             .accessibilityIdentifier("botw.touch.parameters")
                     }
-                    Text("Send these values to use this layout as the default. Offsets are fractions of the game UI area; positive X moves right and positive Y moves down.")
+                    Text(LocalizedStringKey(portrait ? "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately." : "Send these values to use this layout as the default. Offsets are fractions of the game UI area; positive X moves right and positive Y moves down."))
                         .font(.footnote).foregroundStyle(.secondary)
                 }.padding(.vertical, 8)
             }.frame(width: 285)
         }
         .padding(16)
         .onChange(of: m.values) { _, _ in copied = false }
+        .onChange(of: portrait) { _, _ in copied = false }
         #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
         #endif
@@ -148,11 +171,13 @@ private struct BotwControlPreview: View {
     let canvas: dm_touchpad_rect
     let previewScale: CGFloat
     let rect: CGRect
-    let gap: Double
+    let layout: dm_botw_touch_layout
+    let unit: CGFloat
+    let portrait: Bool
     @State private var dragOrigin: CGPoint?
     @State private var scaleOrigin: Double?
     private var gold: Color { Color(red: 0.94, green: 0.88, blue: 0.70) }
-    private var badges: Bool { (m.values["DM_BOTW_PAD_BADGES"] ?? "0") != "0" }
+    private var badges: Bool { layout.badges != 0 }
     private func icon(_ name: String) -> Image? {
         guard let path = Bundle.main.resourceURL?.appendingPathComponent("dm/touch_\(name.lowercased()).png").path else { return nil }
         #if os(iOS)
@@ -176,16 +201,16 @@ private struct BotwControlPreview: View {
         }
     }
     private func set(_ field: String, _ value: Double) {
-        let key = control.env(field)
+        let key = control.env(field, portrait: portrait)
         guard !m.fixed.contains(key), let row = m.settings.first(where: { $0.env == key }) else { return }
         m.values[key] = String(format: "%.3f", min(max(value, row.min ?? 0), row.max ?? 1))
     }
     private func faceButton(_ index: Int) -> some View {
-        let radius: CGFloat = rect.width * CGFloat(DM_TP_FACE_R) / (CGFloat(DM_TP_FACE_R) + CGFloat(DM_TP_FACE_GAP)*CGFloat(gap)) / 2
+        let radius = CGFloat(DM_TP_FACE_R) * unit * CGFloat(layout.control.0.scale)
         let diameter: CGFloat = radius * 2 * previewScale
-        let spacing: CGFloat = (rect.width / 2 - radius) * previewScale
-        let position = CGPoint(x: index == 0 ? spacing : index == 3 ? -spacing : 0,
-                               y: index == 1 ? spacing : index == 2 ? -spacing : 0)
+        var config = layout
+        let offset = dm_botw_layout_face_offset(&config, Int32(index), Float(unit))
+        let position = CGPoint(x: CGFloat(offset.x)*previewScale, y: CGFloat(offset.y)*previewScale)
         return button(["A","B","X","Y"][index], diameter: diameter)
             .frame(width: diameter, height: diameter)
             .offset(x: position.x, y: position.y)
@@ -210,13 +235,13 @@ private struct BotwControlPreview: View {
         .onTapGesture { selected = control }
         .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .named("touch-preview")).onChanged { event in
             selected = control
-            if dragOrigin == nil { dragOrigin = CGPoint(x: Double(m.values[control.env("X")] ?? "0") ?? 0, y: Double(m.values[control.env("Y")] ?? "0") ?? 0) }
+            if dragOrigin == nil { dragOrigin = CGPoint(x: Double(m.values[control.env("X", portrait: portrait)] ?? "0") ?? 0, y: Double(m.values[control.env("Y", portrait: portrait)] ?? "0") ?? 0) }
             set("X", dragOrigin!.x + event.translation.width / (Double(canvas.width)*previewScale))
             set("Y", dragOrigin!.y + event.translation.height / (Double(canvas.height)*previewScale))
         }.onEnded { _ in dragOrigin = nil })
         .simultaneousGesture(MagnifyGesture().onChanged { event in
             selected = control
-            if scaleOrigin == nil { scaleOrigin = Double(m.values[control.env("SCALE")] ?? "1") ?? 1 }
+            if scaleOrigin == nil { scaleOrigin = Double(m.values[control.env("SCALE", portrait: portrait)] ?? "1") ?? 1 }
             set("SCALE", scaleOrigin! * event.magnification)
         }.onEnded { _ in scaleOrigin = nil })
         .accessibilityElement(children: .ignore)

@@ -267,9 +267,54 @@ static void test_custom_layout(void) {
     assert(dm_botw_layout_read(&layout));
 }
 
+static void test_portrait_layout(void) {
+    dm_botw_touch_layout layout=dm_botw_layout_defaults_for(1), landscape=dm_botw_layout_defaults();
+    const float sizes[][2]={{320,568},{390,844},{430,932},{768,1024}};
+    const int controls[]={0,4,6,7,8,9,12};
+    for (unsigned s=0;s<sizeof sizes/sizeof *sizes;s++) {
+        float w=sizes[s][0], h=sizes[s][1];
+        dm_touchpad_rect canvas=dm_botw_layout_canvas(w,h), r[16]={{0}};
+        for (unsigned i=0;i<sizeof controls/sizeof *controls;i++) {
+            int b=controls[i]; r[b]=dm_botw_layout_control(&layout,b,w,h,0,59,0,34,canvas);
+            assert(r[b].x>=0 && r[b].y>=59 && r[b].x+r[b].width<=w && r[b].y+r[b].height<=h-34);
+        }
+        nearf(r[12].x+r[12].width*.5f,r[6].x+r[6].width*.5f,.001f);
+        nearf(r[6].x+r[6].width*.5f,r[8].x+r[8].width*.5f,.001f);
+        assert(r[12].y<r[6].y && r[6].y<r[8].y && r[8].y<r[4].y);
+        float dx=r[4].x+r[4].width*.5f-r[8].x-r[8].width*.5f;
+        float dy=r[4].y+r[4].height*.5f-r[8].y-r[8].height*.5f;
+        assert(hypotf(dx,dy) >= dm_botw_layout_stick_radius(&layout,w,h)*DM_TP_STICK_GRAB*1.8f);
+        float u=dm_botw_layout_unit(&layout,w,h), cx=r[0].x+r[0].width*.5f, cy=r[0].y+r[0].height*.5f;
+        dm_touchpad_point p[4];
+        for (int b=0;b<4;b++) {
+            p[b]=dm_botw_layout_face_offset(&layout,b,u);
+            assert(dm_botw_layout_face_buttons(&layout,cx+p[b].x,cy+p[b].y,cx,cy,u)==(1ull<<b));
+        }
+        assert(p[1].x<p[0].x && p[1].y>p[0].y && p[3].x<p[2].x && p[3].y>p[2].y);
+        assert(p[2].y<p[0].y && p[3].y<p[1].y);
+        assert(r[9].x<r[7].x && r[9].y>r[7].y && r[9].y+r[9].height<cy+p[3].y);
+    }
+    setenv("DM_BOTW_PORTRAIT","0",1); assert(!dm_botw_compact_mode(390,844,0,0));
+    setenv("DM_BOTW_PORTRAIT","1",1);
+    const float modes[][5]={{390,844,0,0,1},{599.9f,1000,0,0,1},{600,1000,0,0,0},
+        {600.1f,1000,0,0,0},{626,890,0,0,0},{744,1133,0,0,0},
+        {620,1000,10,10,0},{620,1000,10,11,1},{600,599,20,20,0},{590,590,0,0,0}};
+    for (unsigned i=0;i<sizeof modes/sizeof *modes;i++)
+        assert(dm_botw_compact_mode(modes[i][0],modes[i][1],modes[i][2],modes[i][3])==(int)modes[i][4]);
+    setenv("DM_BOTW_PORTRAIT_PAD_FACE_X","0.15",1);
+    assert(dm_botw_layout_read_for(&layout,1) && dm_botw_layout_read(&landscape));
+    nearf(layout.control[0].x,.15f,.0001f); nearf(landscape.control[0].x,-.006f,.0001f);
+    setenv("DM_BOTW_PORTRAIT_MOVE_DEADZONE","0.2",1);
+    dm_touchpad_stick_response a,b;
+    assert(!dm_botw_stick_settings_read_for(&a,1) && !dm_botw_stick_settings_read(&b));
+    nearf(a.deadzone,.2f,.0001f); nearf(b.deadzone,.07f,.0001f);
+    unsetenv("DM_BOTW_PORTRAIT_MOVE_DEADZONE"); unsetenv("DM_BOTW_PORTRAIT_PAD_FACE_X"); unsetenv("DM_BOTW_PORTRAIT");
+}
+
 int main(void) {
     test_configurable_stick();
     test_custom_layout();
+    test_portrait_layout();
     test_directional_ownership();
     test_stick_shaping();
     test_safe_insets_and_resize();

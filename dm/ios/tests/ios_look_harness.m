@@ -19,7 +19,7 @@ void dm_test_motion_publish(CMQuaternion q, CMAcceleration a, CMRotationRate r);
 void dm_gamepad_geometry_changed(UIInterfaceOrientation orientation);
 void front_look_mode_changed(void);
 int dm_botw_touch_hud_available(void);
-void dm_botw_touch_hud_publish(int active, float center_x, float center_y);
+void dm_botw_touch_hud_publish(int active, float center_x, float center_y, float dpad_scale);
 
 @interface DmGamepad : UIView
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event;
@@ -203,7 +203,8 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
         g_menu_pointer_events[g_menu_pointer_count++] = (menu_pointer_event){phase,x,y};
 }
 int dm_botw_rune_icon_snapshot(dm_botw_rune_icon_state *out) { if (!out) return 0; *out = g_botw_rune_icon_snapshot; return 1; }
-void dm_botw_touch_hud_publish(int active, float center_x, float center_y) { (void)active; (void)center_x; (void)center_y; }
+static float g_published_dpad_scale;
+void dm_botw_touch_hud_publish(int active, float center_x, float center_y, float dpad_scale) { (void)center_x; (void)center_y; if (active) g_published_dpad_scale=dpad_scale; }
 void dm_botw_touch_hud_map_tapped(void) {}
 int dm_botw_touch_actions_available(void) { return g_botw_touch_actions_available; }
 void dm_botw_touch_cancel_trigger(uint64_t bit) { g_botw_cancel_requested |= bit; }
@@ -251,6 +252,7 @@ void dm_touch_set(const dm_touch *touches, int count) {
 }
 void dm_aspect_touch_rect(float w, float h, float rect[4]) { rect[0] = rect[1] = 0; rect[2] = w; rect[3] = h; }
 void dm_aspect_hud_rect(float w, float h, float rect[4]) { dm_aspect_touch_rect(w,h,rect); }
+float dm_aspect_hud_y_scale(void) { return 1; }
 void dm_motion_set(int p, const float acc[3], const float rot[3]) { (void)p; (void)acc; (void)rot; }
 void dm_motion_clear(int p) { (void)p; }
 void dm_motion_set_switch(int p, const float acc[3], const float rot[3]) { (void)p; (void)acc; (void)rot; }
@@ -1624,6 +1626,20 @@ static void test_motion_orientation(void) {
     dm_test_motion_publish(right, accel, rate);
     CHECK(g_motion_samples[4].flags == DM_MOTION_RESET && g_motion_samples[5].flags == 0,
           "requested recenter remains one-shot and independent of orientation changes");
+    setenv("DM_BOTW_PORTRAIT","1",1);
+    dm_test_motion_reset(); g_motion_count=0;
+    dm_gamepad_geometry_changed(UIInterfaceOrientationLandscapeRight); dm_test_motion_publish(right,accel,rate);
+    dm_gamepad_geometry_changed(UIInterfaceOrientationPortrait); dm_test_motion_publish(quarter_turn,accel,rate);
+    mapped_pose=(CMQuaternion){.w=g_motion_samples[1].quat[0],.x=g_motion_samples[1].quat[1],.y=g_motion_samples[1].quat[2],.z=g_motion_samples[1].quat[3]};
+    CHECK(g_motion_count==2 && !g_motion_samples[1].flags && motion_quaternion_matches(mapped_pose,right),
+          "opt-in portrait compensates a physical quarter-turn without changing the neutral pose");
+    CHECK(fabsf(g_motion_samples[1].acc[0]-.5f)<1e-6f && fabsf(g_motion_samples[1].acc[1]-.25f)<1e-6f &&
+          fabsf(g_motion_samples[1].gyro[0]+(float)(.2/(2*M_PI)))<1e-6f,
+          "portrait motion rotates acceleration and angular rate together");
+    dm_gamepad_geometry_changed(UIInterfaceOrientationLandscapeRight); dm_test_motion_publish(right,accel,rate);
+    CHECK(!g_motion_samples[2].flags && fabsf(g_motion_samples[2].acc[0]-.25f)<1e-6f,
+          "returning from portrait restores the original landscape motion frame");
+    unsetenv("DM_BOTW_PORTRAIT");
 }
 
 static void test_botw_manual_menu_pad(DmGamepad *view) {
@@ -1774,6 +1790,66 @@ static void test_botw_custom_layout(DmGamepad *original) {
     for(unsigned i=0;i<sizeof keys/sizeof *keys;i++) unsetenv(keys[i]);
 }
 
+@interface PortraitInsetGamepad : DmGamepad
+@property(nonatomic) UIEdgeInsets testInsets;
+@end
+@implementation PortraitInsetGamepad
+- (UIEdgeInsets)safeAreaInsets { return self.testInsets; }
+@end
+
+static void test_botw_portrait(DmGamepad *original) {
+    g_botw_touchhud_available=g_botw_gameplay_ready=YES;
+    g_botw_touch_menu_active=g_botw_touch_menu_presented=NO;
+    g_look_enabled=YES; setenv("DM_BOTW_PORTRAIT","0",1);
+    setenv("DM_BOTW_PAD_DPAD_SCALE","0.9",1); setenv("DM_BOTW_PORTRAIT_PAD_DPAD_SCALE","1.2",1);
+    PortraitInsetGamepad *view=[[PortraitInsetGamepad alloc] initWithFrame:CGRectMake(0,0,390,844)];
+    [original.superview addSubview:view];
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view setNeedsLayout]; [view layoutIfNeeded];
+    CHECK(fabs([view facePos:3].y-[view facePos:0].y)<.01,"portrait layout remains off by default on an upright view");
+    setenv("DM_BOTW_PORTRAIT","1",1); [view setNeedsLayout]; [view layoutIfNeeded];
+    CGPoint a=[view facePos:0], b=[view facePos:1], x=[view facePos:2], y=[view facePos:3];
+    CGPoint r=[view dm_testDropCenter:7], zr=[view dm_testDropCenter:9];
+    CHECK(b.x<a.x && b.y>a.y && y.x<x.x && y.y>x.y && zr.x<r.x && zr.y>r.y && y.y<b.y && zr.y<y.y,
+          "portrait right controls form three upward-right B/A, Y/X and ZR/R pairs");
+    CGPoint cross=view.dpadCenter, rune=[view dm_testRuneButtonCenter], shield=[view dm_testShieldHome];
+    CHECK(fabs(cross.x-rune.x)<.01 && fabs(rune.x-shield.x)<.01 && cross.y<rune.y && rune.y<shield.y,
+          "portrait D-pad, L and floating ZL homes align vertically");
+    save_pad_preview(view,@"botw-portrait.png");
+    for (int button=0;button<4;button++) {
+        CGPoint p=[view facePos:button]; FakeTouch *t=touch(p.x,p.y); began(view,t);
+        CHECK(g_buttons==(1ull<<button),"portrait face hit testing follows each drawn button"); ended(view,t,p.x,p.y);
+    }
+    reset_look(); FakeTouch *look=touch(210,190); began(view,look);
+    FakeTouch *held=touch(b.x,b.y); began(view,held);
+    CHECK(g_look_held && (g_buttons&DM_BTN_B),"portrait supports camera dragging alongside a held face button");
+    view.frame=CGRectMake(0,0,844,390); [view setNeedsLayout]; [view layoutIfNeeded];
+    CHECK(!g_look_held && !g_buttons && !g_lx && !g_ly && !g_rx && !g_ry,
+          "rotation releases held controls and camera input before switching profiles");
+    CHECK(fabs([view facePos:3].y-[view facePos:0].y)<.01,"enabling portrait mode leaves landscape's diamond unchanged");
+    const CGFloat widths[]={599,600,626,744,599};
+    for (unsigned i=0;i<sizeof widths/sizeof *widths;i++) {
+        view.frame=CGRectMake(0,0,widths[i],1133); [view setNeedsLayout]; [view layoutIfNeeded];
+        BOOL compact=fabs([view facePos:3].y-[view facePos:0].y)>.01;
+        CHECK(compact==(widths[i]<600),"upright controls use the normal profile at 600pt and above");
+        CHECK(fabs(g_published_dpad_scale-(compact?1.2:.9))<.001,"native D-pad publication follows the selected layout profile");
+        CGPoint p=[view facePos:0]; FakeTouch *t=touch(p.x,p.y); began(view,t);
+        CHECK(g_buttons==DM_BTN_A,"wide and compact portrait face positions retain matching touch targets"); ended(view,t,p.x,p.y);
+    }
+    view.frame=CGRectMake(0,0,640,1000); view.testInsets=UIEdgeInsetsMake(0,20,0,20);
+    [view setNeedsLayout]; [view layoutIfNeeded];
+    CHECK(fabs([view facePos:3].y-[view facePos:0].y)<.01,"600pt after horizontal safe insets uses the normal layout");
+    view.testInsets=UIEdgeInsetsMake(0,20,0,21); [view setNeedsLayout]; [view layoutIfNeeded];
+    CHECK(fabs([view facePos:3].y-[view facePos:0].y)>.01,"horizontal safe insets below 600pt select compact controls");
+    view.testInsets=UIEdgeInsetsZero;
+    view.frame=CGRectMake(0,0,390,844); [view setNeedsLayout]; [view layoutIfNeeded];
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES]; [view layoutIfNeeded];
+    CHECK([view dm_testControlsHidden] && fabs([view facePos:3].y-[view facePos:0].y)<.01,
+          "a connected controller suppresses portrait touch controls and their custom geometry");
+    [view reset]; [view removeFromSuperview]; unsetenv("DM_BOTW_PORTRAIT");
+    unsetenv("DM_BOTW_PAD_DPAD_SCALE"); unsetenv("DM_BOTW_PORTRAIT_PAD_DPAD_SCALE");
+    g_botw_touchhud_available=NO; [original dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+}
+
 static void run_tests(DmGamepad *view) {
     test_dpad_art_visibility(view);
     test_botw_button_artwork(view);
@@ -1811,6 +1887,7 @@ static void run_tests(DmGamepad *view) {
         test_botw_manual_menu_pad(view);
         test_botw_tunable_stick(view);
         test_botw_custom_layout(view);
+        test_botw_portrait(view);
         NSString *report = [NSString stringWithFormat:@"UIKit handler regression: %d failures; %d look BEGIN sessions\n", g_failures, g_begin_count];
         printf("%s", report.UTF8String);
         fflush(stdout); fflush(stderr);

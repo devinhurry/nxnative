@@ -3778,7 +3778,7 @@ static void shmap_load(void) {
     int gs_loc, lay_loc; char gs_comp, lay_comp;   // a slice-writing geometry shader (no function: the layer comes from input gs_loc.gs_comp) / a vertex shader with layer entry points writing output lay_loc.lay_comp (dmsh_build.py gs_slice, vs_layer_entry); -1 = none
     // The argument buffer encoded last time
     id<MTLBuffer> ab_buf; uint64_t ab_gpu; size_t ab_off; uint64_t ab_pass; uint32_t ab_binst; uint64_t ab_pgen;   // ab_pass: serial of the render pass that encoded this argument block - reused only within the same pass (the arena holding a block from another pass / another submission may already have been reclaimed and rewritten); ab_pgen: g_psnap_gen when it was encoded (pools, pool_gpu)
-    double ab_ui_clip_x, ab_ui_clip_bias; // projection correction belongs to the cached vertex argument block
+    double ab_ui_clip_x, ab_ui_clip_bias, ab_ui_clip_y, ab_ui_clip_bias_y; // projection correction belongs to the cached vertex argument block
     id<MTLLibrary> bflib; int bflib_tried; NSMutableDictionary<NSString *, id<MTLFunction>> *bffn;   // bflib: readable-tile version <key>_bf (merge B step 2)
     uint64_t mis[4];   // mis: texture slots 0-255 already reported for a type mismatch (tex_mis_note)
     NSString *ventry; id<MTLFunction> vfn; int vfn_state;
@@ -7052,9 +7052,11 @@ static void ubo_read(int stage, int reg, int off, size_t n, void *out) {
 }
 static uint32_t ubo_handle(int stage, int reg, int off) { uint32_t h; ubo_read(stage, reg, off, 4, &h); return h; }
 // BOTW's registered ui2d shaders use c3[0..3] for the clip matrix and c13.x
-// for the clip-x offset (NVN UBO slots 0 and 10). Correct clip x before clipping, keeping a full-sized
-// viewport: a narrowed viewport also clips native full-bleed backgrounds.
+// for the clip-x offset (NVN UBO slots 0 and 10). Correct clip coordinates before
+// clipping, keeping a full-sized viewport: a narrowed viewport also clips native
+// full-bleed backgrounds and the relocated weather component on narrow screens.
 static double g_ui_clip_x = 1, g_ui_clip_bias;
+static double g_ui_clip_y = 1, g_ui_clip_bias_y;
 static double g_ui_copy_x = 1, g_ui_copy_bias;
 static int g_ui_layout_draw;
 static struct {
@@ -7084,9 +7086,14 @@ static void ui_projection_copy(int reg, const float *source, float *out, size_t 
     if (out != source) memcpy(out, source, size);
     if (reg == 0 && size >= 112 && g_ui_copy_x != 1)
         ui_capture_projection(out, g_ui_map_capture.rect, g_ui_copy_x, g_ui_copy_bias);
-    else if (reg == 0 && size >= 64)
-        for (int i = 0; i < 4; i++) out[i] = source[i] * g_ui_clip_x + source[12 + i] * g_ui_clip_bias;
-    else if (reg == 10 && size >= 4) out[0] = source[0] * g_ui_clip_x;
+    else if (reg == 0 && size >= 64) {
+        if (g_ui_clip_x != 1 || g_ui_clip_bias != 0)
+            for (int i = 0; i < 4; i++) out[i] = source[i] * g_ui_clip_x + source[12 + i] * g_ui_clip_bias;
+        if (g_ui_clip_y != 1 || g_ui_clip_bias_y != 0)
+            for (int i = 0; i < 4; i++) out[4+i] = source[4+i] * g_ui_clip_y + source[12+i] * g_ui_clip_bias_y;
+    } else if (reg == 10 && size >= 4) {
+        out[0] = source[0] * g_ui_clip_x;
+    }
 }
 static void ui_scissor_x(long *x0, long *x1, long width, double squeeze, int projection, int scope) {
     // Native ui2d clamps scissor edges to its 16:9 target before calling NVN.
@@ -7118,7 +7125,8 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
     args_sync_dirty();
     if (!passdump() && !g_args_dirty[nvn_stage] && sh->ab_buf && sh->ab_pass == g_pass.serial && nvn_stage != 5 &&
         !(sh->rf.drv_read[0] && sh->ab_binst != g_draw_binst) && !(sh->rf.pool && sh->ab_pgen != g_psnap_gen) &&
-        (nvn_stage != 0 || (sh->ab_ui_clip_x == ui_key_x && sh->ab_ui_clip_bias == ui_key_bias))) {
+        (nvn_stage != 0 || (sh->ab_ui_clip_x == ui_key_x && sh->ab_ui_clip_bias == ui_key_bias &&
+         sh->ab_ui_clip_y == g_ui_clip_y && sh->ab_ui_clip_bias_y == g_ui_clip_bias_y))) {
         bind_args(en, nvn_stage, metal_vertex, sh->ab_buf, sh->ab_gpu, sh->ab_off, sh->rf.abi);
         g_stat_args_reuse++;
         return 1;
@@ -7157,7 +7165,8 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
                     FILE *f = fopen(p, "wb"); if (f) { fwrite((const void *)u->addr, 1, u->size, f); fclose(f); } else RED_ONCE(41, "CBDUMP cannot write %s", p);
                 }
             }
-            if (nvn_stage == 0 && (g_ui_clip_x != 1 || g_ui_clip_bias != 0 || g_ui_copy_x != 1) && (reg == 0 || reg == 10)) {
+            if (nvn_stage == 0 && (g_ui_clip_x != 1 || g_ui_clip_bias != 0 || g_ui_clip_y != 1 ||
+                g_ui_clip_bias_y != 0 || g_ui_copy_x != 1) && (reg == 0 || reg == 10)) {
                 // Read the replay-time uniform snapshot, including queued inline
                 // updates. Keep the guest buffer and the shader libraries intact.
                 id<MTLBuffer> corrected; size_t off = arena_alloc((size_t)ul, &corrected);
@@ -7385,6 +7394,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
     bind_args(en, nvn_stage, metal_vertex, ab, g_cur_arena->gpu + off, off, sh->rf.abi);
     sh->ab_buf = ab; sh->ab_gpu = g_cur_arena->gpu + off; sh->ab_off = off; sh->ab_pass = g_pass.serial; sh->ab_binst = g_draw_binst; sh->ab_pgen = g_psnap_gen; g_args_dirty[nvn_stage] = 0;
     sh->ab_ui_clip_x = ui_key_x; sh->ab_ui_clip_bias = ui_key_bias;
+    sh->ab_ui_clip_y = g_ui_clip_y; sh->ab_ui_clip_bias_y = g_ui_clip_bias_y;
     g_stat_args_enc++;
     return 1;
 }
@@ -9490,6 +9500,16 @@ static int ui_squeeze_scale(NvProg *pr, double *ux, double *uy, int scope) {
     int layout = strstr(DM_GAME_ASPECT_UI, key) != NULL;
     if (!layout) return 0;
     g_ui_layout_draw = !strcmp(DM_GAME_ID, "01007EF00011E000");
+    if (g_ui_layout_draw && scope == NVN_UI_WEATHER) {
+        double gain=dm_aspect_hud_gain();
+        *ux=1/gain; *uy=1/(dm_aspect_hud_y_scale()*gain);
+        return 1;
+    }
+    // Narrow-display HUD containers apply their native vertical scale before
+    // Calculate, keeping geometry, scissors and capture coordinates together.
+    // Rune capture overrides the ancestor HUD tag, but shares its transform.
+    if (g_ui_layout_draw && dm_aspect_ratio() < 16.0f/9.0f &&
+        (scope == NVN_UI_HUD || scope == NVN_UI_MAP || scope == NVN_UI_RUNE)) return 0;
     // A projected fullscreen fill must retain its native clip/texture matrices
     // together. The final canvas stretch extends both, without exposing the
     // animated texture's far edge on ultrawide displays.
@@ -9710,7 +9730,7 @@ static void draw_(const p_draw *dw, const p_draw_idx *di);
 static void draw(const p_draw *dw, const p_draw_idx *di) { cp_stamp start = cp_begin(); draw_(dw, di); cp_end(5, start); }
 static void draw_(const p_draw *dw, const p_draw_idx *di) {
     if (g_scene_up.output) { g_scene_up.source = g_scene_up.output = nil; g_args_dirty[1] = 1; }
-    g_ui_clip_x = 1; g_ui_clip_bias = 0;
+    g_ui_clip_x = g_ui_clip_y = 1; g_ui_clip_bias = g_ui_clip_bias_y = 0;
     g_ui_copy_x = 1; g_ui_copy_bias = 0;
     g_draw_binst = (uint32_t)(dw ? dw->base_instance : di ? di->base_instance : 0);   // c0 + 0x644 of the stages that read the driver segment (encode_args)
     if (passdump()) { NvProg *p = g_geo_program ? g_geo_program : S.prog ? prog_get(S.prog) : nil;
@@ -9865,8 +9885,10 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
       if (!(g_ed.ok & ED_SREF) || g_ed.sref != sr) { enc_r_stencil_ref(en, sr, sr); g_ed.sref = sr; g_ed.ok |= ED_SREF; } }
     // Viewport / scissor (clamped within the target size)
     NSUInteger tw = g_pass.tw, th = g_pass.th;
-    int ui_projection = g_ui_layout_draw && sq && sux > 1;
+    int ui_projection = g_ui_layout_draw && sq && (sux > 1 || ui_scope == NVN_UI_WEATHER);
+    int ui_projection_y = g_ui_layout_draw && sq && ui_scope == NVN_UI_WEATHER;
     g_ui_clip_x = ui_projection ? 1 / sux : 1; g_ui_clip_bias = 0;
+    g_ui_clip_y = ui_projection_y ? 1 / suy : 1; g_ui_clip_bias_y = 0;
     if (ui_projection && ui_scope == NVN_UI_MAP && R.has_sc &&
         R.sc.w > 0 && R.sc.h > 0 && (R.sc.w < tw || R.sc.h < th)) {
         g_ui_map_capture.frame = atomic_load(&g_cur_frame);
@@ -9880,18 +9902,20 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
     }
     // A corrected bank is a value snapshot, whereas an ordinary argument block
     // points at the game's live uniforms. Refresh the snapshot for every draw.
-    if (ui_projection) g_args_dirty[0] = 1;
+    if (ui_projection || ui_projection_y) g_args_dirty[0] = 1;
     { MTLViewport v = S.has_vp ? (MTLViewport){S.vp[0][0], S.vp[0][1], S.vp[0][2], S.vp[0][3], S.dr[0], S.dr[1]} : (MTLViewport){0, 0, tw, th, 0, 1};
       if (ui_projection && v.width > 0) g_ui_clip_bias = (tw - 2 * v.originX - v.width) * (1 - g_ui_clip_x) / v.width;
       if (ui_projection && ui_scope == NVN_UI_MAP && v.width > 0)
           g_ui_clip_bias += dm_aspect_hud_offset(1) / (640.0 * sux) * tw / v.width;
-      if (sq) { if (!ui_projection) { v.originX = tw / 2.0 + (v.originX - tw / 2.0) / sux; v.width /= sux; } v.originY = th / 2.0 + (v.originY - th / 2.0) / suy; v.height /= suy; }
+      if (sq) { if (!ui_projection) { v.originX = tw / 2.0 + (v.originX - tw / 2.0) / sux; v.width /= sux; }
+          if (!ui_projection_y) { v.originY = th / 2.0 + (v.originY - th / 2.0) / suy; v.height /= suy; } }
       if (atomic_load_explicit(&g_origin_ll, memory_order_relaxed)) { v.originY += v.height; v.height = -v.height; }   // lower-left origin (see g_origin_ll)
       // Viewport swizzle: NEGATIVE_Y negates clip y, the same as the viewport flipped about its centre; facing is decided after it on the GPU as in Metal, so the winding stays.
       // Other swizzles (axis exchanges, negated x / z / w) are no viewport change and are drawn unswizzled
       { uint32_t sw; memcpy(&sw, S.vp_sw[0], 4);
         if (sw == 0x100) { v.originY += v.height; v.height = -v.height; }
         else if (sw) RED_ONCE(108, "viewport swizzle %d,%d,%d,%d not implemented (drawn unswizzled)", S.vp_sw[0][0], S.vp_sw[0][1] ^ 2, S.vp_sw[0][2] ^ 4, S.vp_sw[0][3] ^ 6); }
+      if (ui_projection_y && v.height != 0) g_ui_clip_bias_y = (2 * v.originY + v.height - th) * (1 - g_ui_clip_y) / v.height;
       if (!(g_ed.ok & ED_VP) || memcmp(&g_ed.vp, &v, sizeof v)) { enc_r_viewport(en, v); g_ed.vp = v; g_ed.ok |= ED_VP; } }
     MTLScissorRect sc = {0, 0, tw, th};
     if (R.has_sc && !S.rast_discard) {   // raster state cannot suppress vertex storage writes
@@ -9899,7 +9923,7 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
         if (x1 > (long)tw) x1 = tw; if (y1 > (long)th) y1 = th;
         if (sq) {
             ui_scissor_x(&x0, &x1, (long)tw, sux, ui_projection, ui_scope);
-            y0 = (long)floor(th / 2.0 + (y0 - th / 2.0) / suy); y1 = (long)ceil(th / 2.0 + (y1 - th / 2.0) / suy);
+            ui_scissor_x(&y0, &y1, (long)th, suy, ui_projection_y, NVN_UI_HUD);
             if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0; if (x1 > (long)tw) x1 = tw; if (y1 > (long)th) y1 = th;
         }
         if (x1 <= x0 || y1 <= y0) { PD("Z %llu draw skipped: empty scissor (%d,%d %dx%d, target %lux%lu)", g_stat_pass, R.sc.x, R.sc.y, R.sc.w, R.sc.h, (unsigned long)tw, (unsigned long)th); return; }

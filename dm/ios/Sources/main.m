@@ -192,6 +192,12 @@ int front_ios_boot_ok(void) { return g_boot_ok; }
 @interface App : UIResponder <UIApplicationDelegate>
 @end
 @implementation App
+- (UIInterfaceOrientationMask)application:(UIApplication *)application supportedInterfaceOrientationsForWindow:(UIWindow *)window {
+    (void)application; (void)window;
+    const char *enabled=getenv("DM_BOTW_PORTRAIT");
+    return !strcmp(DM_GAME_ID,"01007EF00011E000") && enabled && !strcmp(enabled,"1") ?
+        UIInterfaceOrientationMaskLandscape | UIInterfaceOrientationMaskPortrait : UIInterfaceOrientationMaskLandscape;
+}
 - (UISceneConfiguration *)application:(UIApplication *)a configurationForConnectingSceneSession:(UISceneSession *)s options:(UISceneConnectionOptions *)o {
     return [[UISceneConfiguration alloc] initWithName:@"Default" sessionRole:s.role];
 }

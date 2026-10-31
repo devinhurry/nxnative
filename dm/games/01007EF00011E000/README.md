@@ -690,6 +690,71 @@ Validation: aspect/background restoration and menu/HUD regressions pass; 173 NVN
 
 **Gameplay edge HUD and loading fills (2026-10-29, resolved on Mac).** The native heart container moves toward the left display edge, preserving the spacing of full and partial hearts. The collapsed minimap and its sensor, noise, temperature, time and weather panes move together toward the right edge. Touch mode retains its upper-right map layout; ordinary input retains the lower-right layout. Hearts retain native padding against the full display; the map cluster uses its authored right-corner padding independently of input mode. Touch map bounds and the adjacent plus/minus buttons use the same HUD rectangle. Expanding the Slate restores its native centered position; returning to 16:9 restores all original positions without accumulating offsets. The HUD draw scope fixes [target-clamped scissors](../../../docs/reference/rendering.md#edge-anchored-ui-keeps-open-scissor-edges) without opening menu clips.
 
+**Narrow displays and optional portrait controls (2026-10-31).** Below 16:9,
+hearts and the collapsed minimap/environment group use the top corners, in
+both touch and controller modes. Their readable size follows the display's
+shorter edge. Native pane transforms keep artwork, scissors, map capture and
+touch bounds together; opening the Slate restores the original menu geometry.
+The loading screen's cream and black fills extend vertically. Other menu
+foregrounds retain their centered 16:9 proportions. Returning to 16:9 or wider
+restores the existing HUD transforms.
+
+The current-rune Picture has a separate capture draw tag, which takes priority
+over its equipment group's HUD tag. On narrow displays it must share that
+group's native transform: applying the centered-menu viewport correction again
+flattened the rune and moved it away from the D-pad. The rune capture tag now
+uses the same narrow HUD viewport, while wider displays retain their correction.
+
+The weather component's animated current-weather pictures do not inherit model
+scale in the same way as its flat forecast icons and background. Applying the
+narrow HUD's nonuniform scale to `Pa_Weather_00` stretched the current rain into
+a tall streak; even a uniform parent scale left the animated icon too small.
+The component now retains its native model geometry. Its draw scope applies
+both display-axis corrections to a replay-time projection copy, after the
+animation, before clipping. Its relocation delta uses those same scales, keeping
+the weather aligned with the other environment gauges. Guest uniforms and shader
+libraries are unchanged; 16:9 and wider retain their existing behavior.
+Mac gameplay verifies the rain, sun and cloud pictures in portrait and 4:3;
+native aspect/HUD fixtures, 189 NVN recording checks, 192 graphics checks and
+188 iOS source checks pass. Evidence is in `portrait-live-20261031/` and
+`weather-*-20261031.log` in the game work folder. Physical iPhone acceptance
+remains pending; the full shader regression has the compiler-version limitation
+described below.
+
+The BOTW touch editor's **Enable portrait mode** switch (`DM_BOTW_PORTRAIT`,
+off by default) permits upright iOS gameplay. The compact touch profile is used
+only when the display is taller than it is wide and its width after left/right
+safe insets is below 600pt. At 600pt or wider, portrait uses the normal profile;
+landscape always retains the normal profile. The compact left column is
+D-pad, L, ZL, movement stick from top to bottom. The right pairs rise toward
+the right: B/A at the bottom, Y/X above, and ZR/R at the top. Normal and compact
+previews each edit, reset and export their own layout and movement response;
+compact keys retain the `DM_BOTW_PORTRAIT_PAD_` and `DM_BOTW_PORTRAIT_MOVE_`
+prefixes. The frontend publishes the selected profile's native D-pad size with
+its position, so the equipment artwork stays consistent in wide portrait too.
+Resizing releases held touch input before switching
+profiles. The launcher remains landscape, physical controllers retain their
+input behavior, and other games do not offer these settings or orientations.
+
+Validation: native geometry covers 320x568, 390x844, 430x932 and 768x1024;
+aspect tests cover readable 4:3/9:16 HUD geometry and restoration; the UIKit
+handler harness passes 39 look sessions, including portrait face hits,
+camera/button multitouch, rotation release, gyro basis and controller hiding.
+The 600pt update adds 599/600/626/744pt selection, horizontal safe-inset and
+native D-pad scale checks; these pass in the native and UIKit harnesses.
+Mac gameplay also verifies a 390pt compact portrait window widening to 626pt
+with normal controls, then shrinking back; the rune and D-pad remain aligned.
+Independent setting persistence/reset/export, the full host suite, 184 GPU
+present checks, 188 iOS source checks and an unsigned iOS smoke build pass.
+The BOTW-only shader regression stops at the local compiler check:
+Metal `32023.883` differs from the pinned `32023.921`. This is separate from
+the live Mac test, which reuses the prepared `715bb867230c` shader cache with
+the current host. Mac gameplay verifies the readable portrait/4:3 top HUD,
+minimap tap, native Back, loading fill and a portrait/landscape/portrait
+round trip. The test runs from a copy of the user's save. Evidence is in `portrait-*-20261031/` and
+`portrait-live-20261031/` in the game work folder. Physical iPhone rotation
+and safe-area acceptance remain pending.
+
 **Resolved: minimap disappeared in very wide windows (2026-10-29).**
 The D-pad center is published relative to the centered 16:9 UI canvas. At 32:9,
 its valid position beside that canvas has a negative normalized x. Rejecting

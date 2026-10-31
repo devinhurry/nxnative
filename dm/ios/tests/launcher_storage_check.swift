@@ -53,6 +53,26 @@ import Foundation
         expect(reopened.values["DM_BOTW_PAD_FACE_X"] == "-0.006" && reopened.values["DM_BOTW_PAD_FACE_GAP"] == "1.060" && reopened.values["DM_BOTW_PAD_R_Y"] == "0.100", "per-control restore resets XYAB spacing and position without changing R")
         reopened.reset(keys: reopened.touchSettingsKeys)
         expect(reopened.values["DM_BOTW_PAD_R_Y"] == "-0.097" && reopened.values["DM_FPS_TARGET"] == "30", "restore all touch defaults leaves frame rate alone")
+        let portraitSuite = suite + ".portrait"
+        let portraitDefaults = UserDefaults(suiteName: portraitSuite)!
+        defer { portraitDefaults.removePersistentDomain(forName: portraitSuite) }
+        let portraitModel = LauncherModel(file.settings, defaults: portraitDefaults)
+        expect(portraitModel.values["DM_BOTW_PORTRAIT"] == "0", "portrait mode starts disabled")
+        portraitModel.values["DM_BOTW_PORTRAIT"] = "1"
+        portraitModel.values["DM_BOTW_PAD_FACE_X"] = "0.123"
+        portraitModel.values["DM_BOTW_PORTRAIT_PAD_FACE_X"] = "-0.200"
+        portraitModel.values["DM_BOTW_PORTRAIT_MOVE_CURVE"] = "0.750"
+        portraitModel.apply()
+        let portraitRestored = LauncherModel(file.settings, defaults: portraitDefaults)
+        expect(portraitRestored.values["DM_BOTW_PAD_FACE_X"] == "0.123" && portraitRestored.values["DM_BOTW_PORTRAIT_PAD_FACE_X"] == "-0.200" &&
+               portraitRestored.touchStickResponse(portrait: true)?.curve == 0.75 && portraitRestored.touchStickResponse?.curve == 0.3,
+               "portrait and landscape positions and movement responses persist independently")
+        let portraitExport = portraitRestored.touchSettingsExport(portrait: true)
+        expect(portraitExport.contains("DM_BOTW_PORTRAIT_PAD_FACE_X=-0.200") && !portraitExport.contains("DM_BOTW_PAD_FACE_X="),
+               "portrait parameter export contains only the portrait profile")
+        portraitRestored.reset(keys: portraitRestored.touchSettingsKeys(portrait: true))
+        expect(portraitRestored.values["DM_BOTW_PORTRAIT_PAD_FACE_X"] == "0.000" && portraitRestored.values["DM_BOTW_PAD_FACE_X"] == "0.123" && portraitRestored.values["DM_BOTW_PORTRAIT"] == "1",
+               "restoring portrait defaults preserves landscape settings and the portrait toggle")
         d.set("nan", forKey: "launcher.DM_BOTW_MOVE_CURVE"); d.set("2.00", forKey: "launcher.DM_BOTW_MOVE_SIZE")
         expect(LauncherModel(file.settings, defaults: d).touchStickResponse!.curve == 0.3 && LauncherModel(file.settings, defaults: d).touchStickResponse!.size == 0.8, "invalid saved tuning values load defaults")
         setenv("DM_ENV_FILE_KEYS", "DM_BOTW_MOVE_DEADZONE", 1); setenv("DM_BOTW_MOVE_DEADZONE", "0.12", 1)

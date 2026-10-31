@@ -218,6 +218,22 @@ int main(void) { @autoreleasepool {
     dm_aspect_set_display(4.f / 3);
     EXPECT("4:3 layout corrected vertically", 1, ui_squeeze_scale(layout, &ux, &uy, 0));
     EXPECT("4:3 UI x unchanged", 1000, lround(ux * 1000)); EXPECT("4:3 UI y scale", 1333, lround(uy * 1000));
+    if (!strcmp(DM_GAME_ID,"01007EF00011E000")) {
+        const float narrow[]={4.f/3,9.f/16};
+        for (unsigned i=0;i<sizeof narrow/sizeof *narrow;i++) {
+            dm_aspect_set_display(narrow[i]);
+            EXPECT("narrow menu content retains native centered proportions",1,ui_squeeze_scale(layout,&ux,&uy,0));
+            EXPECT("native-scaled narrow heart/environment HUD is not scaled twice",0,ui_squeeze_scale(layout,&ux,&uy,NVN_UI_HUD));
+            EXPECT("native-scaled narrow map retains its capture and clip coordinates",0,ui_squeeze_scale(layout,&ux,&uy,NVN_UI_MAP));
+            // Rune capture takes precedence over its ancestor's HUD tag while
+            // recording. It must still share the equipment group's viewport.
+            EXPECT("native-scaled narrow rune keeps the equipment viewport",0,ui_squeeze_scale(layout,&ux,&uy,NVN_UI_RUNE));
+            EXPECT("narrow rune keeps both viewport axes unchanged",1,ux==1 && uy==1);
+            EXPECT("weather keeps native model geometry and corrects its projection",1,ui_squeeze_scale(layout,&ux,&uy,NVN_UI_WEATHER));
+            EXPECT("weather projection compensates both display axes",1,fabs(ux*dm_aspect_hud_gain()-1)<.0001 && fabs(uy*narrow[i]/(16.f/9)*dm_aspect_hud_gain()-1)<.0001);
+            EXPECT("narrow loading fills extend over the full canvas",0,ui_squeeze_scale(layout,&ux,&uy,NVN_UI_STRETCH));
+        }
+    }
     dm_aspect_set_display(20.f / 9);
     R.rt.color[0] = &tex;
     EXPECT("offscreen capture remains unscaled (no double transform)", 0, ui_squeeze_scale(layout, &ux, &uy, 0));
@@ -225,6 +241,7 @@ int main(void) { @autoreleasepool {
     EXPECT("3D composite remains unscaled", 0, ui_squeeze_scale(layout, &ux, &uy, 0));
     memcpy(layout->sh[0]->key, DM_GAME_ASPECT_UI, 16); layout->sh[0]->key[16] = 0;
     dm_aspect_set_display(21.f / 10);
+    EXPECT("wide rune retains the existing layout correction",1,ui_squeeze_scale(layout,&ux,&uy,NVN_UI_RUNE));
     const char *split_fill_vs[] = {"78a4ace2913b091d_b", "a983fef957911db8_b"};
     for (int i = 0; i < 2; i++) {
         strcpy(layout->sh[0]->key, split_fill_vs[i]);
@@ -273,6 +290,14 @@ int main(void) { @autoreleasepool {
     float projection[32], corrected[32], original[32];
     for (int i = 0; i < 32; i++) projection[i] = i + 0.25f;
     memcpy(original, projection, sizeof original);
+    g_ui_clip_x=1; g_ui_clip_bias=0; g_ui_clip_y=.3; g_ui_clip_bias_y=.125;
+    ui_projection_copy(0,projection,corrected,sizeof corrected);
+    EXPECT("weather projection changes only the vertical clip row",1,!memcmp(original,corrected,16) && !memcmp(original+8,corrected+8,sizeof original-32));
+    EXPECT("weather y projection preserves its clip center",1,fabs(corrected[5]-(original[5]*.3+original[13]*.125))<.000001);
+    EXPECT("weather projection leaves source uniforms untouched",1,!memcmp(original,projection,sizeof original));
+    ui_projection_copy(10,projection,corrected,sizeof corrected);
+    EXPECT("vertical correction leaves the clip-x driver bank unchanged",1,!memcmp(original,corrected,sizeof original));
+    g_ui_clip_y=1; g_ui_clip_bias_y=0;
     g_ui_clip_x = (16.0 / 9) / (21.0 / 10); g_ui_clip_bias = 0;
     ui_projection_copy(0, projection, corrected, sizeof corrected);
     EXPECT("UI source uniforms remain unchanged", 1, !memcmp(original, projection, sizeof original));
@@ -303,13 +328,13 @@ int main(void) { @autoreleasepool {
     EXPECT("full backgrounds retain both open edges",1,left==0 && right==1280);
     left=40;right=1200;ui_scissor_x(&left,&right,1280,1,1,NVN_UI_HUD);
     EXPECT("16:9 HUD scissor stays unchanged",1,left==40 && right==1200);
-    g_on=1; g_custom=0; dm_aspect_set_display(32.f/9); dm_aspect_set_safe_area(2560,720,0,0);
+    g_on=1; g_custom=0; dm_aspect_set_display(32.f/9); dm_aspect_set_safe_area(2560, 720, 0, 0, 0);
     left=1042;right=1208;ui_scissor_x(&left,&right,1280,2,1,NVN_UI_MAP);
     EXPECT("32:9 map clip moves to the right edge without leaving native clip space",1,left==1161 && right==1244);
-    dm_aspect_set_safe_area(2560,720,0,40);
+    dm_aspect_set_safe_area(2560, 720, 0, 0, 40);
     left=1042;right=1208;ui_scissor_x(&left,&right,1280,2,1,NVN_UI_MAP);
     EXPECT("32:9 map clip uses authored right padding without an extra landscape inset",1,left==1161 && right==1244);
-    dm_aspect_set_display(16.f/9); dm_aspect_set_safe_area(1280,720,0,0);
+    dm_aspect_set_display(16.f/9); dm_aspect_set_safe_area(1280, 720, 0, 0, 0);
     left=1042;right=1208;ui_scissor_x(&left,&right,1280,1,0,NVN_UI_MAP);
     EXPECT("map clip restores its native position at 16:9",1,left==1042 && right==1208);
     // Captured return-animation data: a 192x192 read of the map at (485,257).

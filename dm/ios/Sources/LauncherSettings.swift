@@ -52,6 +52,10 @@ struct TouchStickResponse {
     }
 }
 
+func botwTouchKey(_ key: String, portrait: Bool) -> String {
+    portrait ? "DM_BOTW_PORTRAIT_" + String(key.dropFirst("DM_BOTW_".count)) : key
+}
+
 struct BotwTouchControl: Identifiable, Hashable {
     let id: Int
     let key, label: String
@@ -61,10 +65,11 @@ struct BotwTouchControl: Identifiable, Hashable {
         .init(id: 7, key: "R", label: "R"), .init(id: 9, key: "ZR", label: "ZR"),
         .init(id: 12, key: "DPAD", label: "D-pad")
     ]
-    func env(_ field: String) -> String {
-        id == 4 && field == "SCALE" ? "DM_BOTW_MOVE_SIZE" : "DM_BOTW_PAD_\(key)_\(field)"
+    func env(_ field: String, portrait: Bool = false) -> String {
+        botwTouchKey(id == 4 && field == "SCALE" ? "DM_BOTW_MOVE_SIZE" : "DM_BOTW_PAD_\(key)_\(field)", portrait: portrait)
     }
     var keys: Set<String> { Set([env("X"), env("Y"), env("SCALE")]) }
+    func keys(portrait: Bool) -> Set<String> { Set([env("X", portrait: portrait), env("Y", portrait: portrait), env("SCALE", portrait: portrait)]) }
 }
 
 final class LauncherModel: ObservableObject {
@@ -161,8 +166,12 @@ final class LauncherModel: ObservableObject {
         settings.contains { TouchStickResponse.keys.contains($0.env) && !fixed.contains($0.env) && !$0.isDefault(values[$0.env] ?? $0.def) }
     }
     var touchStickResponse: TouchStickResponse? {
-        guard TouchStickResponse.keys.isSubset(of: Set(settings.map(\.env))) else { return nil }
+        touchStickResponse(portrait: false)
+    }
+    func touchStickResponse(portrait: Bool) -> TouchStickResponse? {
+        guard Set(TouchStickResponse.keys.map { botwTouchKey($0, portrait: portrait) }).isSubset(of: Set(settings.map(\.env))) else { return nil }
         func number(_ key: String) -> Double? {
+            let key = botwTouchKey(key, portrait: portrait)
             guard let s = settings.first(where: { $0.env == key }) else { return nil }
             let v = values[key] ?? s.def
             return Double(s.accepts(v) ? v : s.def)
@@ -177,10 +186,19 @@ final class LauncherModel: ObservableObject {
     var touchSettingsKeys: Set<String> {
         Set(settings.filter { Self.isTouchSection($0.sectionTitle) }.map(\.env))
     }
+    func touchSettingsKeys(portrait: Bool) -> Set<String> {
+        Set(touchSettingsKeys.filter { $0 != "DM_BOTW_PORTRAIT" && $0.hasPrefix("DM_BOTW_PORTRAIT_") == portrait })
+    }
     // Export the same normalized values consumed by both gamepads, including
     // defaults and locked values. No device-specific preview pixels are saved.
     var touchSettingsExport: String {
-        settings.filter { Self.isTouchSection($0.sectionTitle) }.map { row in
+        touchSettingsExport(keys: touchSettingsKeys)
+    }
+    func touchSettingsExport(portrait: Bool) -> String {
+        touchSettingsExport(keys: touchSettingsKeys(portrait: portrait))
+    }
+    private func touchSettingsExport(keys: Set<String>) -> String {
+        settings.filter { keys.contains($0.env) }.map { row in
             let current = values[row.env] ?? row.def
             let value = row.accepts(current) ? current : row.def
             let text = row.kind == "range" ? String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), Double(value) ?? 0) : value

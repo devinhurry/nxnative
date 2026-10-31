@@ -53,7 +53,10 @@ int dm_opmode(void);
 int dm_aspect_native(void);
 float dm_aspect_ratio(void);
 void dm_aspect_set_display(float ratio);
-void dm_aspect_set_safe_area(float w, float h, float left, float right);
+void dm_aspect_set_safe_area(float w, float h, float left, float top, float right);
+float dm_aspect_hud_y_scale(void);
+float dm_aspect_hud_gain(void);
+float dm_aspect_hud_top(void);
 float dm_aspect_hud_offset(int right);
 float dm_aspect_ui_point_scale(void); // Native 720-unit layout units per frontend point.
 void dm_aspect_ui_pane(uint8_t *pane); // BOTW fullscreen backgrounds and edge HUD, independent of input mode

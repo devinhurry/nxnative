@@ -10,6 +10,7 @@
 #include "dm.h"
 #include "haptics_apple.h"
 #include "save_sync.h"
+#include "botw_touch_layout.h"
 #include "build_info_apple.h"
 #import "CloudSaves.h"
 
@@ -45,8 +46,9 @@ static UILabel *front_ios_fps_label(void);
     [super layoutSubviews];
     CAMetalLayer *l = (CAMetalLayer *)self.layer;
     l.drawableSize = CGSizeMake(self.bounds.size.width * l.contentsScale, self.bounds.size.height * l.contentsScale);
-    if (l.drawableSize.width > 0 && l.drawableSize.height > 0) dm_aspect_set_display((float)(l.drawableSize.width / l.drawableSize.height));
-    dm_aspect_set_safe_area(self.bounds.size.width, self.bounds.size.height, self.safeAreaInsets.left, self.safeAreaInsets.right);
+    CGSize display=self.superview ? self.superview.bounds.size : self.bounds.size;
+    if (display.width > 0 && display.height > 0) dm_aspect_set_display((float)(display.width/display.height));
+    dm_aspect_set_safe_area(self.bounds.size.width, self.bounds.size.height, self.safeAreaInsets.left, self.safeAreaInsets.top, self.safeAreaInsets.right);
 }
 @end
 
@@ -75,6 +77,7 @@ static void import_done(void) { if (front_ios_prepare_game()) [g_root showLaunch
     dm_cloud_saves_env();   // DM_SAVE_SYNC from the launcher's Cloud saves pick, before the game's first save mount reads it (CloudSaves.m, save_sync.h)
     front_hud_env();   // before the game view makes its device (an env file's DM_METAL_HUD sets it in main.m already)
     self.game = [[DmGameView alloc] initWithFrame:self.view.bounds];
+    [self setNeedsUpdateOfSupportedInterfaceOrientations];
     [self.view addSubview:self.game];
     g_layer = (CAMetalLayer *)self.game.layer;
     if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) { g_layer.developerHUDProperties = @{@"mode": @"default"}; LOG("front end: Metal performance HUD on (DM_METAL_HUD)"); }   // Apple's HUD over the game: frame rate, frame and GPU time, memory
@@ -143,7 +146,10 @@ static void import_done(void) { if (front_ios_prepare_game()) [g_root showLaunch
 - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
 - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }   // Edge gestures need two swipes, to avoid accidental exits
 - (BOOL)prefersStatusBarHidden { return YES; }
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskLandscape; }
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return self.game && !strcmp(DM_GAME_ID,"01007EF00011E000") && dm_botw_portrait_enabled() ?
+        UIInterfaceOrientationMaskLandscape | UIInterfaceOrientationMaskPortrait : UIInterfaceOrientationMaskLandscape;
+}
 @end
 UIViewController *front_ios_root(void) { return [DmRootVC new]; }
 

@@ -28,6 +28,10 @@ int dm_aspect_native(void) { return aspect_native; }
 static float hud_offset[2];
 float dm_aspect_hud_offset(int right) { return hud_offset[!!right]; }
 float dm_aspect_ui_point_scale(void) { return 1; }
+static float hud_y_scale=1, hud_gain=1;
+float dm_aspect_hud_y_scale(void) { return hud_y_scale; }
+float dm_aspect_hud_gain(void) { return hud_gain; }
+float dm_aspect_hud_top(void) { return 360-(360-DM_TP_BOTW_MAP_TOP)*hud_y_scale*hud_gain; }
 void dm_aspect_ui_pane(uint8_t *pane) { if (pane) aspect_pane_calls++; }
 void front_botw_rune_icon_changed(void) {}
 void dm_botw_touch_actions_reset(void) { actions_reset_count++; }
@@ -79,7 +83,7 @@ int main(void) {
     pane_name(root, "RootPane"); pane_name(all, "N_All_00"); pane_name(target, "N_MainAll_00");
     set_pane_parent(all, root); set_pane_parent(target, all);
     target[BOTW_TOUCH_FLAGS] = 0x01; // local visibility/state bit is preserved
-    dm_botw_touch_hud_publish(1, 0.5f, 0.5f);
+    dm_botw_touch_hud_publish(1, 0.5f, 0.5f,1);
     calculate_entry(target);
     assert(target[BOTW_TOUCH_FLAGS] == 0x11);
 
@@ -94,21 +98,21 @@ int main(void) {
     expect_translation(target, 45, -36);
 
     // A geometry move updates the offset; the input position is normalized on the centered 16:9 canvas.
-    dm_botw_touch_hud_publish(1, 0.25f, 0.75f);
+    dm_botw_touch_hud_publish(1, 0.25f, 0.75f,1);
     matrix_translation(target, -509, 210);
     calculate_entry(target);
     calculated_matrix(target);
     expect_translation(target, -275, -216);
 
     // A resized D-pad scales its native equipment artwork about the touch center.
-    g_touch_layout.control[12].scale = 1.25f;
+    dm_botw_touch_hud_publish(1, .25f, .75f, 1.25f);
     matrix_translation(target, -509, 210);
     calculate_entry(target);
     calculated_matrix(target);
     expect_translation(target, -263.75f, -225);
     float basis; memcpy(&basis, target + BOTW_TOUCH_MATRIX, sizeof basis);
     assert(fabsf(basis - 1.25f) < .001f);
-    dm_botw_touch_hud_publish(0, .25f, .75f);
+    dm_botw_touch_hud_publish(0, .25f, .75f,1);
     assert(actions_reset_count == 1);
     matrix_translation(target, -509, 210);
     calculate_entry(target);
@@ -116,13 +120,32 @@ int main(void) {
     expect_translation(target, -509, 210);
     memcpy(&basis, target + BOTW_TOUCH_MATRIX, sizeof basis);
     assert(basis == 1);
-    g_touch_layout.control[12].scale = 1;
+
+    // The narrow shortcut keeps its cross-guide centered after native Y
+    // scaling, using the D-pad size published by the active frontend profile.
+    setenv("DM_BOTW_PORTRAIT","1",1); hud_y_scale=.3f; hud_gain=16.f/9;
+    dm_botw_touch_hud_publish(1,.25f,.75f,1.1f);
+    matrix_translation(target,-509,210);
+    float sy=hud_y_scale*hud_gain;
+    memcpy(target+BOTW_TOUCH_MATRIX,&hud_gain,4); memcpy(target+BOTW_TOUCH_MATRIX+0x14,&sy,4);
+    calculate_entry(target); calculated_matrix(target);
+    expect_translation(target,-232,-201.12f);
+    memcpy(&basis,target+BOTW_TOUCH_MATRIX+0x14,4); assert(fabsf(basis-sy*1.1f)<.001f);
+    // A wide portrait view uses the normal profile on the same narrow canvas.
+    dm_botw_touch_hud_publish(1,.25f,.75f,1.25f);
+    matrix_translation(target,-509,210);
+    memcpy(target+BOTW_TOUCH_MATRIX,&hud_gain,4); memcpy(target+BOTW_TOUCH_MATRIX+0x14,&sy,4);
+    calculate_entry(target); calculated_matrix(target);
+    expect_translation(target,-220,-204);
+    memcpy(&basis,target+BOTW_TOUCH_MATRIX+0x14,4); assert(fabsf(basis-sy*1.25f)<.001f);
+    dm_botw_touch_hud_publish(0,.25f,.75f,1);
+    unsetenv("DM_BOTW_PORTRAIT"); hud_y_scale=1; hud_gain=1;
 
     // A recreated MainShortCut layout with a new pane address replaces the retained target.
     uint8_t root2[0x100] = {0}, all2[0x100] = {0}, target2[0x100] = {0};
     pane_name(root2, "RootPane"); pane_name(all2, "N_All_00"); pane_name(target2, "N_MainAll_00");
     set_pane_parent(all2, root2); set_pane_parent(target2, all2);
-    dm_botw_touch_hud_publish(1, 0.5f, 0.5f);
+    dm_botw_touch_hud_publish(1, 0.5f, 0.5f,1);
     matrix_translation(target2, -509, 210);
     calculate_entry(target2);
     calculated_matrix(target2);
@@ -169,6 +192,27 @@ int main(void) {
     expect_translation(cut_sibling, 460, 257);
     matrix_translation(status, 392, -182); calculate_entry(status); calculated_matrix(status);
     expect_translation(status, 342, 315);
+    // Weather's animated pictures keep their native model scale. After replay's
+    // projection, they must still align with the map's other gauges.
+    const float weather_ratios[]={4.f/3,9.f/16};
+    for (unsigned i=0;i<sizeof weather_ratios/sizeof *weather_ratios;i++) {
+        hud_y_scale=weather_ratios[i]/(16.f/9);
+        hud_gain=(16.f/9)*fminf(1,1/weather_ratios[i]);
+        scaled_matrix(weather,1,392,-182);
+        calculate_entry(weather); calculated_matrix(weather);
+        scaled_matrix(status,hud_gain,392*hud_gain,-182*hud_gain*hud_y_scale);
+        calculate_entry(status); calculated_matrix(status);
+        float weather_x,status_x,weather_y,status_y;
+        memcpy(&weather_x,weather+BOTW_TOUCH_MATRIX+0x0c,4);
+        memcpy(&status_x,status+BOTW_TOUCH_MATRIX+0x0c,4);
+        memcpy(&weather_y,weather+BOTW_TOUCH_MATRIX+0x1c,4);
+        memcpy(&status_y,status+BOTW_TOUCH_MATRIX+0x1c,4);
+        assert(fabsf(weather_x*hud_gain-status_x)<.001f);
+        assert(fabsf(weather_y*hud_y_scale*hud_gain-status_y)<.001f);
+        memcpy(&basis,weather+BOTW_TOUCH_MATRIX+0x14,4);
+        assert(basis==1);
+    }
+    hud_y_scale=hud_gain=1;
     assert(fabsf((315.0f - 257.0f) - 58.0f) < .001f); // gauges retain their native offset from the map
     assert(367.0f + 280.0f * .5f < 640.0f); // linked gauge content fits; Pa_Sensor's extra width is padding
     assert(fabsf((460.0f + 166.0f * .5f) - 543.0f) < .001f);
@@ -318,13 +362,14 @@ int main(void) {
     assert(dm_botw_rune_icon_snapshot(&rune_state) && !rune_state.valid && rune_state.rgba[0] == 0);
 
     // Controller connect / non-3D mode publishes inactive and restores a fresh native matrix.
-    dm_botw_touch_hud_publish(0, 0.25f, 0.75f);
-    assert(actions_reset_count == 2);
-    dm_botw_touch_hud_publish(0, 0.25f, 0.75f);
-    assert(actions_reset_count == 2); // repeated inactive publications do not reset on every Npad poll
-    dm_botw_touch_hud_publish(1, 0.5f, 0.5f);
-    dm_botw_touch_hud_publish(0, 0.5f, 0.5f);
-    assert(actions_reset_count == 3); // each active-to-inactive transition clears once
+    int resets_before=actions_reset_count;
+    dm_botw_touch_hud_publish(0, 0.25f, 0.75f,1);
+    assert(actions_reset_count == resets_before+1);
+    dm_botw_touch_hud_publish(0, 0.25f, 0.75f,1);
+    assert(actions_reset_count == resets_before+1); // repeated inactive publications do not reset on every Npad poll
+    dm_botw_touch_hud_publish(1, 0.5f, 0.5f,1);
+    dm_botw_touch_hud_publish(0, 0.5f, 0.5f,1);
+    assert(actions_reset_count == resets_before+2); // each active-to-inactive transition clears once
     matrix_translation(target2, -509, 210);
     calculate_entry(target2);
     assert(target2[BOTW_TOUCH_FLAGS] & BOTW_TOUCH_DIRTY);
@@ -349,7 +394,7 @@ int main(void) {
     // An ultrawide D-pad lies left of the centered UI canvas. Its normalized
     // coordinate is legitimately negative; it must not disable the whole HUD.
     hud_offset[0] = hud_offset[1] = 640; // 32:9
-    dm_botw_touch_hud_publish(1, -.35f, .75f);
+    dm_botw_touch_hud_publish(1, -.35f, .75f,1);
     assert(dm_botw_touch_hud_active());
     matrix_translation(target2, -509, 210); calculate_entry(target2); calculated_matrix(target2);
     expect_translation(target2, -1043, -216);
@@ -357,7 +402,7 @@ int main(void) {
     scaled_matrix(cut, 1, 510, -240); calculate_entry(cut); calculated_matrix(cut);
     expect_translation(cut, 460, 257); // stays inside native clip space even at 32:9
     assert(map_region_valid && fabsf(map_region[0] - 2297.f / 2560) < .001f);
-    dm_botw_touch_hud_publish(1, NAN, .75f);
+    dm_botw_touch_hud_publish(1, NAN, .75f,1);
     assert(!dm_botw_touch_hud_active() && !map_region_valid);
     hud_offset[0] = hud_offset[1] = 0;
     // The shared pane hook still services widescreen backgrounds without an

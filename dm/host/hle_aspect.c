@@ -1,6 +1,6 @@
 // Native aspect: only publish display geometry from the front end. The game's projection-update gate applies it on the
-// guest thread, before the matrix is calculated. UI content remains centered at
-// 16:9; native full-width background panes can extend to the display edges.
+// guest thread, before the matrix is calculated. Menus remain centered at
+// 16:9; gameplay HUD and flat loading backgrounds can use the display edges.
 #include "hle.h"
 #include "botw_rune_icon.h"
 #include "touchpad_geometry.h"
@@ -14,6 +14,7 @@ static int g_on;
 static float g_custom;
 static _Atomic float g_screen = 16.0f / 9.0f;
 static _Atomic float g_hud_safe_left;
+static _Atomic float g_hud_safe_top;
 static _Atomic float g_ui_point_scale = 1;
 static module_t *g_main;
 static uint64_t g_single_off, g_proj_off, g_vt_off, g_field_off, g_dirty_off;
@@ -44,6 +45,20 @@ static void aspect_config(void) {
 int dm_aspect_native(void) { pthread_once(&g_config_once, aspect_config); return g_on; }
 float dm_aspect_custom_ratio(void) { pthread_once(&g_config_once, aspect_config); return g_custom; }
 float dm_aspect_ratio(void) { return dm_aspect_native() ? (g_custom ? g_custom : atomic_load(&g_screen)) : 0; }
+float dm_aspect_hud_y_scale(void) {
+    float ratio = dm_aspect_ratio();
+    return ratio > 0 && ratio < GAME_ASPECT ? ratio / GAME_ASPECT : 1;
+}
+float dm_aspect_hud_gain(void) {
+    float ratio = dm_aspect_ratio();
+    // Keep HUD size tied to the shorter display edge, rather than the height
+    // of a tiny fitted 16:9 menu in portrait. 16:9 and wider stay unchanged.
+    return ratio > 0 && ratio < GAME_ASPECT ? GAME_ASPECT*fminf(1,1/ratio) : 1;
+}
+float dm_aspect_hud_top(void) {
+    float scale = dm_aspect_hud_y_scale();
+    return scale < 1 ? 360 - (360-DM_TP_BOTW_MAP_TOP)*scale*dm_aspect_hud_gain() - atomic_load(&g_hud_safe_top) : DM_TP_BOTW_MAP_TOP;
+}
 void dm_aspect_set_display(float ratio) {
     if (!isfinite(ratio) || ratio <= 0) die("[RED] invalid display aspect %g", ratio);
     atomic_store(&g_screen, ratio);
@@ -67,16 +82,20 @@ float dm_aspect_hud_offset(int right) {
     return fmaxf(0, extra - safe);
 }
 float dm_aspect_ui_point_scale(void) { return atomic_load(&g_ui_point_scale); }
-void dm_aspect_set_safe_area(float w, float h, float left, float right) {
-    if (!isfinite(w) || !isfinite(h) || !isfinite(left) || !isfinite(right) || w <= 0 || h <= 0) return;
+void dm_aspect_set_safe_area(float w, float h, float left, float top, float right) {
+    if (!isfinite(w) || !isfinite(h) || !isfinite(left) || !isfinite(top) || !isfinite(right) || w <= 0 || h <= 0) return;
     float canvas[4]; dm_aspect_touch_rect(w, h, canvas);
     float frame_width = dm_aspect_native() ? fminf(w, h * dm_aspect_ratio()) : canvas[2];
     float bar = (w - frame_width) * .5f, scale = 720 / canvas[3];
     atomic_store(&g_ui_point_scale, scale);
     atomic_store(&g_hud_safe_left, fmaxf(0, left - bar) * scale);
+    float picture_height = dm_aspect_native() ? fminf(h, w/dm_aspect_ratio()) : canvas[3];
+    atomic_store(&g_hud_safe_top, fmaxf(0, top-(h-picture_height)*.5f)*720/picture_height);
 }
 void dm_aspect_hud_rect(float w, float h, float rect[4]) {
     dm_aspect_touch_rect(w, h, rect);
+    float yscale = dm_aspect_hud_y_scale();
+    if (yscale < 1) { rect[3] /= yscale; rect[1] = (h-rect[3])*.5f; }
     float scale = rect[3] / 720, left = dm_aspect_hud_offset(0) * scale;
     rect[0] -= left;
     rect[2] += left + dm_aspect_hud_offset(1) * scale;
@@ -129,6 +148,7 @@ typedef struct {
     uintptr_t pane, parent, type;
     char name[16];
     float native_width, written_width, native_height, written_height, native_x, written_x, native_y, written_y;
+    float native_scale_x, written_scale_x, native_scale_y, written_scale_y;
 } aspect_ui_width;
 static void *g_ui_widths;
 static pthread_mutex_t g_ui_width_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -184,6 +204,7 @@ static int aspect_ui_hud_anchor(uint8_t *pane) {
     if (aspect_ui_named(pane, "Pa_HeartGauge_00") && aspect_ui_named(parent, "N_State_00") &&
         aspect_ui_named(all, "N_All_00") && aspect_ui_named(aspect_ui_parent(all), "RootPane")) return -1;
     if (aspect_ui_named(parent, "N_All_00") && aspect_ui_named(all, "RootPane")) {
+        if (aspect_ui_named(pane,"N_MainAll_00")) return 3;
         const char *names[] = {"Pa_Sensor_00", "Pa_SoundGauge_00", "Pa_TempMeter_00", "Pa_Weather_00", "Pa_Time_00"};
         for (unsigned i=0;i<sizeof names/sizeof *names;i++) if (aspect_ui_named(pane,names[i])) return 1;
     }
@@ -192,6 +213,8 @@ static int aspect_ui_hud_anchor(uint8_t *pane) {
 static int aspect_ui_hud_pane(uint8_t *pane) {
     for (int i=0; pane && i<64; i++,pane=aspect_ui_parent(pane)) {
         int anchor=aspect_ui_hud_anchor(pane);
+        if (anchor==3 && (!dm_botw_touch_hud_active() || dm_aspect_hud_y_scale()==1)) continue;
+        if (anchor==1 && aspect_ui_named(pane,"Pa_Weather_00") && dm_aspect_hud_y_scale()<1) return 3;
         if (anchor && (anchor!=2 || aspect_ui_map_collapsed(aspect_ui_map_cut(pane)))) return anchor == 2 ? 2 : 1;
     }
     return 0;
@@ -249,15 +272,25 @@ static int aspect_ui_background_pane(uint8_t *pane) {
     uintptr_t child; memcpy(&child, pane + 0x28, sizeof child);
     return !child || child == (uintptr_t)pane + 0x20;
 }
+static int aspect_ui_loading_background(uint8_t *pane) {
+    if (aspect_ui_loading_fill(pane)) return 1;
+    if (!pane || !aspect_ui_background((const char *)pane+0xb8)) return 0;
+    // Only Fade's background leaves join the cream fill on narrow displays.
+    for (int depth=0;pane && depth<64;depth++,pane=aspect_ui_parent(pane))
+        if (aspect_ui_named(pane,"RootPane")) return aspect_ui_child(pane,"N_LogoInOut_00") != NULL;
+    return 0;
+}
 static _Thread_local int g_ui_background_drawing, g_ui_hud_drawing;
 int dm_aspect_ui_background_drawing(void) { return g_ui_background_drawing; }
-int dm_aspect_ui_hud_drawing(void) { return g_ui_hud_drawing; } // 1 = edge HUD; 2 = collapsed map
+int dm_aspect_ui_hud_drawing(void) { return g_ui_hud_drawing; } // 1 = edge HUD; 2 = collapsed map; 3 = weather with uniform model scale
 static void aspect_ui_draw(const uint64_t *regs) {
     // x21 is Pane::Draw's saved this across the DrawSelf virtual call.
-    g_ui_background_drawing = dm_aspect_ratio() > GAME_ASPECT &&
-        aspect_ui_background_pane((uint8_t *)(uintptr_t)regs[21]);
-    if (g_ui_background_drawing && aspect_ui_loading_fill((uint8_t *)(uintptr_t)regs[21])) g_ui_background_drawing = 2;
-    g_ui_hud_drawing = dm_aspect_ratio() > GAME_ASPECT ? aspect_ui_hud_pane((uint8_t *)(uintptr_t)regs[21]) : 0;
+    uint8_t *pane=(uint8_t *)(uintptr_t)regs[21];
+    float ratio=dm_aspect_ratio();
+    g_ui_background_drawing = ratio > GAME_ASPECT && aspect_ui_background_pane(pane);
+    if ((ratio > GAME_ASPECT && aspect_ui_loading_fill(pane)) ||
+        (ratio > 0 && ratio < GAME_ASPECT && aspect_ui_loading_background(pane))) g_ui_background_drawing=2;
+    g_ui_hud_drawing = ratio > 0 && ratio != GAME_ASPECT ? aspect_ui_hud_pane(pane) : 0;
     dm_botw_rune_icon_draw_begin((uint8_t *)(uintptr_t)regs[21]);
 }
 static void aspect_ui_draw_end(const uint64_t *regs) { (void)regs; g_ui_background_drawing = g_ui_hud_drawing = 0; dm_botw_rune_icon_draw_end(); }
@@ -272,14 +305,23 @@ void dm_aspect_ui_pane(uint8_t *pane) {
     if (title_art == 2) return;
     // A background must not resize a container that owns foreground content.
     if (!hud && !aspect_ui_background_pane(pane)) return;
-    float width, height, x, y;
+    float width, height, x, y, scale_x, scale_y;
     memcpy(&width, pane + 0x50, 4); memcpy(&height, pane + 0x54, 4);
     memcpy(&x, pane + 0x30, 4); memcpy(&y, pane + 0x34, 4);
+    memcpy(&scale_x,pane+0x48,4); memcpy(&scale_y,pane+0x4c,4);
     aspect_ui_width key = {.pane = (uintptr_t)pane};
     pthread_mutex_lock(&g_ui_width_mu);
     aspect_ui_width **found = tfind(&key, &g_ui_widths, aspect_ui_width_order);
     float wide = fmaxf(1, dm_aspect_ratio() / GAME_ASPECT);
-    if (!found && wide == 1 && hud != -1) { pthread_mutex_unlock(&g_ui_width_mu); return; }
+    int narrow = hud && dm_aspect_hud_y_scale()<1 && (hud!=3 || dm_botw_touch_hud_active());
+    if (hud==2 && !aspect_ui_map_collapsed(aspect_ui_map_cut(pane))) narrow=0;
+    float xscale=narrow ? dm_aspect_hud_gain() : 1;
+    float yscale=narrow ? dm_aspect_hud_y_scale()*xscale : 1;
+    // Weather's animated pictures do not inherit scale like the flat panes.
+    // Leave the component's model geometry intact and resize the whole draw
+    // in projection, so its pictures and background keep the same proportions.
+    if (hud==1 && aspect_ui_named(pane,"Pa_Weather_00")) xscale=yscale=1;
+    if (!found && wide == 1 && !narrow && hud != -1) { pthread_mutex_unlock(&g_ui_width_mu); return; }
     if (!found) {
         aspect_ui_width *entry = calloc(1, sizeof *entry);
         if (!entry) die("[RED] aspect: cannot allocate background pane state");
@@ -293,23 +335,32 @@ void dm_aspect_ui_pane(uint8_t *pane) {
     if (entry->parent != parent || entry->type != type || memcmp(entry->name, pane + 0xb8, 16)) {
         entry->parent = parent; entry->type = type; memcpy(entry->name, pane + 0xb8, 16);
         entry->native_width = width; entry->native_height = height; entry->native_x = x; entry->native_y = y;
+        entry->native_scale_x=scale_x; entry->native_scale_y=scale_y;
     }
     if (width != entry->written_width) entry->native_width = width;
     if (height != entry->written_height) entry->native_height = height;
     if (x != entry->written_x) entry->native_x = x;
     if (y != entry->written_y) entry->native_y = y;
+    if (scale_x != entry->written_scale_x) entry->native_scale_x=scale_x;
+    if (scale_y != entry->written_scale_y) entry->native_scale_y=scale_y;
     entry->written_width = entry->native_width * (hud ? 1 : wide);
     // Title illustrations cover the display without distorting their artwork;
     // flat fills and Windows extend horizontally with their edge sizes intact.
     int cover = !hud && title_art == 1;
     entry->written_height = entry->native_height * (cover ? wide : 1);
-    entry->written_x = entry->native_x;
-    entry->written_y = entry->native_y;
+    entry->written_x = entry->native_x*(hud==3 ? 1 : xscale);
+    entry->written_y = entry->native_y*(hud==3 ? 1 : yscale);
+    entry->written_scale_x=entry->native_scale_x*xscale;
+    entry->written_scale_y=entry->native_scale_y*yscale;
     if (cover) { entry->written_x *= wide; entry->written_y *= wide; }
     // Landscape's horizontal safe inset reserves the notch at mid-height.
     // Hearts sit above it, with their own authored top/corner padding; adding
     // the entire inset here leaves an unnecessary gap on iPhone.
     if (hud == -1) entry->written_x += DM_TP_BOTW_EDGE_EXTRA*dm_aspect_ui_point_scale() - fmaxf(0, 360 * dm_aspect_ratio() - 640);
+    if (hud == -1 && narrow) {
+        entry->written_x += 640*(xscale-1);
+        entry->written_y += 360*(1-yscale)-atomic_load(&g_hud_safe_top);
+    }
     // AppMap's ScissorPane::Draw rejects clips outside its native 16:9
     // target before submitting draws. Anchor that subtree during GPU replay.
     else if (hud == 1 && !dm_botw_touch_hud_active())
@@ -322,11 +373,14 @@ void dm_aspect_ui_pane(uint8_t *pane) {
         entry->written_x += margin;
     }
     if (width != entry->written_width || height != entry->written_height ||
-        ((hud || title_right || cover) && x != entry->written_x) || (cover && y != entry->written_y)) {
+        ((hud || title_right || cover) && x != entry->written_x) ||
+        ((hud || cover) && y != entry->written_y) ||
+        (hud && (scale_x != entry->written_scale_x || scale_y != entry->written_scale_y))) {
         memcpy(pane + 0x50, &entry->written_width, 4);
         memcpy(pane + 0x54, &entry->written_height, 4);
         if (hud || title_right || cover) memcpy(pane + 0x30, &entry->written_x, 4);
-        if (cover) memcpy(pane + 0x34, &entry->written_y, 4);
+        if (hud || cover) memcpy(pane + 0x34, &entry->written_y, 4);
+        if (hud) { memcpy(pane+0x48,&entry->written_scale_x,4); memcpy(pane+0x4c,&entry->written_scale_y,4); }
         pane[0x58] |= 0x10;
     }
     pthread_mutex_unlock(&g_ui_width_mu);
