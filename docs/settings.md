@@ -36,24 +36,19 @@ The size of the 3D picture, from 50 to 100 %. Below 100 % the size is fixed ther
 
 BOTW's experimental **Dynamic resolution** option keeps its native 80–100% scale controller but targets the selected frame rate, including the movie and thermal 30 fps caps. A fixed **Render scale** takes precedence. With this option off, BOTW keeps its original resolution policy.
 
-Its separate **Scene upscaling** option applies MetalFX before the native scene composite and HUD. It can improve the appearance of reduced-resolution 3D without processing the HUD. Both experimental options default off. Scene upscaling also costs GPU time; it does not guarantee a higher frame rate. **Upscaling** below remains the independent final-picture option.
+**Upscaling** is one choice, defaulting to **Standard**:
 
-A game that renders below the screen's resolution is scaled up to the screen. **Standard**, the default, scales smoothly; **MetalFX** uses Apple's MetalFX upscaler, which sharpens edges and text as it scales.
+- **Standard** keeps the game's normal scaling.
+- **Scene MetalFX** (experimental, on verified profiles such as BOTW) scales 3D before the native scene composite and HUD. Text and UI keep their native rendering.
+- **Full-screen MetalFX** scales the final picture, including text and UI, to the display.
 
-```mermaid
-flowchart LR
-    G["Game's picture<br/>handheld 1280x720<br/>docked 1920x1080"] --> S{Upscaling}
-    S -->|Standard| B["Smooth scaling"]
-    S -->|MetalFX| M["MetalFX: sharper edges and text"]
-    B --> D["Screen<br/>2868x1320 on an iPhone 17 Pro Max"]
-    M --> D
-```
+The two MetalFX modes are mutually exclusive. Scene mode is offered only when the game's scene composite has been verified. MetalFX costs GPU time and does not guarantee a higher frame rate.
 
-Breath of the Wild renders 1280x720 in handheld mode. Docked it renders its world at 900p and scales that to 1080p itself, before the app sees the picture. MetalFX works in either mode: handheld saves the most GPU time and heat, docked looks sharper than smooth scaling. Rendering at the screen's resolution stays the sharpest picture, where the GPU can afford it.
+Breath of the Wild renders 1280x720 in handheld mode. Docked it renders its world at 900p and scales that to 1080p itself, before the app sees the picture. Full-screen MetalFX works in either console mode: handheld saves the most GPU time and heat, docked looks sharper than smooth scaling. Rendering at the screen's resolution stays the sharpest picture, where the GPU can afford it.
 
-- **When to change it:** turn it on if the picture looks soft and the device has GPU time to spare: on a Mac, or on an iPhone in handheld mode at 30 fps. For long sessions at 60 fps on an iPhone leave it at Standard.
-- **Cost:** more GPU time each frame, which can increase heat on an iPhone. [Breath of the Wild's measurements](../dm/games/01007EF00011E000/README.md#upscaling-current) cover Mac and iPhone; the matching iPhone Standard run and MetalFX's share of the thermal cost remain unmeasured. Nothing changes while the game's picture is as large as the screen. Unsupported devices and sizes use Standard scaling.
-- **On the Mac:** choose **MetalFX** under **Upscaling** in the [settings window](#the-mac-settings-window)'s Advanced settings, or set `DM_PRESENT_UPSCALE=metalfx` in its `env.txt` (off by default). It helps in a large window or on a 4K screen.
+- **When to change it:** choose a MetalFX mode if the picture looks soft and the device has GPU time to spare: on a Mac, or on an iPhone in handheld mode at 30 fps. For long sessions at 60 fps on an iPhone leave it at Standard.
+- **Cost:** more GPU time each frame, which can increase heat on an iPhone. [Breath of the Wild's measurements](../dm/games/01007EF00011E000/README.md#upscaling-current) cover Mac and iPhone; the matching iPhone Standard run and MetalFX's share of the thermal cost remain unmeasured. Full-screen MetalFX only acts when the final picture is smaller than the display; Scene MetalFX only acts when the verified 3D input is smaller than its UI canvas. Unsupported devices and sizes use Standard scaling.
+- **On the Mac:** choose **Full-screen MetalFX** under **Upscaling** in the [settings window](#the-mac-settings-window)'s Advanced settings, or set `DM_PRESENT_UPSCALE=metalfx` in its `env.txt` (off by default). It helps in a large window or on a 4K screen.
 
 ### Game language
 
@@ -247,7 +242,6 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Frame rate | `DM_FPS_TARGET` | `30`, `60` |
 | Render scale | `DM_RENDER_SCALE` | `0.5` to `1.0` |
 | Dynamic resolution | `DM_DYNAMIC_RESOLUTION` | `1`, `0` |
-| Scene upscaling | `DM_SCENE_UPSCALE` | `1`, `0` |
 | Console mode | `DM_OPMODE` | `1` docked, `0` handheld |
 | Game language | `DM_LANG` | a language code, such as `ja` |
 | Display mode (Mac) | `DM_FULLSCREEN` | `1` fullscreen, `0` a window |
@@ -257,7 +251,7 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Game rumble | `DM_RUMBLE` | `1`, `0` |
 | Rumble strength | `DM_RUMBLE_GAIN` | `0` to `3` |
 | Rumble cutoff | `DM_RUMBLE_MIN` | `0` to `0.9` |
-| Upscaling | `DM_PRESENT_UPSCALE` | `off`, `metalfx` |
+| Upscaling | `DM_PRESENT_UPSCALE` | `off`, `scene` (verified profiles), `metalfx` |
 | Frame buffering | `DM_PRESENT_SNAP` | `1`, `0` |
 | Metal 4 pipelines | `DM_PSO_MTL4` | `1`, `0` |
 | Pipeline prebuild | `DM_PSO_PREBUILD` | `1`, `0` |

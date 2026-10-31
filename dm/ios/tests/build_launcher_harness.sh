@@ -28,8 +28,11 @@ cat > "$APP/Info.plist" <<'PLIST'
 PLIST
 GFXAPI=nvn python3 "$ROOT/dm/games/settings.py" 01007EF00011E000 "$WORK/metadata" "$WORK/control.nacp" "$APP/dm/launcher.json"
 SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+xcrun --sdk iphonesimulator clang -target arm64-apple-ios26.0-simulator -isysroot "$SDK" -fobjc-arc \
+    -c "$ROOT/dm/ios/Sources/CloudSaves.m" -o "$WORK/CloudSaves.o"
 xcrun --sdk iphonesimulator swiftc -swift-version 5 -parse-as-library -target arm64-apple-ios26.0-simulator \
     -sdk "$SDK" -I "$ROOT/dm/host" -module-cache-path "$WORK/module-cache" -o "$APP/BOTWLauncherTest" \
+    -import-objc-header "$ROOT/dm/ios/Sources/CloudSaves.h" "$WORK/CloudSaves.o" \
     "$ROOT/dm/ios/Sources/LauncherRow.swift" "$ROOT/dm/ios/Sources/LauncherSettings.swift" "$ROOT/dm/ios/Sources/BotwTouchSettings.swift" "$ROOT/dm/ios/Sources/Launcher.swift" "$ROOT/dm/ios/tests/launcher_ui_harness.swift"
 plutil -lint "$APP/Info.plist"
 codesign --force --sign - "$APP"

@@ -597,18 +597,20 @@ averaging, 0.05 steps and 0.8 floor. The 175/150 thresholds then correspond to
 Movies and the thermal cap publish the same effective 30 fps budget. A fixed
 `DM_RENDER_SCALE` takes precedence; target 0 retains the original budget.
 
-`DM_SCENE_UPSCALE=1` uses [scene upscaling before the HUD](../../../docs/reference/rendering.md#scene-upscaling-before-the-hud).
+`DM_PRESENT_UPSCALE=scene` uses [scene upscaling before the HUD](../../../docs/reference/rendering.md#scene-upscaling-before-the-hud).
 An outdoor pass trace confirms vertex `5e9f57168d89a543` and fragment
 `bd7ffdd435c6c3bc` are the native scene FXAA/upscale from the tone-mapped
 1600x900 image into the 1920x1080 UI canvas, before its layout draws. Their
 vertex constants already describe the output texel grid, including when the
 native controller lowers the input to 1280x720. Only that draw's input is
 substituted; the native FXAA, output alpha/channel mask, and all later HUD,
-inventory and map draws retain their original state. The independent final
-`DM_PRESENT_UPSCALE` setting remains available. MetalFX adds GPU work; neither
+inventory and map draws retain their original state. The single **Upscaling**
+choice offers **Standard**, **Scene MetalFX** and
+**Full-screen MetalFX** (`DM_PRESENT_UPSCALE=off|scene|metalfx`); the MetalFX
+modes cannot run together. MetalFX adds GPU work; neither
 option is a measured frame-rate improvement on every scene or device.
 
-Validation (2026-10-31, Apple M2): 64 Python checks, the emitted ARM64 budget
+Initial validation (`39585d4e`, 2026-10-31, Apple M2): 64 Python checks, the emitted ARM64 budget
 stub, 31 scene-scaling GPU checks in each encoding mode, 168 existing present
 checks, the present snapshot cases, and 188 iOS source files pass. World,
 inventory, map, and return-to-world camera/movement checks retain their HUD.
@@ -619,6 +621,18 @@ M2 (baseline 1,744, candidate 1,770 by the end of the 70 s runs); screenshots
 confirm both reach the outdoor scene. Other games are not runtime-checked:
 only this verified controller and scene pair opt in, and the shared present
 path has the focused GPU coverage above.
+
+The unified selector (2026-10-31) removes the independent scene toggle.
+Settings generation and the shared iOS/Mac storage check cover one choice,
+all three values, applying to the game environment, and reopening saved choices.
+Scene GPU tests pass 36 checks in each encoding mode, including refusal in
+Standard and Full-screen modes; the 171 present checks confirm Scene mode
+keeps final presentation on its standard path. Both localization tables
+validate, and all 188 iOS source files compile. The BOTW-only quick regression against
+`39585d4e` is `PASS`, with identical 19,592-shader outputs and no new red
+lines; both runs still miss the reference-machine frame gate (1,834 and
+1,844 at 70 s). Other games retain their existing Standard / Full-screen
+choices; scene mode requires the verified profile pair.
 
 Exploratory `scripts/bench.py` comparison, using its existing runner with the
 copied post-pickup outdoor save, 60 fps target, the same host and warm pipeline
@@ -975,7 +989,7 @@ General host changes first needed here; each applies to every game:
 - **Resolved: no rumble on Xbox and DualShock 4-style controllers (Mac)** (`haptics_apple.m`): [Controller haptic engines without advanced players](../../../docs/reference/services.md#controller-haptic-engines-without-advanced-players), [DualShock 4 rumble through its effects report](../../../docs/reference/services.md#dualshock-4-rumble-through-its-effects-report). The charged attack's 0.07 is still not felt on an Xbox controller's motors (open there).
 - **No sound on an iPhone set to silent** (`front_ios_audio_session`): [The ring / silent switch muted the game on iOS](../../../docs/reference/audio.md#the-ring--silent-switch-muted-the-game-on-ios); the device check is open.
 - **Upscaling in the present** (`fx_encode`, `DM_PRESENT_UPSCALE`): [The present upscales through MetalFX](../../../docs/reference/rendering.md#the-present-upscales-through-metalfx).
-- **Experimental scene scaling before UI** (`DM_SCENE_UPSCALE`, default off): [Scene upscaling before the HUD](../../../docs/reference/rendering.md#scene-upscaling-before-the-hud).
+- **Experimental scene scaling before UI** (`DM_PRESENT_UPSCALE=scene`, default off): [Scene upscaling before the HUD](../../../docs/reference/rendering.md#scene-upscaling-before-the-hud).
 - **Thermal cap; resolved movie recovery and acquire/present races** (`thermal_capped`, `DM_THERMAL_CAP`): [A thermally serious iPhone holds 30 fps](../../../docs/reference/frame-rate.md#a-thermally-serious-iphone-holds-30-fps).
 - **Resolved in the host: frame-step recovery after a 30 fps cap**: [The frame step after a 30 fps cap ends](../../../docs/reference/frame-rate.md#the-frame-step-after-a-30-fps-cap-ends). Modelled with the measured iPhone GPU times; recovery on the device has not been observed here.
 - **Pipeline keys omit disabled blend factors** (`pso_key_norm`): [Pipeline keys omit unused colour state](../../../docs/reference/shaders.md#pipeline-keys-omit-unused-colour-state).

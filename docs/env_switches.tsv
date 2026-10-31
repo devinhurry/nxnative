@@ -231,7 +231,7 @@ DM_PRESENT_INTERVAL	switch	`display` presents one frame per display-link tick wh
 DM_PRESENT_LATENCY	switch	`=<n>` (above 0): the display link's preferred frame latency in a window and in fullscreen (default 1 in a window, 2 in fullscreen)
 DM_PRESENT_LINK	switch	Present pacing: `0` acquires the drawable itself, `1` (the default) presents on a 60 Hz display link, `2` uses a 120 Hz display link with a frame every other tick
 DM_PRESENT_SNAP	player	`=<n>`: present snapshots, a ring of n host textures (2 to 4; `1` = 2) the presents are copied to so the game's swapchain texture is free at once; `0` off (default: the profile's `present_snap`)
-DM_PRESENT_UPSCALE	player	`metalfx` scales a picture smaller than its rectangle on the screen through MetalFX's spatial scaler; `off` (the default) scales it bilinearly
+DM_PRESENT_UPSCALE	player	`off` (default) keeps standard scaling; `scene` scales only the verified 3D scene before the HUD; `metalfx` scales the final picture, including text and UI. One mutually exclusive launcher choice: Upscaling
 DM_PROBE	diagnostic	`=module:offset,…` (Mac only): puts a `brk` at each guest address and on every hit prints the thread, registers, strings they point to and a backtrace, then runs the original instruction
 DM_PROBE_ALL	diagnostic	Set: probe hits (`DM_PROBE`) also print x9–x18
 DM_PROBE_DUMP	diagnostic	`=module:offset:length[:file]`: on the first hit of any probe, writes that range of guest memory to a file (default `run/<platform>/probe_dump.bin`)
@@ -292,7 +292,6 @@ DM_RUMBLE_MIN	player	`=0..0.9`: controller rumble levels below it stay silent an
 DM_SAVE	path	This run's save folder (must be set); the device save is `<DM_SAVE>_device`, and `pso_user.tsv` goes in its parent folder; the Mac launcher, the iOS app and the NSP script set it
 DM_SAVED_CHOICES	switch	`0` ignores the player's saved choices (launcher.<VAR> in the app's preferences) and leaves them saved; the Mac launcher and the iOS settings screen
 DM_SAVE_SYNC	player	Cloud saves: the folder whose `<title ID>/save.dmsync` the save is synced through, `icloud` for iCloud Drive/nxnative Saves (the Mac); `0` or unset, off. The Mac launcher sets the folder chosen in its settings window's Cloud saves, the iPhone app the one picked in its launcher (dm/host/save_sync.h)
-DM_SCENE_UPSCALE	player	`1` applies MetalFX to a verified scene-composite input before the native FXAA and HUD, for a profile naming scene_upscale; `0` (default) keeps native scaling. Independent of final-picture DM_PRESENT_UPSCALE
 DM_SCHEME_NAME	switch	Set by `build_ipa.sh` itself for xcodegen's `project.yml`: the Xcode scheme name, `DmIOS`, or `<display name> (<title ID>)` for a project prepared with `--prepare-xcode`
 DM_SCREEN_MATCH	switch	`0` keeps the screen's refresh rate in fullscreen; by default a Mac screen whose rate is not a multiple of the game's frame rate switches to one that is (144 → 120 Hz)
 DM_SEPARATE_ROM	switch	Package iOS game files in a separate .nxrom for in-app import; default 0.
