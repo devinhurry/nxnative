@@ -26,6 +26,7 @@
 #include "motion_apple.h"
 #include "motion_pro_mac.h"
 #include "pad_apple.h"
+#include "build_info_apple.h"
 #include <signal.h>
 #include <math.h>
 
@@ -984,8 +985,21 @@ static void preview_refresh(void) {
 }
 - (void)cancelLook;
 - (void)fitDrawable;
+- (void)showAbout:(id)sender;
 @end
 @implementation DmGameView
+- (void)showAbout:(id)sender {
+    (void)sender;
+    if (self.window.attachedSheet) return;
+    input_release(); [self cancelLook]; [g_preview_view cancelInput];
+    NSAlert *about = [NSAlert new];
+    about.messageText = @"About nxnative";
+    about.informativeText = dm_build_about_message(NSBundle.mainBundle);
+    [about addButtonWithTitle:@"Close"];
+    [about beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response) {
+        (void)response; if (self.window.keyWindow) input_resume();
+    }];
+}
 - (void)setFrameSize:(NSSize)s {
     [super setFrameSize:s];
     if (s.width <= 0 || s.height <= 0) return;
@@ -1153,6 +1167,8 @@ void front_run(void (*guest)(void)) {
         // Main menu: AppKit runs ⌘ shortcuts only through menu items, so ⌘Q quits and ⌃⌘F toggles fullscreen from here (AppKit shows the item as Globe-F and keeps ⌃⌘F as a hidden twin)
         NSMenu *bar = [NSMenu new], *app = [NSMenu new], *wm = [[NSMenu alloc] initWithTitle:@"Window"];
         [[bar addItemWithTitle:@"" action:nil keyEquivalent:@""] setSubmenu:app];
+        [app addItemWithTitle:@"About nxnative" action:@selector(showAbout:) keyEquivalent:@""].target = gameView;
+        [app addItem:NSMenuItem.separatorItem];
         [app addItemWithTitle:@"Quit " DM_GAME_NAME action:@selector(terminate:) keyEquivalent:@"q"];
         [[bar addItemWithTitle:@"Window" action:nil keyEquivalent:@""] setSubmenu:wm];
         [wm addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"].keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagCommand;

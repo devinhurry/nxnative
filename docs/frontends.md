@@ -3,6 +3,7 @@
 A graphical app that packs games, keeps a library of them or starts them is a project of its own that builds on nxnative. [NX2Apple](https://github.com/LNPANDY/NX2Apple), [NX Play](https://github.com/varyform/nx-native-wrapper) and [NxNative Launcher](https://github.com/rennan101/nxnative_Launcher) are such apps. This page lists what such an app can rely on: how it runs a build and follows it, what a built app says about its game's settings, and how it starts a game with them. None of it needs a change to nxnative; when a front end needs more, the piece it needs is an issue or a small PR here.
 
 - [Building: the NSP script](#building-the-nsp-script)
+- [Build identity](#build-identity)
 - [The settings list](#the-settings-list)
 - [Starting a game](#starting-a-game)
 - [What a front end cannot see yet](#what-a-front-end-cannot-see-yet)
@@ -22,6 +23,12 @@ With `--progress json` it asks nothing and writes one JSON object per line on st
 | `say` | `msg` | a message; one starting with `[RED] ` is an error |
 
 The exit code is 0 for a finished build, 1 for a build that stopped on an error (its last `say` says why, starting with `[RED] `; an unexpected error also prints its traceback on stderr), 2 for invalid command-line arguments, and 130 when interrupted. Argument parsing happens before JSON mode starts: an argument error writes its usage and error to stderr and emits no JSON events. A front end must check the process's exit status and capture stderr as well as the JSON stream. Each tool's full output goes to `<NSP folder>/<title ID>_build/logs/`, not to stdout. The build folder `<title ID>_build/` keeps what the next build can reuse, so a second build after a change takes a fraction of the first.
+
+## Build identity
+
+The app's `Info.plist` carries `DMCommit` (at least 12 hexadecimal characters, with `+dirty` for uncommitted tracked changes), `DMRepository` (`owner/repo`) and `DMBuildTime` (UTC, `YYYY-MM-DDTHH:MM:SSZ`). About shortens only the displayed commit to six characters; logs and bug reports keep `DMCommit`. Without Git metadata, the source fields are `unknown`. A bare Mac host has no app plist.
+
+The iOS target's always-run build phase writes `StampedInfo.plist` in Xcode's derived files, using `Gen/Info.plist` as its template. This refreshes metadata for unsigned IPAs and every build of a prepared Xcode project without editing tracked files. Prepare an existing Xcode project again once to add the phase. The Mac packer stamps its generated app plist before signing; reusing an unchanged app keeps its original timestamp. `DM_REPOSITORY=owner/repo` overrides the repository name, otherwise `GITHUB_REPOSITORY` is used in Actions, then the local GitHub origin (HTTPS or SSH).
 
 ## The settings list
 

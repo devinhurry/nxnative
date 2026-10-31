@@ -14,6 +14,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import time
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / 'dm/games'))
@@ -85,12 +86,14 @@ def main():
     derived = root / 'derived'
     run(sys.executable, ios / 'tools/gen_resources.py', project, romfs, marker,
         shaders, f'b-{chain}', '', derived, chain_h)
-    run('xcodebuild', '-project', project / 'DmIOS.xcodeproj', '-scheme', 'DmIOS',
+    build_command = ('xcodebuild', '-project', project / 'DmIOS.xcodeproj', '-scheme', 'DmIOS',
         '-configuration', 'Release', '-destination', 'generic/platform=iOS',
         '-derivedDataPath', derived, '-jobs', '3',
         'CODE_SIGNING_ALLOWED=NO', 'CODE_SIGNING_REQUIRED=NO', 'CODE_SIGN_IDENTITY=',
         f'DM_XCODE_OUTPUT_ROOT={derived}', f'SYMROOT={derived}/Build/Products',
         f'OBJROOT={derived}/Build/Intermediates.noindex', 'build')
+    template = (gen / 'Info.plist').read_bytes()
+    run(*build_command)
 
     app = derived / 'Build/Products/Release-iphoneos/DmIOS.app'
     info = plistlib.loads((app / 'Info.plist').read_bytes())
@@ -103,6 +106,18 @@ def main():
             raise RuntimeError(f'Resource staging failed: {packed}')
     if (app / '_CodeSignature').exists() or (app / 'embedded.mobileprovision').exists():
         raise RuntimeError('The smoke-test app must be unsigned')
+    if not info.get('DMCommit') or not info.get('DMRepository') or not info.get('DMBuildTime'):
+        raise RuntimeError('The built app has no source/build metadata')
+    # Build the same prepared project again: no XcodeGen and no source edits.
+    time.sleep(1.1)   # The timestamp has one-second precision.
+    env['DM_REPOSITORY'] = 'ci-fixture/metadata-refresh'
+    run(*build_command)
+    refreshed = plistlib.loads((app / 'Info.plist').read_bytes())
+    if refreshed['DMRepository'] != env['DM_REPOSITORY'] or refreshed['DMBuildTime'] <= info['DMBuildTime']:
+        raise RuntimeError('An incremental Xcode build kept stale build metadata')
+    if refreshed['DMCommit'] != info['DMCommit'] or (gen / 'Info.plist').read_bytes() != template:
+        raise RuntimeError('Stamping changed the source identity or generated plist template')
+    print('iOS incremental metadata refresh passed (plist template unchanged)', flush=True)
     print(f'iOS smoke build passed: {executable}', flush=True)
 
 
