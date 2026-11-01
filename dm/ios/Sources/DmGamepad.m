@@ -506,7 +506,9 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
     [self publishTouchHudForController:atomic_load(&g_any_controller_connected)];
 }
 - (void)publishTouchHudForController:(BOOL)connected {
-    BOOL active = botwTouchHudSupported() && _full && !_tap && !connected && !_manualMenuPad;
+    // The backup pad is still touch mode. Disabling the HUD here also disables
+    // scene observation, which would clear this pad as a false menu transition.
+    BOOL active = botwTouchHudSupported() && _full && !_tap && !connected;
     if (!active || self.bounds.size.width <= 0 || self.bounds.size.height <= 0) {
         dm_botw_touch_hud_publish(0, 0, 0, 1);
         [self setBotwMapRectValid:NO x:0 y:0 width:0 height:0];
