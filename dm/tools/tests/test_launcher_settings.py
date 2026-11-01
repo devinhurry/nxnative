@@ -15,7 +15,7 @@ settings = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(settings)
 
 BOTW, WONDER = '01007EF00011E000', '010015100B514000'
-PERFORMANCE_NVN = ['DM_PRESENT_SNAP', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_NVN_ENC_THREAD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
+PERFORMANCE_NVN = ['DM_NVN_FB_SNAP', 'DM_PRESENT_SNAP', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_NVN_ENC_THREAD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
 
 
 def build(gid, api, platform=None):
@@ -66,6 +66,15 @@ class LauncherSettingsTests(unittest.TestCase):
                     s = rows['DM_PRESENT_SNAP']
                     self.assertEqual((s['kind'], s['section'], s['default']), ('toggle', 'Performance', '1'))   # Breath of the Wild's profile: present_snap on
                     self.assertIn('latency', s['note'])
+
+    def test_skip_feedback_snapshots_is_opt_in_for_nvn(self):
+        for platform in ('ios', 'mac'):
+            for gid in (BOTW, WONDER):
+                row = build(gid, 'nvn', platform)['DM_NVN_FB_SNAP']
+                self.assertEqual((row['kind'], row['section']), ('toggle', 'Performance'))
+                self.assertEqual((row['on'], row['off'], row['default']), ('0', '1', '1'))
+            for api in ('vulkan', 'gl', ''):
+                self.assertNotIn('DM_NVN_FB_SNAP', build(BOTW, api, platform))
 
     def test_sections_keep_the_profile_defaults(self):
         botw, wonder = build(BOTW, 'nvn'), build(WONDER, 'nvn')

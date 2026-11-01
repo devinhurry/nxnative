@@ -241,6 +241,32 @@ import Foundation
                 expect(LauncherModel(list, defaults: d).values["DM_PRESENT_UPSCALE"] == mode, "the upscaling choice survives reopening")
             }
         }
+        // The experiment is an inverted toggle: On sends 0; Off restores automatic snapshots (1).
+        for list in [file.settings, mac.settings] {
+            d.removeObject(forKey: "launcher.DM_NVN_FB_SNAP")
+            setenv("DM_ENV_FILE_KEYS", "", 1); unsetenv("DM_NVN_FB_SNAP")
+            let row = list.first { $0.env == "DM_NVN_FB_SNAP" }!
+            let model = LauncherModel(list, defaults: d)
+            expect(model.values[row.env] == row.offValue, "skipping feedback snapshots starts disabled")
+            model.setValue(row.onValue, for: row); model.apply()
+            expect(String(cString: getenv(row.env)) == "0" && d.string(forKey: "launcher." + row.env) == "0", "enabling the experiment disables snapshots and saves the choice")
+            let restored = LauncherModel(list, defaults: d)
+            unsetenv(row.env); restored.applySaved()
+            expect(restored.values[row.env] == row.onValue && String(cString: getenv(row.env)) == "0", "the experiment survives reopening and skipping the launcher")
+            restored.setValue(row.offValue, for: row); restored.apply()
+            expect(String(cString: getenv(row.env)) == "1" && d.string(forKey: "launcher." + row.env) == nil, "turning the experiment off restores automatic snapshots")
+            restored.setValue(row.onValue, for: row); restored.apply()
+            restored.reset(); restored.apply()
+            expect(String(cString: getenv(row.env)) == "1" && d.string(forKey: "launcher." + row.env) == nil, "Reset and Play restore automatic snapshots")
+            for value in ["0", "1", "all"] {
+                setenv("DM_ENV_FILE_KEYS", row.env, 1); setenv(row.env, value, 1)
+                let locked = LauncherModel(list, defaults: d)
+                locked.setValue(row.onValue, for: row); locked.reset(); locked.apply()
+                expect(locked.fixed.contains(row.env) && locked.values[row.env] == value && String(cString: getenv(row.env)) == value,
+                       "the feedback experiment preserves an explicit env-file override: \(value)")
+            }
+        }
+        unsetenv("DM_ENV_FILE_KEYS"); unsetenv("DM_NVN_FB_SNAP")
         print("launcher storage: \(failed) failed")
         exit(failed == 0 ? 0 : 1)
     }
