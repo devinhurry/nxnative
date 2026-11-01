@@ -1098,6 +1098,30 @@ static void test_cursorless_help_prompts(void) {
     put_ptr(selector.mapview + 0x18, (uintptr_t)root);
     assert(!selector_cursorless_prompt_view((uintptr_t)selector.manager, 9000,
         (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &help)); // ambiguous owners
+    // DLCWindow stays shown and input-enabled behind its credits. Distinct
+    // roots on the same native draw layer have an established front-to-back
+    // order; the higher-index screen owns the visible prompts.
+    uint8_t *credits_root = fake_pane(116, "RootPane", -1, 1280, 720, 0, 0);
+    fake_pane(117, "Pa_GuideB_00", 116, 200, 40, 0, 0);
+    uint8_t *credits_icon = fake_pane(118, "T_Icon_00", 117, 34, 34, 559, -318);
+    uint8_t *credits_label = fake_pane(119, "T_Guide_00", 117, 120, 24, 541, -318);
+    put_ptr(credits_icon + 0xe0, (uintptr_t)(icon + 0xf0));
+    generic_back_prompt_observe(credits_icon, 1); generic_back_prompt_observe(credits_label, 1);
+    put_ptr(selector.mapview + 0x18, (uintptr_t)credits_root);
+    strcpy((char *)selector.screen + 0x200, "DLCWindow_00");
+    strcpy((char *)selector.map_screen + 0xa0, "StaffRollDLC_00");
+    assert(selector_cursorless_prompt_view((uintptr_t)selector.manager, 9000,
+        (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &help));
+    assert(help.generic_screen == (uintptr_t)selector.map_screen &&
+           help.generic_root == (uintptr_t)credits_root && help.back_valid);
+    selector.active[1] = 1;
+    assert(!selector_cursorless_prompt_view((uintptr_t)selector.manager, 9000,
+        (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &help));
+    selector.active[1] = 0;
+    credits_root[0x59] = 0;
+    assert(selector_cursorless_prompt_view((uintptr_t)selector.manager, 9000,
+        (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, &help));
+    assert(help.generic_screen == (uintptr_t)selector.screen); // hidden overlay cannot own input
     uint32_t one = 1; memcpy(selector.registry + 0x28, &one, 4);
     strcpy((char *)selector.screen + 0x200, "PauseMenuRecipe_00");
     uint8_t *plain = native_panes[81].bytes;
@@ -1857,6 +1881,48 @@ static void test_map_displacement_drag(void) {
     g_test_map_pan_current = g_test_map_pan_target = 0;
     g_test_map_setter_current = g_test_map_setter_target = 0;
     mock_map_cursor_updates = 1;
+    dm_botw_touch_menu_reset();
+}
+
+static void test_stacked_action_guides(void) {
+    dm_botw_touch_menu_reset();
+    current_guest_frame = 12000;
+    dm_botw_touch_menu_test_set_render_frame(12000);
+    uint8_t *root = fake_pane(70, "RootPane", -1, 1280, 720, 0, 0);
+    const uint16_t glyphs[] = {0xe043, 0xe041};
+    const char *parts[] = {"Pa_GuideY_00", "Pa_GuideB_00"};
+    for (int i = 0; i < 2; i++) {
+        int at = 71 + i * 3;
+        float y = i ? -318 : -285;
+        fake_pane(at, parts[i], 70, 300, 40, 559, y);
+        // DLCWindow's Y glyph pane is wider than B's. Their nearly equal
+        // horizontal centers must not make the stacked rows clip each other.
+        uint8_t *icon = fake_pane(at + 1, "T_Icon_00", at, i ? 34 : 176, 34, 559 + i * .1f, y);
+        uint8_t *text = fake_pane(at + 2, "T_Guide_00", at, i ? 120 : 191, 24, 541, y);
+        put_ptr(icon + 0xe0, (uintptr_t)&glyphs[i]);
+        generic_back_prompt_observe(icon, 1); generic_back_prompt_observe(text, 1);
+    }
+    dm_botw_touch_menu_view dlc = {.generic_mode = 1, .generic_key = 1, .page_key = 1, .render_frame = 12000};
+    dlc.back_valid = generic_back_prompt_snapshot((uintptr_t)root, 12000, dlc.back);
+    generic_action_prompts_to_view((uintptr_t)root, 12000, &dlc);
+    assert(dlc.back_valid && dlc.footer_action_count == 1);
+    assert(point_in_rect(.936f, .896f, dlc.footer_actions[0])); // visible Y glyph
+    assert(point_in_rect(.88f, .896f, dlc.footer_actions[0])); // Staff Credits label
+    assert(point_in_rect(.936f, .942f, dlc.back)); // visible B glyph
+    assert(point_in_rect(.90f, .942f, dlc.back)); // Cancel label
+    dm_botw_touch_menu_test_publish(&dlc);
+    tap(.936f, .896f); assert(sample(12000) == DM_BTN_Y); sample(12001);
+    dlc.render_frame = 12002; dm_botw_touch_menu_test_publish(&dlc);
+    tap(.936f, .942f); assert(sample(12002) == DM_BTN_B); sample(12003);
+
+    // A true neighbor on B's row still limits its label's touch area.
+    fake_pane(77, "Pa_GuideA_00", 70, 200, 40, 480, -318);
+    uint8_t *neighbor = fake_pane(78, "T_Icon_00", 77, 34, 34, 480, -318);
+    uint16_t a = 0xe040; put_ptr(neighbor + 0xe0, (uintptr_t)&a);
+    generic_back_prompt_observe(neighbor, 1);
+    float rect[4];
+    assert(generic_back_prompt_snapshot((uintptr_t)root, 12000, rect));
+    assert(fabsf(rect[0] - (480 + 17 + 640) / 1280.0f) < 1e-6f);
     dm_botw_touch_menu_reset();
 }
 
@@ -4243,6 +4309,7 @@ int main(void) {
     test_message_advance_owner();
     test_new_item_inventory_prompt();
     test_shared_prompt_collection();
+    test_stacked_action_guides();
     test_menu_animation_visibility();
     test_inline_holding_prompts();
     test_inventory_category_touch_cells();
