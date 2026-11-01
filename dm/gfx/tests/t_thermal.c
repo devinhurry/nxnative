@@ -47,8 +47,10 @@ static void *reader(void *unused) {
 int main(void) {
     target(60);
     const char *enabled = getenv("DM_THERMAL_CAP");
-    if (enabled && !strcmp(enabled, "0")) {
+    if (!enabled || strcmp(enabled, "1")) {
         at(10, 3); CHECK("disabled: a critical device keeps the configured cap", nvn_game_fps() == 60);
+        target(30); CHECK("disabled: the configured 30 fps cap still applies", nvn_game_fps() == 30);
+        target(60);
         movie(1); CHECK("disabled: the movie cap still applies", nvn_game_fps() == 30);
         CHECK("disabled: thermal state is never read", atomic_load(&thermal_reads) == 0);
     } else {

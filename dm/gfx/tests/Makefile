@@ -93,11 +93,13 @@ t_thermal_tsan: t_thermal.c $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -fsanitize=thread -o $@ t_thermal.c $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
 .PHONY: check_t_thermal thermal-tsan
 check_t_thermal: t_thermal
-	./t_thermal
+	env -u DM_THERMAL_CAP ./t_thermal
 	DM_THERMAL_CAP=0 ./t_thermal
+	DM_THERMAL_CAP=1 ./t_thermal
 thermal-tsan: t_thermal_tsan
-	./t_thermal_tsan
+	env -u DM_THERMAL_CAP ./t_thermal_tsan
 	DM_THERMAL_CAP=0 ./t_thermal_tsan
+	DM_THERMAL_CAP=1 ./t_thermal_tsan
 t_fuse_check: t_fuse_check.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_fuse_check.m $(MTL_T_SRC) $(FW)
 t_perf_order: t_perf_order.m $(MTL_T_DEP)

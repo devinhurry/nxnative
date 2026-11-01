@@ -107,6 +107,12 @@ DM_FORCE_STRICT	diagnostic	`=1` makes the loader fail on forced-hook entries no 
 DM_FPS	switch	`30` or `60` pins the frame rate the display link and frame pacing aim for; otherwise it follows the game's present interval (60, or 30 when the game asks for 30)
 DM_FPS_HOLD	player	`on` / `off` overrides the profile's `fps_hold`: whether late frames may raise the hold above the frame cap's vsyncs (on by default)
 DM_FPS_TARGET	player	Frame-rate cap: `30` or `60`, or `0` for the game's own limit; overrides the profile's `fps_target`
+DM_FRAMEGEN	player	Experimental MetalFX interpolation for profiles with validated inputs: `0` off (default); `30`, `40`, `50`, `60` select the real-frame target; `max` interpolates uncapped real pairs; unsupported GPUs keep normal rendering
+DM_FRAMEGEN_FI_CACHE	diagnostic	`0` disables the bounded cache of exact MetalFX interpolator configurations (on by default); changing configuration still resets temporal history
+DM_FRAMEGEN_PROFILE	path	JSONL output for frame-generation input selection, resource preparation and GPU-stage diagnostics; unset by default
+DM_FRAMEGEN_SHOT	path	Path prefix for one diagnostic real/generated PNG pair after 600 generated presentations; unset by default
+DM_FRAMEGEN_TIMING	path	TSV output for requested and confirmed real/generated presentation timestamps; unset by default
+DM_FRAMEGEN_YFLIP	diagnostic	Camera-reprojection clip-space Y multiplier (default `1`); `-1` tests the opposite convention
 DM_FS	diagnostic	When set, logs file opens, paths not found or not mounted, and a read summary every 64 MiB or 1000 reads
 DM_FSLOG	diagnostic	`=<file>` writes one TSV line per ReadFile: seconds since boot, guest path, offset, length and guest buffer address
 DM_FSLOG_HASH	diagnostic	With `DM_FSLOG`, adds a column with the FNV-1a 64 hash of the bytes read
@@ -191,7 +197,7 @@ DM_NVN_DUAL_WANT	path	`=<file>`: appends the key of each pixel shader a pipeline
 DM_NVN_ENC_LABEL	diagnostic	`=1` labels every render encoder `p<pass in frame> <width>x<height> <first 8 digits of the first draw's fragment key> d<draws>` for Instruments traces
 DM_NVN_ENC_THREAD	player	`1` runs the replay's Metal encoding on a thread of its own while the submit thread goes on translating; on by default on iOS (`0` turns it off), off on macOS
 DM_NVN_FAST_WAKE	switch	`0` makes the game's `SyncWait`s wake on the commit feedback handler instead of the GPU's own signal of the fence (on by default)
-DM_NVN_FB_SNAP	switch	Draws that sample a colour attachment of their own render pass: unset, those that write it (or follow a write in the pass) read a snapshot, reused until the game's next barrier; `0` none; `all` a fresh snapshot for every draw that samples one (slow, diagnostic)
+DM_NVN_FB_SNAP	switch	Draws that sample a colour attachment of their own render pass: unset or `1`, those that write it (or follow a write in the pass) read a snapshot, reused until the game's next barrier; `0` none (the launcher's opt-in Skip feedback snapshots experiment, rendering errors possible); `all` a fresh snapshot for every draw that samples one (slow, diagnostic)
 DM_NVN_FLUSH_FILL	switch	`0` starts a new GPU texture in a CPU-writable pool as zeros; by default one whose storage the game flushed before its first use is filled from that storage once
 DM_NVN_FRAMES	diagnostic	`=<N>` prints the NVN call table frame by frame for the first N frames (default 3)
 DM_NVN_FUSE_CHECK	diagnostic	`=1` checks pass merging in the same frame: renders the merged passes again apart and logs the comparison of the attachments every time
@@ -218,7 +224,7 @@ DM_NVN_PASSDUMP	diagnostic	`=<f>`, `<f1>-<f2>` or `every:<n>`: logs every render
 DM_NVN_PASSDUMP_ALL	diagnostic	`=1` makes `DM_NVN_PASSDUMP` record every draw and binding change, not only the first per pass and stage, including copies and inline uniform updates
 DM_NVN_PASSGPU	diagnostic	`=<file>` writes the GPU time of each render and compute pass from stage-boundary timestamp counters (off under Metal 4); also gives each dispatch its own encoder
 DM_NVN_PASSGPU_SERIAL	diagnostic	`=1` makes each encoder on the main command buffer wait until all earlier work has finished, so `DM_NVN_PASSGPU` times read each pass's exclusive time (totals read high)
-DM_NVN_PASS_REUSE	diagnostic	`0` restores the former identical-target split, conservative color-write policies and always-format-view snapshot allocations; on by default with local write proofs and required-only snapshot format-view usage, independent of TBDR lookahead; `ab` follows the existing `DM_AB` phases; allocation-policy comparisons need fresh processes because cached allocations retain their capabilities
+DM_NVN_PASS_REUSE	player	`0` restores the former identical-target split, conservative color-write policies and always-format-view snapshot allocations; on by default with local write proofs and required-only snapshot format-view usage, independent of TBDR lookahead; `ab` follows the existing `DM_AB` phases; allocation-policy comparisons need fresh processes because cached allocations retain their capabilities
 DM_NVN_PREDICT	switch	`0` turns off the parallel precompile look-ahead: a pipeline miss compiles only the pipeline it needs
 DM_NVN_PROF	diagnostic	`=1` wraps the implemented NVN functions in a timing wrapper and collects the time each takes during recording
 DM_NVN_PROGTRACE	diagnostic	`=<vertex keys,...>` logs matching ProgramSetShaders calls and their guest backtraces
@@ -387,9 +393,10 @@ DM_TEST_PRESENT_LAG	diagnostic	`=<every n>,<ms>[,<in a row>][;…]` sleeps that 
 DM_TEST_SWKBD_HOLD_MS	diagnostic	`=<ms>` (with `DM_KBD`) keeps the system keyboard up that long before `DM_KBD`'s text is returned, as a player typing would
 DM_TEST_SWKBD_LAG_MS	diagnostic	`=<ms>` sleeps that long between the keyboard handing back its text and the game's thread getting the result, to check that auto-accept does not act early
 DM_TEST_TRANSFORM_FEEDBACK	test	Path to the native t_transform_feedback executable used by the Python feedback tests
+DM_TEST_UI_LIBRARY	test	Compiled offline separate-UI fixture library used by the native frame-generation tests
 DM_TEST_UP_LEAK	diagnostic	`=1` keeps the old upload staging block instead of retiring it, as before the fix, to measure the leak
 DM_TEST_UP_LOST	diagnostic	`=<batch index>` treats that batch of uploads as dropped, to exercise the re-upload path
-DM_THERMAL_CAP	switch	`0` turns off the thermal cap, which holds the frame step at 30 fps while iOS reports a serious or critical thermal state (on by default)
+DM_THERMAL_CAP	player	`1` enables the optional thermal cap, which holds the frame step at 30 fps while iOS reports a serious or critical thermal state; off by default, also with `0`
 DM_THR	diagnostic	`=1` logs each SVC (except `SleepThread`) with its first four arguments, and each `CreateThread` with entry, stack, priority and core
 DM_THRCPU	diagnostic	`=<tsv path>[,<seconds>]` writes each thread's CPU time (100% = one core) and the total every interval (default 10 s); on iOS a relative path is under `Documents`
 DM_TOUCH_HAPTICS	player	`0` turns off the light haptic tap when a touch control is pressed (on by default); launcher setting

@@ -628,6 +628,25 @@ Used at `DM_FPS_TARGET=0` and for the interval the framework keeps while the VFR
 - The dynamic-resolution method (`main+0x12666e4`) keeps its scale in s8 (0.8–1.0 in 0.05 steps, `+0x1218`, `main+0x1266818`, or the forced 0.75 / 0.5 of `+0x284 & 0x1800`) and applies it from `main+0x1266880`: the views' scale (`+0x28a0` / `+0x28a4` = s8 × base width (`+0x1214`: 1600 docked, 1280 handheld) / output width), from which the size function (`main+0x106340c`) sizes the scene buffers each frame, the shader ratio `uking_dynamic_resolution_ratio` and the other readers (`main+0xc3c3f4`, an LOD check at `main+0x14126b4`). That block runs only when the dynamic path has just recomputed the scale (`+0x280` bit 4, set at `main+0x1266830`) or in a forced mode, else `main+0x126686c` skips it. The stub sets s8 at the block and, for a factor other than 1.0, takes the block every frame. A multiply in the size function (Tears of the Kingdom's way) would leave the ratio and those readers at the old scale.
 - At 0.5 the 1600×900 passes become 800×450 and the 800×450, 400×225, 200×112 and 100×56 chains halve too, while the shadow maps and the 1920×1080 output keep their size and the HUD stays sharp. It holds in handheld mode (960×540 at 0.75). On the Mac (M4 Pro) the GPU time does not change (about 13 ms in the first shrine at 1.0 and at 0.5): a frame has about 650 passes, most of them tiny. Whether it helps an iPhone, whose GPU loads and stores each pass's attachments, is what the setting is for.
 
+### Optional thermal frame cap (current, 2026-11-01)
+
+The iOS Performance setting **Reduce to 30 fps when hot** is optional and defaults
+off. It no longer lowers the selected frame-rate cap solely because the system
+reports a serious thermal state. Explicitly enabling it restores the existing
+30 fps cap and cooling recovery. Movie limits, late-frame holds and their return
+to 60 fps are unchanged; iOS still controls hardware frequencies. See
+[the thermal-cap mechanism](../../../docs/reference/frame-rate.md#a-thermally-serious-iphone-holds-30-fps).
+Validation: the production cap tests cover unset, explicit off and explicit on,
+including concurrent readers under ThreadSanitizer; all 64 frame-step checks,
+963 Python tool tests (17 skips), 53 iOS tool tests, launcher persistence,
+localization parsing and the Mac host build pass. Python lint has no baseline
+growth. Targeted C lint has no findings above its baseline, but uses LLVM 19
+rather than CI's LLVM 23. The full regression selects BOTW, the only locally
+prepared game, and stops during shader preparation because installed Metal
+`32023.883` differs from the locked `32023.922.4`; its report is
+`thermal-opt-in-20261101/regress/report.md` in the game's work folder.
+Physical iPhone sustained-performance acceptance remains pending.
+
 ### CPU
 
 - **Resolved: CPU hitches (Mac).** In steady play, frames with 30–210 ms of CPU work came every 1–10 s (Zora's Domain, M2 Max): the main thread and the two workers spinning in one job queue poll (`main+0xef62dc`). The first item of some of its jobs is for the thread of core 0; the threads of cores 1 and 2 wait until it is taken (the queue's flag at +0x98, its cursor at +0x94), taking and releasing the queue's lock (+0x1c) on every pass. Polled at full speed by the two workers, the lock went back and forth between their cores, and the main thread lost nearly every exclusive store: in 40 s of a Time Profiler trace it never held the lock while each worker held it about 750 times, and the three spun for 30–210 ms at a time. The spin-wait rule's lock case takes that loop: the workers leave the lock a moment between passes. Zora's Domain on an M2 Max at 120 Hz (42 s of steady play, three runs each, before → after): standing still, frames over 30 ms of CPU work 2.8 / 6.3 / 3.5 → 0 per 30 s, the frame's work p99 20–21 → 8.3–8.4 ms, late frames 2.8 / 5.6 / 2.8 → 2.1 / 0.7 / 2.1 per 30 s; turning the camera, CPU hitches 11.9 / 13.3 / 6.3 → 0, p99 21–25 → 9–15 ms, late frames 12.6 / 13.3 / 7.7 → 1.4 each. Found with `DM_HITCH_DUMP` (the main thread and two workers in one guest loop with no SVC; x0 held the item index) and an `xctrace` Time Profiler trace.
@@ -719,6 +738,21 @@ remains pending.
 - **Present snapshots (Mac).** The game's two swapchain textures held its CPU work to display ticks and the GPU at 444 MHz on an M2 Max ([present snapshots](../../../docs/reference/frame-rate.md#present-snapshots-the-games-swapchain-texture-free-at-once)). Judged by cost, the frame step stepped to 30 at a GPU time of 0.75 vsyncs. Zora's Domain from a Cemu save (120 Hz), frames on screen longer than 1/60 s by a quarter: 64 of 8,684 with neither, 41 with the GPU filler alone, 4 of 10,800 with snapshots alone (no step to 30 in 3 minutes, at 444 MHz throughout).
 
 ### Render-pass cost audit (2026-11-01)
+
+The Game Overlay exposes these local render-pass, store and snapshot-allocation
+policies as **Memory transfer optimization**, on by default. It is independent
+of the off-by-default **Skip feedback snapshots (experimental)** option; both
+choices are saved and applied at Play. See [settings](../../../docs/settings.md#memory-transfer-optimization).
+
+Overlay follow-up (2026-11-01): settings checks cover all four combinations of
+the two switches, persistence, Reset and explicit environment overrides on both
+platforms. The production iOS launcher compiles. After integrating main
+`c197cc6c`, the current `run_mac.py --test` path completes world, inventory,
+map and return-to-world checks with memory optimization on, automatic feedback
+snapshots and frame generation off. Screenshots render correctly and the log
+contains no `[RED]` lines or crash. Artifacts are in
+`01007EF00011E000-work/memory-transfer-toggle-20261101/`. No performance
+benchmark was run; physical-iPhone acceptance remains separate.
 
 Device baseline (`log2.txt`): iPhone Air, `eb3bc99ccd83`, frame generation and upscaling off,
 handheld with fixed scale 0.8. The actual feedback source is 1024x576. At
@@ -1088,6 +1122,8 @@ The retained native source is under `framegen-fix-20261031/`: `kept-profiled` an
 
 Current checks: twelve isolated motion processes pass 558 setup/input/pixel/resource checks; the 16-frame-per-condition reused-instance sequence passes 249; the queue/image fixture passes 187 plus 6 unsupported-device checks. The feature-off allocator and rescue fixtures passed 13 and 49 checks before the final rigid-selection refinement (which only runs with frame generation active). Both changed graphics translation units compile for iPhone, without signing or device execution. Report/document checks are separate from GPU acceptance. Native source hashes, exact control logs, excluded startup/candidate runs, platform optical-flow probes and `display-comparison.json` are retained in the work-folder report. Original saves remain untouched. Full shader/regress validation remains blocked by installed Metal 32023.883 versus the chain's locked 32023.921; this is not a five-game regression pass.
 
+
+**Feedback snapshot bypass (experimental, current, 2026-11-01).** Performance settings now offer **Skip feedback snapshots (experimental)**, off by default. Turning it on uses the existing `DM_NVN_FB_SNAP=0` path; turning it off restores automatic snapshots (`1`). This is an explicit correctness tradeoff, with no replacement protection. The setting and its saved choice apply on iPhone and Mac; iPhone rendering, sustained frame rate and thermal effects remain unverified. See [same-pass feedback](../../../docs/reference/rendering.md#same-pass-feedback-read-through-a-snapshot) for the mechanism and [the setting](../../../docs/settings.md#skip-feedback-snapshots-experimental) for comparison and reset instructions.
 
 **Native widescreen UI backgrounds (2026-10-28).** Widescreen is independent of touch/controller mode. Menu foreground content and touch coordinates retain the centered 16:9 layout; full-width native background Pictures and Windows extend to the display edges. Windows retain their own corner sizes, and title illustrations use proportional cover sizing. Returning to 16:9 restores native dimensions without accumulating scale.
 

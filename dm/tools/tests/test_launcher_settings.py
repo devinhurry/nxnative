@@ -15,13 +15,14 @@ settings = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(settings)
 
 BOTW, WONDER = '01007EF00011E000', '010015100B514000'
-PERFORMANCE_NVN = ['DM_PRESENT_SNAP', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_NVN_ENC_THREAD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
+PERFORMANCE_NVN = ['DM_NVN_PASS_REUSE', 'DM_NVN_FB_SNAP', 'DM_PRESENT_SNAP', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_NVN_ENC_THREAD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
 
 
-def build(gid, api, platform=None):
+def build(gid, api, platform=None, fixups=''):
     env = {'GFXAPI': api, **({'SETTINGS_PLATFORM': platform} if platform else {})}
     with tempfile.TemporaryDirectory() as tmp, patch.object(settings.nacp, 'languages', return_value=['en-US']), patch.dict(os.environ, env):
         if not platform: os.environ.pop('SETTINGS_PLATFORM', None)
+        (Path(tmp) / 'main.fixups.tsv').write_text(fixups)
         return {s['env']: s for s in settings.build(gid, tmp, Path(tmp) / 'control.nacp')['settings']}
 
 
@@ -67,6 +68,27 @@ class LauncherSettingsTests(unittest.TestCase):
                     self.assertEqual((s['kind'], s['section'], s['default']), ('toggle', 'Performance', '1'))   # Breath of the Wild's profile: present_snap on
                     self.assertIn('latency', s['note'])
 
+    def test_skip_feedback_snapshots_is_opt_in_for_nvn(self):
+        for platform in ('ios', 'mac'):
+            for gid in (BOTW, WONDER):
+                row = build(gid, 'nvn', platform)['DM_NVN_FB_SNAP']
+                self.assertEqual((row['kind'], row['section']), ('toggle', 'Performance'))
+                self.assertEqual((row['on'], row['off'], row['default']), ('0', '1', '1'))
+            for api in ('vulkan', 'gl', ''):
+                self.assertNotIn('DM_NVN_FB_SNAP', build(BOTW, api, platform))
+
+    def test_memory_transfers_default_on_independently_of_snapshot_bypass(self):
+        for platform in ('ios', 'mac'):
+            for gid in (BOTW, WONDER):
+                rows = build(gid, 'nvn', platform)
+                row = rows['DM_NVN_PASS_REUSE']
+                self.assertEqual((row['kind'], row['section'], row['label']), ('toggle', 'Performance', 'Memory transfer optimization'))
+                self.assertEqual((row['on'], row['off'], row['default']), ('1', '0', '1'))
+                self.assertFalse(row.get('needs'))
+                self.assertFalse(rows['DM_NVN_FB_SNAP'].get('needs'))
+            for api in ('vulkan', 'gl', ''):
+                self.assertNotIn('DM_NVN_PASS_REUSE', build(BOTW, api, platform))
+
     def test_sections_keep_the_profile_defaults(self):
         botw, wonder = build(BOTW, 'nvn'), build(WONDER, 'nvn')
         self.assertEqual([e for e, s in botw.items() if s['section'] == 'Performance'], ['DM_FRAMEGEN', 'DM_LOW_MEMORY'] + PERFORMANCE_NVN)
@@ -98,6 +120,17 @@ class LauncherSettingsTests(unittest.TestCase):
         self.assertEqual((s['on'], s['off'], s['default']), ('on', 'off', 'on'))
         s = build(BOTW, 'nvn')['DM_SHOW_FPS']
         self.assertEqual((s['on'], s['off']), ('1', '0'))
+
+    def test_thermal_cap_is_opt_in_for_ios_frame_step_builds(self):
+        for platform in ('ios', 'mac'):
+            for fixups in ('', '# FPS_STATE_OFF\t0x4000\n'):
+                rows = build(BOTW, 'nvn', platform, fixups)
+                self.assertEqual('DM_THERMAL_CAP' in rows, platform == 'ios' and bool(fixups))
+                if 'DM_THERMAL_CAP' in rows:
+                    s = rows['DM_THERMAL_CAP']
+                    self.assertEqual((s['kind'], s['section'], s['default'], s['on'], s['off']),
+                                     ('toggle', 'Performance', '0', '1', '0'))
+                self.assertEqual(rows['DM_FPS_HOLD']['default'], 'on')
 
     def test_touch_layout_defaults_and_game_scope(self):
         expected = {
