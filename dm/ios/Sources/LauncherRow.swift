@@ -43,6 +43,8 @@ struct SettingRow: View {
                     settingLabel
                 }
                 .accessibilityIdentifier(s.env)
+                .accessibilityLabel(Text(LocalizedStringKey(s.label)))
+                .accessibilityHint(note)
             case "choice":
                 if s.env == "DM_FPS_TARGET" {
                     VStack(alignment: .leading, spacing: 8) {

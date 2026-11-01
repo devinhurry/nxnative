@@ -5,7 +5,7 @@ import Foundation
 private var nativeApplied: [String: String] = [:]
 @_cdecl("dm_launcher_setting_is_live")
 func mockNativeSettingIsLive(_ key: UnsafePointer<CChar>) -> Int32 {
-    ["DM_BOTW_MOVE_CURVE", "DM_RUMBLE"].contains(String(cString: key)) ? 1 : 0
+    ["DM_BOTW_MOVE_CURVE", "DM_RUMBLE", "DM_FPS_TARGET", "DM_FRAMEGEN"].contains(String(cString: key)) ? 1 : 0
 }
 @_cdecl("dm_launcher_setting_apply")
 func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<CChar>) -> Int32 {
@@ -161,7 +161,7 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
         setenv("DM_ENV_FILE_KEYS", "", 1); unsetenv("DM_FULLSCREEN"); unsetenv("DM_OPMODE")
         let mm = LauncherModel(mac.settings, defaults: d)
         expect(mm.sections(basic: true) == ["Game", "Controls"] && mm.sections(basic: false) == ["Game", "Controls", "Touch left stick", "Touch layout", "Performance"], "Basic and Advanced keep the list's sections")
-        expect(mm.rows(in: "Game", basic: true).map(\.env) == ["DM_FPS_TARGET", "DM_RENDER_SCALE", "DM_OPMODE", "DM_LANG", "DM_FULLSCREEN"], "Basic rows in the list's order")
+        expect(mm.rows(in: "Game", basic: true).map(\.env) == ["DM_FPS_TARGET", "DM_FRAMEGEN", "DM_RENDER_SCALE", "DM_OPMODE", "DM_LANG", "DM_FULLSCREEN"], "Basic rows in the list's order")
         expect(!file.settings.contains { $0.env == "DM_FULLSCREEN" } && mm.values["DM_FULLSCREEN"] == "0", "Display mode is the Mac's, Window by default")
         mm.values["DM_FULLSCREEN"] = "1"; mm.apply()
         expect(String(cString: getenv("DM_FULLSCREEN")) == "1" && d.string(forKey: "launcher.DM_FULLSCREEN") == "1", "Fullscreen goes into the environment and is saved")
@@ -182,6 +182,53 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
         launched.reset(); launched.apply()
         expect(launched.values["DM_OPMODE"] == "0" && d.string(forKey: "launcher.DM_OPMODE") == "1", "Reset then Play keeps the saved choice of a setting fixed at launch")
         unsetenv("DM_OPMODE"); setenv("DM_ENV_LAUNCH_KEYS", "", 1); d.removeObject(forKey: "launcher.DM_OPMODE")
+        // The shared toggle follows the independently selected real-game rate.
+        let fgDomain = "nxnative.launcher-framegen-test.\(UUID().uuidString)"
+        let fgDefaults = UserDefaults(suiteName: fgDomain)!
+        defer { fgDefaults.removePersistentDomain(forName: fgDomain) }
+        unsetenv("DM_FRAMEGEN"); unsetenv("DM_FPS_TARGET")
+        let fgRow = file.settings.first { $0.env == "DM_FRAMEGEN" }!
+        let fpsRow = file.settings.first { $0.env == "DM_FPS_TARGET" }!
+        let fg = LauncherModel(file.settings, defaults: fgDefaults)
+        expect(fgRow.kind == "choice" && fgRow.options!.map { $0[0] } == ["0", "30", "60"] && !fg.frameGenerationEnabled,
+               "frame generation starts off and exposes only the two supported source rates")
+        expect(fg.rows(in: "Game", basic: true).contains { $0.env == fgRow.env }, "frame generation is beside the game frame rate")
+        for rate in ["30", "60"] { for enabled in [false, true] {
+            fg.setValue("0", for: fgRow)
+            fg.binding(fpsRow).wrappedValue = rate
+            fg.setValue(enabled ? rate : "0", for: fgRow)
+            fg.apply()
+            let expected = enabled ? rate : "0"
+            expect(String(cString: getenv("DM_FPS_TARGET")) == rate && String(cString: getenv("DM_FRAMEGEN")) == expected,
+                   "all four frame-rate and interpolation combinations reach the game")
+            let reopened = LauncherModel(file.settings, defaults: fgDefaults)
+            expect(reopened.values[fpsRow.env] == rate && reopened.values[fgRow.env] == expected,
+                   "each of the four modes survives reopening")
+            reopened.beginRuntime()
+            let other = rate == "30" ? "60" : "30"
+            reopened.binding(fpsRow).wrappedValue = other
+            expect(reopened.values[fgRow.env] == (enabled ? other : "0") &&
+                   String(cString: getenv("DM_FPS_TARGET")) == other &&
+                   String(cString: getenv("DM_FRAMEGEN")) == (enabled ? other : "0"),
+                   "live frame-rate changes preserve the independent interpolation switch")
+        } }
+        fgDefaults.set("30", forKey: "launcher.DM_FRAMEGEN")
+        fgDefaults.removeObject(forKey: "launcher.DM_FPS_TARGET")
+        let migrated = LauncherModel(file.settings, defaults: fgDefaults)
+        expect(migrated.values[fpsRow.env] == "30", "an existing interpolation choice restores its matching source rate")
+        setenv("DM_ENV_FILE_KEYS", "DM_FRAMEGEN", 1); setenv("DM_FRAMEGEN", "30", 1)
+        let fgLocked = LauncherModel(file.settings, defaults: fgDefaults)
+        fgLocked.binding(fpsRow).wrappedValue = "60"
+        fgLocked.reset(); fgLocked.apply()
+        expect(fgLocked.lockingKey(fpsRow) == "DM_FRAMEGEN" && fgLocked.values[fpsRow.env] == "30" &&
+               String(cString: getenv("DM_FRAMEGEN")) == "30", "a pinned interpolation rate remains consistent through edits and Reset")
+        setenv("DM_ENV_FILE_KEYS", "DM_FPS_TARGET", 1); setenv("DM_FPS_TARGET", "60", 1)
+        fgDefaults.set("30", forKey: "launcher.DM_FRAMEGEN")
+        let fpsLocked = LauncherModel(file.settings, defaults: fgDefaults)
+        expect(fpsLocked.values[fgRow.env] == "60", "a pinned frame rate takes precedence over a saved interpolation rate")
+        fpsLocked.setValue("0", for: fgRow)
+        expect(!fpsLocked.frameGenerationEnabled && fpsLocked.values[fpsRow.env] == "60", "interpolation can be disabled without changing a pinned frame rate")
+        setenv("DM_ENV_FILE_KEYS", "", 1); unsetenv("DM_FRAMEGEN"); unsetenv("DM_FPS_TARGET")
         // Automatic memory defaults are recalculated; only explicit On/Off is
         // saved, including choices equal to the current automatic default.
         let memoryDomain = "org.nxnative.launcher-memory-test.\(UUID().uuidString)"
@@ -276,6 +323,37 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
                memoryDefaults.string(forKey: "launcher." + runtimeCurve.env) == "0.65" && runtimeModel.appliesImmediately(runtimeCurve),
                "Mac settings bindings apply live values and save the choice")
         #endif
+        for list in [file.settings, mac.settings] {
+            let reuse = list.first { $0.env == "DM_NVN_PASS_REUSE" }!
+            let snapshots = list.first { $0.env == "DM_NVN_FB_SNAP" }!
+            let effective: (String) -> String = { key in getenv(key).map { String(cString: $0) } ?? "1" }
+            setenv("DM_ENV_FILE_KEYS", "", 1)
+            for reuseValue in ["0", "1"] { for snapshotValue in ["0", "1"] {
+                for row in [reuse, snapshots] { d.removeObject(forKey: "launcher." + row.env) }
+                let model = LauncherModel(list, defaults: d)
+                expect(model.values[reuse.env] == "1" && model.values[snapshots.env] == "1", "memory transfer optimization starts on and snapshot bypass starts off")
+                model.setValue(reuseValue, for: reuse); model.setValue(snapshotValue, for: snapshots); model.apply()
+                expect(effective(reuse.env) == reuseValue && effective(snapshots.env) == snapshotValue, "all four memory/snapshot combinations reach the game independently")
+                let restored = LauncherModel(list, defaults: d)
+                unsetenv(reuse.env); unsetenv(snapshots.env); restored.applySaved()
+                expect(restored.values[reuse.env] == reuseValue && restored.values[snapshots.env] == snapshotValue &&
+                       effective(reuse.env) == reuseValue && effective(snapshots.env) == snapshotValue, "both choices survive reopening and skipping the overlay")
+                let changedReuse = reuseValue == "1" ? "0" : "1"
+                restored.setValue(changedReuse, for: reuse); restored.apply()
+                expect(effective(reuse.env) == changedReuse && effective(snapshots.env) == snapshotValue, "changing memory transfers leaves snapshot bypass alone")
+                restored.setValue(snapshotValue == "1" ? "0" : "1", for: snapshots); restored.apply()
+                expect(effective(reuse.env) == changedReuse, "changing snapshot bypass leaves memory transfers alone")
+                restored.reset(); restored.apply()
+                expect(effective(reuse.env) == "1" && effective(snapshots.env) == "1" &&
+                       d.string(forKey: "launcher." + reuse.env) == nil && d.string(forKey: "launcher." + snapshots.env) == nil,
+                       "Reset restores memory optimization on and snapshot bypass off")
+            } }
+            setenv("DM_ENV_FILE_KEYS", reuse.env, 1); setenv(reuse.env, "0", 1)
+            let locked = LauncherModel(list, defaults: d)
+            locked.setValue("1", for: reuse); locked.reset(); locked.apply()
+            expect(locked.fixed.contains(reuse.env) && effective(reuse.env) == "0", "memory transfer optimization preserves an explicit env-file override")
+            unsetenv(reuse.env)
+        }
         // The experiment is an inverted toggle: On sends 0; Off restores automatic snapshots (1).
         for list in [file.settings, mac.settings] {
             d.removeObject(forKey: "launcher.DM_NVN_FB_SNAP")

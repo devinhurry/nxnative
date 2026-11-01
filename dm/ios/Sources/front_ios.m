@@ -6,6 +6,7 @@
 #import <Metal/Metal.h>
 #import <AVFAudio/AVFAudio.h>
 #include <errno.h>
+#include <stdatomic.h>
 #include "front.h"
 #include "hle.h"
 #include "dm.h"
@@ -28,6 +29,7 @@ void dm_gamepad_settings_done(void);
 void dm_gamepad_refresh_touch_settings(void);
 
 static CAMetalLayer *g_layer;
+static _Atomic int g_screen_hz=60;
 static void front_ios_power_watch(void);
 static void front_ios_audio_watch(void);
 static UILabel *front_ios_fps_label(void);
@@ -55,6 +57,8 @@ static UILabel *front_ios_fps_label(void);
 }
 - (void)layoutSubviews {
     [super layoutSubviews];
+    NSInteger hz=self.window.windowScene.screen.maximumFramesPerSecond;
+    if (hz>0) atomic_store(&g_screen_hz,(int)hz);
     CAMetalLayer *l = (CAMetalLayer *)self.layer;
     l.contentsScale = fmax(1,self.traitCollection.displayScale);
     if ([self.window.windowScene.session.role isEqualToString:UIWindowSceneSessionRoleExternalDisplayNonInteractive])
@@ -121,6 +125,7 @@ static void tv_attach(void);
 - (void)showLauncher;
 @end
 static DmRootVC *g_root;
+int front_screen_max_fps(void) { return atomic_load(&g_screen_hz); }
 UIInterfaceOrientationMask front_ios_orientations(UIWindow *window) {
     CGSize size=window.bounds.size; UIEdgeInsets safe=window.safeAreaInsets;
     return !strcmp(DM_GAME_ID,"01007EF00011E000") && dm_botw_portrait_allowed(size.width,size.height,safe.left,safe.right) ?

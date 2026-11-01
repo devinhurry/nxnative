@@ -8,6 +8,10 @@
 static uint64_t test_now = 10000000000ull;
 static unsigned test_waits, test_spurious;
 static int test_silent;
+// Pacing depends on availability, not on a test machine's optional MetalFX GPU.
+static int test_framegen;
+static int test_framegen_enabled(void) { return test_framegen; }
+#define dm_fg_enabled test_framegen_enabled
 static int test_clock_gettime(clockid_t clock, struct timespec *t) {
     (void)clock;
     *t = (struct timespec){.tv_sec = test_now / 1000000000ull, .tv_nsec = test_now % 1000000000ull};
@@ -24,6 +28,7 @@ static int test_pthread_cond_timedwait(pthread_cond_t *, pthread_mutex_t *, cons
 #define g_ft g_ft_hle
 #include "../nvn/hle_nvn.c"
 #undef g_ft
+#undef dm_fg_enabled
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
 module_t *g_mod; int g_nmod;
@@ -61,12 +66,95 @@ static void acquire_ticks(int hz, int display, int interval, double want, const 
     printf("%s: %.2f ticks per acquire (expected %.2f)\n", label, got, want);
     CHECK(got == want, label);
 }
-int main(void) { @autoreleasepool {
-    setenv("DM_RT", "0", 1); setenv("DM_PRESENT_SNAP", "0", 1);
+@interface ClockUpdate : NSObject
+@property CFTimeInterval targetPresentationTimestamp;
+@end
+@implementation ClockUpdate
+@end
+static void display_tick(NvMetalDisplayLinkDelegate *delegate,double target) {
+    ClockUpdate *update=[ClockUpdate new]; update.targetPresentationTimestamp=target;
+    [delegate metalDisplayLink:nil needsUpdate:(id)update];
+}
+static void missed_callback_regression(void) {
+    _Alignas(8) float state[10]={30}; dm_fps_state=(uint8_t *)state;
+    nvn_present_config(60,0); win_t win={.interval=2}; int idx;
+    for (int mode=1;mode<=2;mode++) {
+        test_framegen=1; g_link_mode=mode;
+        NvMetalDisplayLinkDelegate *delegate=[NvMetalDisplayLinkDelegate new];
+        double target=1000*mode;
+        display_tick(delegate,target);
+        mtl_link_wait_ticks(1,100000000ull);   // anchor the prior source frame
+        uint64_t tick=g_link_tick_n; unsigned waits=test_waits;
+        target+=1./30; display_tick(delegate,target);   // omitted 1 or 3 notifications
+        CHECK(g_link_tick_n-tick==(uint64_t)(2*mode),"missing display callbacks retain elapsed refresh intervals");
+        h_nvnWindowAcquireTexture((NVNwindow *)&win,NULL,&idx);
+        CHECK(test_waits==waits,"a late 30 fps source does not wait for missing callbacks again");
+        target+=10; display_tick(delegate,target);
+        waits=test_waits; h_nvnWindowAcquireTexture((NVNwindow *)&win,NULL,&idx);
+        CHECK(test_waits==waits,"a source resumes immediately after a long display gap");
+        waits=test_waits; h_nvnWindowAcquireTexture((NVNwindow *)&win,NULL,&idx);
+        CHECK(test_waits-waits==(unsigned)(2*mode),"a long gap cannot fund a burst of extra source frames");
+        test_framegen=0; tick=g_link_tick_n;
+        target+=1./30; display_tick(delegate,target);
+        CHECK(g_link_tick_n==tick+1,"feature-off callback accounting remains unchanged");
+    }
+    test_framegen=1; g_link_mode=1;
+    NvMetalDisplayLinkDelegate *delegate=[NvMetalDisplayLinkDelegate new];
+    display_tick(delegate,3000); uint64_t tick=g_link_tick_n;
+    display_tick(delegate,3000+1./120); display_tick(delegate,3000+1./60);
+    CHECK(g_link_tick_n==tick+1,"extra notifications do not invent elapsed refresh intervals");
+}
+static void framegen_vsync_regression(void) {
+    for (int rate=60;rate<=240;rate++) {
+        uint64_t previous=0; int events=0,ordered=1;
+        for (int raw=1;raw<=rate;raw++) {
+            uint64_t tick=link_vsync_count(raw,rate);
+            ordered &= tick>=previous && tick-previous<=1;
+            events+=(int)(tick-previous); previous=tick;
+        }
+        CHECK(ordered && events==60,"every native refresh rate retains 60 logical game vsyncs");
+    }
+    g_link_mode=2;
+    for (int enabled=0;enabled<=1;enabled++) {
+        test_framegen=enabled; g_link_tick_n+=g_link_tick_n&1;
+        uint64_t first=g_link_tick_n,seen=link_vsync_count(first,enabled?120:0);
+        int complete=1;
+        for (int i=0;i<60;i++) complete &= mtl_link_wait_vsync(&seen,100000000ull);
+        CHECK(complete && g_link_tick_n-first==120,"VI waits preserve game time on a 120 Hz screen with interpolation on or off");
+    }
+    test_framegen=0;
+}
+int main(int argc, char **argv) { @autoreleasepool {
+    int missed=argc>1 && !strcmp(argv[1],"--framegen-clock");
+    int snapshots=missed || (argc>1 && !strcmp(argv[1],"--framegen-snap"));
+    setenv("DM_RT", "0", 1); setenv("DM_PRESENT_SNAP", snapshots?"2":"0", 1);
     // Test uncapped display pacing independently of the selected game's default.
     setenv("DM_FPS_TARGET", "0", 1);
     g_dm_present_link = 2; g_link = (CAMetalDisplayLink *)[NSObject new];   // a link is "on" while the object is set; nothing calls it here
     CHECK(mtl_link_active(), "the link counts as active");
+    if (missed) {
+        missed_callback_regression();
+        framegen_vsync_regression();
+        printf("t_link_ticks missing callbacks: %d checks, %d failed\n",checks,failed);
+        return failed!=0;
+    }
+    if (snapshots) {
+        _Alignas(8) float state[10]={30}; dm_fps_state=(uint8_t *)state;
+        for (int mode=1;mode<=2;mode++) {
+            g_link_mode=mode;
+            test_framegen=0;
+            acquire_ticks(60,0,2,0,"ordinary snapshots keep their queue-based pacing");
+            test_framegen=1;
+            // No picture is queued: this covers unavailable, skipped or dropped
+            // interpolation without depending on how fast the GPU renders it.
+            acquire_ticks(60,0,2,mode*2,"30 real frames retain their own vsync budget with interpolation");
+            state[0]=60;
+            acquire_ticks(60,0,1,mode,"a game's one-vsync override keeps its real-frame budget");
+            state[0]=30;
+        }
+        printf("t_link_ticks snapshots: %d checks, %d failed\n",checks,failed);
+        return failed!=0;
+    }
     g_link_mode = 2;
     CHECK(mtl_link_rate() == 120, "a 120 Hz link reports 120");
     double a = per_wait(0, 1), b = per_wait(1, 1), c = per_wait(1, 2);

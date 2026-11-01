@@ -1,3 +1,46 @@
+// BC1->ASTC and BC2/3/7->ASTC, BC4/5->EAC kernels adapted from
+// MacNativeGames 92ec79bd (MIT; dm/third_party/macnativegames/LICENSE).
+#include "../tex/nvn_bc1astc_msl.h"
+#include "../tex/nvn_bctc_msl.h"
+static int g_bc_transcode_on = -1;
+static id<MTLComputePipelineState> bc_transcode_pipeline(int bc1) {
+    static id<MTLComputePipelineState> ps[2]; static int failed[2];
+    if (!ps[bc1] && !failed[bc1]) {
+        NSError *error = nil;
+        id<MTLLibrary> lib = [g_dev newLibraryWithSource:bc1 ? @(k_bc1astc_msl) : @(k_bctc_msl) options:nil error:&error];
+        id<MTLFunction> fn = [lib newFunctionWithName:bc1 ? @"bc1astc" : @"bctc"];
+        ps[bc1] = fn ? [g_dev newComputePipelineStateWithFunction:fn error:&error] : nil;
+        if (!ps[bc1]) { failed[bc1] = 1; MLOG("[RED] BC transcoder compilation failed: %s; using decompressed textures", error.localizedDescription.UTF8String); }
+    }
+    return ps[bc1];
+}
+static MTLPixelFormat bc_transcode_format(uint32_t f) {
+    switch (f) {
+        case 0x41: case 0x42: case 0x43: case 0x44: case 0x4d: return MTLPixelFormatASTC_4x4_LDR;
+        case 0x45: case 0x46: case 0x47: case 0x48: case 0x4e: return MTLPixelFormatASTC_4x4_sRGB;
+        case 0x49: return MTLPixelFormatEAC_R11Unorm;
+        case 0x4b: return MTLPixelFormatEAC_RG11Unorm;
+        default: return MTLPixelFormatInvalid;
+    }
+}
+static int bc_transcoded_format(MTLPixelFormat f) {
+    return f == MTLPixelFormatASTC_4x4_LDR || f == MTLPixelFormatASTC_4x4_sRGB || f == MTLPixelFormatEAC_R11Unorm || f == MTLPixelFormatEAC_RG11Unorm;
+}
+static int bc_sampled_format(const tex_t *t, uint32_t *pf) {
+    if (!g_no_bc) return 0;   // Native BC needs neither conversion nor extra storage.
+    if (g_bc_transcode_on < 0) {
+        // Re-compression is lossy: use it only under the low-memory preset.
+        const char *e = getenv("DM_NVN_BC_TRANSCODE"); g_bc_transcode_on = dm_low_memory_enabled() && (!e || strcmp(e, "0"));
+        MLOG("BC fallback transcoding: %s (low-memory preset; DM_NVN_BC_TRANSCODE=0 disables; ASTC/EAC may be lossy)", g_bc_transcode_on ? "on" : "off");
+    }
+    if (!g_bc_transcode_on || t->d.samples > 1 || (t->d.flags & (NVN_TEXTURE_FLAGS_IMAGE | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET))) return 0;
+    unsigned target = t->d.target;
+    if (target != 1 && target != 4 && target != 8 && target != 9) return 0;
+    MTLPixelFormat f = bc_transcode_format(t->d.format);
+    int bc1 = t->d.format == 0x41 || t->d.format == 0x42 || t->d.format == 0x45 || t->d.format == 0x46;
+    if (!f || !bc_transcode_pipeline(bc1)) return 0;
+    *pf = (uint32_t)f; return 1;
+}
 // BC fallback, used only when the device has no native BC formats. Keep the
 // original blocks beside the sampled image: copies and block render targets
 // operate on those bytes, then decode on the same GPU timeline. Native BC never
@@ -126,8 +169,53 @@ static NSUInteger bc_level(id<MTLTexture> t, NSUInteger lv) {
     while (root.parentTexture) { lv += root.parentRelativeLevel; root = root.parentTexture; }
     return lv;
 }
+// One scratch block per upload slot, reused after each ordered copy. Allocation
+// during up_flush cannot call up_alloc (which could recursively flush the batch).
+// Growing a slot retires its previous block with this batch, not the game frame.
+static id<MTLBuffer> g_bc_scratch[3];
+static void bc_transcode(id<MTL4ComputeCommandEncoder> encoder, id<MTLTexture> dst, NSUInteger slice, NSUInteger lv,
+                         MTLOrigin origin, MTLSize size, NvBC *info) {
+    int upload = encoder == g_up_ce;
+    NSUInteger bb = dst.pixelFormat == MTLPixelFormatEAC_R11Unorm ? 8 : 16;
+    NSUInteger row = ((size.width + 3) / 4) * bb, bytes = row * ((size.height + 3) / 4);
+    id<MTLBuffer> scratch, params; size_t off = 0, po;
+    if (upload) {
+        id<MTLBuffer> old = g_bc_scratch[g_up_cur_slot];
+        if (!old || old.length < bytes) {
+            scratch = [g_dev newBufferWithLength:MAX(bytes, 256u) options:MTLResourceStorageModePrivate];
+            if (!scratch) MDIE("cannot allocate %lu bytes of BC transcoding scratch", (unsigned long)bytes);
+            res_add(scratch); if (old) [g_up_keep addObject:old]; g_bc_scratch[g_up_cur_slot] = scratch;
+        } else scratch = old;
+        params = up_param_alloc(&po);
+    } else { off = arena_alloc(bytes, &scratch); po = arena_alloc(64, &params); }
+    NSUInteger source = bc_offset(dst, lv, slice, origin, info), source_row = info->row[bc_level(dst, lv)];
+    if (source > UINT32_MAX || source_row > UINT32_MAX || off > UINT32_MAX) MDIE("BC transcoding offset exceeds the kernel ABI");
+    int bc1 = info->format == 0x41 || info->format == 0x42 || info->format == 0x45 || info->format == 0x46;
+    uint32_t p[6] = {(uint32_t)source, (uint32_t)source_row, (uint32_t)size.width, (uint32_t)size.height,
+        bc1 ? (info->format == 0x42 || info->format == 0x46) : info->format, (uint32_t)off};
+    memcpy((uint8_t *)params.contents + po, p, sizeof p);
+    static id<MTL4ArgumentTable> table;
+    if (!upload && !table) {
+        MTL4ArgumentTableDescriptor *d = [MTL4ArgumentTableDescriptor new]; d.maxBufferBindCount = 3;
+        NSError *error = nil; table = rec_table([g_dev newArgumentTableWithDescriptor:d error:&error]);
+        if (!table) MDIE("BC transcoder argument table failed: %s", error.localizedDescription.UTF8String);
+    }
+    id<MTL4ArgumentTable> at = upload ? g_up_ct : table;
+    [encoder barrierAfterEncoderStages:MTLStageDispatch | MTLStageBlit beforeEncoderStages:MTLStageDispatch | MTLStageBlit visibilityOptions:resource_vis()];
+    [encoder setArgumentTable:at]; [at setAddress:info->blocks.gpuAddress atIndex:0];
+    [at setAddress:params.gpuAddress + po atIndex:1]; [at setAddress:scratch.gpuAddress atIndex:2];
+    [encoder setComputePipelineState:bc_transcode_pipeline(bc1)];
+    [encoder dispatchThreadgroups:MTLSizeMake((size.width + 31) / 32, (size.height + 31) / 32, 1) threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
+    [encoder barrierAfterEncoderStages:MTLStageDispatch beforeEncoderStages:MTLStageBlit visibilityOptions:resource_vis()];
+    // These are output ASTC/EAC blocks, so bypass the BC-input copy wrapper.
+    [encoder copyFromBuffer:scratch sourceOffset:off sourceBytesPerRow:row sourceBytesPerImage:bytes sourceSize:size toTexture:dst
+          destinationSlice:slice destinationLevel:lv destinationOrigin:origin];
+    [encoder barrierAfterEncoderStages:MTLStageBlit beforeEncoderStages:MTLStageDispatch | MTLStageBlit visibilityOptions:resource_vis()];
+    if (!upload) [encoder setArgumentTable:g_ct];
+}
 static void bc_decode(id<MTL4ComputeCommandEncoder> encoder, id<MTLTexture> dst, NSUInteger slice, NSUInteger lv, MTLOrigin origin, MTLSize size) {
     NvBC *info = bc_info(dst); if (!info) return;
+    if (bc_transcoded_format(dst.pixelFormat)) { bc_transcode(encoder, dst, slice, lv, origin, size, info); return; }
     int is3d = dst.textureType == MTLTextureType3D;
     MTLPixelFormat pf = dst.pixelFormat == MTLPixelFormatRGBA8Unorm_sRGB ? MTLPixelFormatRGBA8Unorm : dst.pixelFormat;
     __strong id<MTLTexture> root = dst; NSUInteger root_lv = lv, root_slice = slice;

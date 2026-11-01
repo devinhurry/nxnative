@@ -88,6 +88,20 @@ int main(void) {
       EXPECT("uncapped native mode keeps original budget",100,(int)normalization);
       *(uint32_t *)(state+4)=1;
       EXPECT("the state page's movie flag is the host's copy, not read for the cap",60,fps_present_cap());
+      nvn_framegen_step clock={0}; w.presents=1;
+      g_fs_start=1000000000ull; fstep_tick(&w,60);
+      fstep_framegen_mode(&clock,30);
+      (void)nvn_framegen_seconds(&clock,1000000000ull,30,30);
+      (void)nvn_framegen_seconds(&clock,1033333333ull,30,30);
+      fstep_framegen_mode(&clock,0);
+      w.presents=1000; g_fs_start=60000000000ull; fstep_tick(&w,60);
+      EXPECT("leaving interpolation does not repay its elapsed game time",1,g_fs.step);
+      EXPECT("ordinary stepping resumes without old time debt",0,(int)g_fs.debt);
+      EXPECT("ordinary stepping has no stale late-frame run",0,g_fs.late_run);
+      w.presents++; g_fs_start=60016666667ull; fstep_tick(&w,60);
+      EXPECT("next ordinary frame retains its original game speed",1,g_fs.step);
+      memset(&g_fs,0,sizeof g_fs); memset(&g_fg,0,sizeof g_fg); atomic_store(&g_fs_k,0);
+      g_fs_restart=1;
       dm_fps_state=NULL;unsetenv("DM_FPS_TARGET");g_present_cap=-1;nvn_present_config(0,0);
     }
     // No frame step page and no engine limiter the host writes (a main the profile's

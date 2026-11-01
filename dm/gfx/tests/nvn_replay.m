@@ -314,6 +314,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     char live[65]; cap_hex(pres->sha256, live); int same_all = 1, ok_all = 1; uint64_t worst_px = 0;
     for (int rep = 0; rep < warm; rep++) {
         uint64_t exec_ns = 0, setup_ns = 0, pass0 = 0, draw0 = 0, frame_no = rep == 0 && mtl_frame ? mtl_frame : 1000000 + (uint64_t)rep;   // the first replay takes the live frame number (frame-keyed diagnostics)
+        uint64_t loads0, stores0, full0; mtl_bw(&loads0, &stores0, &full0);
         if (tdir) { char tp[1200]; snprintf(tp, sizeof tp, "%s/r%d_%%d.png", tdir, index + rep); dm_gfx_texdump_next(tp); g_td_frame = (long)frame_no; }
         if (rep) for (uint32_t r = 0; r < rp_nrg; r++) if (rp_rg[r].mem) memcpy(rp_rg[r].mem, rp_rg[r].orig, (size_t)rp_rg[r].size);   // back to the state at the first submit
         for (uint32_t s = 1; s <= nsub; s++) {
@@ -394,6 +395,9 @@ int main(int argc, char **argv) { @autoreleasepool {
         }   // DM_NVN_TEXDUMP of the live frame: the replay has no next frame to trigger it
         double gpu = mtl_gpu_ms(frame_no);
         uint64_t pass1, draw1; mtl_stats(&pass1, &draw1);
+        char feedback[400]; mtl_feedback_stats(feedback, sizeof feedback);
+        uint64_t loads, stores, full_rw; mtl_bw(&loads, &stores, &full_rw);
+        printf("replay %d: attachments load %.2f MiB / store %.2f MiB; %s\n", index + rep, (loads - loads0) / 1048576.0, (stores - stores0) / 1048576.0, feedback);
         if (opt_writes) { uint64_t a[6]; mtl_vbuf_stats(&a[0], &a[1], &a[2], &a[3], &a[4], &a[5]); printf("vbuf: resolve %llu reuse %llu set %llu skip %llu unaligned copies %llu (%llu bytes)\n", a[0], a[1], a[2], a[3], a[4], a[5]); }
         if (have_px) printf("replay %d: %llu pixels differ from the live frame (largest byte difference %u, x %u-%u y %u-%u)\n", index + rep, (unsigned long long)npx, big, x0, x1, y0, y1);
         printf("replay %d: digest %s %s live %s (%ux%u format %u); submit CPU %.2f ms (+ %.2f ms applying the captured state), GPU %.2f ms; %llu passes, %llu draws, %llu segments\n", index + rep, out, same ? "==" : "!=", live, w, h, pf, exec_ns / 1e6, setup_ns / 1e6, gpu,

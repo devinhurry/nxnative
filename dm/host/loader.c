@@ -1,6 +1,7 @@
 // Multi-module loading (playing the role of Horizon's rtld): mapping, claiming thread slots, gate registration, cross-module relocation, take-over by name, segment permissions.
 // The code area (original text and patch area) is set to read-only+execute as soon as it is copied in, and from then on the loader only writes data: on iOS these two blocks must be embedded as is as signed code segments.
 #include "dm.h"
+#include "../gfx/nvn/framegen_policy.h"
 #include <TargetConditionals.h>
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -10,6 +11,12 @@
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
 #include "hle.h"
+
+// CPU-only tools have no interpolation backend. The graphics implementation
+// supplies the strong definition and checks device support before the cap.
+__attribute__((weak)) int dm_fg_enabled(void) { return 0; }
+__attribute__((weak)) int dm_fg_mode(void) { return *DM_GAME_FRAMEGEN_SCENE && dm_fg_enabled()?dm_framegen_parse(getenv("DM_FRAMEGEN")):0; }
+__attribute__((weak)) int dm_fg_requested_mode(void) { return dm_fg_mode(); }
 
 module_t *g_mod;
 int g_nmod;
@@ -231,8 +238,24 @@ static void read_layout(module_t *m, const char *dir) {
 // (hle_nvn.c fstep_tick)
 uint8_t *dm_fps_state;
 static const char *g_fps_mod;   // the module holding the state page (for the log)
+static _Atomic int g_normal_fps_target;
+void dm_framegen_mode_changed(int mode) {
+    if (!dm_fps_state) return;
+    uint32_t was=__atomic_load_n((uint32_t *)(dm_fps_state+0x40),__ATOMIC_RELAXED);
+    float target=mode ? (mode>0?mode:60) : g_normal_fps_target;
+    float ratio=mode ? 30.0f/(mode>0?mode:60) : 0;
+    uint32_t bits; memcpy(&bits,&target,4); __atomic_store_n((uint32_t *)dm_fps_state,bits,__ATOMIC_RELAXED);
+    memcpy(&bits,&ratio,4); __atomic_store_n((uint32_t *)(dm_fps_state+0x40),bits,__ATOMIC_RELAXED);
+    if (mode || was) {
+        // The first guest frame after a live change precedes the next present.
+        // Publish its nominal step now instead of leaving the old policy's one.
+        uint32_t rate=(uint32_t)target,step=rate?(60+rate-1)/rate:0;
+        __atomic_store_n((uint32_t *)(dm_fps_state+0x20),step,__ATOMIC_RELAXED);
+    }
+    if (!mode) __atomic_store_n((uint32_t *)(dm_fps_state+0x44),0,__ATOMIC_RELAXED);
+}
 static void install_fps_state(module_t *m) {
-    if (m->fps_state_off + 0x40 > m->size || m->fps_state_off < m->key_page_off + m->key_page_size) die("%s: frame step state page out of range", m->name);
+    if (m->fps_state_off + 0x48 > m->size || m->fps_state_off < m->key_page_off + m->key_page_size) die("%s: frame step state page out of range", m->name);
     dm_fps_state = m->base + m->fps_state_off; g_fps_mod = m->name;
 }
 // The settings in the state page, written when the game starts (main.c, after host loading): on iOS the loading runs at app launch, before the launcher has set DM_FPS_TARGET and
@@ -241,8 +264,10 @@ void dm_fps_state_apply(void) {
     if (!dm_fps_state) return;
     const char *e = getenv("DM_FPS_TARGET"); int t = e ? atoi(e) : DM_GAME_FPS_TARGET;
     if (t != 0 && t != 30 && t != 60) { LOG("[RED] DM_FPS_TARGET=%s: must be 0, 30 or 60; using the game's own frame step", e); t = 0; }
-    float f = (float)t; uint32_t word; memcpy(&word, &f, sizeof word);
-    __atomic_store_n((uint32_t *)dm_fps_state, word, __ATOMIC_RELAXED);
+    g_normal_fps_target=t;
+    int framegen=dm_fg_mode(); dm_framegen_mode_changed(framegen);
+    if (framegen) t=framegen>0?framegen:60;
+    uint32_t word;
     // Render scale of the 3D views (the stubs at Tears of the Kingdom's main+0xd5cc0, Breath of the Wild's main+0x1266880): 1.0 keeps the game's own size and dynamic resolution;
     // another factor fixes the size at that fraction (DM_RENDER_SCALE, 0.5 to 1.0). Independent of the frame step: written at target 0 too
     const char *rs = getenv("DM_RENDER_SCALE"); float sc = 1.0f;
@@ -252,11 +277,12 @@ void dm_fps_state_apply(void) {
     // BOTW's verified budget stub reads this normalization; other state-page
     // builds leave it unused. A manual scale retains its fixed-size semantics.
     const char *dr = getenv("DM_DYNAMIC_RESOLUTION");
-    float percent = dr && !strcmp(dr, "1") && sc == 1.0f ? (t == 60 ? 200.0f : 100.0f) : 0;
+    float percent = dr && !strcmp(dr, "1") && sc == 1.0f ? (t>0?100.0f*t/30.0f:100.0f) : 0;
     memcpy(&word, &percent, sizeof word);
     __atomic_store_n((uint32_t *)(dm_fps_state + 0x38), word, __ATOMIC_RELAXED);
     char cap[32]; snprintf(cap, sizeof cap, ", capped at %d fps", t);
-    LOG("%s: frame step %s%s (%s)", g_fps_mod, !t ? "as the game sets it" : "in whole vsyncs decided by the host", t ? cap : "", e ? "DM_FPS_TARGET" : "game profile fps_target");
+    if (framegen<0) snprintf(cap,sizeof cap,", uncapped");
+    LOG("%s: frame step %s%s (%s)", g_fps_mod, framegen ? "measured time between real frames" : !t ? "as the game sets it" : "in whole vsyncs decided by the host", t ? cap : "", framegen ? "DM_FRAMEGEN" : e ? "DM_FPS_TARGET" : "game profile fps_target");
 }
 static void install_key_page(module_t *m) {
     if (m->key_page_off + m->key_page_size > m->size) die("%s: key page out of range", m->name);

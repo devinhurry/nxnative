@@ -144,6 +144,10 @@ final class LauncherModel: ObservableObject {
         var next = values
         next[s.env] = v
         if s.env == "DM_FPS_TARGET", frameGenerationEnabled { next["DM_FRAMEGEN"] = v }
+        if s.env == "DM_FRAMEGEN", v != "0" {
+            if fixed.contains("DM_FPS_TARGET") { next[s.env] = values["DM_FPS_TARGET"] ?? v }
+            else { next["DM_FPS_TARGET"] = v }
+        }
         values = next
     }
 

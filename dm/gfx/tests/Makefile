@@ -85,6 +85,8 @@ t_timestamp: t_timestamp.c ../nvn/nvn_timestamp.h
 	$(CC) -std=c11 -O2 -g -Wall -Wextra -Werror -o $@ $<
 t_fstep: t_fstep.c ../nvn/nvn_fstep.h
 	clang -O1 -Wall -o $@ t_fstep.c
+t_framegen_step: t_framegen_step.c ../nvn/nvn_framegen_step.h
+	clang -O1 -Wall -o $@ t_framegen_step.c
 t_thermal: t_thermal.c $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_thermal.c $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
 t_thermal_tsan: t_thermal.c $(MTL_T_DEP)
@@ -119,6 +121,11 @@ check_t_perf_order: t_perf_order
 	DM_NVN_FAST_WAKE=0 DM_NVN_SLICE_MERGE=0 DM_NVN_CS_HOIST=0 MTL_DEBUG_LAYER=1 ./t_perf_order
 t_link_ticks: t_link_ticks.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_link_ticks.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
+.PHONY: check_t_link_ticks
+check_t_link_ticks: t_link_ticks
+	./t_link_ticks
+	./t_link_ticks --framegen-snap
+	./t_link_ticks --framegen-clock
 t_cpu_tex: t_cpu_tex.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_cpu_tex.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
 .PHONY: check_t_cpu_tex
@@ -181,6 +188,21 @@ t_present_rescue: t_present_rescue.m t_present_rescue_focus.c $(MTL_T_DEP)
 .PHONY: check_t_present_rescue
 check_t_present_rescue: t_present_rescue
 	MTL_DEBUG_LAYER=1 ./t_present_rescue --metal
+t_framegen: t_framegen.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_framegen.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_framegen
+check_t_framegen: t_framegen t_framegen_ui.metallib
+	MTL_DEBUG_LAYER=0 ./t_framegen --unsupported
+	DM_TEST_UI_LIBRARY=$(CURDIR)/t_framegen_ui.metallib MTL_DEBUG_LAYER=0 ./t_framegen
+t_framegen_ui.metallib: test_dmsh_ui.py ../tools/dmsh_ui.py ../tools/dmsh_alpha.py ../nvn/dmsh_abi.h
+	python3 test_dmsh_ui.py --fixture t_framegen_ui.metal
+	xcrun -sdk macosx metal -c t_framegen_ui.metal -o t_framegen_ui.air
+	xcrun -sdk macosx metallib t_framegen_ui.air -o $@
+t_framegen_motion: t_framegen_motion.m t_framegen.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_framegen_motion.m $(filter-out ../nvn/framegen_metal.m,$(MTL_T_SRC)) $(FW)
+.PHONY: check_t_framegen_motion
+check_t_framegen_motion: t_framegen_motion
+	MTL_DEBUG_LAYER=0 ./t_framegen_motion
 t_present_alloc: t_present_alloc.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_present_alloc.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_present_alloc
@@ -208,6 +230,8 @@ t_xv: t_xv.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_xv.m $(MTL_T_SRC) $(FW)
 t_ub: t_ub.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_ub.m $(MTL_T_SRC) $(FW)
+t_driver_bank: t_driver_bank.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_driver_bank.m $(MTL_T_SRC) $(FW)
 t_gpuprof: t_gpuprof.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_gpuprof.m $(MTL_T_SRC) $(FW)
 t_vbuf: t_vbuf.m $(MTL_T_DEP)
@@ -238,9 +262,12 @@ t_bc: t_bc.m $(MTL_T_DEP)
 .PHONY: check_t_bc
 check_t_bc: t_bc
 	python3 ../tex/bcdec_msl.py --check
+	python3 ../tex/gen_bctc_msl.py --check
 	DM_TEST_NO_BC=0 MTL_DEBUG_LAYER=1 ./t_bc
 	DM_TEST_NO_BC=1 MTL_DEBUG_LAYER=1 ./t_bc
 	DM_TEST_NO_BC=1 DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_bc
+	DM_TEST_NO_BC=1 MTL_DEBUG_LAYER=1 ./t_bc --transcode
+	DM_TEST_NO_BC=1 DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_bc --transcode
 t_upload_slots: t_upload_slots.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_upload_slots.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_upload_slots
@@ -273,6 +300,10 @@ t_geometry_primitive_id: t_geometry_primitive_id.m t_geometry.m $(MTL_T_DEP)
 .PHONY: check_t_feedback
 check_t_feedback: t_feedback
 	MTL_DEBUG_LAYER=1 ./t_feedback
+	DM_NVN_PASS_REUSE=0 MTL_DEBUG_LAYER=1 ./t_feedback
+	DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_feedback
+	DM_NVN_ENC_THREAD=1 DM_NVN_PASS_REUSE=0 MTL_DEBUG_LAYER=1 ./t_feedback
+	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_feedback
 t_mip_extent: t_mip_extent.m ../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_mip_extent.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
 .PHONY: check_t_mip_extent
@@ -287,6 +318,10 @@ t_rt_range: t_rt_range.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_rt_range.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_rt_range
 check_t_rt_range: t_rt_range
+	MTL_DEBUG_LAYER=1 ./t_rt_range --same-target
+	MTL_DEBUG_LAYER=1 ./t_rt_range --same-target --sample-attachment
+	MTL_DEBUG_LAYER=1 ./t_rt_range --same-target --registry-change
+	DM_NVN_PASS_REUSE=0 MTL_DEBUG_LAYER=1 ./t_rt_range --same-target
 	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_rt_range
 	MTL_DEBUG_LAYER=1 ./t_rt_range   # DontCare on by default: attachment bytes use the closed-form expectation of "one depth-stencil store saved per pass"
 	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_rt_range --disabled
@@ -398,6 +433,9 @@ check_t_image_attachment_store: RUN_ENV = MTL_DEBUG_LAYER=1
 t_unwritten_store: t_unwritten_store.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_unwritten_store.m $(MTL_T_SRC) $(FW)
 check_t_unwritten_store: RUN_ENV = MTL_DEBUG_LAYER=1
+check_t_unwritten_store: t_unwritten_store
+	MTL_DEBUG_LAYER=1 ./t_unwritten_store
+	DM_NVN_PASS_REUSE=0 MTL_DEBUG_LAYER=1 ./t_unwritten_store
 t_upgrade_alias: t_upgrade_alias.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_upgrade_alias.m $(MTL_T_SRC) $(FW)
 check_t_upgrade_alias: RUN_ENV = MTL_DEBUG_LAYER=1

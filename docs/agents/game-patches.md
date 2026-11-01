@@ -95,7 +95,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 | [Subnautica: Below Zero](#subnautica-below-zero) | 1 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [Super Smash Bros. Ultimate](#super-smash-bros-ultimate) | 11 | 0 | 0 | 1 | 0 | `game` |
 | [Taiko Risshiden V DX](#taiko-risshiden-v-dx) | 1 | 0 | 0 | 2 | 0 | `game` |
-| [The Legend of Zelda: Breath of the Wild](#the-legend-of-zelda-breath-of-the-wild) | 7 | 13 | 6 | 0 | 3 | `build` → `game` ×3 |
+| [The Legend of Zelda: Breath of the Wild](#the-legend-of-zelda-breath-of-the-wild) | 7 | 13 | 10 | 0 | 3 | `build` → `game` ×3 |
 | [The Legend of Zelda: Link's Awakening](#the-legend-of-zelda-links-awakening) | 1 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [The Legend of Zelda: Tears of the Kingdom](#the-legend-of-zelda-tears-of-the-kingdom) | 0 | 0 | 9 | 0 | 0 | `build` → `game` |
 | [Xenoblade Chronicles 3](#xenoblade-chronicles-3) | 6 | 0 | 0 | 0 | 0 | `build` → `game` |
@@ -531,10 +531,14 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - gate 38 at `+0xd6f034`: native list-widget update entry: x0 is the shared list widget; cache receiver metadata only
   - frame step `+0xeb0f88`: held-button counts step by the VFR ratio (menu repeat in game time at any frame step)
   - frame step `+0x11269b8`: setWaitVsyncInterval: the host's step unless the VFR override is set (state page target fps; 0 = the game's interval)
+  - frame step `+0x125f128`: optional frame generation: latched real-time VFR / fade / UI / physics step; zero preserves original
   - frame step `+0x126686c`: scale apply block taken every frame when the host render scale is not 1.0
   - frame step `+0x1266880`: 3D view scale = the host render scale (1.0 = the game's dynamic resolution)
   - frame step `+0x12670ac`: native dynamic-resolution GPU budget follows the host frame-rate cap
+  - frame step `+0x1280ee4`: optional frame generation: latched real-time VFR / fade / UI / physics step; zero preserves original
+  - frame step `+0x128106c`: optional frame generation: latched real-time VFR / fade / UI / physics step; zero preserves original
   - frame step `+0x151d3d0`: VFR::updateInterval: its own override published for the host (state page target fps; 0 = original)
+  - frame step `+0x151d484`: optional frame generation: latched real-time VFR / fade / UI / physics step; zero preserves original
   - render scale stub (the launcher offers DM_RENDER_SCALE)
   - launcher capabilities: DYNAMIC_RESOLUTION
   - host [hle_botw_touch_actions.c:11](../../dm/host/hle_botw_touch_actions.c#L11): build check
@@ -647,6 +651,8 @@ Profile keys (`game.tsv`) whose value changes what the host does, set away from 
 | `camera_ui_aspect 19:0xa0:0xa8:0x74` | [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) | `game`, at goal | the game's model lens and projection members at the checked observation gate |
 | `camera_world_aspect 19:0x41c0` | [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) | `game`, at goal | the game's world-label camera member at the checked observation gate |
 | `enc_thread on` | [Need For Speed™ Hot Pursuit Remastered](../../dm/games/010029B0118E8000/README.md) | `game` → `host`, gap | what iOS does for every game: a default for every game after `regress.py check` on the games |
+| `framegen_camera 0:2336` | [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) | `game`, at goal | the game's validated vertex camera block, used only by opt-in interpolation |
+| `framegen_scene bd7ffdd435c6c3bc f7ee6fe10b925543` | [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) | `game`, at goal | the game's scene-completion shader identity; normal rendering does not use it |
 | `game_env DOTNET_GCRegionRange=60000000` | [Absolum](../../dm/games/0100A83022A22000/README.md) | `game`, at goal | measured for the game's regions |
 | `present_snap on` | [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) | `game` → `host`, gap | a setting the game was tested with: a default for every game after `regress.py check` on the games |
 | `pso_mtl4 on` | [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) | `game` → `host`, gap | a setting the game was tested with on an iPhone: a default for every game after `regress.py check` on the games |

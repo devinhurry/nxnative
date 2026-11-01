@@ -9,6 +9,7 @@
 # Environment IOSOUT=dir: the same MSL also goes through dm/ios/tools/ios_metal.compile to produce an iphoneos metallib + reflection (chain_metal records the iOS compile convention)
 # Final summary: success / failure counts and the distribution of reasons; distribution of driver segment read offsets (those outside the range the replay layer can fill are listed separately)
 import inspect, os, re, sys, json, struct, hashlib, shutil, subprocess, tempfile, collections, threading, concurrent.futures as cf
+import dmsh_ui
 import dmsh_geometry, dmsh_atomic, dmsh_abi as abi   # abi: the driver segment layout and the binding kinds the host shares (dm/gfx/nvn/dmsh_abi.h)
 DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # Workspace root (game files, build outputs and run artifacts are all under it)
 HOME = os.path.expanduser('~')
@@ -150,6 +151,7 @@ VIN_STATS = collections.Counter()
 PULL_STATS = collections.Counter()
 ALPHA_STATS = collections.Counter()
 LOGIC_STATS = collections.Counter()
+UI_STATS = collections.Counter()
 BF_STATS = collections.Counter()
 
 def variant_semantic_label(label, modules):
@@ -164,6 +166,7 @@ def module_semantic_hash(module):
 def memo_variant(label, module, *args, **kwargs):
     dependencies = [module]
     if module is dmsh_mesh: dependencies.extend((dmsh_geometry, dmsh_pull))
+    if module is dmsh_ui: dependencies.append(dmsh_alpha)
     dep_values = {'abi': VARIANT_ABI_VALUES, 'modules': [VARIANT_MODULE_FP[m.__name__] for m in dependencies]}
     if dmsh_pull in dependencies: dep_values['pull_fetch_sha256'] = VARIANT_PULL_FETCH_FP
     return CODEGEN.memo(variant_semantic_label(label, dependencies), module.variant if module is not dmsh_mesh else module.compose,
@@ -261,12 +264,16 @@ def alpha_finish(key, sources, refls):   # the alpha test library <key>_ba (dmsh
 def logic_finish(key, sources, refls):   # the logic operation library <key>_bl (dmsh_logic.py): none for a shader without integer colour outputs
     return ps_side_finish(key, sources, refls, dmsh_logic, 'bl', 'logic', LOGIC_STATS, 'logic operation')
 
+def ui_finish(key, sources, refls):
+    if GAME.get('shader_ui_capture', '0') != '1': return refls
+    return ps_side_finish(key, sources, refls, dmsh_ui, 'bui', 'ui_capture', UI_STATS, 'separate UI')
+
 CODEGEN = dmsh_codegen_cache.Cache(os.path.join(CAS, 'codegen'), SPIRV_CROSS)
 CODEGEN.watch_sources([__file__, SPIRV_CROSS, dmsh_codegen_cache.__file__, dmsh_shader_pipeline.__file__, dmsh_xlatecache.__file__, dmsh_mtlcache.__file__, dmsh_chain.__file__, dmsh_atomic.__file__, dmsh_geometry.__file__,
                        dmsh_facts.__file__, dmsh_fetch.__file__, dmsh_vin.__file__, dmsh_pull.__file__, dmsh_alpha.__file__,
-                       dmsh_logic.__file__, dmsh_mesh.__file__, abi.__file__, abi.HEADER,
+                       dmsh_logic.__file__, dmsh_ui.__file__, dmsh_mesh.__file__, abi.__file__, abi.HEADER,
                        os.path.join(os.path.dirname(dmsh_pull.__file__), 'dmsh_pull.metal')])
-VARIANT_MODULES = (dmsh_fetch, dmsh_vin, dmsh_pull, dmsh_alpha, dmsh_logic, dmsh_mesh, dmsh_geometry)
+VARIANT_MODULES = (dmsh_fetch, dmsh_vin, dmsh_pull, dmsh_alpha, dmsh_logic, dmsh_ui, dmsh_mesh, dmsh_geometry)
 VARIANT_MODULE_FP = {m.__name__: module_semantic_hash(m) for m in VARIANT_MODULES}
 VARIANT_ABI_VALUES = sorted(abi.VALUES.items())
 VARIANT_PULL_FETCH_FP = hashlib.sha256(dmsh_pull.FETCH.encode()).hexdigest()
@@ -1142,7 +1149,7 @@ def materialize_shader(key, bundle):
         atomic_json(os.path.join(out, key + '_b.json'), MTL.with_compiler('mac', refresh_reflection(key, bundle['base_refl'])))
     side_sources = dict(selected)
     pull_finish(key, side_sources, refls); vin_finish(key, side_sources, refls)
-    alpha_finish(key, side_sources, refls); logic_finish(key, side_sources, refls)
+    alpha_finish(key, side_sources, refls); logic_finish(key, side_sources, refls); ui_finish(key, side_sources, refls)
     fetch_finish(key, canonical, bundle['base_refl']['bindings'], refls)
     for target, refl in refls.items(): write_target_refl(key, target, refl)
     return ('metal failed' if failed else 'ok'), '; '.join(failed)[:160], next(iter(refls.values()), refresh_reflection(key, bundle['base_refl']))
