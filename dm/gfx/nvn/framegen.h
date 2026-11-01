@@ -11,12 +11,14 @@ void dm_fg_request_reset(void);
 id<MTLTexture> dm_fg_scene_target(id<MTLDevice> device,NSUInteger width,NSUInteger height,MTLPixelFormat format);
 // Borrow the completed canvas on the game's queue; encode retains it through GPU completion.
 void dm_fg_note_ui(id<MTLTexture> canvas);
+id<MTLTexture> dm_fg_ui_target(id<MTLDevice> device,NSUInteger width,NSUInteger height);
 id<MTLResidencySet> dm_fg_residency(void);
 void dm_fg_note_scene(void);
 void dm_fg_note_depth(id<MTLTexture> depth);
 void dm_fg_note_camera(const float *camera,int count);
 int dm_fg_frame_prepare(double frame_seconds,int interpolate);
 int dm_fg_has_history(void);   // submit thread only: this real picture can precede an interpolated midpoint
+double dm_fg_frame_seconds(void); // interval between real inputs, including uncapped mode
 NSArray *dm_fg_frame_encode(id<MTL4CommandBuffer> cb,int slot,id<MTL4CounterHeap> heap,NSUInteger stamp);
 id<MTLTexture> dm_fg_output(int slot);
 void dm_fg_generation_done(int slot);

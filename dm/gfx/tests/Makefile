@@ -77,6 +77,8 @@ t_timestamp: t_timestamp.c ../nvn/nvn_timestamp.h
 	$(CC) -std=c11 -O2 -g -Wall -Wextra -Werror -o $@ $<
 t_fstep: t_fstep.c ../nvn/nvn_fstep.h
 	clang -O1 -Wall -o $@ t_fstep.c
+t_framegen_step: t_framegen_step.c ../nvn/nvn_framegen_step.h
+	clang -O1 -Wall -o $@ t_framegen_step.c
 t_thermal: t_thermal.c $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_thermal.c $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
 t_thermal_tsan: t_thermal.c $(MTL_T_DEP)
@@ -173,9 +175,13 @@ check_t_present_rescue: t_present_rescue
 t_framegen: t_framegen.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_framegen.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_framegen
-check_t_framegen: t_framegen
+check_t_framegen: t_framegen t_framegen_ui.metallib
 	MTL_DEBUG_LAYER=0 ./t_framegen --unsupported
-	MTL_DEBUG_LAYER=0 ./t_framegen
+	DM_TEST_UI_LIBRARY=$(CURDIR)/t_framegen_ui.metallib MTL_DEBUG_LAYER=0 ./t_framegen
+t_framegen_ui.metallib: test_dmsh_ui.py ../tools/dmsh_ui.py ../tools/dmsh_alpha.py ../nvn/dmsh_abi.h
+	python3 test_dmsh_ui.py --fixture t_framegen_ui.metal
+	xcrun -sdk macosx metal -c t_framegen_ui.metal -o t_framegen_ui.air
+	xcrun -sdk macosx metallib t_framegen_ui.air -o $@
 t_framegen_motion: t_framegen_motion.m t_framegen.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_framegen_motion.m $(filter-out ../nvn/framegen_metal.m,$(MTL_T_SRC)) $(FW)
 .PHONY: check_t_framegen_motion

@@ -7,3 +7,7 @@ t_*
 nvn_replay
 .precommit.err
 .precommit_snap/
+# Generated offline UI fixture used by check_t_framegen
+t_framegen_ui.metal
+t_framegen_ui.air
+t_framegen_ui.metallib

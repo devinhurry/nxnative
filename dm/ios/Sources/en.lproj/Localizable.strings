@@ -160,3 +160,8 @@
 "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately." = "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately.";
 "Experimental frame generation" = "Experimental frame generation";
 "Supports Handheld and Docked. Handheld's smaller canvas reduces GPU work. MetalFX inserts one picture between 30 real game frames per second. Adds display latency; requires a supported GPU. Applies on Play." = "Supports Handheld and Docked. Handheld's smaller canvas reduces GPU work. MetalFX inserts one picture between 30 real game frames per second. Adds display latency; requires a supported GPU. Applies on Play.";
+
+"Inserts one picture between real game frames. Change rates while playing from the frame generation menu. Requires a supported GPU." = "Inserts one picture between real game frames. Change rates while playing from the frame generation menu. Requires a supported GPU.";
+"Uncapped" = "Uncapped";
+
+"Off" = "Off";

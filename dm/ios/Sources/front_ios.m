@@ -5,12 +5,14 @@
 #import <Metal/Metal.h>
 #import <AVFAudio/AVFAudio.h>
 #include <errno.h>
+#include <stdatomic.h>
 #include "front.h"
 #include "hle.h"
 #include "dm.h"
 #include "haptics_apple.h"
 #include "save_sync.h"
 #include "botw_touch_layout.h"
+#include "../../gfx/nvn/framegen_policy.h"
 #import "CloudSaves.h"
 #import "GameFiles.h"
 
@@ -98,11 +100,14 @@ static UILabel *front_ios_fps_label(void);
 @property (nonatomic, strong) UIView *surface;
 @property (nonatomic, strong) UIView *pad;
 @property (nonatomic, strong) UILabel *fps;
+@property (nonatomic, strong) UIButton *framegen;
 @property (nonatomic) BOOL launched;
 - (void)startGame;
 - (void)showLauncher;
 @end
 static DmRootVC *g_root;
+static _Atomic int g_screen_hz=60;
+int front_screen_max_fps(void) { return atomic_load(&g_screen_hz); }
 UIInterfaceOrientationMask front_ios_orientations(UIWindow *window) {
     CGSize size=window.bounds.size; UIEdgeInsets safe=window.safeAreaInsets;
     return !strcmp(DM_GAME_ID,"01007EF00011E000") && dm_botw_portrait_allowed(size.width,size.height,safe.left,safe.right) ?
@@ -137,6 +142,31 @@ static void game_files_done(void) { [g_root showLauncher]; }
     [self.surface addSubview:self.pad];
     self.fps = front_ios_fps_label();   // above the pad, which hides while a controller is connected
     if (self.fps) [self.surface addSubview:self.fps];
+    if (*DM_GAME_FRAMEGEN_SCENE) {
+        self.framegen=[UIButton buttonWithType:UIButtonTypeSystem];
+        [self.framegen setImage:[UIImage systemImageNamed:@"slider.horizontal.3"] forState:UIControlStateNormal];
+        self.framegen.tintColor=UIColor.whiteColor; self.framegen.backgroundColor=[UIColor colorWithWhite:0 alpha:.25];
+        self.framegen.layer.cornerRadius=16; self.framegen.accessibilityIdentifier=@"dm.framegen";
+        self.framegen.accessibilityLabel=NSLocalizedString(@"Experimental frame generation",nil);
+        self.framegen.showsMenuAsPrimaryAction=YES;
+        self.framegen.menu=[UIMenu menuWithTitle:NSLocalizedString(@"Experimental frame generation",nil) children:@[
+            [UIDeferredMenuElement elementWithUncachedProvider:^(void (^complete)(NSArray<UIMenuElement *> *)) {
+                NSMutableArray *items=[NSMutableArray array];
+                for (NSNumber *number in @[@0,@30,@40,@50,@60,@(-1)]) {
+                    int mode=number.intValue;
+                    NSString *value=mode<0?@"max":number.stringValue;
+                    NSString *title=mode<0?NSLocalizedString(@"Uncapped",nil):mode?[NSString stringWithFormat:@"%d + %d",mode,mode]:NSLocalizedString(@"Off",nil);
+                    UIAction *action=[UIAction actionWithTitle:title image:nil identifier:nil handler:^(__kindof UIAction *selected) {
+                        if (dm_fg_set_mode(mode)) [[NSUserDefaults standardUserDefaults] setObject:value forKey:@"launcher.DM_FRAMEGEN"];
+                    }];
+                    action.state=dm_fg_requested_mode()==mode?UIMenuElementStateOn:UIMenuElementStateOff;
+                    [items addObject:action];
+                }
+                complete(items);
+            }]
+        ]];
+        [self.surface addSubview:self.framegen];
+    }
     [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     UIApplication.sharedApplication.idleTimerDisabled = YES;
     front_ios_boot();
@@ -144,6 +174,8 @@ static void game_files_done(void) { [g_root showLauncher]; }
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     if (!self.game) return;
+    NSInteger hz=self.view.window.screen.maximumFramesPerSecond;
+    if (hz>0) atomic_store(&g_screen_hz,(int)hz);
     CGRect frame=self.view.bounds,division=((DmPlaySurface *)self.view).division;
     if (CGRectIsEmpty(frame)) return;
     float previous[4],next[4]; dm_aspect_region(1,previous);
@@ -167,6 +199,7 @@ static void game_files_done(void) { [g_root showLauncher]; }
     CGRect s = UIEdgeInsetsInsetRect(b, self.surface.safeAreaInsets); CGFloat u = MIN(b.size.height / 430.0, 1.3);
     CGFloat x = floor(CGRectGetMinX(s) + 130 * u);
     if (self.fps) self.fps.frame = CGRectMake(x, floor(CGRectGetMinY(s) + 22 * u - 11), 64, 22);
+    self.framegen.frame=CGRectMake(floor(CGRectGetMidX(s)-16),CGRectGetMinY(s)+6,32,32);
 }
 - (void)viewDidAppear:(BOOL)a {
     [super viewDidAppear:a];

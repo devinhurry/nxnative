@@ -267,6 +267,7 @@ static void display_backpressure_regression(void) {
 }
 static void fallback_and_deadline_regression(void) {
     for (int rescue=0;rescue<2;rescue++) {
+        present_drop_for_suspend(); framegen_discard_inputs();
         pthread_mutex_lock(&g_pq_mu);
         g_dm_present_link=rescue?1:0; g_rescue_mode=rescue; g_rescue_back_at=UINT64_MAX;
         g_link_owns_layer=g_link_started=0; pthread_cond_broadcast(&g_pq_cv);
@@ -275,8 +276,14 @@ static void fallback_and_deadline_regression(void) {
         for (int i=0;i<3;i++) {
             inputs(1); uint64_t ticket=present_enqueue(&real_texture,1./30,NULL,0);
             mtl_present_wait(ticket); wait_queue();
+            pthread_mutex_lock(&g_pq_mu);
+            while (g_classic_busy) pthread_cond_wait(&g_pq_cv,&g_pq_mu);
+            pthread_mutex_unlock(&g_pq_mu);
+            tick_time+=1./30;
+            framegen_presented(0,ticket,0,tick_time,tick_time,0,0);
         }
-        CHECK(rescue?"rescue presenter does not compute unused interpolation":"manual classic presenter does not compute unused interpolation",generation_count()==made && g_fg_displayed==shown);
+        CHECK(rescue?"rescue presenter generates and displays optional pictures":"manual classic presenter generates and displays optional pictures",generation_count()>made && g_fg_displayed>shown);
+        shown=g_fg_displayed;
         pthread_mutex_lock(&g_pq_mu);
         g_dm_present_link=1; g_rescue_mode=0; g_link_owns_layer=g_link_started=1;
         pthread_mutex_unlock(&g_pq_mu);
@@ -327,7 +334,8 @@ static void fallback_and_deadline_regression(void) {
     tick(1./30); wait_present();
 }
 // Synthetic UI shaders have closed-form pixels; they do not reproduce the
-// game's font implementation. MetalFX borrows the complete canvas after UI.
+// game's font implementation. The actual offline variant copies the original
+// draw into the premultiplied UI target, preserving its native pixels/query.
 // The game's samples-passed query must count only the two original draws.
 static void ui_capture_regression(void) {
     NSError *error=nil;
@@ -336,6 +344,11 @@ static void ui_capture_regression(void) {
     NvProg *program=[NvProg new]; program->sh[0]=[NvShader new]; program->sh[1]=[NvShader new];
     program->sh[0]->fn=[library newFunctionWithName:@"ui_vertex"];
     program->sh[1]->fn=[library newFunctionWithName:@"ui_fragment"];
+    const char *ui_path=getenv("DM_TEST_UI_LIBRARY");
+    CHECK("offline UI fixture library is supplied",ui_path!=NULL); if (!ui_path) return;
+    program->sh[1]->uilib=[g_dev newLibraryWithURL:[NSURL fileURLWithPath:@(ui_path)] error:&error];
+    program->sh[1]->ui_state=1; program->sh[1]->has_ui=1;
+    CHECK("actual offline UI variant loads",program->sh[1]->uilib!=nil);
     program->sh[1]->stage=1; program->sh[1]->rf.color_known=program->sh[1]->rf.color_mask=1;
     snprintf(program->sh[0]->key,sizeof program->sh[0]->key,"fedcba9876543210_b");
     snprintf(program->sh[1]->key,sizeof program->sh[1]->key,"0123456789abcdef_b");
@@ -343,10 +356,22 @@ static void ui_capture_regression(void) {
     tex_t target={.magic=MAGIC('T','E','X',0),.serial=99802};
     target.d=(nvn_texdesc){.target=NVN_TEXTURE_TARGET_2D,.format=NVN_FORMAT_RGBA8,.width=256,.height=256,.depth=1,.levels=1,.samples=1};
     id<MTLBuffer> pixels[2]; uint64_t samples[2][2]={{0}};
-    id<MTLBuffer> captured=[g_dev newBufferWithLength:256*256*4 options:MTLResourceStorageModeShared]; res_add(captured);
+    id<MTLBuffer> captured=[g_dev newBufferWithLength:256*256*8 options:MTLResourceStorageModeShared]; res_add(captured);
     for (int capture=0;capture<2;capture++) {
         pixels[capture]=[g_dev newBufferWithLength:256*256*4 options:MTLResourceStorageModeShared]; res_add(pixels[capture]);
         mtl_sub_begin(); state_reset(); memset(&R,0,sizeof R); vis_clear();
+        g_framegen_capture_state.ui_ready=0;
+        if (capture) {
+            id<MTLTexture> ui=dm_fg_ui_target(g_dev,256,256);
+            MTL4RenderPassDescriptor *clear=[MTL4RenderPassDescriptor new];
+            clear.colorAttachments[0].texture=ui; clear.colorAttachments[0].loadAction=MTLLoadActionClear; clear.colorAttachments[0].storeAction=MTLStoreActionStore;
+            clear.colorAttachments[0].clearColor=MTLClearColorMake(0,0,0,0);
+            enc_r_end(enc_r_begin(clear));
+            g_framegen_capture_state.canvas_serial=target.serial;
+            g_framegen_capture_state.width=g_framegen_capture_state.height=256;
+            g_framegen_capture_state.format=MTLPixelFormatRGBA8Unorm;
+            g_framegen_capture_state.ui_ready=1;
+        }
         g_vis_on=g_vis_counting=1;
         R.has_rt=1; R.rt.n=1; R.rt.color[0]=&target; R.clear_c[0]=1;
         R.cc[0]=MTLClearColorMake(.1,.2,.3,1);
@@ -357,20 +382,75 @@ static void ui_capture_regression(void) {
         p_draw draw={NVN_DRAW_PRIMITIVE_TRIANGLES,0,3}; draw_(&draw,NULL); draw_(&draw,NULL);
         rp_end();
         if (capture) {
-            g_framegen_capture_state.composited_canvas=tex_mtl(&target);
-            dm_fg_note_ui(g_framegen_capture_state.composited_canvas);
-            [blit() copyFromTexture:g_framegen_capture_state.composited_canvas sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(256,256,1) toBuffer:captured destinationOffset:0 destinationBytesPerRow:1024 destinationBytesPerImage:256*1024];
+            id<MTLTexture> ui=dm_fg_ui_target(g_dev,256,256); dm_fg_note_ui(ui);
+            [blit() copyFromTexture:ui sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(256,256,1) toBuffer:captured destinationOffset:0 destinationBytesPerRow:2048 destinationBytesPerImage:256*2048];
         }
         post((post_op){3,NULL,0,0,(uint64_t)samples[capture],NVN_COUNTER_TYPE_SAMPLES_PASSED,vis_snapshot()});
         [blit() copyFromTexture:tex_mtl(&target) sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(256,256,1) toBuffer:pixels[capture] destinationOffset:0 destinationBytesPerRow:1024 destinationBytesPerImage:256*1024];
         CHECK("UI submission completes",mtl_wait(mtl_sub_commit(),5000000000ull));
         CHECK("UI submission has no GPU error",!mtl_last_commit_error());
     }
-    CHECK("MetalFX receives the whole composed canvas",!memcmp(captured.contents,pixels[1].contents,256*256*4));
+    const __fp16 *ui=captured.contents;
+    printf("separate UI RGBA: %.4f %.4f %.4f %.4f\n",(float)ui[0],(float)ui[1],(float)ui[2],(float)ui[3]);
+    CHECK("separate UI preserves blended RGB and accumulated coverage",fabs((float)ui[0]-.6)<.01 && fabs((float)ui[1]-.075)<.01 && fabs((float)ui[2]-.15)<.01 && fabs((float)ui[3]-.75)<.01);
     CHECK("capturing UI preserves original pixels",!memcmp(pixels[0].contents,pixels[1].contents,256*256*4));
     CHECK("capture preserves game occlusion queries",samples[0][0]==2*256*256 && samples[1][0]==samples[0][0]);
     CHECK("original UI draws really wrote colour",((const uint8_t *)pixels[1].contents)[0]>140);
-    g_framegen_capture_state.composited_canvas=nil; g_vis_on=g_vis_counting=0;
+    // Exercise Apple's separate-UI path as well as the captured attachment.
+    // The scene is (.15,.2,.6), with UI coverage .75 and premultiplied RGB
+    // (.6,.075,.15), so the generated image must contain their linear sum.
+    dm_fg_reset(); int slot=-1;
+    for (int i=0;i<2;i++) {
+        inputs(1); g_framegen_capture_state.ui_ready=1;
+        slot=framegen_generate(1./30,1); wait_queue();
+    }
+    CHECK("separate UI produces a generated image",slot>=0);
+    if (slot>=0) {
+        id<MTLBuffer> buffer=read_pixels(dm_fg_output(slot));
+        const uint8_t *rgb=buffer.contents;
+        double expected[]={.6375,.125,.3}; int correct=1;
+        for (int c=0;c<3;c++) {
+            double encoded=rgb[4*(128*256+128)+c]/255.;
+            double linear=encoded<=.04045?encoded/12.92:pow((encoded+.055)/1.055,2.4);
+            correct &= fabs(linear-expected[c])<.025;
+        }
+        CHECK("MetalFX composites the separate transparent HUD correctly",correct);
+        dm_fg_display_done(slot);
+    }
+    g_framegen_capture_state.composited_canvas=nil; g_framegen_capture_state.ui_ready=0; g_vis_on=g_vis_counting=0;
+}
+static void live_mode_regression(void) {
+    for (int rate=30;rate<=60;rate+=10) {
+        int was=dm_fg_mode();
+        CHECK("live source-rate request is accepted",dm_fg_set_mode(rate));
+        CHECK("mode waits for a real-frame boundary",dm_fg_mode()==was);
+        dm_fg_latch();
+        CHECK("real-frame boundary applies the requested source rate",dm_fg_mode()==rate);
+        // Use modeled 120 Hz updates; GPU work finishes between each. This
+        // checks fractional deadlines, not the machine's measured frame rate.
+        present_drop_for_suspend(); framegen_discard_inputs(); g_link_hold_until=0;
+        delegate=[NvMetalDisplayLinkDelegate new]; g_link_mode=2;
+        inputs(1); present_enqueue(&real_texture,1./rate,NULL,0); tick(1./120); wait_present();
+        double origin=tick_time;
+        for (int pair=0;pair<rate;pair++) {
+            inputs(1); uint64_t ticket=present_enqueue(&real_texture,1./rate,NULL,0); wait_queue();
+            int updates=0;
+            while (g_pq_read<ticket && updates++<12) { tick(1./120); wait_present(); }
+            CHECK("each modeled source pair completes its real ticket",g_pq_read==ticket);
+        }
+        CHECK("fractional refreshes do not lengthen a second of source frames",fabs(tick_time-origin-1)<1./120+.0001);
+    }
+    CHECK("uncapped mode can be selected live",dm_fg_set_mode(-1)); dm_fg_latch();
+    CHECK("uncapped mode is active",dm_fg_mode()==-1);
+    CHECK("invalid runtime mode is rejected",!dm_fg_set_mode(45) && dm_fg_mode()==-1);
+    CHECK("frame generation can be disabled live",dm_fg_set_mode(0)); dm_fg_latch();
+    CHECK("live off stops capture",!dm_fg_enabled());
+    uint64_t previous=g_fg_present_serial;
+    inputs(1); uint64_t ticket=present_enqueue(&real_texture,1./60,NULL,0); tick(1./30); wait_present();
+    CHECK("off transition preserves monotonic allocator fences",g_fg_present_serial>previous && g_pq_done==ticket);
+    CHECK("frame generation can be reenabled live",dm_fg_set_mode(30)); dm_fg_latch();
+    inputs(1); CHECK("reenabling starts with fresh real history",framegen_generate(1./30,1)<0);
+    g_link_mode=1;
 }
 int main(int argc,char **argv) { @autoreleasepool {
     alarm(90); setbuf(stdout,NULL);
@@ -492,6 +572,7 @@ int main(int argc,char **argv) { @autoreleasepool {
     crop_regression();
     fallback_and_deadline_regression();
     display_backpressure_regression();
+    live_mode_regression();
     char stats[256]; dm_fg_stats(stats,sizeof stats); printf("%s; displayed=%llu\n",stats,(unsigned long long)g_fg_displayed);
     printf("%d checks, %d failed\n",checks,failed); return !!failed;
 } }

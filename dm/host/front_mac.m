@@ -1085,6 +1085,13 @@ static void preview_refresh(void) {
 - (void)fitDrawable;
 @end
 @implementation DmGameView
+- (void)changeFrameGeneration:(NSMenuItem *)item {
+    if (dm_fg_set_mode((int)item.tag)) [[NSUserDefaults standardUserDefaults] setObject:item.representedObject forKey:@"launcher.DM_FRAMEGEN"];
+}
+- (BOOL)validateMenuItem:(NSMenuItem *)item {
+    if (item.action==@selector(changeFrameGeneration:)) item.state=dm_fg_requested_mode()==item.tag?NSControlStateValueOn:NSControlStateValueOff;
+    return YES;
+}
 - (void)setFrameSize:(NSSize)s {
     [super setFrameSize:s];
     if (s.width <= 0 || s.height <= 0) return;
@@ -1264,6 +1271,16 @@ void front_run(void (*guest)(void)) {
         [[bar addItemWithTitle:@"Window" action:nil keyEquivalent:@""] setSubmenu:wm];
         [wm addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"].keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagCommand;
         NSApp.mainMenu = bar;
+        if (*DM_GAME_FRAMEGEN_SCENE) {
+            NSMenu *framegen=[[NSMenu alloc] initWithTitle:@"Frame generation"];
+            [[bar addItemWithTitle:@"Frame generation" action:nil keyEquivalent:@""] setSubmenu:framegen];
+            for (NSNumber *number in @[@0,@30,@40,@50,@60,@(-1)]) {
+                int mode=number.intValue;
+                NSString *title=mode<0?@"Uncapped":mode?[NSString stringWithFormat:@"%d + %d",mode,mode]:@"Off";
+                NSMenuItem *item=[framegen addItemWithTitle:title action:@selector(changeFrameGeneration:) keyEquivalent:@""];
+                item.target=v; item.tag=mode; item.representedObject=mode<0?@"max":number.stringValue;
+            }
+        }
         const char *fs = getenv("DM_FULLSCREEN");
         if (fs && *fs && strcmp(fs, "0")) dispatch_async(dispatch_get_main_queue(), ^{ [win toggleFullScreen:nil]; });   // start in fullscreen (DM_FULLSCREEN=0 keeps the window)
         for (NSNotificationName nm in @[GCControllerDidConnectNotification, GCControllerDidDisconnectNotification])

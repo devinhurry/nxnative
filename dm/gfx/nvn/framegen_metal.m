@@ -34,7 +34,7 @@ static struct {
     id<MTLDevice> dev;
     id<MTL4FXFrameInterpolator> fi;
     NSUInteger in_w, in_h, out_w, out_h; MTLPixelFormat scene_fmt;
-    id<MTLTexture> scene[2], ui, mv, ndepth, flow, flow_fill, out[MFX_OUT], outv[MFX_OUT];
+    id<MTLTexture> scene[2], ui, ui_layer, mv, ndepth, flow, flow_fill, out[MFX_OUT], outv[MFX_OUT];
     id<MTLTexture> pdepth; uint64_t pdepth_frame;   // the previous interpolated frame's depth (copied after its motion), and its g.frames
     id<MTLResidencySet> rs;
     id<MTLComputePipelineState> mv_ps, flow_regions_ps, flow_ps, flow_fill_ps, flow_apply_ps;
@@ -79,7 +79,7 @@ static id<MTL4FXFrameInterpolator> fi_cached(NSUInteger iw, NSUInteger ih) {
     for (unsigned i = 0; i < g_fi_cache_count; i++) {
         id<MTL4FXFrameInterpolator> fi = g_fi_cache[i];
         if (fi.inputWidth == iw && fi.inputHeight == ih && fi.outputWidth == g.out_w &&
-            fi.outputHeight == g.out_h && fi.colorTextureFormat == g.scene_fmt) {
+            fi.outputHeight == g.out_h && fi.colorTextureFormat == g.scene_fmt && fi.uiTextureFormat==g.ui.pixelFormat) {
             MLOG("reuse cached interpolator %u: %lux%lu -> %lux%lu; reset history", i,
                  (unsigned long)iw, (unsigned long)ih, (unsigned long)g.out_w, (unsigned long)g.out_h);
             return fi;
@@ -89,27 +89,50 @@ static id<MTL4FXFrameInterpolator> fi_cached(NSUInteger iw, NSUInteger ih) {
 }
 
 static _Atomic int g_on;
+static _Atomic int g_requested, g_mode_initialized;
 static _Atomic int g_reset_requested;
 static pthread_once_t g_once = PTHREAD_ONCE_INIT;
+static pthread_once_t g_cap_once = PTHREAD_ONCE_INIT;
+static int g_supported;
 
-static void dm_fg_init(void) {
-    int value=dm_framegen_requested();
-    if (value) {
-        // The loader asks before NVN initialization, after launcher settings
-        // have been applied. Both NVN and this preflight use the default device.
-        id<MTLDevice> device=MTLCreateSystemDefaultDevice();
-        value=device && [MTLFXFrameInterpolatorDescriptor supportsMetal4FX:device];
-        if (value) MLOG("experimental frame generation available: 30 real + 30 generated frames requested");
-        else MLOG("[RED] this GPU does not support Metal 4 frame interpolation; keeping normal rendering and frame rate");
-    }
-    atomic_store(&g_on,value);
+static void dm_fg_capability(void) {
+    id<MTLDevice> device=MTLCreateSystemDefaultDevice();
+    g_supported=device && [MTLFXFrameInterpolatorDescriptor supportsMetal4FX:device];
+    if (!g_supported) MLOG("[RED] this GPU does not support Metal 4 frame interpolation; keeping normal rendering and frame rate");
 }
-int dm_fg_enabled(void) {
+static int dm_fg_supported(void) { pthread_once(&g_cap_once,dm_fg_capability); return g_supported; }
+static void dm_fg_init(void) {
+    int mode=*DM_GAME_FRAMEGEN_SCENE ? dm_framegen_parse(getenv("DM_FRAMEGEN")) : 0;
+    if (mode && !dm_fg_supported()) mode=0;
+    atomic_store(&g_requested,mode); atomic_store(&g_on,mode); atomic_store(&g_mode_initialized,1);
+}
+int dm_fg_mode(void) {
     // Lifecycle callbacks can run on the launcher before Play applies settings.
     // Cache device capability, never an early off/default launcher selection.
-    if (!dm_framegen_requested()) return 0;
+    if (!atomic_load(&g_mode_initialized) && !dm_framegen_requested()) return 0;
     pthread_once(&g_once,dm_fg_init);
     return atomic_load_explicit(&g_on,memory_order_relaxed);
+}
+int dm_fg_enabled(void) { return dm_fg_mode()!=0; }
+int dm_fg_requested_mode(void) { (void)dm_fg_mode(); return atomic_load(&g_requested); }
+int dm_fg_set_mode(int mode) {
+    if (!*DM_GAME_FRAMEGEN_SCENE || !(mode==0 || mode==-1 || mode==30 || mode==40 || mode==50 || mode==60)) return 0;
+    pthread_once(&g_once,dm_fg_init);
+    if (mode && !dm_fg_supported()) return 0;
+    atomic_store(&g_requested,mode);
+    MLOG("frame generation requested: %s%d (next real frame)",mode<0?"uncapped ":"",mode);
+    return 1;
+}
+__attribute__((weak)) void dm_framegen_mode_changed(int mode) { (void)mode; }
+extern void dm_framegen_mode_will_change(void) __attribute__((weak_import));
+int dm_fg_latch(void) {
+    if (!atomic_load(&g_mode_initialized)) return 0;
+    int mode=atomic_load(&g_requested),was=atomic_load(&g_on);
+    if (mode==was) return 0;
+    if (dm_framegen_mode_will_change) dm_framegen_mode_will_change();
+    dm_fg_reset(); atomic_store(&g_on,mode); dm_framegen_mode_changed(mode);
+    MLOG("frame generation mode %d -> %d",was,mode);
+    return 1;
 }
 void dm_fg_request_reset(void) { atomic_store(&g_reset_requested,1); }
 void dm_fg_reset(void) {
@@ -175,7 +198,7 @@ static void ensure_out(id<MTLDevice> dev, NSUInteger w, NSUInteger h, MTLPixelFo
     if (g.out_w == w && g.out_h == h && g.scene[0] && (!fmt || fmt == g.scene_fmt)) return;
     if (!fmt) fmt = g.scene_fmt ? g.scene_fmt : MTLPixelFormatRG11B10Float;
     for (int i = 0; i < 2; i++) drop(&g.scene[i]);
-    g.ui=nil;
+    g.ui=nil; drop(&g.ui_layer);
     for (int i = 0; i < MFX_OUT; i++) { drop(&g.out[i]); g.outv[i] = nil; }
 
     for (int i = 0; i < 2; i++) g.scene[i] = mk(fmt, w, h, MTLTextureUsageShaderRead);   // blit copies of the canvas
@@ -189,7 +212,12 @@ static void ensure_out(id<MTLDevice> dev, NSUInteger w, NSUInteger h, MTLPixelFo
 }
 id<MTLTexture> dm_fg_scene_target(id<MTLDevice> dev, NSUInteger w, NSUInteger h, MTLPixelFormat fmt) { ensure_out(dev, w, h, fmt); return g.scene[g.cur]; }
 void dm_fg_note_ui(id<MTLTexture> canvas) {
-    g.ui=canvas && canvas.width==g.out_w && canvas.height==g.out_h && canvas.pixelFormat==g.scene_fmt ? canvas : nil;
+    g.ui=canvas && canvas.width==g.out_w && canvas.height==g.out_h ? canvas : nil;
+}
+id<MTLTexture> dm_fg_ui_target(id<MTLDevice> dev,NSUInteger w,NSUInteger h) {
+    ensure_out(dev,w,h,0);
+    if (!g.ui_layer) g.ui_layer=mk(MTLPixelFormatRGBA16Float,w,h,MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget);
+    return g.ui_layer;
 }
 id<MTLResidencySet> dm_fg_residency(void) { return g.rs; }
 void dm_fg_note_scene(void) { g.scene_ok = 1; }
@@ -201,7 +229,7 @@ void dm_fg_note_camera(const float *c, int n) {
 }
 
 static void ensure_fi(NSUInteger iw, NSUInteger ih) {
-    if (g.fi && g.in_w == iw && g.in_h == ih && g.fi.colorTextureFormat == g.scene_fmt && g.fi.outputWidth == g.out_w && g.fi.outputHeight == g.out_h) return;
+    if (g.fi && g.in_w == iw && g.in_h == ih && g.fi.colorTextureFormat == g.scene_fmt && g.fi.uiTextureFormat==g.ui.pixelFormat && g.fi.outputWidth == g.out_w && g.fi.outputHeight == g.out_h) return;
     NSError *e = nil;
     int profile=dm_fg_profile_on(); double begin=profile?CACurrentMediaTime():0;
     NSUInteger old_w=g.in_w,old_h=g.in_h;
@@ -211,7 +239,7 @@ static void ensure_fi(NSUInteger iw, NSUInteger ih) {
     if (!g.fi) {
         MTLFXFrameInterpolatorDescriptor *d = [MTLFXFrameInterpolatorDescriptor new];
         d.colorTextureFormat = g.scene_fmt; d.outputTextureFormat = MTLPixelFormatRGBA8Unorm_sRGB;
-        d.depthTextureFormat = MTLPixelFormatR32Float; d.motionTextureFormat = MTLPixelFormatRG16Float; d.uiTextureFormat = g.scene_fmt;
+        d.depthTextureFormat = MTLPixelFormatR32Float; d.motionTextureFormat = MTLPixelFormatRG16Float; d.uiTextureFormat = g.ui.pixelFormat;
         d.inputWidth = iw; d.inputHeight = ih; d.outputWidth = g.out_w; d.outputHeight = g.out_h;
         id<MTL4Compiler> comp = [g.dev newCompilerWithDescriptor:[MTL4CompilerDescriptor new] error:&e];
         if (profile) compiler_end=CACurrentMediaTime();
@@ -390,6 +418,7 @@ static int camera_cut(void) {
     return sqrt(dx * dx + dy * dy + dz * dz) > 8.0 || f < cos(25.0 * M_PI / 180.0);
 }
 
+double dm_fg_frame_seconds(void) { return g.dt>0?g.dt:1./60; }
 int dm_fg_frame_prepare(double frame_s,int interpolate) {
     // Suspend/resume can happen without any guest presents. Never touch the
     // submit-thread-owned camera/texture state from the front-end callback.
@@ -490,7 +519,7 @@ NSArray *dm_fg_frame_encode(id<MTL4CommandBuffer> cb, int s, id<MTL4CounterHeap>
     g.pdepth_frame = g.frames;
     id<MTL4FXFrameInterpolator> fi = g.fi;
     fi.colorTexture = g.scene[g.cur]; fi.prevColorTexture = g.scene[g.cur ^ 1]; fi.depthTexture = g.ndepth; fi.motionTexture = g.mv;
-    fi.uiTexture = g.ui; fi.uiTextureComposited = YES; fi.outputTexture = g.out[s]; fi.fence = g.fence;
+    fi.uiTexture = g.ui; fi.uiTextureComposited = g.ui!=g.ui_layer; fi.outputTexture = g.out[s]; fi.fence = g.fence;
     fi.motionVectorScaleX = 1; fi.motionVectorScaleY = 1; fi.jitterOffsetX = 0; fi.jitterOffsetY = 0;
     fi.deltaTime = (float)g.dt; fi.nearPlane = (float)g.cam[56]; fi.farPlane = (float)g.cam[57];
     fi.fieldOfView = (float)(g.cam[70] * 180.0 / M_PI); fi.aspectRatio = (float)g.cam[62]; fi.depthReversed = NO;
