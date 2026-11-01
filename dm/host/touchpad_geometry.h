@@ -5,6 +5,33 @@
 typedef struct { float x, y; } dm_touchpad_point;
 typedef struct { float x, y, width, height; } dm_touchpad_rect;
 
+// Place the temporary Settings entry in free space between the drawn controls.
+// Search the center column first; move below each intersecting control.
+static inline dm_touchpad_rect dm_touchpad_settings_rect(dm_touchpad_rect safe,
+        const dm_touchpad_rect *controls, int count) {
+    const float gap=10, height=34;
+    float width=fminf(94,safe.width-2*gap);
+    if (width<=0 || safe.height<height+2*gap) return (dm_touchpad_rect){0};
+    float center=safe.x+(safe.width-width)*.5f, stride=width+gap;
+    int columns=(int)ceilf(safe.width/stride)*2+1;
+    for (int column=0;column<columns;column++) {
+        float offset=(float)((column+1)/2)*stride*(column%2 ? 1 : -1);
+        float x=fminf(fmaxf(center+offset,safe.x+gap),safe.x+safe.width-width-gap);
+        float y=safe.y+gap;
+        for (int pass=0;pass<=count && y+height<=safe.y+safe.height-gap;pass++) {
+            float next=y;
+            for (int i=0;i<count;i++) {
+                dm_touchpad_rect r=controls[i];
+                if (r.width>0 && r.height>0 && x<r.x+r.width+gap && x+width>r.x-gap &&
+                    y<r.y+r.height+gap && y+height>r.y-gap) next=fmaxf(next,r.y+r.height+gap);
+            }
+            if (next==y) return (dm_touchpad_rect){x,y,width,height};
+            y=next;
+        }
+    }
+    return (dm_touchpad_rect){0};
+}
+
 // A vertical book fold leaves edge controls alone. A horizontal Seated fold
 // separates the picture above it from touch controls below it.
 static inline int dm_touchpad_seated_split(dm_touchpad_rect area, dm_touchpad_rect fold,

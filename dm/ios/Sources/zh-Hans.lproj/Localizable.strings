@@ -219,3 +219,7 @@
 
 "Frame generation" = "补帧";
 "Inserts one picture between real game frames at the selected frame rate. Requires a supported GPU." = "按所选帧率，在相邻游戏画面之间生成一帧。需要受支持的 GPU。";
+
+"Left-stick parameters" = "左摇杆参数";
+"Restore left-stick defaults" = "恢复左摇杆默认参数";
+"Applies to BOTW touch movement." = "仅用于旷野之息的触控移动。";

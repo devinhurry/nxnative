@@ -70,13 +70,13 @@ static NSOutlineView *findOutline(NSView *view) {
     return nil;
 }
 
-static BOOL selectControlsNativeRow(NSWindow *window) {
+static BOOL selectNativeRow(NSWindow *window, NSInteger index) {
     NSOutlineView *outline = findOutline(window.contentView);
-    if (!outline || outline.numberOfRows < 2 || !outline.window) return NO;
+    if (!outline || outline.numberOfRows <= index || !outline.window) return NO;
     // The launcher's first section is Game and its second is Controls. Select the live native AX outline row;
     // the following heading check verifies that List(selection:) updated the SwiftUI state.
-    [outline selectRowIndexes:[NSIndexSet indexSetWithIndex:1] byExtendingSelection:NO];
-    return outline.selectedRow == 1;
+    [outline selectRowIndexes:[NSIndexSet indexSetWithIndex:index] byExtendingSelection:NO];
+    return outline.selectedRow == index;
 }
 
 static BOOL hasAXLabel(id node, NSString *label, NSString *role, NSHashTable *visited, NSUInteger depth) {
@@ -91,9 +91,9 @@ static BOOL hasAXLabel(id node, NSString *label, NSString *role, NSHashTable *vi
     return NO;
 }
 
-static BOOL controlsHeadingVisible(NSWindow *sheet) {
+static BOOL sectionHeadingVisible(NSWindow *sheet, NSString *section) {
     NSHashTable *visited = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
-    return hasAXLabel(sheet, @"Controls", NSAccessibilityHeadingRole, visited, 0);
+    return hasAXLabel(sheet, [section isEqual:@"Touch"] ? @"BOTW touch settings" : section, NSAccessibilityHeadingRole, visited, 0);
 }
 
 static void dumpAX(id node, int depth, NSHashTable *visited) {
@@ -172,13 +172,13 @@ static void waitForCondition(NSWindow *root, NSString *description, BOOL (^condi
     dispatch_async(dispatch_get_main_queue(), poll);
 }
 
-static void waitForControlsSection(NSWindow *sheet, const char *message, void (^next)(void)) {
+static void waitForSection(NSWindow *sheet, NSString *section, NSInteger index, const char *message, void (^next)(void)) {
     CFAbsoluteTime deadline = CFAbsoluteTimeGetCurrent() + 4.0;
     NSString *description = [NSString stringWithUTF8String:message];
     __block BOOL attempted = NO;
     __block void (^poll)(void);
     poll = ^{
-        if (controlsHeadingVisible(sheet)) {
+        if (sectionHeadingVisible(sheet, section)) {
             void (^continuation)(void) = next;
             poll = nil;
             check(YES, message);
@@ -189,7 +189,7 @@ static void waitForControlsSection(NSWindow *sheet, const char *message, void (^
         } else {
             if (!attempted) {
                 attempted = YES;
-                if (!press(sheet, @"settings.section.Controls", nil, nil)) selectControlsNativeRow(sheet);
+                if (!press(sheet, [@"settings.section." stringByAppendingString:section], nil, nil)) selectNativeRow(sheet,index);
             }
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC),
                            dispatch_get_main_queue(), poll);
@@ -242,7 +242,7 @@ int main(void) { @autoreleasepool {
                     if (!interpolationSwitch) dumpHierarchy(sheet);
                     check(interpolationSwitch,
                           "interpolation is a separate switch beside frame rate");
-                waitForControlsSection(sheet, "startup Controls navigation responds", ^{
+                waitForSection(sheet, @"Controls", 1, "startup Controls navigation responds", ^{
                     {
                         NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
                         check(hasAXLabel(sheet, nil, NSAccessibilityCheckBoxRole, nodes, 0), "startup controls include the native rumble toggle");
@@ -276,10 +276,25 @@ int main(void) { @autoreleasepool {
           "the same process opens in-game settings after startup");
     waitForCondition(game, @"in-game settings sheet", ^{ return (BOOL)(game.attachedSheet != nil); }, ^{
         NSWindow *sheet = game.attachedSheet;
-        waitForControlsSection(sheet, "in-game Controls navigation responds", ^{
+        waitForSection(sheet, @"Controls", 1, "in-game Controls navigation responds", ^{
             NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
             check(hasAXLabel(sheet, nil, NSAccessibilityCheckBoxRole, nodes, 0), "in-game controls include the native rumble toggle");
-            waitForPress(sheet, nil, @"Done", NSAccessibilityButtonRole, "in-game Done responds", ^{});
+            waitForSection(sheet, @"Touch", 2, "Touch opens the menu rather than an embedded editor", ^{
+                waitForPress(sheet, @"settings.touch.normal", nil, nil, "normal layout opens its editor", ^{
+                    waitForCondition(sheet, @"full-width normal layout", ^{ return (BOOL)(findOutline(sheet.contentView)==nil); }, ^{
+                        check(YES,"layout editor replaces the section sidebar");
+                        waitForPress(sheet, nil, @"Back", NSAccessibilityButtonRole, "Back restores the touch menu", ^{
+                            waitForPress(sheet, @"settings.touch.compact", nil, nil, "compact layout opens its own editor", ^{
+                                waitForPress(sheet, nil, @"Back", NSAccessibilityButtonRole, "compact layout returns to the menu", ^{
+                                    waitForPress(sheet, @"settings.touch.stick", nil, nil, "stick parameters open a separate page", ^{
+                                        waitForPress(sheet, nil, @"Done", NSAccessibilityButtonRole, "in-game Done responds", ^{});
+                                    });
+                                });
+                            });
+                        });
+                    });
+                });
+            });
         });
     });
     [NSApp run];

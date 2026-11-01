@@ -141,6 +141,7 @@ void dm_host_preload_start(int argc, char **argv) {
 int main(int argc, char **argv) {
     { int mtl_pso_prebuild_tool(void); if (mtl_pso_prebuild_tool()) return 0; }   // DM_PSO_PREBUILD=tool: the pipeline archive's prebuild alone, no game (nvn_mtl.m)
     if (!front_startup_settings()) return 0;
+    front_hud_env();   // The Mac launcher has now applied the player's HUD choice.
     if (getenv("DM_PRELOAD")) dm_host_preload_start(argc, argv);   // Exercise the early-start path on Mac (on iOS it is called from the App's main())
     if (atomic_load(&g_pre.started)) {
         pthread_join(g_pre.th, NULL);
