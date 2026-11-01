@@ -682,6 +682,69 @@ remains pending.
 - **Shrines at 20–27 fps (GitHub issues #534 and #598; current, the fix not yet seen in a shrine).** The reporters' shrines (Oman Au on a MacBook Air M2; every shrine on an M3) run at 20–27 fps where the open world holds 60. In the #598 log the slow stretches have about 1,000 draws a frame, as the fast ones, but a GPU time of about 36 ms against 9–13 ms. They have about 240 `passes ended to land them for a read` a frame, all `refused … other GPU writes`, and 280–330 `load-all store-all passes` against about 100. The probe on the Shrine of Resurrection save found the one write behind that refusal there: the GPU particle dispatch `9f8116baffddaf81` binds its three outputs with size 0, which counted as a write anywhere ([A storage buffer bound with size 0 counted as a write anywhere](../../../docs/reference/rendering.md#a-storage-buffer-bound-with-size-0-counted-as-a-write-anywhere)). With the fix, that save's world-load burst (1,200 refusals) is gone. Opening Oman Au's final gate ends the slowdown even out of view (#534): an emitter that stops with the gate would fit, but no shrine save was here to show it.
 - **Present snapshots (Mac).** The game's two swapchain textures held its CPU work to display ticks and the GPU at 444 MHz on an M2 Max ([present snapshots](../../../docs/reference/frame-rate.md#present-snapshots-the-games-swapchain-texture-free-at-once)). Judged by cost, the frame step stepped to 30 at a GPU time of 0.75 vsyncs. Zora's Domain from a Cemu save (120 Hz), frames on screen longer than 1/60 s by a quarter: 64 of 8,684 with neither, 41 with the GPU filler alone, 4 of 10,800 with snapshots alone (no step to 30 in 3 minutes, at 444 MHz throughout).
 
+### Render-pass cost audit (2026-11-01)
+
+Current: iPhone Air, `eb3bc99ccd83`, frame generation and upscaling off,
+handheld with fixed scale 0.8. The actual feedback source is 1024x576. At
+about 54 s the frame step starts dropping from 60; at 60 s thermal state 2
+explicitly caps it at 30. The same 2,773 draws take GPU p50 8.87 ms before
+and 28.71 ms after the drop. Fixed scale takes precedence over the enabled
+dynamic-resolution setting. These device observations establish a thermal
+cap, not an optimization acceptance result.
+
+The current-checkout Mac test path was checked fresh, then used with matching
+chain `715bb867230c` and disposable save copies. Three captured frames were
+replayed through both policies in the same build, four times each, with the
+encode thread both off and on. All 24 corresponding image digests are
+identical; draw counts are unchanged. Warm render-pass counts and mean
+attachment-traffic savings over replays 2-4 agree in both encoding modes:
+
+| Frame | Draws | Passes before / after | Attachment traffic saved (MiB/frame) |
+|---|---:|---:|---:|
+| Forest, camera turning | 3,653 | 149 / 147 | 9.32 |
+| Ruins save, landscape | 4,423 | 137 / 134 | 16.06 |
+| Same save, portrait preview | 2,151 | 133 / 130 | 16.07 |
+
+These are attachment-size ledger estimates, not measured DRAM traffic. Cold
+pipeline/cache order affects replay timings, so these runs do not establish
+an FPS percentage. The frame captures already differ from their live image
+under the reference policy; the before/after policy comparison is exact,
+while capture/live equality remains open. The existing matching shader cache
+uses experimental Metal `32023.883`, as in the resolution experiment above.
+
+Validation: the complete graphics `make run` passes (88 test targets plus
+the pull/budget checks); feedback readback passes 105 checks in each of five
+configurations, unwritten stores pass 90 checks in each policy, and the
+exact-target tests retain colors, depth, stencil and occlusion counts with
+attachment-read and resource-registration fallbacks. The tools suite passes
+760 tests (7 skipped), the iOS tools pass 50, and the iOS compile check passes
+190 source files. The five-game `regress.py check` selection was BOTW, Tears
+of the Kingdom (same engine), Super Mario 3D World (masked G-buffer outputs),
+Age of Calamity (compute/draw interleaving) and Xenoblade Chronicles 2
+(ordering barriers); only BOTW has a local prepared Mac build. Its separate
+static check is blocked by Metal `32023.883` versus required `32023.921`.
+Cross-game runtime acceptance remains open.
+
+The final host also completes a portrait `run_mac.py --test --touch-preview`
+route from a disposable copy of the ruins save: world, inventory, world,
+map, world. All five screenshots render and the log has no `[RED]` lines.
+This is Mac preview coverage, not physical-iPhone acceptance.
+
+Open: the phone reached snapshot #100,000 around frame 2,235. The Mac samples
+retain 6-10 copies per frame, refreshed by barriers and submission boundaries.
+In the final portrait scene's 300-frame windows there are 1,800 copies
+(13.5 MiB per frame): 600 barrier refreshes and 1,200 submission refreshes,
+with no cache misses or shape refreshes once warm.
+The phone's high copy rate has not been reproduced, so it is not
+claimed fixed. The new per-window refresh-cause counters distinguish barrier,
+submission, shape and cache-miss causes without a full device pass dump.
+
+The general fixes and GPU proofs are described in
+[Render-pass reuse with local write proofs](../../../docs/reference/rendering.md#render-pass-reuse-with-local-write-proofs).
+Artifacts, source-save digests, iPhone logs, captures and policy comparisons
+stay in `01007EF00011E000-work/render-pass-audit-20261101/`. The source saves
+are unchanged; physical iPhone acceptance remains pending.
+
 ## Rendering
 
 **Native widescreen UI backgrounds (2026-10-28).** Widescreen is independent of touch/controller mode. Menu foreground content and touch coordinates retain the centered 16:9 layout; full-width native background Pictures and Windows extend to the display edges. Windows retain their own corner sizes, and title illustrations use proportional cover sizing. Returning to 16:9 restores native dimensions without accumulating scale.

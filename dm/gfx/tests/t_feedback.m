@@ -7,6 +7,7 @@ module_t *g_mod; int g_nmod;
 void svc_thread_dump(void) {}
 uint64_t now_ns(void) { return bp_now(); }
 static int checks, failed;
+static NvProg *barrier_writer;
 #define CHECK(c, label) do { checks++; if (!(c)) { failed++; fprintf(stderr, "FAIL: %s\n", label); } } while (0)
 
 static id<MTLTexture> target(tex_t *t, uint64_t serial) {
@@ -115,6 +116,47 @@ static void reuse_case(NvProg *pr) {
     printf("feedback reuse: %s\n", before == failed ? "PASS" : "FAIL");
     mtl_tex_release(&source);
 }
+// Write-mask store elision must preserve the source for a later snapshot.
+// A barrier still refreshes it: red if untouched, green after a real write.
+static void barrier_case(NvProg *pr, int mode) {
+    int tid = 680 + mode; tex_t source; target(&source, 99800 + mode);
+    mtl_reg_tex(tid, &source, NULL);
+    prog_t program = {.serial = 99810 + mode}; serial_put(program.serial, pr);
+    id<MTLBuffer> result = [g_dev newBufferWithLength:1024 options:MTLResourceStorageModeShared]; res_add(result);
+    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin();
+    R.has_rt = 1; R.rt.n = 1; R.rt.color[0] = &source;
+    S.prog = &program; S.tex[1][0] = tid; S.chmask.mask = UINT32_MAX;
+    pr->sh[1]->rf.b[0].reg = 0;
+    clear(MTLClearColorMake(1, 0, 0, 1)); rp_end();
+    uint64_t copies = g_fb_count;
+    fb_prepare(pr);
+    CHECK(g_fb_count == copies + 1, "initial feedback snapshot copied");
+    S.chmask.mask = 0;
+    p_draw draw = {.prim = NVN_DRAW_PRIMITIVE_TRIANGLES, .count = 3, .instances = 1};
+    draw_(&draw, NULL);
+    CHECK(g_enc != nil, "read-only attachment draw keeps its render pass open");
+    if (mode == 1) {
+        struct { op_hdr h; p_clear_color c; op_hdr end; } code = {
+            {OP_CLEAR_COLOR, sizeof(op_hdr) + sizeof(p_clear_color)}, {.index=0, .mask=15, .rgba={0, 1, 0, 1}}, {OP_END, sizeof(op_hdr)}};
+        mtl_exec((const uint8_t *)&code);
+    } else if (mode == 2) { rp_end(); draw_(&draw, NULL); }
+    else if (mode == 3) {
+        prog_t writer = {.serial = 99820}; serial_put(writer.serial, barrier_writer);
+        S.prog = &writer; S.chmask.mask = UINT32_MAX; draw_(&draw, NULL); S.prog = &program;
+    }
+    struct { op_hdr h; int32_t bits, pad; op_hdr end; } barrier = {
+        {OP_BARRIER, 16}, NVN_BARRIER_ORDER_FRAGMENTS_BIT | NVN_BARRIER_INVALIDATE_TEXTURE_BIT, 0, {OP_END, sizeof(op_hdr)}};
+    mtl_exec((const uint8_t *)&barrier);
+    S.chmask.mask = UINT32_MAX;
+    fb_prepare(pr);
+    CHECK(g_fb_n == 1, "feedback snapshot remains bound after the barrier");
+    CHECK(g_fb_count == copies + 2, "barrier refreshes the feedback snapshot");
+    readback(g_fb_use[0], result, 0);
+    CHECK(mtl_wait(mtl_sub_commit(), 5000000000ull), "barrier proof GPU submission completes");
+    CHECK(!mtl_last_commit_error(), "barrier proof has no GPU error");
+    pixels(result, 0, mode == 1 || mode == 3 ? (const uint8_t[]){0, 255, 0, 255} : (const uint8_t[]){255, 0, 0, 255}, "barrier snapshot contains the literal current color");
+    mtl_tex_release(&source);
+}
 int main(void) { @autoreleasepool {
     setenv("DM_NVN_TBDR", "0", 1);
     mtl_init(); NSError *error = nil;
@@ -122,6 +164,7 @@ int main(void) { @autoreleasepool {
         "vertex float4 v(uint i[[vertex_id]]) { return float4(i == 1 ? 3.0 : -1.0, i == 2 ? 3.0 : -1.0, 0, 1); }\n"
         "struct A {texture2d<float, access::read> source[[id(0)]];};\n"
         "fragment float4 f(float4 p[[position]], constant A&a[[buffer(0)]]) {return a.source.read(uint2(p.xy));}\n"
+        "fragment float4 green() {return float4(0,1,0,1);}\n"
         options:nil error:&error];
     CHECK(lib != nil, "synthetic shader compiles");
     if (!lib) { fprintf(stderr, "%s\n", error.localizedDescription.UTF8String); return 1; }
@@ -138,6 +181,12 @@ int main(void) { @autoreleasepool {
     const int slots[] = {0, 128, 255};
     for (int i = 0; i < 3; i++) slot_case(pr, pipeline, slots[i], i);
     reuse_case(pr);
+    pr->sh[0] = [NvShader new]; pr->sh[0]->fn = [lib newFunctionWithName:@"v"];
+    pr->sh[1]->rf.color_known = 1; pr->sh[1]->rf.color_mask = 1;
+    barrier_writer = [NvProg new]; barrier_writer->sh[0] = pr->sh[0]; barrier_writer->sh[1] = [NvShader new];
+    barrier_writer->sh[1]->fn = [lib newFunctionWithName:@"green"]; barrier_writer->sh[1]->stage = 1;
+    barrier_writer->sh[1]->rf.color_known = 1; barrier_writer->sh[1]->rf.color_mask = 1;
+    for (int mode = 0; mode < 4; mode++) barrier_case(pr, mode);
     printf("feedback snapshot: %d checks, %d failed\n", checks, failed);
     return failed != 0;
 } }

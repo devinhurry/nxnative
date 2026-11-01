@@ -3128,7 +3128,7 @@ static int udc_on(void) {
         const char *a = getenv("DM_NVN_UDC_AB"); if (a && !strcmp(a, "1")) { g_udc_ab = 0; g_udc_ab_on = 0; } }
     return g_udc_ab || g_udc_ab_on;
 }
-// DM_NVN_TBDR=0 disables lookahead and pass merging. The independent unwritten-attachment proof remains active; DM_NVN_UNWRITTEN_DC=0 disables that too.
+// DM_NVN_TBDR=0 disables lookahead merging. Local exact-target and unwritten-attachment proofs run independently; DM_NVN_PASS_REUSE / DM_NVN_UNWRITTEN_DC control them.
 // Only for equivalence comparison (the same replay run on / off, comparing the picture byte by byte), not a product configuration
 // Mario: off by default (only DM_NVN_TBDR=1 turns it on). These optimizations infer read / write relations from "which textures are bound in texture slots", while 38% of this game's shaders use bindless textures (handles in uniform buffers, NVN_RB_TEXU),
 //   so the inference would miss readers - e.g. deciding an attachment is never read afterwards and not storing it. Turn them back on once they recognize bindless readers.
@@ -3473,10 +3473,9 @@ static id<MTL4RenderCommandEncoder> rp_begin_ex_(int clear_only) {
     g_enc_mode = clear_only; g_enc_geo_nocolor = g_geo_omit_colors; g_pass_swrite = g_pass_order = g_pass_late_res = 0; g_sm_pass = 0;
     if (!R.has_rt) { RED_ONCE(3, "no render target set before the draw"); return nil; }
     if (g_imfit_npend) img_fit_upgrade();   // no pass is open here: the upgrade's copy may run (img_fit)
-    // The version of the attachment-range candidate is taken before capturing any attachment; if it changes during setup, there is no continuation.
-    uint64_t reg0 = 0, ser0 = 0, dirty0 = 0;
-    if (rt_range_on()) { reg0 = g_reg_gen; ser0 = g_ser_gen; }
-    if (rt_range_on()) dirty0=nvn_dirty_now();
+    // Take versions before resolving attachments: replacement or CPU writes
+    // during setup invalidate either kind of target continuation.
+    uint64_t reg0 = g_reg_gen, ser0 = g_ser_gen, dirty0 = nvn_dirty_now();
     if (g_blit) { enc_b_end(g_blit); g_blit = nil; }
     MTL4RenderPassDescriptor *pd = [MTL4RenderPassDescriptor new];
     int any = 0;
@@ -3633,8 +3632,8 @@ static id<MTL4RenderCommandEncoder> rp_begin_ex_(int clear_only) {
         g_pass.dfmt = g_pass.hd ? (uint32_t)dt.pixelFormat : 0; g_pass.sfmt = stt ? (uint32_t)stt.pixelFormat : 0;
         if (dt || stt) g_pass.samples = (uint32_t)(dt ? dt : stt).sampleCount;
         pass_dims(pd, (NSUInteger)R.rt.n, &g_pass.tw, &g_pass.th);
-        if (rt_range_on()) { g_pass.reg_gen = reg0; g_pass.ser_gen = ser0; }
-        if (rt_range_on()) { g_pass.range_dirty=dirty0; g_pass.range_color=pd.colorAttachments[0].texture; g_pass.range_depth=pd.depthAttachment.texture; }
+        g_pass.reg_gen = reg0; g_pass.ser_gen = ser0; g_pass.range_dirty = dirty0;
+        if (rt_range_on()) { g_pass.range_color=pd.colorAttachments[0].texture; g_pass.range_depth=pd.depthAttachment.texture; }
         g_enc_pso = nil; g_enc_dss = nil; g_ed.ok = 0;
     }
     if (g_vis_on) {
@@ -4936,7 +4935,11 @@ static void swrite_note(NvProg *pr) {
     if (g_pass_swrite) { g_vbuf_write_epoch++; return; }   // further shader writes also invalidate aligned vertex snapshots
     if (prog_swrites(pr)) { g_pass_swrite = 1; g_vbuf_write_epoch++; }
 }
-static void udc_note_draw(NvProg *pr) {
+// One diagnostic control for comparing these local pass-reuse proofs against
+// the former split/store policy, including DM_AB phases in the same run.
+static int pass_reuse_on(void) { static int mode = -1; if (mode < 0) mode = sw_mode("DM_NVN_PASS_REUSE", 1); return sw_on(mode); }
+static void udc_note_draw(NvProg *pr, int ordinary_outputs) {
+    ordinary_outputs = ordinary_outputs && pass_reuse_on();
     int td = tbdr_on();
     if (!td && !udc_on()) {
         uint32_t cm = pr && pr->sh[1] ? pr->sh[1]->rf.color_mask : 0;
@@ -4962,7 +4965,13 @@ static void udc_note_draw(NvProg *pr) {
     for (int i = 0; i < g_nsd; i++) {
         sd_att *t = &g_sd[i];
         if (image_write) { t->wrote = 1; t->wwhy = 1; }
-        else if (t->depth == 0 && t->idx >= 0 && (((S.chmask.mask >> (4 * t->idx)) & 0xf) || (shader_color_mask >> t->idx & 1))) { t->wrote = 1; t->wwhy = (S.chmask.mask >> (4 * t->idx)) & 0xf ? 2 : 3; }
+        else if (t->depth == 0 && t->idx >= 0) {
+            int channels = (S.chmask.mask >> (4 * t->idx)) & 0xf, output = shader_color_mask >> t->idx & 1;
+            // Ordinary pipelines disable writes when either the channel mask or
+            // the shader output is absent (pso_desc). Specialized/remapped
+            // outputs retain the conservative rule; writable aliases above do too.
+            if (ordinary_outputs ? channels && output : channels || output) { t->wrote = 1; t->wwhy = channels ? 2 : 3; }
+        }
         else if (t->depth == 1 && S.ds.dw) { t->wrote = 1; t->wwhy = 4; }
         else if (t->depth == 2 && S.ds.st && (S.st_wmask[0] || S.st_wmask[1])
                 && (S.ds.fail_f != NVN_STENCIL_OP_KEEP || S.ds.zfail_f != NVN_STENCIL_OP_KEEP || S.ds.zpass_f != NVN_STENCIL_OP_KEEP
@@ -9004,7 +9013,7 @@ void ms_after(void) {
 // a fresh snapshot for each took the Mac's GPU time from about 4 to 28 ms a frame, reuse until a barrier needs about ten a frame (GPU time within the noise of none).
 // DM_NVN_FB_SNAP=0 none, all a fresh snapshot for every draw sampling an attachment of its pass (diagnostic)
 static int g_fb_mode = -1;   // 0 none, 1 writers with reuse until a barrier, 2 every sampling draw, fresh
-static uint64_t g_fb_bar, g_fb_reuse, g_fb_split;   // game barriers so far (OP_BARRIER with bits); draws that reused a snapshot; passes ended before a write to an attachment an earlier draw read
+static uint64_t g_fb_bar, g_fb_reuse, g_fb_split, g_fb_bytes, g_fb_refresh[5];   // refresh: first/evicted, barrier, submission, shape, forced
 static uint64_t g_fb_pass = UINT64_MAX; static uint32_t g_fb_wmask, g_fb_rmask;   // the current Metal render pass: color attachments written so far, sampled directly
 typedef struct { uint64_t ser, bar, sub; int lv, sl; __strong id<MTLTexture> snap; } fb_cache_t;
 static fb_cache_t g_fbc[8]; static int g_fbc_next;
@@ -9018,14 +9027,28 @@ static inline void fb_pass_sync(void) { uint64_t p = g_stat_pass + !g_enc; if (p
 static fb_cache_t *fb_snap(uint64_t ser, int lv, int sl, MTLPixelFormat pf, NSUInteger w, NSUInteger h, int force, int *fresh) {
     fb_cache_t *e = NULL;
     for (int i = 0; i < 8 && !e; i++) if (g_fbc[i].snap && g_fbc[i].ser == ser && g_fbc[i].lv == lv && g_fbc[i].sl == sl) e = &g_fbc[i];
+    int matched = e != NULL;
+    uint64_t old_bar = e ? e->bar : 0, old_sub = e ? e->sub : 0;
+    int shape = e && (e->snap.pixelFormat != pf || e->snap.width != w || e->snap.height != h);
     if (e && (e->snap.pixelFormat != pf || e->snap.width != w || e->snap.height != h)) { defer_obj_release(e->snap); e->snap = nil; }
     if (e && e->snap && !force && e->bar == g_fb_bar && e->sub == g_sub_serial) { *fresh = 0; return e; }
+    PD("F feedback refresh ser=%llu lv%d sl%d matched=%d force=%d barrier=%llu->%llu submission=%llu->%llu", (unsigned long long)ser, lv, sl, matched, force,
+       (unsigned long long)old_bar, (unsigned long long)g_fb_bar, (unsigned long long)old_sub, (unsigned long long)g_sub_serial);
     if (!e) { e = &g_fbc[g_fbc_next]; g_fbc_next = (g_fbc_next + 1) & 7;
         if (e->snap && (e->snap.pixelFormat != pf || e->snap.width != w || e->snap.height != h)) { defer_obj_release(e->snap); e->snap = nil; } }
     if (!e->snap) { MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:w height:h mipmapped:NO];
         d.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView; d.storageMode = MTLStorageModePrivate;
         e->snap = [g_dev newTextureWithDescriptor:d]; if (!e->snap) { e->ser = 0; return NULL; } res_add(e->snap); }   // full queue barriers separate a copy from the draws that read the earlier content
-    e->ser = ser; e->lv = lv; e->sl = sl; e->bar = g_fb_bar; e->sub = g_sub_serial; *fresh = 1; return e;
+    e->ser = ser; e->lv = lv; e->sl = sl; e->bar = g_fb_bar; e->sub = g_sub_serial;
+    g_fb_refresh[force ? 4 : shape ? 3 : !matched ? 0 : old_sub != g_sub_serial ? 2 : 1]++;
+    *fresh = 1; return e;
+}
+void mtl_feedback_stats(char *out, size_t n) {
+    static uint64_t prev[9];
+    uint64_t v[9] = {g_fb_count, g_fb_bytes, g_fb_reuse, g_fb_refresh[0], g_fb_refresh[1], g_fb_refresh[2], g_fb_refresh[3], g_fb_refresh[4], g_rt_merge_n}, d[9];
+    for (int i = 0; i < 9; i++) { d[i] = v[i] - prev[i]; prev[i] = v[i]; }
+    snprintf(out, n, "copies %llu / %.1f MB, reused by %llu draws; refresh first/evicted %llu, barrier %llu, submission %llu, shape %llu, forced %llu; identical-target continuations %llu",
+             d[0], d[1] / 1048576.0, d[2], d[3], d[4], d[5], d[6], d[7], d[8]);
 }
 // Called before the draw opens its render pass: if a snapshot is needed, end the current render pass, copy the snapshot (or reuse a valid one) and register the substitution (used by this draw's argument encoding)
 static void fb_prepare(NvProg *pr) {
@@ -9063,6 +9086,7 @@ static void fb_prepare(NvProg *pr) {
             if (fresh) {
                 if (g_enc) rp_end();
                 id<MTL4ComputeCommandEncoder> be = blit(); enc_b_copy_texture(be, base, (NSUInteger)sl, (NSUInteger)lv, MTLOriginMake(0, 0, 0), MTLSizeMake(w, h, 1), snap, 0, 0, MTLOriginMake(0, 0, 0));
+                g_fb_bytes += att_bytes(snap, 0);
             } else if (g_enc && (g_fb_rmask >> k & 1)) rp_end();   // an earlier draw of this pass read the attachment directly: it must not see this pass's writes
             if (!g_enc) fb_pass_sync();
             MTLTextureSwizzleChannels sw = t.swizzle;
@@ -9861,8 +9885,8 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
         static int once2; if (!once2++) MLOG("same-target continuation: a draw in the continued pass needs a depth / stencil plane that is not attached; split here (first case pass %llu)", g_stat_pass);
         PD("M %llu a draw in the continued pass needs a depth / stencil plane that is not attached; split here", g_stat_pass); rp_end(); }
     if (g_rt_range_active && (!rt_range_pr_ro(pr) || !S.ds.dt || S.ds.dw || S.ds.st)) rp_end();   // The external write visibility at the original encoder boundary is not removed
-    if (g_rt_merged && draw_samples_rt(pr)) { static int once; if (!once++) MLOG("same-target continuation: a draw in the continued pass samples an attachment; split here (first case pass %llu)", g_stat_pass);
-        PD("M %llu a draw in the continued pass samples an attachment; split here", g_stat_pass); rp_end(); }
+    if (g_rt_merged && (draw_samples_rt(pr) || prog_swrites(pr))) { static int once; if (!once++) MLOG("same-target continuation: a draw samples an attachment or writes shader resources; split here (first case pass %llu)", g_stat_pass);
+        PD("M %llu a draw samples an attachment or writes shader resources; split here", g_stat_pass); rp_end(); }
     order_draw(pr, g_fz.active || g_sm_pass || g_defer_replaying);   // a write after an ordering barrier in the pass
     static id<MTLFunction> fz_fn;   // Specialized fragment function for this draw of the later pass in a merged render pass (nil = use the original version)
     if (g_fz.active && g_enc && g_fz.phase == 2 && (lop_on() || !fz_p2_draw(pr, dw, di, g_fz.lmap2, &fz_fn))) {   // Cannot be proven (or a logic operation, which needs the shader's own targets: lop_key): end the merged render pass (the earlier pass's result is stored as usual) and reopen with the later pass's original targets
@@ -10034,7 +10058,8 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
         again = 1; draw(dw, di); again = 0; return;
     }
     // Parameter binding captures the actual resources under the registry lock; if the version changed between the eligibility check and the binding, split and retry before any GPU draw.
-    if (g_rt_range_active && (g_pass.reg_gen != g_reg_gen || g_pass.ser_gen != g_ser_gen || g_pass.range_dirty != nvn_dirty_now())) { rp_end(); draw(dw, di); return; }
+    if ((g_rt_range_active || (g_rt_merged && !tbdr_on())) &&
+        (g_pass.reg_gen != g_reg_gen || g_pass.ser_gen != g_ser_gen || g_pass.range_dirty != nvn_dirty_now())) { rp_end(); draw(dw, di); return; }
     int prim = dw ? dw->prim : di->prim;
     MTLPrimitiveType mp;
     switch (prim) {
@@ -10110,7 +10135,7 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
 #ifdef NVN_RT_RANGE_TEST
     rr_snap(dw,di);
 #endif
-    udc_note_draw(pr);
+    udc_note_draw(pr, !g_fz.active && !g_defer_replaying && !g_geo_program && !g_geo_mesh.on && !g_ui_dock_draw);
     swrite_note(pr); order_note(pr);
     if (g_geo_mesh.on) { geo_mesh_encode(en); return; }
     if (g_geo_program) {
@@ -11118,6 +11143,8 @@ void mtl_exec(const uint8_t *p) {
             case OP_SET_RT: {
                 seated_dock_finish();
                 const p_set_rt *r = a;
+                PD("Y set_rt cmd=%p same=%d open=%d previous_pass=%llu colors=%d depth=%llu", p, R.has_rt && rt_same(&R.rt, r), g_enc != nil,
+                   (unsigned long long)g_stat_pass, r->n, (unsigned long long)(r->depth ? r->depth->serial : 0));
                 if (defer_begin_q(p)) break;
                 int pend = R.clear_d || R.clear_s; for (int i = 0; i < 8; i++) pend |= R.clear_c[i];
                 if (g_enc && !pend && R.has_rt && tbdr_on() && rt_range_same(&R.rt,r)) {
@@ -11125,7 +11152,13 @@ void mtl_exec(const uint8_t *p) {
                 if (g_enc && g_fz.active && g_fz.phase == 1 && fz_reuse_op(p) && !pend && g_enc_mode != 1 && R.has_rt && tbdr_on() && rt_same(&g_fz.rt1, r)) {
                     g_rt_merged = 1; if (!g_rt_merge_n++) MLOG("same-target continuation: first case pass %llu", g_stat_pass); PD("M %llu same-target continuation pass", g_stat_pass); break; }
                 // Do not continue a render pass opened only for a clear; one with fewer depth / stencil attachments can be continued (check the planes before drawing)
-                if (g_enc && g_enc_mode != 1 && !pend && R.has_rt && tbdr_on() && rt_same(&R.rt, r)) { g_rt_merged = 1; if (!g_rt_merge_n++) MLOG("same-target continuation: first case pass %llu", g_stat_pass); PD("M %llu same-target continuation pass", g_stat_pass); R.rt = *r; break; }
+                // Keeping identical attachments needs no lookahead. Outside the
+                // experimental path keep all planes, preserve shader-write
+                // boundaries, and split before any later attachment read/write alias.
+                if (g_enc && g_enc_mode != 1 && !pend && R.has_rt && (tbdr_on() || (pass_reuse_on() && g_enc_mode == 0 && !g_pass_swrite &&
+                    g_pass.reg_gen == g_reg_gen && g_pass.ser_gen == g_ser_gen && g_pass.range_dirty == nvn_dirty_now())) && rt_same(&R.rt, r)) {
+                    g_rt_merged = 1; if (!g_rt_merge_n++) MLOG("same-target continuation: first case pass %llu", g_stat_pass);
+                    PD("M %llu same-target continuation pass", g_stat_pass); R.rt = *r; break; }
                 if (g_enc && g_sm_pass && !pend && !g_game_barrier) { int sl;   // another layer of the slice-merged pass's level (sm_scan planned it)
                     if (sm_rt_slice(&R.rt, r, &sl) && sl >= g_sm_lo && sl <= g_sm_hi) { R.rt = *r; g_sm_cur = sl; g_sm_ncont++;
                         { void td_note_layer(id<MTLTexture>, uint64_t, NSUInteger, NSUInteger); td_note_layer(tex_mtl(r->color[0]), r->color[0]->serial, r->cview[0].set_levels ? r->cview[0].base_level : 0, (NSUInteger)sl); } PD("M %llu slice-merged pass goes on in layer %d", g_stat_pass, sl); break; } }
@@ -11199,7 +11232,7 @@ void mtl_exec(const uint8_t *p) {
                 PD("I %llu barrier bits %#x%s", g_stat_pass, bits, split ? ": ends the pass (shader writes)" : order ? " (render pass open; a later shader write is ordered after its draws)" : g_enc ? " (render pass open)" : "");
                 if (split) { rp_end(); static int once; if (!once++) MLOG("a game barrier (bits %#x) after shader writes in a draw pass: the pass ends there (first case pass %llu)", bits, (unsigned long long)g_stat_pass); }
                 else if (order) g_pass_order |= (bits & NVN_BARRIER_ORDER_PRIMITIVES_BIT ? 1 : 0) | (bits & (NVN_BARRIER_ORDER_FRAGMENTS_BIT | NVN_BARRIER_ORDER_FRAGMENTS_TILED_BIT) ? 2 : 0);
-                if (bits) { g_game_barrier = 1; g_fb_bar++; } break; }   // g_fb_bar: snapshots taken before it are stale (see fb_prepare)
+                if (bits) { g_game_barrier = 1; g_fb_bar++; } break; }   // Snapshots taken before a barrier are stale (see fb_prepare).
             case OP_SET_TEX_POOL: case OP_SET_SAMP_POOL: state_op(h.op, a); break;
             default: break;
         }
