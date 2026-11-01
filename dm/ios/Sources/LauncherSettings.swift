@@ -146,6 +146,7 @@ final class LauncherModel: ObservableObject {
     // setting that cannot do anything is not offered (an upscaler's detail with the upscaler off, rumble strength
     // with rumble off). A row naming a setting this game does not have stays drawn, as it has nothing to hide behind
     func visible(_ s: Setting) -> Bool {
+        if s.env == "DM_PSO_PREBUILD", values[Self.lowMemoryKey] == "1" { return false }
         guard let n = s.needs, let eq = n.firstIndex(of: "=") else { return true }
         let key = String(n[n.startIndex..<eq]), want = String(n[n.index(after: eq)...])
         guard let v = values[key] else { return true }

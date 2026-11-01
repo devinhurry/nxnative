@@ -3,7 +3,6 @@ import contextlib
 import importlib.util
 import io
 import json
-import os
 from pathlib import Path
 import shutil
 import stat
@@ -17,6 +16,7 @@ import zipfile
 
 REPO = Path(__file__).resolve().parents[3]
 spec = importlib.util.spec_from_file_location('graphics_pack', REPO / 'dm/tools/graphics_pack.py')
+assert spec and spec.loader
 gp = importlib.util.module_from_spec(spec); spec.loader.exec_module(gp)
 
 

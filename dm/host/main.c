@@ -110,6 +110,7 @@ static void host_preload(int argc, char **argv) {
     dm_botw_touch_hud_install(); // shared BOTW pane gates: widescreen backgrounds and optional touch HUD
     dm_botw_touch_menu_install(); // observe the supported BOTW inventory and native pointer on existing pane gates
     dm_botw_touch_actions_install(); // BOTW touch-mode R/ZR sequencing and its native Dash-result filter are build-gated
+    dm_cheats_init();   // the Atmosphère cheat files for this build (hle_cheats.c): picked by first 16 hex digits of main's build ID, which the loader knows now
     dm_sdk_major();   // logs the SDK version, which SDK-dependent behaviour follows (loader.c)
     uint64_t ta = now_ns();
     probe_install();   // DM_PROBE probes (for diagnostics)
