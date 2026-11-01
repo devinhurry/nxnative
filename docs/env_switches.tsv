@@ -361,6 +361,7 @@ DM_TEST_KEYRACE	diagnostic	`=<n>` creates up to n (at most 512) pthread keys on 
 DM_TEST_KILL_AT	diagnostic	`=write:<n>` exits the process (`_exit(9)`) at the nth save write, imitating a kill mid-write
 DM_TEST_LEAK_GPU	diagnostic	`=1` allocates and keeps a 1 MB shared Metal buffer every 100 ticks: a GPU memory leak on demand
 DM_TEST_LINK_STALL	diagnostic	`=<start s>,<duration s>`: counting from the first present, pauses the display link at that point for that long, to check the present fallback
+DM_TEST_NO_BC	diagnostic	`=1` forces capability-selected GPU BC1-7 decoding on a device with native BC support; test uploads, raw copies, views and block render targets without changing shader libraries
 DM_TEST_NO_METAL4	diagnostic	`=1` treats the GPU as one without Metal 4, as on a virtual Mac: the NVN layer starts only its classic part and drops every present
 DM_TEST_PRESENT_LAG	diagnostic	`=<every n>,<ms>[,<in a row>][;…]` sleeps that long before every nth present (and the ones after it in the run): a slow frame on demand
 DM_TEST_SWKBD_HOLD_MS	diagnostic	`=<ms>` (with `DM_KBD`) keeps the system keyboard up that long before `DM_KBD`'s text is returned, as a player typing would

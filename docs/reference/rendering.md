@@ -4,6 +4,15 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 
 ## Textures and formats
 
+### BC textures on GPUs without BC support
+
+- **Symptom:** an A16 device aborts while uploading a texture: `MTLTextureDescriptor has invalid pixelFormat (140)`, `CRASH sig=6`, with `pkg_upload` in the backtrace.
+- **Cause:** format 140 is BC4_RUnorm. The NVN format mapping was correct, but this GPU has no BC texture formats, and the old decompression path had been removed.
+- **Fix:** `supportsBCTextureCompression` selects native BC or GPU decoding once at initialization. Native BC keeps its descriptors, uploads and copies. The fallback (`nvn_bc.inc`) uses bcdec's scalar algorithms adapted to Metal for BC1-7, including signed channels and BC6H. It stores the compressed blocks separately from the sampled pixels, so buffer and texture copies, readbacks, mip/array views and block render targets preserve the original bytes. Writes decode their destination region after the GPU copy; a BC4 block-encoder render pass continues through its existing shadow. No CPU wait is needed to decode a GPU-written source.
+- **Check:** `t_bc` compares every BC format against native GPU decoding across mip levels and array layers (allowing interpolation/8-bit quantization differences for BC1-5), and checks GPU-written partial copies plus loaded 2D/3D BC4 render-target passes, in native and forced-fallback modes and with the encoding thread. `bcdec_msl.py --check` verifies the generated source. A forced Mac run cannot establish physical A16 memory or performance acceptance; decoded textures use more memory.
+- **Lifetime:** the fallback retires block allocations and completed upload sources on its own queue. In a low-memory Mac run, residency commit stopped in `IOGPUResourceGroupUpdateResources` while Metal's completion callback waited on `g_res_mu`; moving the fallback's reclamation off that callback allowed the completion queue to drain. Native BC retains its existing reclamation route. The file-backed/transient-source tests cover GPU completion before source release.
+- **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md), user-provided A16 log (`log-susan.txt`, build `68b7dd4e663e`, 2026-11-01).
+
 ### Null textures in diagnostic logs
 
 - **Symptom:** clang reports null dereferences in `nvnWindowInitialize` and `clear_tex`; clearing a null texture crashes with `DM_NVN_PASSDUMP=1`.
@@ -295,7 +304,7 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Cause:** a GPU block encoder writes a BC texture through an uncompressed integer view (one texel per block). Metal can neither attach a compressed format nor make an uncompressed view of one.
 - **Fix:** such a pass draws into an uncompressed shadow of blocks × blocks in the view's format: the level's (or layer's, or depth plane's) blocks are copied into it through a buffer before the pass and back after it (`bcrt_attach` / `bcrt_flush` in `nvn_mtl.m`; the method comes from PR #11). The shadows stay resident and are reused, and they are kept out of the load-skip and store-elision bookkeeping. `attach`, the pipeline prediction and the sampling views go by the NVN format, so BC textures are never attached or viewed raw. The encoder's output must be declared `uint` ([Integer fragment outputs declared by hand](shaders.md#integer-fragment-outputs-declared-by-hand)).
 - **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md): agl's BC4 block encoder (`8e2cc2671cae6020`) writes a 32×32 RGTC1 (BC4) texture through an `RGBA16UI` view (one texel per 8-byte block); its twin for a 2D source (`93aa5e22a8202409`) failed in an iPhone run; GitHub issue #4 (reported from an iPhone 14 Pro / A16). [The Legend of Zelda: Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md): agl's BC4 block encoder (`0544282c162305db`, the same shader Mario Wonder ships) encodes a 32×32×32 BC4 3D texture one depth plane per pass through an `RGBA16UI` view; a raw dump at frame 1500 of the new-game route: the texture was all zeros before, now all 32 planes hold encoded blocks.
-- **Note:** the A16 has no BC formats; the host used to store BC textures decompressed on such GPUs (about 3.9 GB instead of 2.8 GB for BotW, over iOS's limit on a 6 GB iPhone), and that path has since been removed: only GPUs with BC are supported.
+- **Note:** A16 uses the [GPU BC fallback](#bc-textures-on-gpus-without-bc-support). Its shadow still contains compressed blocks; the changed region is decoded after the pass. Historical CPU/GPU decompression used about 3.9 GB instead of 2.8 GB for BotW; those figures do not establish the current fallback's physical-device memory use.
 
 ### A depth texture drawn through a colour view
 
