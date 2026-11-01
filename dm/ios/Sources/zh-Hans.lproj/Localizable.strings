@@ -114,7 +114,7 @@
 "Upscaling" = "画面放大";
 "Uses more GPU time and can increase heat." = "会增加图形处理负载，可能更容易发热。";
 "Version %@" = "版本 %@";
-"BOTW version %@" = "版本 %@ · 制作者 b站up主可不能太乐";
+"BOTW creator notice" = "触摸旷野由b站up主“可不能太乐”制作，基于nxnative、macnativegames构建。\n仅供学习研究，未在任何地方售卖，请使用正版游戏游玩。";
 "Vertical offset" = "垂直偏移";
 "Window" = "窗口";
 "XYAB: Button spacing" = "XYAB：按钮间距";
