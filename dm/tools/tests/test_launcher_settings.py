@@ -69,7 +69,7 @@ class LauncherSettingsTests(unittest.TestCase):
 
     def test_sections_keep_the_profile_defaults(self):
         botw, wonder = build(BOTW, 'nvn'), build(WONDER, 'nvn')
-        self.assertEqual([e for e, s in botw.items() if s['section'] == 'Performance'], ['DM_LOW_MEMORY'] + PERFORMANCE_NVN)
+        self.assertEqual([e for e, s in botw.items() if s['section'] == 'Performance'], ['DM_FRAMEGEN', 'DM_LOW_MEMORY'] + PERFORMANCE_NVN)
         self.assertEqual(botw['DM_PSO_MTL4']['default'], '1')   # pso_mtl4 on
         self.assertEqual((wonder['DM_PRESENT_SNAP']['default'], wonder['DM_PSO_MTL4']['default']), ('0', '0'))
         self.assertEqual((botw['DM_PSO_PREBUILD']['default'], botw['DM_NVN_ENC_THREAD']['default'], botw['DM_METAL_HUD']['default']), ('1', '1', '0'))   # the host's iOS defaults
@@ -161,7 +161,7 @@ class LauncherSettingsTests(unittest.TestCase):
             listed = settings.build(BOTW, tmp, Path(tmp) / 'control.nacp')
         rows = {s['env']: s for s in listed['settings']}
         self.assertEqual(listed['schema'], 1)
-        self.assertEqual([e for e, s in rows.items() if s.get('level') == 'basic'], ['DM_FPS_TARGET', 'DM_RENDER_SCALE', 'DM_OPMODE', 'DM_LANG', 'DM_RUMBLE'])
+        self.assertEqual([e for e, s in rows.items() if s.get('level') == 'basic'], ['DM_FPS_TARGET', 'DM_RENDER_SCALE', 'DM_OPMODE', 'DM_LANG', 'DM_RUMBLE', 'DM_FRAMEGEN'])
         self.assertEqual(rows['DM_RUMBLE_GAIN']['needs'], 'DM_RUMBLE=1')
         self.assertFalse({'level', 'needs'} & set(rows['DM_METAL_HUD']), 'a row without meta has no optional fields')
 

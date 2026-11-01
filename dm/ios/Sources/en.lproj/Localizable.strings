@@ -158,3 +158,5 @@
 "Allows portrait rotation below 600pt of available width. Wider portrait windows are always supported and keep the normal layout." = "Allows portrait rotation below 600pt of available width. Wider portrait windows are always supported and keep the normal layout.";
 
 "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately." = "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately.";
+"Experimental frame generation" = "Experimental frame generation";
+"Supports Handheld and Docked. Handheld's smaller canvas reduces GPU work. MetalFX inserts one picture between 30 real game frames per second. Adds display latency; requires a supported GPU. Applies on Play." = "Supports Handheld and Docked. Handheld's smaller canvas reduces GPU work. MetalFX inserts one picture between 30 real game frames per second. Adds display latency; requires a supported GPU. Applies on Play.";

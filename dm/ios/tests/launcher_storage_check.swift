@@ -130,7 +130,7 @@ import Foundation
         let mac = try! JSONDecoder().decode(SettingsFile.self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[2])))
         setenv("DM_ENV_FILE_KEYS", "", 1); unsetenv("DM_FULLSCREEN"); unsetenv("DM_OPMODE")
         let mm = LauncherModel(mac.settings, defaults: d)
-        expect(mm.sections(basic: true) == ["Game", "Controls"] && mm.sections(basic: false) == ["Game", "Controls", "Touch left stick", "Touch layout", "Performance"], "Basic and Advanced keep the list's sections")
+        expect(mm.sections(basic: true) == ["Game", "Controls", "Performance"] && mm.sections(basic: false) == ["Game", "Controls", "Touch left stick", "Touch layout", "Performance"], "Basic and Advanced keep the list's sections")
         expect(mm.rows(in: "Game", basic: true).map(\.env) == ["DM_FPS_TARGET", "DM_RENDER_SCALE", "DM_OPMODE", "DM_LANG", "DM_FULLSCREEN"], "Basic rows in the list's order")
         expect(!file.settings.contains { $0.env == "DM_FULLSCREEN" } && mm.values["DM_FULLSCREEN"] == "0", "Display mode is the Mac's, Window by default")
         mm.values["DM_FULLSCREEN"] = "1"; mm.apply()
@@ -152,6 +152,26 @@ import Foundation
         launched.reset(); launched.apply()
         expect(launched.values["DM_OPMODE"] == "0" && d.string(forKey: "launcher.DM_OPMODE") == "1", "Reset then Play keeps the saved choice of a setting fixed at launch")
         unsetenv("DM_OPMODE"); setenv("DM_ENV_LAUNCH_KEYS", "", 1); d.removeObject(forKey: "launcher.DM_OPMODE")
+        // The same row renders as a native switch in both launchers. Its on
+        // value selects 30+30, and Play persists/applies the shared variable.
+        let fgDomain = "nxnative.launcher-framegen-test.\(UUID().uuidString)"
+        let fgDefaults = UserDefaults(suiteName: fgDomain)!
+        defer { fgDefaults.removePersistentDomain(forName: fgDomain) }
+        unsetenv("DM_FRAMEGEN")
+        let fgRow = file.settings.first { $0.env == "DM_FRAMEGEN" }!
+        let fg = LauncherModel(file.settings, defaults: fgDefaults)
+        expect(fgRow.kind == "toggle" && fgRow.onValue == "30" && fgRow.offValue == "0" && fg.values[fgRow.env] == "0", "frame generation is an off-by-default native switch")
+        expect(fg.rows(in: "Performance", basic: true).contains { $0.env == fgRow.env }, "frame generation switch appears on the overlay home page")
+        fg.setValue(fgRow.onValue, for: fgRow); fg.apply()
+        expect(String(cString: getenv("DM_FRAMEGEN")) == "30" && fgDefaults.string(forKey: "launcher.DM_FRAMEGEN") == "30", "Play enables and remembers frame generation")
+        unsetenv("DM_FRAMEGEN")
+        let fgReopened = LauncherModel(file.settings, defaults: fgDefaults)
+        expect(fgReopened.values[fgRow.env] == "30", "reopening restores the frame generation switch")
+        fgReopened.setValue(fgRow.offValue, for: fgRow); fgReopened.apply()
+        expect(String(cString: getenv("DM_FRAMEGEN")) == "0" && fgDefaults.string(forKey: "launcher.DM_FRAMEGEN") == nil, "turning frame generation off restores the default and forgets its override")
+        fgReopened.values["DM_OPMODE"] = "0"
+        expect(fgReopened.rows(in: "Performance", basic: true).contains { $0.env == fgRow.env }, "handheld mode also offers frame generation")
+        unsetenv("DM_FRAMEGEN")
         // Automatic memory defaults are recalculated; only explicit On/Off is
         // saved, including choices equal to the current automatic default.
         let memoryDomain = "org.nxnative.launcher-memory-test.\(UUID().uuidString)"

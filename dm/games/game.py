@@ -147,6 +147,11 @@ def header(g):
     scene = g.get('scene_upscale', '').split()
     if scene and (len(scene) != 2 or any(not re.fullmatch(r'[0-9a-f]{16}', k) for k in scene)):
         sys.exit(f'{g.id}: scene_upscale must name the verified scene-composite vertex and pixel shader keys')
+    fg_scene = g.get('framegen_scene', '')
+    fg_camera = g.get('framegen_camera', '')
+    if fg_scene and (not fg_scene.split() or any(not re.fullmatch(r'[0-9a-f]{16}', key) for key in fg_scene.split())): sys.exit(f'{g.id}: framegen_scene must list full 16-digit shader keys')
+    if fg_camera and not re.fullmatch(r'(?:[0-9]|1[0-5]):[0-9]+', fg_camera): sys.exit(f'{g.id}: framegen_camera must be <vertex uniform slot>:<byte size>')
+    if bool(fg_scene) != bool(fg_camera): sys.exit(f'{g.id}: framegen_scene and framegen_camera must be supplied together')
     if any(not re.fullmatch(r'[0-9a-f]{16}', k) for k in au.split()): sys.exit(f'{g.id}: aspect_ui must list full 16-digit shader keys')
     if ac and not re.fullmatch(r'[0-9a-f]{16}', ac): sys.exit(f'{g.id}: aspect_canvas must be one full 16-digit shader key')
     if an == 'on' and not (ca and au and ac): sys.exit(f'{g.id}: aspect_native requires camera_aspect, aspect_ui and aspect_canvas')
@@ -209,6 +214,8 @@ def header(g):
          f'#define DM_GAME_ASPECT_CANVAS {q(ac)}',
          f'#define DM_GAME_SCENE_UPSCALE_VS {q(scene[0] if scene else "")}',
          f'#define DM_GAME_SCENE_UPSCALE_PS {q(scene[1] if scene else "")}',
+         f'#define DM_GAME_FRAMEGEN_SCENE {q(fg_scene)}',
+         f'#define DM_GAME_FRAMEGEN_CAMERA {q(fg_camera)}',
          f'#define DM_GAME_CAMERA_ASPECT {q(ca)}',
          f'#define DM_GAME_CAMERA_LOOK {q(cl)}',
          f'#define DM_GAME_CAMERA_UI_ASPECT {q(cu)}',

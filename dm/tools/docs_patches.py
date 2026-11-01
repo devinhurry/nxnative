@@ -103,6 +103,10 @@ SHADER_BINDING = [
 # Profile switches: (key, the start of its value ('' = any), entry). A key is per-game data, so `game`; its goal is `host` where it is the semantics every game should get
 DEFAULT_SOON = 'a default for every game after `regress.py check` on the games'
 SWITCH_BINDING = [
+    ('framegen_scene', '', {'what': 'the scene boundary for experimental frame generation', 'now': 'game', 'goal': 'game', 'purpose': 'rendering',
+     'why': "the game's scene-completion shader identity; normal rendering does not use it"}),
+    ('framegen_camera', '', {'what': 'the camera uniform layout for experimental frame generation', 'now': 'game', 'goal': 'game', 'purpose': 'rendering',
+     'why': "the game's validated vertex camera block, used only by opt-in interpolation"}),
     ('aspect_native', '', {'what': 'native widescreen with a centered game UI', 'now': 'game', 'goal': 'game', 'purpose': 'rendering',
      'why': "a per-game presentation choice requiring the profile's camera and UI draw identities"}),
     ('aspect_canvas', '', {'what': 'the final UI canvas composite shader', 'now': 'game', 'goal': 'game', 'purpose': 'rendering',

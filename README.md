@@ -8,6 +8,18 @@ It is not an emulator: the game's own code runs directly on the Apple chip, with
 
 Ask your AI agent how to build the project.
 
+## Experimental frame generation (`expriment`)
+
+BOTW has an opt-in MetalFX experiment for the validated Docked rendering path: `DM_FRAMEGEN=30` requests 30 real game frames plus one generated picture between each pair. Leave it unset, or use `0`, for the normal renderer. The Game Overlay home page exposes an off-by-default **Experimental frame generation** switch under **Performance** when Docked mode is selected. A supported Metal 4 GPU is required.
+
+This is a prototype with extra GPU cost and latency. It uses Apple's composited-UI mode, supplying the scene before UI and the completed canvas. It does not guarantee 60 displayed frames per second. See the [BOTW experiment and validation notes](dm/games/01007EF00011E000/README.md#experimental-metalfx-frame-generation).
+
+## Credits
+
+- [seedds](https://github.com/seedds) for [nxnative](https://github.com/seedds/nxnative), the native runtime, graphics translation and build tools this fork is based on (MIT; see [LICENSE](LICENSE)).
+- [ly05010419](https://github.com/ly05010419) and the [MacNativeGames contributors](https://github.com/ly05010419/MacNativeGames) for their BOTW/TOTK research and MetalFX frame interpolation implementation. The experimental frame-generation work adapts their camera reprojection, motion vectors and MetalFX setup; see the [source attribution](dm/third_party/macnativegames/README.md) and [MIT license](dm/third_party/macnativegames/LICENSE).
+- The Ryujinx contributors for the shader translator used by the inherited graphics pipeline; its [license](dm/third_party/ryujinx/LICENSE.txt) is retained with the source.
+
 ## 触摸旷野
 
 这是 [nxnative](https://github.com/seedds/nxnative) 的一个分支，专注于为 **《塞尔达传说：旷野之息》** 添加触屏操作支持。

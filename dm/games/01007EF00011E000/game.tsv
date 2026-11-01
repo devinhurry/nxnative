@@ -26,6 +26,11 @@ aspect_ui	21fe759b8114941c 60e2041ed375cae1 9f8de48697e031b5 71018be49e22ab4a 52
 aspect_canvas	ecb4242efaf4042b
 # Native scene FXAA / upscale into the UI canvas, before any HUD draws.
 scene_upscale	5e9f57168d89a543 bd7ffdd435c6c3bc
+# Experimental MetalFX frame generation: the scene is complete after this upscale
+# fragment draw; the G-buffer vertex camera block is slot 0, 2336 bytes (BOTW 1.9.0).
+# Shader identity and camera layout follow MacNativeGames; normal rendering is unchanged.
+framegen_scene	bd7ffdd435c6c3bc f7ee6fe10b925543
+framegen_camera	0:2336
 # The main camera is a sead::PerspectiveProjection at +0x38 in the singleton at main+0x1e39d10 (vtable main+0x1d05380, aspect +0xb0, dirty +8); 1.9.0 build cd57b23fa4bbad65803d9788c01821ee.
 # UI model camera update at main+0xd44a2c: x19 owns the source camera (+0xa0) and projection (+0xa8); source fovy/offsets are at +0x74.
 camera_ui_aspect	19:0xa0:0xa8:0x74

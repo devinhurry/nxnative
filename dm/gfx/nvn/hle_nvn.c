@@ -14,6 +14,7 @@
 #include "nvn_count.h"
 #include "nvn_tex.h"
 #include "nvn_mtl.h"
+#include "framegen_policy.h"
 #include "nvn_pace.h"
 #include "nvn_fstep.h"
 #include "nvn_timestamp.h"
@@ -1350,7 +1351,11 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
         if (rtp && rt_period != rtp) { rt_period = rtp; set_time_constraint(rtp); }
         rt_comp_tick(rtp);
         uint64_t p0 = now_ns(); int snap = mtl_snap_on();
-        if (snap && mtl_link_active()) { if (wait && mtl_link_stalled()) sleep_until_ns(at); }   // present snapshots (nvn_mtl.m): the acquire's wait for a free ring slot below paces it.
+        // Interpolated pictures use half-frame display slots, but never advance
+        // the game. Snapshot slots alone cannot pace real frames then: skipped
+        // interpolation can free one every refresh and double the game speed.
+        // Keep the game's own vsync wait even when its texture is snapshotted.
+        if (snap && mtl_link_active() && !dm_fg_enabled()) { if (wait && mtl_link_stalled()) sleep_until_ns(at); }   // ordinary snapshots: the acquire's wait for a free ring slot below paces it.
             // While the display link is silent (the window in the background or covered) frames are dropped as fast as they come and
             // nothing frees a slot later, so the texture's slot time paces the game as without snapshots: unpaced, Breath of the Wild ran 3 to 4.5 times real time there
         else if (mtl_link_active()) { if (!link_wait(o, period ? 2 * period : 33333333ull) && wait) sleep_until_ns(at); }   // DM_PRESENT_LINK: pacing fully follows the display link (wait for the present interval's display-link ticks when running fast, go immediately when behind); our own 60 Hz clock is only the fallback when no display-link tick arrives

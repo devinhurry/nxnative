@@ -1,6 +1,7 @@
 // Multi-module loading (playing the role of Horizon's rtld): mapping, claiming thread slots, gate registration, cross-module relocation, take-over by name, segment permissions.
 // The code area (original text and patch area) is set to read-only+execute as soon as it is copied in, and from then on the loader only writes data: on iOS these two blocks must be embedded as is as signed code segments.
 #include "dm.h"
+#include "../gfx/nvn/framegen_policy.h"
 #include <TargetConditionals.h>
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -10,6 +11,10 @@
 #include <mach-o/getsect.h>
 #include <mach-o/ldsyms.h>
 #include "hle.h"
+
+// CPU-only tools have no interpolation backend. The graphics implementation
+// supplies the strong definition and checks device support before the cap.
+__attribute__((weak)) int dm_fg_enabled(void) { return 0; }
 
 module_t *g_mod;
 int g_nmod;
@@ -234,6 +239,9 @@ static void install_fps_state(module_t *m) {
 void dm_fps_state_apply(void) {
     if (!dm_fps_state) return;
     const char *e = getenv("DM_FPS_TARGET"); int t = e ? atoi(e) : DM_GAME_FPS_TARGET;
+    // The optional 30+30 mode keeps the game simulation at 30 real frames.
+    int framegen=dm_framegen_active();
+    if (framegen) t=30;
     if (t != 0 && t != 30 && t != 60) { LOG("[RED] DM_FPS_TARGET=%s: must be 0, 30 or 60; using the game's own frame step", e); t = 0; }
     float f = (float)t; memcpy(dm_fps_state, &f, sizeof f);
     // Render scale of the 3D views (the stubs at Tears of the Kingdom's main+0xd5cc0, Breath of the Wild's main+0x1266880): 1.0 keeps the game's own size and dynamic resolution;
@@ -247,7 +255,7 @@ void dm_fps_state_apply(void) {
     float percent = dr && !strcmp(dr, "1") && sc == 1.0f ? (t == 60 ? 200.0f : 100.0f) : 0;
     memcpy(dm_fps_state + 0x38, &percent, sizeof percent);
     char cap[32]; snprintf(cap, sizeof cap, ", capped at %d fps", t);
-    LOG("%s: frame step %s%s (%s)", g_fps_mod, !t ? "as the game sets it" : "in whole vsyncs decided by the host", t ? cap : "", e ? "DM_FPS_TARGET" : "game profile fps_target");
+    LOG("%s: frame step %s%s (%s)", g_fps_mod, !t ? "as the game sets it" : "in whole vsyncs decided by the host", t ? cap : "", framegen ? "DM_FRAMEGEN" : e ? "DM_FPS_TARGET" : "game profile fps_target");
 }
 static void install_key_page(module_t *m) {
     if (m->key_page_off + m->key_page_size > m->size) die("%s: key page out of range", m->name);

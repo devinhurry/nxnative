@@ -109,6 +109,11 @@ check_t_perf_order: t_perf_order
 	DM_NVN_FAST_WAKE=0 DM_NVN_SLICE_MERGE=0 DM_NVN_CS_HOIST=0 MTL_DEBUG_LAYER=1 ./t_perf_order
 t_link_ticks: t_link_ticks.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_link_ticks.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
+.PHONY: check_t_link_ticks
+check_t_link_ticks: t_link_ticks
+	./t_link_ticks
+	./t_link_ticks --framegen-snap
+	./t_link_ticks --framegen-clock
 t_cpu_tex: t_cpu_tex.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_cpu_tex.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
 .PHONY: check_t_cpu_tex
@@ -165,6 +170,17 @@ t_present_rescue: t_present_rescue.m t_present_rescue_focus.c $(MTL_T_DEP)
 .PHONY: check_t_present_rescue
 check_t_present_rescue: t_present_rescue
 	MTL_DEBUG_LAYER=1 ./t_present_rescue --metal
+t_framegen: t_framegen.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_framegen.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_framegen
+check_t_framegen: t_framegen
+	MTL_DEBUG_LAYER=0 ./t_framegen --unsupported
+	MTL_DEBUG_LAYER=0 ./t_framegen
+t_framegen_motion: t_framegen_motion.m t_framegen.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_framegen_motion.m $(filter-out ../nvn/framegen_metal.m,$(MTL_T_SRC)) $(FW)
+.PHONY: check_t_framegen_motion
+check_t_framegen_motion: t_framegen_motion
+	MTL_DEBUG_LAYER=0 ./t_framegen_motion
 t_present_alloc: t_present_alloc.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_present_alloc.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_present_alloc

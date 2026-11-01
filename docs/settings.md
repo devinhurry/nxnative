@@ -6,7 +6,7 @@ The screen before the game starts shows the settings the game supports. A settin
 - [Game](#game): [Frame rate](#frame-rate), [Render scale](#render-scale), [Console mode](#console-mode), [Upscaling](#upscaling), [Game language](#game-language), [Frame-rate counter](#frame-rate-counter)
 - [Controls](#controls): [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff)
 - [Touch left stick](#touch-left-stick): BOTW movement deadzone, response curve, full movement and size
-- [Performance](#performance): [Experimental low-memory mode](#experimental-low-memory-mode), [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
+- [Performance](#performance): [Experimental frame generation](#experimental-frame-generation), [Experimental low-memory mode](#experimental-low-memory-mode), [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
 - [The Mac settings window](#the-mac-settings-window): [Display mode](#display-mode)
 - [Settings in a file](#settings-in-a-file)
 
@@ -106,6 +106,12 @@ If a BOTW menu does not respond to direct touch on iPhone, **double-tap with thr
 ## Performance
 
 These settings change how the app hands frames to the screen and how it prepares the GPU's work. The game's tested defaults are a good start; change them when a game stutters, runs hot, or you want less latency.
+
+### Experimental frame generation
+
+The Game Overlay home page offers **Experimental frame generation** as an off-by-default switch under **Performance**. It is shown only for a game profile with configured frame-generation inputs; currently BOTW's Docked and Handheld paths are adapted. Handheld uses a smaller native canvas and reduces interpolation GPU work. The Mac launcher also puts this switch on its basic page.
+
+On selects `DM_FRAMEGEN=30`: after the GPU passes the native capability check, the game runs up to 30 real frames per second, and MetalFX can insert a generated picture between pairs. Unsupported GPUs keep the original frame-rate setting. Off sets `DM_FRAMEGEN=0` and retains normal rendering and frame pacing. Play applies and remembers the choice. An environment override remains visible and locked, as for other settings. The current experiment has GPU cost and UI reconstruction limitations; [BOTW validation and remaining work](../dm/games/01007EF00011E000/README.md#experimental-metalfx-frame-generation).
 
 ### Experimental low-memory mode
 
@@ -266,6 +272,7 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Rumble strength | `DM_RUMBLE_GAIN` | `0` to `3` |
 | Rumble cutoff | `DM_RUMBLE_MIN` | `0` to `0.9` |
 | Upscaling | `DM_PRESENT_UPSCALE` | `off`, `scene` (verified profiles), `metalfx` |
+| Experimental frame generation | `DM_FRAMEGEN` | `30` on (30+30), `0` off |
 | Experimental low-memory mode (BOTW) | `DM_LOW_MEMORY` | `1`, `0` |
 | Frame buffering | `DM_PRESENT_SNAP` | `1`, `0` |
 | Metal 4 pipelines | `DM_PSO_MTL4` | `1`, `0` |

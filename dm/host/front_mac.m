@@ -11,6 +11,7 @@
 #import <GameController/GameController.h>
 #include "dm.h"
 #include "dm_input.h"
+#include "../gfx/nvn/framegen_policy.h"
 #include "front.h"
 #include "hle.h"
 #include "pad_slots.h"
@@ -1224,6 +1225,7 @@ void front_run(void (*guest)(void)) {
                                                     styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                                       backing:NSBackingStoreBuffered defer:NO];
         win.title = @DM_GAME_NAME;   // the game profile's name (game name label)
+        if (dm_framegen_requested()) win.title=[win.title stringByAppendingString:@" [MetalFX experiment]"];
         // Fullscreen: without FullScreenPrimary the green button only zooms the window. The present path already scales
         // the game picture to fit the drawable with black bars around it, so fullscreen keeps the game's aspect ratio.
         win.collectionBehavior = NSWindowCollectionBehaviorFullScreenPrimary;
