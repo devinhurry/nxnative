@@ -856,6 +856,114 @@ is BOTW, Odyssey, Wonder, Origami King and NieR, covering known feedback
 users; the latter four have no prepared local Mac builds, so the selection
 cannot execute. Device bandwidth, temperature and sustained FPS remain open.
 
+Device GPU profile (`log6.txt`, `80c9efc8c31e`): periodic sampling every 600
+frames works and ordinary snapshots report usage `0x1`, confirming the
+allocation change is active. Thermal state starts at 0 and reaches 1 at
+52 s; it never reaches 2, and the explicit FPS cap remains 60. The host's
+missed-deadline controller changes the hold to two vsyncs instead. Windows
+ending at frames 1,500/1,800 have GPU p50 9.30/12.82 ms and 91.87/92.09
+copies per frame; at 2,400/2,700 GPU p50 is 27.22/26.66 ms while copies
+fall to 79.44/31.15. Steady pipeline/library compilation is zero. Copy
+frequency alone therefore does not identify this run's bottleneck.
+
+Frame 2,400 measures 21.63 ms in render encoders, 0.39 ms in compute/copy
+encoders and 26.05 ms from first GPU start to last end. Its largest pass
+has four 1280x720 color attachments plus depth, 2,857 draws and 7.104 ms.
+The complete sampled frame has 4,618 draws, versus 2,842 in frame 1,800;
+these are changing workloads, not a controlled frequency measurement.
+Encoder gaps and render attachment transfers are not all attributable to
+the compute/copy category. GPU frequency is not logged, so platform DVFS
+remains possible despite the absence of the serious-thermal FPS cap.
+
+This run also sets `DM_DYNAMIC_RESOLUTION=0`, versus 1 in logs 4 and 5.
+With `DM_RENDER_SCALE=1.0`, BOTW retains its original resolution policy
+without the host's 60-fps budget normalization; the sampled main passes
+remain 1280x720. This is another reason not to treat these logs as an A/B
+measurement of the snapshot allocation change. Evidence and normalized
+window/profile tables stay in `01007EF00011E000-work/log6-gpu-audit-20261101/`.
+
+Pipeline-path experiment (same host `80c9efc8`, Mac Apple M2): replay the
+retained portrait scene in four fresh processes, `DM_PSO_MTL4=0/1/1/0`,
+12 replays each, excluding the first three of each process from timing.
+The full-state MTLDevice path measures warm GPU median 8.465 ms, versus
+8.560 ms for Metal 4 specialization (1.1% less). Same-path run medians
+vary by 0.84 and 0.40 ms respectively, exceeding that difference. The
+corresponding image digests match across all four runs (48 outputs).
+The replayer's captured-pipeline prewarm completes before frame timings;
+the Metal 4 run confirms 1,421 specializations and zero MTLDevice fallbacks.
+This does not support changing the default path; it is one Mac scene,
+not iPhone performance acceptance, and capture/live mismatch remains open.
+The other Mac preview was paused only during comparison and then resumed.
+Results stay under the audit folder's `pso-comparison/`.
+
+Presentation inspection: an empty display queue returns before `present_now`,
+so a 60 Hz display link does not redraw an unchanged game image each tick.
+The four log6 present windows report bilinear GPU p50 0.379-0.633 ms.
+Elapsed encoder gaps alone are not proof of removable synchronization.
+
+External IPA inspection (2026-11-01): `org.macnativegames.botw`, app
+`1.0v102811` / `20261028.11`, contains native 30/60/120 targets and separate
+MetalFX 30+30/60+60 modes. Its binary switches both 120-output modes to a
+120 Hz display link, but disables MetalFX in the native-120 mode. These
+are statically verified targets, not measured iPhone Air performance.
+The current public MacNativeGames iOS frontend differs from this binary;
+its source is architectural context, not an exact package-source match.
+The executable was not installed or run. Binary evidence and source
+references stay in `01007EF00011E000-work/ipa-120hz-audit-20261101/analysis.md`.
+
+Three-way static comparison against public MacNativeGames `92ec79bd` and this
+checkout `80c9efc8` found no confirmed additional same-picture rendering-work
+optimization absent from both sources. The extra iOS frame/quality interfaces
+call existing mechanisms. Two dedicated runtime implementations not found here
+are already public: driver metadata-bank caching (the IPA's no-override default
+is off for BOTW) and BC-to-ASTC/EAC texture transcoding (conditional on no native
+BC support, with lossy cases). Both embedded transcoding GPU source texts match
+the public files byte-for-byte. Our outer argument-buffer reuse and unread-bank
+elimination already avoid related metadata work. Active IPA settings, inlined
+differences and iPhone Air performance remain unverified; missing snapshot names
+do not prove that skipping required feedback copies is correct. The bounded
+comparison and exact evidence are in the same audit folder's `optimization-diff.md`.
+
+The inspected IPA's `20261028.11` build predates public MacNativeGames' iOS
+packaging-time pipeline archive feature (`e52a4aa`, 2026-10-29). Its binary has
+the earlier archive-fill path but lacks the later prebuilt-loader names/flag;
+this is consistent with device-side first-run compilation. Shader data can be
+imported separately, so the IPA's lack of bundled named pipeline archives alone
+is not decisive. Offline compilation primarily removes startup compilation and
+related gameplay hitches; compiling on the phone does not inherently improve
+steady-state GPU frame time. The same audit report records the source evidence.
+
+### MacNativeGames non-interpolation port (2026-11-01, current)
+
+Main's capability-selected BC decoder (`9cbe8984`) is merged into the experimental
+branch (`a124cc3a`). The additional public MacNativeGames `92ec79bd` mechanisms
+are adapted through the general renderer, without a BOTW-specific policy:
+
+- [Independent driver metadata reuse](../../../docs/reference/rendering.md#repeated-driver-metadata-bank-allocations)
+  preserves this checkout's extra image, pool-relative handle, base-instance and
+  indirect-dispatch semantics. It is opt-in (`DM_NVN_DRV_CACHE=1`): four paired
+  Mac replays gave identical corresponding digests, but no repeatable timing gain.
+  Off-run warm submit medians were 22.33 and 20.87 ms; the unchecked on run was
+  21.09 ms (a separate checked-on run was 22.13 ms). The capture has a pre-existing
+  live/replay mismatch, so this is paired-path evidence, not live-frame acceptance.
+- [BC fallback transcoding](../../../docs/reference/rendering.md#bc-textures-on-gpus-without-bc-support)
+  is selected only by low-memory mode on a GPU without native BC support, with
+  `DM_NVN_BC_TRANSCODE=0` available to retain decoded pixels. Re-compression can
+  lose detail. Ordinary mode, native BC, signed BC, BC6H, 3D and writable textures
+  retain the existing representation. Original block bytes remain available for
+  copies/readbacks. This is an old-device memory tradeoff, not an iPhone Air
+  optimization: the user's log6 identifies an A19 Pro GPU, which supports BC.
+
+Focused Metal-validation tests cover metadata immutability, all BC decode formats,
+low-memory selection, sampled ASTC/EAC mip/array contents, GPU-written partial
+updates and writable upgrades, including threaded encoding. The standard BOTW
+regression preparation currently fails before gameplay: after using the existing
+arm64 venv to avoid Rosetta/.NET architecture mixing, the compiler check rejects
+installed Metal 32023.883 against locked 32023.921. Only BOTW has a local Mac
+build in the configured games folder; the requested broader game checks and
+physical iPhone acceptance remain open. Evidence and logs are under
+`01007EF00011E000-work/macnativegames-port-20261101/`; no IPA is repackaged.
+
 ## Rendering
 
 **Native widescreen UI backgrounds (2026-10-28).** Widescreen is independent of touch/controller mode. Menu foreground content and touch coordinates retain the centered 16:9 layout; full-width native background Pictures and Windows extend to the display edges. Windows retain their own corner sizes, and title illustrations use proportional cover sizing. Returning to 16:9 restores native dimensions without accumulating scale.
@@ -1320,6 +1428,8 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 - The frame step under load: `DM_TEST_PRESENT_LAG=1,12` (12 ms added to every frame: 30 fps at 1.000 of real time).
 
 ## Found on this game
+
+- [Repeated driver metadata bank allocations](../../../docs/reference/rendering.md#repeated-driver-metadata-bank-allocations): independent c0/c2 reuse is implemented as an opt-in experiment; paired replay output matches, with no repeatable timing gain yet.
 
 - **Implemented; physical iPhone acceptance pending:** [Feedback snapshot usage preserves compression eligibility](../../../docs/reference/rendering.md#feedback-snapshot-usage-preserves-compression-eligibility). Same-format snapshots no longer request arbitrary format reinterpretation; required reinterpretations preserve the cached version when upgrading their allocation.
 

@@ -192,6 +192,8 @@ t_xv: t_xv.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_xv.m $(MTL_T_SRC) $(FW)
 t_ub: t_ub.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_ub.m $(MTL_T_SRC) $(FW)
+t_driver_bank: t_driver_bank.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_driver_bank.m $(MTL_T_SRC) $(FW)
 t_gpuprof: t_gpuprof.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_gpuprof.m $(MTL_T_SRC) $(FW)
 t_vbuf: t_vbuf.m $(MTL_T_DEP)
@@ -222,9 +224,12 @@ t_bc: t_bc.m $(MTL_T_DEP)
 .PHONY: check_t_bc
 check_t_bc: t_bc
 	python3 ../tex/bcdec_msl.py --check
+	python3 ../tex/gen_bctc_msl.py --check
 	DM_TEST_NO_BC=0 MTL_DEBUG_LAYER=1 ./t_bc
 	DM_TEST_NO_BC=1 MTL_DEBUG_LAYER=1 ./t_bc
 	DM_TEST_NO_BC=1 DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_bc
+	DM_TEST_NO_BC=1 MTL_DEBUG_LAYER=1 ./t_bc --transcode
+	DM_TEST_NO_BC=1 DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_bc --transcode
 t_upload_slots: t_upload_slots.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_upload_slots.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_upload_slots
