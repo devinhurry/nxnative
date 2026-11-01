@@ -69,6 +69,13 @@ void front_botw_rune_icon_changed(void);
 // Native BOTW touch-action acknowledgements may arrive on the guest thread.
 // Front ends marshal this to their UI thread and release acknowledged inputs.
 void front_botw_touch_action_changed(void);
+// Present the live settings screen from a native iOS touch control; returns
+// zero when this build has no settings screen. iOS only.
+int front_show_game_settings(void);
+// Apply startup choices before host loading; zero means the player quit.
+int front_startup_settings(void);
+// Re-read live touch settings after the launcher updates their environment.
+void front_refresh_touch_settings(void);
 
 // Touchscreen (implemented by the host's hle_touch.c; called by the iOS / Mac front end): whenever the set of touch points changes (down / move / up / cancel) the whole set is pushed once; n = 0 = all lifted.
 // id = finger slot number 0–15 (the lowest free slot on down, unchanged until up; used directly as finger_id); x / y = normalized coordinates [0,1) on the output frame, origin at top left.

@@ -2,7 +2,7 @@
 // On the real device each goes through IPC or a system applet; the host gives results as single-player offline. Pure-computation SDK parts (hash, util, software Opus) are not taken over, the original implementation is used directly.
 #include "hle.h"
 #include <dirent.h>
-#include "romfs_image.h"
+#include "aoc_files.h"
 
 // ---------- aoc add-on content (the DLC NSPs in the player's folder) / ec shop (excluded) ----------
 // Owned add-on content indices (ascending), fixed at the first query:
@@ -12,16 +12,6 @@
 //   DM_AOC_OWNED=0: always none (test switch, for runs without the DLC).
 // Room for every index the scan accepts (1..2000): Super Smash Bros. Ultimate has 99 DLC, and a cap below the folder count dropped whichever readdir returned last (fighters among them).
 static int g_aoc[2000], g_naoc = -1;
-static int aoc_int_cmp(const void *a, const void *b) { return *(const int *)a - *(const int *)b; }
-static int aoc_index(const char *name, size_t len, int allow_image) {
-    if (!len || name[0] < '1' || name[0] > '9') return 0;
-    size_t j = 0; int index = 0;
-    for (; j < len && name[j] >= '0' && name[j] <= '9'; j++) {
-        index = index * 10 + name[j] - '0';
-        if (index > 2000) return 0;
-    }
-    return j == len || (allow_image && len - j == 4 && !memcmp(name + j, ".img", 4)) ? index : 0;
-}
 static void aoc_load(void) {
     if (g_naoc >= 0) return;
     g_naoc = 0;
@@ -30,28 +20,7 @@ static void aoc_load(void) {
     if (!dir && romfs_image_aoc_path(getenv("DM_ROMFS"), derived, sizeof derived)) dir = derived;
     if (e && !strcmp(e, "0")) why = "DM_AOC_OWNED=0";
     else if (dir && *dir) {
-        why = dir; DIR *d = opendir(dir); struct dirent *ent;
-        while (d && (ent = readdir(d)) && g_naoc < (int)(sizeof g_aoc / sizeof *g_aoc)) {
-            int i = aoc_index(ent->d_name, strlen(ent->d_name), 1); char path[PATH_MAX]; struct stat st;
-            if (i && snprintf(path, sizeof path, "%s/%s", dir, ent->d_name) < (int)sizeof path && !stat(path, &st) &&
-                (strchr(ent->d_name, '.') ? S_ISREG(st.st_mode) : S_ISDIR(st.st_mode))) g_aoc[g_naoc++] = i;
-        }
-        if (d) closedir(d);
-        else {
-            romfs_img *m = romfs_image_open(dir);
-            if (m) {
-                const img_ent *root = &m->e[m->root];
-                for (uint64_t j = 0; j < root->b && g_naoc < (int)(sizeof g_aoc / sizeof *g_aoc); j++) {
-                    const img_ent *x = &m->e[root->a + j];
-                    int i = !x->type ? aoc_index(m->names + x->name, x->nlen, 0) : 0;
-                    if (i) g_aoc[g_naoc++] = i;
-                }
-                romfs_image_close(m);
-            }
-        }
-        qsort(g_aoc, g_naoc, sizeof *g_aoc, aoc_int_cmp);
-        int unique = 0; for (int i = 0; i < g_naoc; i++) if (!i || g_aoc[i] != g_aoc[i - 1]) g_aoc[unique++] = g_aoc[i];
-        g_naoc = unique;   // a legacy directory and its replacement image report the same DLC once
+        why = dir; g_naoc = dm_aoc_collect(dir, g_aoc, (int)(sizeof g_aoc / sizeof *g_aoc));
     }
     static char list[2000 * 5 + 1]; list[0] = 0; for (int i = 0; i < g_naoc; i++) snprintf(list + strlen(list), sizeof list - strlen(list), "%s%d", i ? "," : "", g_aoc[i]);
     LOG("aoc: reporting %d add-on contents {%s} (%s)", g_naoc, list, why);

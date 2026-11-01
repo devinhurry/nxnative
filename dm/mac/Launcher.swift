@@ -1,93 +1,83 @@
-// Mac app launcher: the settings window shown before the game starts, in the launcher's own process (launcher.c calls dm_mac_launcher before it starts the host). Its settings come from the
-// app's Resources/dm/launcher.json (dm/games/settings.py with SETTINGS_PLATFORM=mac); the model and the rows are the iOS launcher's (dm/ios/Sources/LauncherSettings.swift, LauncherRow.swift),
-// and so is the store: launcher.<VAR> in the app's preferences, which launcher.c reads when the window is not shown (docs/frontends.md, Saved choices). Basic settings (level basic) come
-// first, the others under Advanced settings, each in the list's sections. Play puts the settings into this process's environment, which the host inherits; Quit and closing the window end the
-// app without the game. "Show this window at launch" off: no window unless Option is held at launch, and launcher.c applies the saved choices. The window never takes focus by itself: an app
-// opened in the background (open -g) keeps its window behind until the player switches to it
+// Native Mac window and resource adapters for the shared SwiftUI launcher pages.
+// Packaged apps apply choices before spawning their host; direct hosts do so before module loading.
+// Both use launcher.<VAR> preferences and keep launch/environment-file overrides fixed.
 import AppKit
 import SwiftUI
+import GameController
+import DmTouchPad
 
-private func info(_ key: String) -> String? { Bundle.main.object(forInfoDictionaryKey: key) as? String }
+private var launcherDetails: [String: String] = [:]
+private var launcherDefaults = UserDefaults.standard
+private var sessionModel: LauncherModel?
+private func info(_ key: String) -> String? { Bundle.main.object(forInfoDictionaryKey: key) as? String ?? launcherDetails[key] }
+
+private func loadModel() -> LauncherModel? {
+    let path = ProcessInfo.processInfo.environment["DM_LAUNCHER_FILE"]
+    let url = path.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) } ?? Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json")
+    guard let url, let data = try? Data(contentsOf: url),
+          let file = try? JSONDecoder().decode(SettingsFile.self, from: data), !file.settings.isEmpty else { return nil }
+    let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+    launcherDetails = record["metadata"] as? [String: String] ?? [:]
+    if Bundle.main.bundleIdentifier == nil, let game = record["game"] as? String {
+        launcherDefaults = UserDefaults(suiteName: "org.nxnative." + game.lowercased()) ?? .standard
+    }
+    let model = LauncherModel(file.settings, defaults: launcherDefaults)
+    sessionModel = model
+    return model
+}
 
 struct LauncherView: View {
     @ObservedObject var m: LauncherModel
     let done: (Bool) -> Void
-    let fit: (CGFloat) -> Void
-    @AppStorage("window.show") private var show = true
-    @AppStorage("window.advanced") private var advanced = false
-    @State private var showTouchSettings = false
+    @State private var showSettings = false
+    @State private var availableMemory = dm_low_memory_available()
+
+    private var romfs: String {
+        if let value = ProcessInfo.processInfo.environment["DM_ROMFS"] { return value }
+        let root = Bundle.main.resourceURL!
+        let image = root.appendingPathComponent("romfs.img")
+        return FileManager.default.fileExists(atPath: image.path) ? image.path : root.appendingPathComponent("romfs").path
+    }
+    private var dlcCount: Int {
+        if let directory = ProcessInfo.processInfo.environment["DM_AOC_DIR"] { return Int(dm_aoc_count_paths(directory, romfs)) }
+        let count = Int(dm_aoc_combined_count(romfs))
+        if count >= 0 { return count }
+        return Int(dm_aoc_count_paths(Bundle.main.resourceURL!.appendingPathComponent("aoc").path, nil))
+    }
+    private var graphicsReady: Bool {
+        let path = ProcessInfo.processInfo.environment["DM_MSL_DIR"] ?? Bundle.main.resourceURL!.appendingPathComponent("msl").path
+        return FileManager.default.fileExists(atPath: path)
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 64, height: 64).accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(info("CFBundleName") ?? "Game").font(.title2.weight(.semibold))
-                    Text(String(format: NSLocalizedString("Version %@", comment: "Game version"), info("CFBundleShortVersionString") ?? "1.0")).foregroundStyle(.secondary)
+        LauncherDashboard(
+            model: m,
+            title: info("CFBundleName") ?? "Game",
+            version: info("CFBundleShortVersionString") ?? "1.0",
+            icon: Image(nsImage: NSApp.applicationIconImage),
+            romReady: FileManager.default.fileExists(atPath: romfs),
+            shadersReady: graphicsReady, dlcCount: dlcCount,
+            memoryBytes: availableMemory, importBusy: false, checkingResources: false,
+            resourceStatus: nil, importProgress: 0, graphicsVersion: nil, graphicsCompiler: nil,
+            buildInfo: launcherDetails,
+            shouldShowTouchNotice: {
+                ProcessInfo.processInfo.environment["DM_TOUCH_PREVIEW"] == "1" && GCController.controllers().isEmpty
+            },
+            onPlay: { done(true) }, onSettings: { showSettings = true },
+            onImportROM: nil, onImportShaders: nil)
+            .frame(minWidth: 720, minHeight: 420)
+            .sheet(isPresented: $showSettings) {
+                LauncherSettingsPage(m: m) { showSettings = false }.frame(width: 1000, height: 620)
+            }
+            .task {
+                while !Task.isCancelled {
+                    availableMemory = dm_low_memory_available()
+                    m.refreshMemoryDefault(available: availableMemory)
+                    try? await Task.sleep(for: .seconds(2))
                 }
-                Spacer()
             }
-            .padding([.horizontal, .top], 20)
-            Form {
-                settingSections(basic: true)
-                if m.touchStickResponse != nil {
-                    Section("Touch") { Button("Touch settings") { showTouchSettings = true } }
-                }
-                CloudSavesSection()
-                Section {
-                    DisclosureGroup("Advanced settings", isExpanded: $advanced) {}
-                }
-                if advanced {
-                    settingSections(basic: false)
-                    Section {
-                        Button("Reset to tested defaults") { m.reset() }
-                            .disabled(!m.changed)
-                    } footer: {
-                        Text("Brings back all settings this game was tested with.")
-                    }
-                }
-                AboutSection()
-            }
-            .formStyle(.grouped)
-            .onScrollGeometryChange(for: CGFloat.self) {
-                $0.contentSize.height + $0.contentInsets.top + $0.contentInsets.bottom - $0.containerSize.height
-            } action: { _, extraHeight in
-                fit(extraHeight)
-            }
-            HStack {
-                Toggle("Show this window at launch", isOn: $show).toggleStyle(.checkbox)
-                Spacer()
-                Button("Quit") { done(false) }
-                Button("Play") { done(true) }.keyboardShortcut(.defaultAction)
-            }
-            .padding(20)
-            if m.lowMemoryEnabled {
-                Text(LocalizedStringKey(LauncherModel.lowMemoryNotice))
-                    .font(.footnote).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 20).padding(.bottom, 12)
-                    .accessibilityIdentifier("botw.low-memory.notice")
-            }
-        }
-        .frame(minWidth: 520, idealWidth: 560)
-        .sheet(isPresented: $showTouchSettings) {
-            NavigationStack {
-                BotwTouchSettingsView(m: m)
-                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { showTouchSettings = false } } }
-            }.frame(width: 1000, height: 620)
-        }
     }
 
-    @ViewBuilder private func settingSections(basic: Bool) -> some View {
-        ForEach(m.sections(basic: basic).filter { !LauncherModel.isTouchSection($0) }, id: \.self) { section in
-            let rows = m.rows(in: section, basic: basic)
-            if !rows.isEmpty {
-                Section(LocalizedStringKey(section)) {
-                    ForEach(rows) { SettingRow(s: $0, m: m) }
-                }
-            }
-        }
-    }
 }
 
 /// Cloud saves: a folder the save is synced through (dm/host/save_sync.h), the one the iPhone app picks in its launcher's Cloud saves section. It is kept in this app's
@@ -148,19 +138,22 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         app.addItem(withTitle: NSLocalizedString("Close Window", comment: "Menu"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         app.addItem(withTitle: String(format: NSLocalizedString("Quit %@", comment: "Menu"), name), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.submenu = app; menu.addItem(item); NSApp.mainMenu = menu
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 660), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 540), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         w.title = name; w.isReleasedWhenClosed = false; w.delegate = self
-        w.contentMinSize = NSSize(width: 520, height: 0)
+        w.contentMinSize = NSSize(width: 720, height: 420)
         window = w
         if let screen = w.screen ?? NSScreen.main {
             w.setFrameTopLeftPoint(NSPoint(x: screen.visibleFrame.midX - w.frame.width / 2, y: screen.visibleFrame.maxY))
         }
-        let host = NSHostingView(rootView: LauncherView(m: model, done: { [weak self] in self?.finish($0) }, fit: { [weak self] in self?.fit($0) }))
-        host.sizingOptions = []   // the Form's measured scroll content owns the height, including after collapse
+        let host = NSHostingView(rootView: LauncherView(m: model, done: { [weak self] in self?.finish($0) }).defaultAppStorage(launcherDefaults))
+        host.sizingOptions = []   // Keep the resizable dashboard's window size independent of its scroll content.
         w.contentView = host
         host.layoutSubtreeIfNeeded()
-        // no activation and no ordering in front of another app's windows: LaunchServices activates an app opened from Finder or the Dock (applicationDidBecomeActive), open -g does not
-        if NSApp.isActive { w.makeKeyAndOrderFront(nil) } else { w.orderBack(nil) }
+        // LaunchServices activates packaged apps and respects open -g. Direct
+        // terminal hosts have no bundle or LaunchServices activation event.
+        if Bundle.main.bundleIdentifier == nil {
+            w.makeKeyAndOrderFront(nil); NSApp.activate()
+        } else if NSApp.isActive { w.makeKeyAndOrderFront(nil) } else { w.orderBack(nil) }
     }
     func applicationDidBecomeActive(_ n: Notification) { window?.makeKeyAndOrderFront(nil) }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {   // ⌘Q, or a logout or restart: the app ends without the game (exit 0, as Quit)
@@ -168,12 +161,6 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         return .terminateNow   // not terminateCancel, which a logout or restart takes as a refusal and stops
     }
     func windowWillClose(_ n: Notification) { finish(false) }
-
-    func fit(_ extraHeight: CGFloat) {
-        guard let w = window, let screen = w.screen else { return }
-        let frame = LauncherWindowLayout.fitted(w.frame, extraHeight: extraHeight, visible: screen.visibleFrame)
-        if abs(frame.height - w.frame.height) > 0.5 { w.setFrame(frame, display: true) }
-    }
 
     func finish(_ play: Bool) {
         guard let w = window else { return }
@@ -184,31 +171,75 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
     }
 }
 
-enum LauncherWindowLayout {
-    static func fitted(_ frame: NSRect, extraHeight: CGFloat, visible: NSRect) -> NSRect {
-        let top = min(frame.maxY, visible.maxY)
-        let height = min(frame.height + extraHeight, top - visible.minY)
-        return NSRect(x: frame.minX, y: top - height, width: frame.width, height: height)
-    }
-}
-
 // 1: Play (the window's settings are in the environment), 0: the player quit, 2: no window (no launcher.json, or "Show this window at launch" off): launcher.c applies the saved choices
 @_cdecl("dm_mac_launcher")
 public func dmMacLauncher() -> Int32 {
-    guard let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url) else { return 2 }
-    guard let file = try? JSONDecoder().decode(SettingsFile.self, from: data), !file.settings.isEmpty else { fputs("[RED] launcher: dm/launcher.json cannot be read; starting the game\n", stderr); return 2 }
-    if (UserDefaults.standard.object(forKey: "window.show") as? Bool) == false && !NSEvent.modifierFlags.contains(.option) {
+    guard let model = loadModel() else { return 2 }
+    if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" ||
+        ((launcherDefaults.object(forKey: "window.show") as? Bool) == false && !NSEvent.modifierFlags.contains(.option)) {
         fputs("launcher: settings window off (hold Option at launch to show it)\n", stderr)
+        model.applySaved()
+        applyCloudSaves()
         return 2
     }
-    let model = LauncherModel(file.settings)
     let app = NSApplication.shared, launcher = Launcher(model)
     app.setActivationPolicy(.regular)
     app.delegate = launcher
-    fputs("launcher: \(file.settings.count) settings shown\n", stderr)
+    fputs("launcher: \(model.settings.count) settings shown\n", stderr)
     app.run()
     app.setActivationPolicy(.prohibited)   // the host is the game's app from here on
     guard launcher.play else { fputs("launcher: quit without starting the game\n", stderr); return 0 }
     model.apply()
+    applyCloudSaves()
     return 1
 }
+
+private func applyCloudSaves() {
+    if getenv("DM_SAVE_SYNC") == nil, let folder = launcherDefaults.string(forKey: "cloudSaves.folder"), !folder.isEmpty {
+        setenv("DM_SAVE_SYNC", folder, 1)
+    }
+}
+
+#if DM_HOST_UI
+private var gameSettings: GameSettingsWindow?
+private final class GameSettingsWindow: NSObject, NSWindowDelegate {
+    let window: NSWindow
+    weak var parent: NSWindow?
+    let done: @convention(c) () -> Void
+    private var closed = false
+
+    init(model: LauncherModel, parent: NSWindow, done: @escaping @convention(c) () -> Void) {
+        self.parent = parent; self.done = done
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 620),
+                          styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        super.init()
+        window.title = NSLocalizedString("Settings", comment: "In-game settings")
+        window.isReleasedWhenClosed = false; window.delegate = self
+        window.contentMinSize = NSSize(width: 720, height: 420)
+        window.contentView = NSHostingView(rootView: LauncherSettingsPage(m: model) { [weak self] in self?.finish() }
+            .defaultAppStorage(launcherDefaults))
+        parent.beginSheet(window)
+    }
+    func finish() {
+        guard !closed else { return }
+        closed = true
+        parent?.endSheet(window); window.orderOut(nil)
+        parent?.makeKeyAndOrderFront(nil)
+        gameSettings = nil
+        done()
+    }
+    func windowWillClose(_ notification: Notification) { finish() }
+}
+
+@_cdecl("dm_mac_show_game_settings")
+public func dmMacShowGameSettings(_ parentPointer: UnsafeMutableRawPointer, _ done: @escaping @convention(c) () -> Void) -> Int32 {
+    if let current = gameSettings { current.window.makeKeyAndOrderFront(nil); return 1 }
+    guard let model = sessionModel ?? loadModel() else {
+        fputs("launcher: no settings configuration for this game\n", stderr); return 0
+    }
+    let parent = Unmanaged<NSWindow>.fromOpaque(parentPointer).takeUnretainedValue()
+    model.beginRuntime()
+    gameSettings = GameSettingsWindow(model: model, parent: parent, done: done)
+    return 1
+}
+#endif

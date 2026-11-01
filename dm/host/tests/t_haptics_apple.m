@@ -289,6 +289,15 @@ int main(void) { @autoreleasepool {
     assert(cut.haptics.attempts == 0);   // silent: no engine is made
     send_pair(0.725, 0); drain();
     assert(fabsf(cut.haptics.engines.lastObject.testPlayer.levels.lastObject.floatValue - 0.5f) < 1e-6f);
+    setenv("DM_RUMBLE_GAIN", "2", 1); setenv("DM_RUMBLE_MIN", "0", 1); setenv("DM_RUMBLE", "1", 1);
+    dm_haptics_apple_settings_changed(); drain();
+    assert(cut.haptics.engines.lastObject.testPlayer.levels.lastObject.floatValue == 1);
+    setenv("DM_RUMBLE", "0", 1); dm_haptics_apple_settings_changed(); drain();
+    assert(!dm_haptics_enabled());
+    setenv("DM_RUMBLE_GAIN", "1", 1); setenv("DM_RUMBLE_MIN", "0.45", 1); setenv("DM_RUMBLE", "1", 1);
+    dm_haptics_apple_settings_changed(); drain(); send_pair(0.725, 0); drain();
+    assert(dm_haptics_enabled() && fabsf(cut.haptics.engines.lastObject.testPlayer.levels.lastObject.floatValue - 0.5f) < 1e-6f);
+    unsetenv("DM_RUMBLE_GAIN"); unsetenv("DM_RUMBLE_MIN"); unsetenv("DM_RUMBLE");
     send_pair(0, 0); drain();
     rumble_min = 0;
     // A DualShock 4 goes through its effects report only while its HID device is there; without one it keeps Core Haptics

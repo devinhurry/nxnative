@@ -22,7 +22,17 @@ NSString *dm_startup_graphics_error(void) {
     NSURL *doc=[NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask][0];
     return dm_graphics_status(doc,NSBundle.mainBundle.resourceURL);
 }
+int dm_startup_dlc_count(void) { return 2; }
 BOOL dm_startup_prepare(void) {
     NSURL *doc=[NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask][0];
     return !dm_startup_rom_error() && dm_graphics_configure(doc,NSBundle.mainBundle.resourceURL,nil);
+}
+
+// Component fixture only: native host setters are covered by t_launcher_settings.
+int dm_launcher_setting_is_live(const char *key) {
+    return !strncmp(key, "DM_BOTW_", 8) || !strcmp(key, "DM_TOUCH_HAPTICS") || !strncmp(key, "DM_RUMBLE", 9);
+}
+int dm_launcher_setting_apply(const char *key, const char *value) {
+    if (!dm_launcher_setting_is_live(key)) return 0;
+    setenv(key, value, 1); return 1;
 }

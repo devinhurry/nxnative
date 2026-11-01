@@ -1,6 +1,19 @@
 // The launcher's storage (LauncherSettings.swift LauncherModel), run by test_launcher_storage.py on macOS: only choices that differ from the game's default are
 // stored, Reset to tested defaults followed by Play forgets the choices, an env file's values are kept. Arguments: the iOS and the Mac launcher.json of Breath of the Wild (settings.py, GFXAPI=nvn)
 import Foundation
+#if DM_HOST_UI
+private var nativeApplied: [String: String] = [:]
+@_cdecl("dm_launcher_setting_is_live")
+func mockNativeSettingIsLive(_ key: UnsafePointer<CChar>) -> Int32 {
+    ["DM_BOTW_MOVE_CURVE", "DM_RUMBLE"].contains(String(cString: key)) ? 1 : 0
+}
+@_cdecl("dm_launcher_setting_apply")
+func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<CChar>) -> Int32 {
+    guard mockNativeSettingIsLive(key) == 1 else { return 0 }
+    nativeApplied[String(cString: key)] = String(cString: value)
+    return setenv(key, value, 1) == 0 ? 1 : -1
+}
+#endif
 @main struct Check {
     static func main() {
         var failed = 0
@@ -241,6 +254,24 @@ import Foundation
                 expect(LauncherModel(list, defaults: d).values["DM_PRESENT_UPSCALE"] == mode, "the upscaling choice survives reopening")
             }
         }
+        setenv("DM_ENV_FILE_KEYS", "", 1); setenv("DM_ENV_LAUNCH_KEYS", "", 1)
+        memoryDefaults.set("0", forKey: "launcher.DM_LOW_MEMORY")
+        let runtimeModel = model(8 * gib)
+        runtimeModel.beginRuntime()
+        runtimeModel.reset(keys: [LauncherModel.lowMemoryKey])
+        expect(memoryDefaults.string(forKey: "launcher.DM_LOW_MEMORY") == nil,
+               "runtime reset removes an explicit memory override even when its value already equals automatic")
+        setenv("DM_LANG", "en-US", 1)
+        runtimeModel.values["DM_LANG"] = "ja"
+        expect(memoryDefaults.string(forKey: "launcher.DM_LANG") == "ja" && String(cString: getenv("DM_LANG")) == "en-US",
+               "runtime restart-only edits persist without altering the running language")
+        #if DM_HOST_UI
+        let runtimeCurve = runtimeModel.settings.first { $0.env == "DM_BOTW_MOVE_CURVE" }!
+        runtimeModel.binding(runtimeCurve).wrappedValue = "0.65"
+        expect(nativeApplied[runtimeCurve.env] == "0.65" && String(cString: getenv(runtimeCurve.env)) == "0.65" &&
+               memoryDefaults.string(forKey: "launcher." + runtimeCurve.env) == "0.65" && runtimeModel.appliesImmediately(runtimeCurve),
+               "Mac settings bindings apply live values and save the choice")
+        #endif
         print("launcher storage: \(failed) failed")
         exit(failed == 0 ? 0 : 1)
     }

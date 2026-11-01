@@ -41,6 +41,8 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y, float
 - (BOOL)dm_testControlsHidden;
 - (UITapGestureRecognizer *)dm_testMenuPadGesture;
 - (BOOL)dm_testManualMenuPad;
+- (UIButton *)dm_testSettingsButton;
+- (BOOL)dm_testSettingsRevealed;
 - (void)revealBotwMenuPad:(UITapGestureRecognizer *)recognizer;
 - (CAShapeLayer *)dm_testButtonLayer:(int)button;
 - (CAShapeLayer *)dm_testButtonBorder:(int)button;
@@ -236,6 +238,10 @@ void dm_input_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t 
     g_buttons = buttons; g_lx = lx; g_ly = ly; g_rx = rx; g_ry = ry;
 }
 void dm_input_cancel_virtual_latch(uint64_t buttons) { ++g_virtual_latch_cancels; g_virtual_latch_cancel_mask = buttons; }
+static int g_settings_presentations;
+int front_show_game_settings(void) { ++g_settings_presentations; return 1; }
+void dm_gamepad_settings_done(void);
+void dm_gamepad_refresh_touch_settings(void);
 void dm_pad_set_player(int player, uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
     ++g_pad_sets;
     g_pad_player = player;
@@ -1720,6 +1726,8 @@ static void test_botw_manual_menu_pad(DmGamepad *view) {
     [view touchesCancelled:three withEvent:event];
     [view setNeedsLayout]; [view layoutIfNeeded];
     CHECK([view dm_testManualMenuPad],"recognized backup gesture activates the temporary menu pad");
+    CHECK([view dm_testSettingsRevealed] && ![view dm_testSettingsButton].hidden,
+          "the same hidden-menu gesture reveals Settings alongside the temporary full gamepad");
     CHECK(![view dm_testControlsHidden],"the temporary menu pad is visible");
     CHECK(![view dm_testL3ArtworkHidden] && ![view dm_testR3ArtworkHidden] &&
           ![view dm_testZLArtworkHidden] && [view dm_testSwapHidden],
@@ -1767,6 +1775,36 @@ static void test_botw_manual_menu_pad(DmGamepad *view) {
     [view reset];
 }
 
+static void test_botw_gameplay_settings(DmGamepad *view) {
+    [view reset]; g_botw_touchhud_available=YES; g_botw_gameplay_ready=YES;
+    g_botw_touch_menu_active=g_botw_touch_menu_presented=NO; g_force_controls_hidden=NO;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES];
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view layoutIfNeeded];
+    UIButton *button=[view dm_testSettingsButton]; UITapGestureRecognizer *gesture=[view dm_testMenuPadGesture];
+    CHECK(button && button.hidden && ![view dm_testSettingsRevealed],
+          "BOTW gameplay has no settings button until the three-finger gesture is recognized");
+    CHECK([gesture.delegate gestureRecognizer:gesture shouldReceiveTouch:touch(300,100)],
+          "the existing three-finger double tap is eligible during BOTW gameplay");
+    [view revealBotwMenuPad:[RecognizedMenuTap new]]; [view layoutIfNeeded];
+    CHECK(!button.hidden && [view dm_testSettingsRevealed] && ![view dm_testManualMenuPad],
+          "gameplay gesture reveals only the settings button and keeps the menu gamepad fallback separate");
+    CGPoint face=[view facePos:0],stick=[view dm_testStickHome];
+    FakeTouch *heldButton=touch(face.x,face.y), *heldStick=touch(stick.x,stick.y);
+    began(view,heldButton); began(view,heldStick); moved(view,heldStick,stick.x+70,stick.y);
+    CHECK((g_buttons&DM_BTN_A) && g_lx,"settings entry case starts with held virtual inputs");
+    int presentations=g_settings_presentations;
+    [button sendActionsForControlEvents:UIControlEventTouchUpInside];
+    CHECK(g_settings_presentations==presentations+1 && button.hidden && !g_buttons && !g_lx && !g_ly && !g_rx && !g_ry && !g_touch_count,
+          "opening settings hides the button and releases all held virtual input");
+    dm_gamepad_settings_done(); [view layoutIfNeeded];
+    CHECK(!button.hidden && [view dm_testSettingsRevealed],
+          "dismissing settings restores the revealed button during gameplay");
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES]; [view layoutIfNeeded];
+    CHECK(button.hidden && ![view dm_testSettingsRevealed],
+          "controller connection hides and clears the settings button");
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view reset];
+}
+
 static void test_botw_tunable_stick(DmGamepad *original) {
     g_botw_touchhud_available=YES; g_botw_gameplay_ready=YES;
     g_botw_touch_menu_active=g_botw_touch_menu_presented=NO;
@@ -1794,6 +1832,21 @@ static void test_botw_tunable_stick(DmGamepad *original) {
     CHECK(g_lx>DM_STICK_MAX*.17 && g_lx<DM_STICK_MAX*.19 && (g_buttons&DM_BTN_ZL),
           "custom movement settings preserve ZL deadzone, linear curve and drag range");
     ended(view,t,home.x,home.y);
+    home=[view dm_testStickHome]; t=touch(home.x,home.y); began(view,t);
+    moved(view,t,home.x+radius*.6,home.y);
+    setenv("DM_BOTW_MOVE_DEADZONE","0.10",1); setenv("DM_BOTW_MOVE_CURVE","1.00",1);
+    setenv("DM_BOTW_MOVE_FULL","0.90",1); setenv("DM_BOTW_MOVE_SIZE","0.80",1);
+    dm_gamepad_refresh_touch_settings(); [view layoutIfNeeded];
+    CHECK(!g_lx && !g_buttons,"live settings refresh releases held movement");
+    CGFloat liveWidth=CGPathGetPathBoundingBox([view dm_testStickRingLayer].path).size.width;
+    CHECK(fabs(liveWidth-2*base*.8)<.01,"live settings refresh resizes the existing gamepad");
+    home=[view dm_testStickHome]; t=touch(home.x,home.y); began(view,t);
+    moved(view,t,home.x+base*.8*.5,home.y);
+    CHECK(abs(g_lx-DM_STICK_MAX/2)<=2,
+          "live deadzone, curve and full-travel edits reach the existing movement handler");
+    ended(view,t,home.x,home.y);
+    unsetenv("DM_BOTW_MOVE_DEADZONE"); unsetenv("DM_BOTW_MOVE_CURVE");
+    unsetenv("DM_BOTW_MOVE_FULL"); unsetenv("DM_BOTW_MOVE_SIZE");
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES]; [view setNeedsLayout]; [view layoutIfNeeded];
     CHECK(fabs(CGPathGetPathBoundingBox([view dm_testStickRingLayer].path).size.width-2*DM_TP_STICK_R*dm_touchpad_u(390))<.01,
           "custom movement size is ignored with a controller connected");
@@ -1987,6 +2040,7 @@ static void run_tests(DmGamepad *view) {
               "controller-change reset cancels an active look session");
         reset_look(); g_look_enabled = YES;
         test_botw_manual_menu_pad(view);
+        test_botw_gameplay_settings(view);
         test_botw_tunable_stick(view);
         test_botw_custom_layout(view);
         test_botw_portrait(view);

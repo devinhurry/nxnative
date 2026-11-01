@@ -21,6 +21,9 @@ void dm_gamepad_active(void);
 void front_ios_boot(void);
 int front_ios_prepare_game(void);
 bool dm_show_launcher(void *view_controller, void (*done)(void));   // Launcher.swift: false = no launcher (no dm/launcher.json, or DM_LAUNCHER=0)
+bool dm_show_game_settings(void *view_controller, void (*done)(void));
+void dm_gamepad_settings_done(void);
+void dm_gamepad_refresh_touch_settings(void);
 
 static CAMetalLayer *g_layer;
 static void front_ios_power_watch(void);
@@ -109,6 +112,7 @@ UIInterfaceOrientationMask front_ios_orientations(UIWindow *window) {
         UIInterfaceOrientationMaskLandscape | UIInterfaceOrientationMaskPortrait : UIInterfaceOrientationMaskLandscape;
 }
 static void launcher_done(void) { [g_root startGame]; }
+static void game_settings_done(void) { dm_gamepad_settings_done(); }
 @implementation DmRootVC
 - (void)loadView { self.view=[[DmPlaySurface alloc] initWithFrame:CGRectZero]; }
 - (void)viewDidLoad {
@@ -189,6 +193,17 @@ static void launcher_done(void) { [g_root startGame]; }
 }
 @end
 UIViewController *front_ios_root(void) { return [DmRootVC new]; }
+int front_show_game_settings(void) {
+    return g_root && dm_show_game_settings((__bridge void *)g_root, game_settings_done);
+}
+int front_startup_settings(void) { return 1; } // UIKit already applied startup choices before entering the host.
+void front_refresh_touch_settings(void) {
+    void (^refresh)(void)=^{
+        dm_gamepad_refresh_touch_settings();
+        if (g_root) [g_root setNeedsUpdateOfSupportedInterfaceOrientations];
+    };
+    if (NSThread.isMainThread) refresh(); else dispatch_async(dispatch_get_main_queue(),refresh);
+}
 
 // Thermal state and screen brightness for the power and present rows every 300 frames (hle_nvn.c; its weak defaults return -1 on the Mac). thermalState: 0 nominal, 1 fair, 2 serious, 3 critical.
 // Brightness is read on the main thread at start and on each change; every change of the thermal state and of Low Power Mode (which lowers the CPU clock) is logged with the time since launch

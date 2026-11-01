@@ -1,5 +1,7 @@
 module DmTouchPad {
     header "botw_touch_layout.h"
     header "memory_mode.h"
+    header "launcher_settings.h"
+    header "aoc_files.h"
     export *
 }

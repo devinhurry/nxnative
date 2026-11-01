@@ -768,3 +768,13 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Cause:** code that calls fixed module addresses. d2r-mobile's 3D render scale read a renderer pointer at `main+0x31e0848` and called `main+0x8582f0`; in Mario v0 that is the middle of a static initializer and only did nothing because the pointer happened to read 0.
 - **Fix:** such code checks `module_t.build_id` now (written into `fixups.tsv` by the rewriter) and stays off on other builds.
 - **Found on:** [Super Mario Bros. Wonder](../../dm/games/010015100B514000/README.md) (v0, code inherited from d2r-mobile).
+
+
+### In-game launcher settings use the runtime state owners
+
+- **Symptom:** changes made from an in-game settings sheet appear saved but do not affect controls, frame rate, rendering size or rumble until relaunch.
+- **Cause:** most environment switches are read once. Updating the environment alone leaves the live state unchanged.
+- **Fix:** `hle_launcher_settings.c` classifies settings and dispatches validated live values to operation-mode notifications, atomic frame-step state, each front end's touch refresh hook or the haptics output queue. Restart-only rows persist choices without replacing the running environment. `LauncherSettings.swift` observes direct preview edits as well as ordinary setting rows. A shared two-column page is presented from the startup dashboard, BOTW's three-finger gesture or the Mac's Command-comma menu item; presenting and dismissing it releases virtual input. The movement ring's geometry cache checks both its center and radius, so changing stick size also refreshes the visible ring. `aoc_files.h` shares the existing DLC discovery rules with the dashboard instead of caching a separate ownership list. Direct Mac runs record their generated settings and localizations with the runtime, and apply startup choices before module loading. Packaged apps suppress the child's second startup screen after their launcher handles it.
+- **Check:** `t_launcher_settings`, `t_fpslock`, `t_haptics`, `t_pctl`, native Swift storage/layout checks and the UIKit gesture harness. The launcher simulator fixture and `dm/mac/tests/run_launcher_check.py <new scratch directory>` exercise production sheets with synthetic resources; neither runs a game.
+- **UI ownership:** `LauncherDashboard`, `LauncherSettingsPage` and the touch editor are shared SwiftUI views. The iOS and Mac launcher files only provide platform resources, file picking and presentation; they do not maintain separate dashboard layouts. BOTW Mac touch preview also uses the shared first-play notice.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game).

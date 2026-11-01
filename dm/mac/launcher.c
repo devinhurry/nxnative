@@ -189,6 +189,9 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) if (!strcmp(argv[i], "--no-launcher")) window = 0;
     if (!window) fprintf(stderr, "launcher: no settings window (DM_LAUNCHER=0 or --no-launcher)\n");
     int shown = window ? dm_mac_launcher() : 2;
+    // The child host also offers startup settings for direct development runs.
+    // This app's launcher has already handled that step (including opting out).
+    setenv("DM_LAUNCHER", "0", 1);
     if (!shown) return 0;   // Quit: no game
     if (shown == 2) {
         saved_choices();

@@ -48,6 +48,9 @@ int main(void) {
     assert(l.intensity == h.intensity && l.sharpness < h.sharpness);
     assert(dm_haptics_level(&low, 1, 0).intensity == 0);
     assert(fabsf(dm_haptics_level(&low, 1, 2).intensity - 2 * l.intensity) < 0.0001f);
+    calls = 0; dm_haptics_refresh(); assert(calls == 2); // live gain/cutoff updates resend every routed player's current state
+    dm_haptics_set_enabled(0); assert(!dm_haptics_enabled());
+    dm_haptics_set_enabled(1); assert(dm_haptics_enabled());
     dm_haptics_init(record, 0); dm_haptics_route(0, 1); send(0, 0, 1);
     assert(!dm_haptics_available() && dm_haptics_actual(0, 0).amplitude_low == 0);
     puts("haptics: state, timing, routing, sanitization and mapping passed");

@@ -23,6 +23,12 @@ final class LauncherHarnessRoot: UIViewController {
             (scene.windows.first!.rootViewController as! LauncherHarnessRoot).showApplied()
         })
     }
+    @objc func openGameSettings() {
+        _ = dmShowGameSettings(Unmanaged.passUnretained(self).toOpaque(), {
+            let scene = UIApplication.shared.connectedScenes.first as! UIWindowScene
+            (scene.windows.first!.rootViewController as! LauncherHarnessRoot).showApplied()
+        })
+    }
     func showApplied() {
         view.subviews.forEach { $0.removeFromSuperview() }
         let values = (TouchStickResponse.keys.union(["DM_FPS_TARGET", "DM_LOW_MEMORY", "DM_PRESENT_UPSCALE"])).sorted().map { "\($0)=\(ProcessInfo.processInfo.environment[$0] ?? "unset")" }.joined(separator: "\n")
@@ -30,7 +36,9 @@ final class LauncherHarnessRoot: UIViewController {
         text.textColor = .white; text.numberOfLines = 0; text.font = .monospacedSystemFont(ofSize: 16, weight: .regular)
         let reopen = UIButton(type: .system); reopen.setTitle("Reopen launcher", for: .normal)
         reopen.addTarget(self, action: #selector(self.reopen), for: .touchUpInside)
-        let stack = UIStackView(arrangedSubviews: [text, reopen]); stack.axis = .vertical; stack.spacing = 20
+        let settings = UIButton(type: .system); settings.setTitle("Open in-game settings", for: .normal)
+        settings.addTarget(self, action: #selector(self.openGameSettings), for: .touchUpInside)
+        let stack = UIStackView(arrangedSubviews: [text, reopen, settings]); stack.axis = .vertical; stack.spacing = 20
         stack.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(stack)
         NSLayoutConstraint.activate([stack.centerXAnchor.constraint(equalTo: view.centerXAnchor), stack.centerYAnchor.constraint(equalTo: view.centerYAnchor)])
     }

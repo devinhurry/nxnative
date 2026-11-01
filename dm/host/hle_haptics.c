@@ -47,6 +47,21 @@ int dm_haptics_enabled(void) {
     int on = enabled && output != NULL;
     pthread_mutex_unlock(&lock); return on;
 }
+void dm_haptics_set_enabled(int on) {
+    pthread_mutex_lock(&lock);
+    on = !!on;
+    if (enabled != on) {
+        enabled = on;
+        if (!on) for (int p = 0; p < DM_PLAYERS; p++) clear_locked(p);
+    }
+    pthread_mutex_unlock(&lock);
+}
+void dm_haptics_refresh(void) {
+    pthread_mutex_lock(&lock);
+    if (enabled && output && !suspended)
+        for (int p = 0; p < DM_PLAYERS; p++) if (available >> p & 1) output(states[p]);
+    pthread_mutex_unlock(&lock);
+}
 uint32_t dm_haptics_available(void) {
     pthread_mutex_lock(&lock);
     uint32_t m = enabled && output ? available : 0;

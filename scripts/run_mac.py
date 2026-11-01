@@ -426,6 +426,7 @@ def print_runtime(plan):
 
 
 def launch_host(plan, args, env, repo, exec_call=None, prepared_host=None):
+    explicit_settings = set(env).union(env.get('DM_ENV_LAUNCH_KEYS', '').split())
     env = dict(plan.get('runtime_env', {}), **env)
     if prepared_host:
         for key in ('DM_NVN_SHMAP', 'DM_FONT_DIR', 'DM_AOC_DIR', 'DM_PSO_PAIRS'):
@@ -456,6 +457,7 @@ def launch_host(plan, args, env, repo, exec_call=None, prepared_host=None):
     if env.get('DM_FULLSCREEN') is None: env['DM_FULLSCREEN'] = '1'
     if args.windowed:
         env['DM_FULLSCREEN'] = '0'
+        explicit_settings.add('DM_FULLSCREEN')
         if not env.get('DM_WINDOW_SIZE') and env.get('DM_ASPECT_RATIO'):
             try:
                 match = re.fullmatch(r'\s*([0-9.]+)\s*[:/x]\s*([0-9.]+)\s*', env['DM_ASPECT_RATIO'])
@@ -463,6 +465,7 @@ def launch_host(plan, args, env, repo, exec_call=None, prepared_host=None):
                 if not 0.1 <= ratio <= 10: raise ValueError('ratio out of range')
                 env['DM_WINDOW_SIZE'] = f'1600x{round(1600 / ratio)}'
             except (ValueError, ZeroDivisionError) as e: raise LaunchError(f'invalid DM_ASPECT_RATIO: {env["DM_ASPECT_RATIO"]}') from e
+    env['DM_ENV_LAUNCH_KEYS'] = ' '.join(sorted(k for k in explicit_settings if k.startswith('DM_')))
     Path(env['DM_SAVE']).mkdir(parents=True, exist_ok=True)
     Path(env['DM_TEMP']).mkdir(parents=True, exist_ok=True)
     exe = prepared_host or repo / 'dm/host/dmhost'

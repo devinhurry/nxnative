@@ -35,6 +35,7 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dm/tools"))
 import romfs as rfs
 import nso   # the code module loader: nso.Error is a damaged module (its file cut short or not what its header says)
+import mac_launcher_config
 
 # ---- Settings ----
 NSP_DIR = ''                            # folder holding the NSPs (empty = ask at run time)
@@ -1274,14 +1275,14 @@ def build_mac_host(repo, out, env, logs, g):
     and the macOS SDK) are as at the last build into out. The host runs the game's own arm64 code natively, so an Intel Mac stops here (GitHub issue #54)"""
     if not apple_silicon(): raise BuildError('this step boots the game in the Mac host, which runs the game\'s own arm64 code natively: it needs a Mac with Apple silicon, and this Mac has an Intel processor')
     host = repo / 'dm/host'
-    run(['make', '-s', f'GAME={g.id}', f'gen/{g.id}/game_profile.h', 'gen/vpx/libvpx.a'], logs / 'mac_host_make.log', env=env, cwd=host)
+    run(['make', '-s', f'GAME={g.id}', f'gen/{g.id}/game_profile.h', 'gen/vpx/libvpx.a', 'gen/mac-ui.o'], logs / 'mac_host_make.log', env=env, cwd=host)
     dry = subprocess.run(['make', '-n', '-B', f'GAME={g.id}', 'dmhost'], env=env, cwd=host, capture_output=True, text=True)
     line = next((l for l in dry.stdout.splitlines() if ' -o dmhost ' in l), None)
     if not line: raise BuildError(f'make -n gave no compile line for the Mac host: {dry.stderr.strip()[-500:]}')
     cmd = shlex.split(line); cmd[cmd.index('-o') + 1] = out
     kf, tp = out.with_name(out.name + '.key'), repo / 'dm/third_party'
     srcs = [p for d in HOST_DIRS for p in sorted((repo / d).iterdir()) if p.is_file() and p.suffix in ('.c', '.m', '.h', '.S', '.inc')]
-    key = fingerprint(cmd, ('files', srcs + [host / f'gen/{g.id}/game_profile.h', host / 'gen/vpx/libvpx.a', tp / 'stb_vorbis/stb_vorbis.c']),
+    key = fingerprint(cmd, ('files', srcs + [host / f'gen/{g.id}/game_profile.h', host / 'gen/vpx/libvpx.a', host / 'gen/mac-ui.o', tp / 'stb_vorbis/stb_vorbis.c']),
                       ('tree', tp / 'vulkan-headers/include'), ('tree', tp / 'libvpx/vpx'), ('cmd', ['clang', '--version']), ('cmd', ['xcrun', '--show-sdk-build-version']), env=env)
     source_file = out.with_name(out.name + '.source.json')
     if out.is_file() and reused(kf, key) is not None and source_file.is_file():
@@ -2175,6 +2176,9 @@ def write_mac_runtime(work, host, patched, renv, g, gfx, chain=None, description
     if gfx == 'nvn' and source['shader_chain'] != chain: raise BuildError('Mac host and shader chain differ; rebuild a matching runtime')
     renv = dict(renv)
     assets = Path(work) / 'run' / mode
+    launcher = assets / 'launcher.json'
+    launcher_files = mac_launcher_config.prepare(Path(__file__).resolve().parents[1], launcher, host, patched, renv, g, gfx, source)
+    renv['DM_LAUNCHER_FILE'] = launcher.resolve()
     if gfx == 'nvn':
         profile = assets / 'profile'; profile.mkdir(parents=True, exist_ok=True)
         origin = Path(renv['DM_NVN_SHMAP']).resolve()
@@ -2187,7 +2191,7 @@ def write_mac_runtime(work, host, patched, renv, g, gfx, chain=None, description
             if p.is_file() and p.resolve() != (font / p.name).resolve(): shutil.copy2(p, font / p.name)
         renv['DM_FONT_DIR'] = font
     msl = Path(renv['DM_MSL_DIR']).resolve()
-    files = [host, source_file] + [p for p in assets.rglob('*') if p.is_file()]
+    files = [host, source_file] + launcher_files + [p for p in assets.rglob('*') if p.is_file()]
     if (patched / 'build_src.sha256').is_file(): files.append(patched / 'build_src.sha256')
     files += [p for p in patched.iterdir() if p.is_file() and p.suffix in ('.bin', '.tsv')]
     if gfx == 'nvn':
@@ -2217,6 +2221,8 @@ def mac_run(work, game, patched, host, font, msl, aoc, gfx, lang, env, logs, g, 
     if gfx == 'nvn': renv['DM_NVN_SHMAP'] = g.table('shader_map.tsv')
     renv.update(DM_LANG=lang, DM_WINDOW=1, DM_AUDIO=1)
     if env_file: renv.update(env_file_pairs(env_file))
+    if env_file: renv['DM_ENV_FILE_KEYS'] = ' '.join(env_file_pairs(env_file))
+    renv['DM_ENV_LAUNCH_KEYS'] = ' '.join(k for k in env if k.startswith('DM_'))
     if gfx == 'nvn' and g.table('shader_pairs.tsv').is_file():
         if not g.table('pso_pairs.tsv').is_file() and (work / 'shader/pso_pairs.tsv').is_file(): renv['DM_PSO_PAIRS'] = work / 'shader/pso_pairs.tsv'   # split_shaders' copy
         # The pipeline prebuild (docs/development.md, Hybrid pipelines): the pulling base of every shader pair into run/pso_archive, so the first run's draws have stand-ins instead

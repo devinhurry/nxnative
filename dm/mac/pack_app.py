@@ -220,7 +220,7 @@ def pack(a):
         codesign = Path(codesign).resolve()
         minos = min_os(a.host)
         localizations = launcher_localizations() if a.title_id.upper() == '01007EF00011E000' else []
-        sources = [Path(__file__).resolve(), Path(build_info.__file__), HERE / 'launcher.c', HERE.parent / 'host/save_sync.c', HERE.parent / 'host/save_sync.h', HERE.parent / 'host/romfs_image.h', HERE.parent / 'tools/romfs.py'] + swift_sources() + [HERE.parent / 'host' / name for name in ('botw_touch_layout.h', 'touchpad_geometry.h', 'dm_input.h', 'memory_mode.h', 'module.modulemap')] + localizations
+        sources = [Path(__file__).resolve(), Path(build_info.__file__), HERE / 'launcher.c', HERE.parent / 'host/save_sync.c', HERE.parent / 'host/save_sync.h', HERE.parent / 'host/romfs_image.h', HERE.parent / 'tools/romfs.py'] + swift_sources() + [HERE.parent / 'host' / name for name in ('botw_touch_layout.h', 'touchpad_geometry.h', 'dm_input.h', 'memory_mode.h', 'module.modulemap', 'aoc_files.h', 'launcher_settings.h')] + localizations
         source = build_info.source_info()   # A changed commit or repository invalidates reuse; the changing wall clock does not.
         inputs = {'options': vars(a), 'source': source, 'files': [(str(p), p.stat().st_mode, digest(p), os.readlink(p) if p.is_symlink() else None) for p in files + sources],
                   'trees': [(p, inventory(Path(p))) for p in (a.romfs, a.aoc) if p],

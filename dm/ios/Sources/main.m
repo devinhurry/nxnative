@@ -11,6 +11,7 @@
 #include "front.h"
 #include "romfs_image.h"
 #include "romfs_identity.h"
+#include "aoc_files.h"
 #import "GameFiles.h"
 #import "GraphicsPack.h"
 #include "player_env.h"
@@ -153,6 +154,21 @@ static char g_boot_message[640];
 const char *front_ios_boot_message(void) { return g_boot_message[0] ? g_boot_message : NULL; }
 NSString *dm_startup_rom_error(void) {
     return romfs_locate() ? nil : NSLocalizedString(@"Import RomFS.img to start.",nil);
+}
+int dm_startup_dlc_count(void) {
+    NSString *romfs = romfs_locate();
+    const char *dir = getenv("DM_AOC_DIR");
+    NSString *bundled = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"aoc"];
+    if (dir && strcmp(dir, bundled.fileSystemRepresentation)) return dm_aoc_count_paths(dir, romfs.fileSystemRepresentation);
+    char derived[PATH_MAX];
+    if (romfs_image_aoc_path(romfs.fileSystemRepresentation, derived, sizeof derived))
+        return dm_aoc_count_paths(derived, NULL);
+    NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
+    NSString *legacy = [doc stringByAppendingPathComponent:@"game-data/aoc"];
+    BOOL directory = NO;
+    if ([NSFileManager.defaultManager fileExistsAtPath:legacy isDirectory:&directory] && directory)
+        return dm_aoc_count_paths(legacy.fileSystemRepresentation, NULL);
+    return dm_aoc_count_paths([NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"aoc"].fileSystemRepresentation, NULL);
 }
 NSString *dm_startup_graphics_error(void) {
     NSString *doc=NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,NSUserDomainMask,YES)[0];

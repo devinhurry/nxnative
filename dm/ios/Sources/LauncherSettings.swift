@@ -83,7 +83,11 @@ final class LauncherModel: ObservableObject {
     let fixed: Set<String>      // set by an env file or by the launch environment: shown, not changed
     let fromLaunch: Set<String>   // of those, the ones the launch environment set (a front end's launch overrides, Xcode; DM_ENV_LAUNCH_KEYS from launcher.c or main.m)
     let ignoreSaved: Bool   // DM_SAVED_CHOICES=0: start from the defaults, and leave the saved choices as they are
-    @Published var values: [String: String] = [:]
+    @Published var values: [String: String] = [:] {
+        didSet { if isRunning { applyRuntimeChanges(previous: oldValue) } }
+    }
+    @Published private(set) var isRunning = false
+    @Published private(set) var deferredSettings: Set<String> = []
 
     private let defaults: UserDefaults
     private let availableMemory: () -> UInt64
@@ -137,6 +141,37 @@ final class LauncherModel: ObservableObject {
             if !ignoreSaved { defaults.set(v, forKey: "launcher." + s.env) }
         }
         values[s.env] = v
+    }
+
+    func beginRuntime() { isRunning = true }
+
+    func appliesImmediately(_ s: Setting) -> Bool {
+        #if os(iOS) || DM_HOST_UI
+        return dm_launcher_setting_is_live(s.env) == 1 && !deferredSettings.contains(s.env)
+        #else
+        return false
+        #endif
+    }
+
+    private func storeChoice(_ s: Setting, _ value: String) {
+        guard !ignoreSaved else { return }
+        if s.env == Self.lowMemoryKey {
+            if let choice = lowMemoryOverride { defaults.set(choice, forKey: "launcher." + s.env) }
+            else { defaults.removeObject(forKey: "launcher." + s.env) }
+        } else if s.isDefault(value) { defaults.removeObject(forKey: "launcher." + s.env) }
+        else { defaults.set(value, forKey: "launcher." + s.env) }
+    }
+
+    private func applyRuntimeChanges(previous: [String: String]) {
+        for s in settings where !fixed.contains(s.env) {
+            guard let value = values[s.env], value != previous[s.env], s.accepts(value) else { continue }
+            #if os(iOS) || DM_HOST_UI
+            if dm_launcher_setting_is_live(s.env) == 1 && dm_launcher_setting_apply(s.env, value) != 1 {
+                deferredSettings.insert(s.env)
+            }
+            #endif
+            storeChoice(s, value)
+        }
     }
 
     var sections: [String] {
@@ -231,7 +266,10 @@ final class LauncherModel: ObservableObject {
            keys?.contains(Self.lowMemoryKey) ?? true {
             automaticLowMemoryValue = memoryDefault(); lowMemoryOverride = nil
         }
-        for s in settings where !fixed.contains(s.env) && (keys?.contains(s.env) ?? true) { values[s.env] = defaultValue(s) }
+        for s in settings where !fixed.contains(s.env) && (keys?.contains(s.env) ?? true) {
+            values[s.env] = defaultValue(s)
+            if isRunning { storeChoice(s, defaultValue(s)) }
+        }
         fputs("launcher: settings reset to the game's defaults\n", stderr)
     }
 
@@ -242,13 +280,7 @@ final class LauncherModel: ObservableObject {
         for s in settings {
             let v = values[s.env] ?? s.def
             if fixed.contains(s.env) { fputs("launcher: \(s.env) kept at \(v) (\(fromLaunch.contains(s.env) ? "launch environment" : "env file"))\n", stderr); continue }
-            if !ignoreSaved {
-                if s.env == Self.lowMemoryKey {
-                    if let choice = lowMemoryOverride { defaults.set(choice, forKey: "launcher." + s.env) }
-                    else { defaults.removeObject(forKey: "launcher." + s.env) }
-                } else if s.isDefault(v) { defaults.removeObject(forKey: "launcher." + s.env) }
-                else { defaults.set(v, forKey: "launcher." + s.env) }
-            }
+            storeChoice(s, v)
             let origin = s.env == Self.lowMemoryKey ? (lowMemoryOverride == nil ? " (automatic)" : " (manual)") : (s.isDefault(v) ? "" : " (changed)")
             setenv(s.env, v, 1); fputs("launcher: \(s.env)=\(v)\(origin)\n", stderr)
         }

@@ -1,6 +1,6 @@
 # Settings
 
-The screen before the game starts shows the settings the game supports. A setting that only matters while another is on appears under it and disappears when that one is turned off. Tap **Play** to start; the app remembers your choices for the next start. Game, Controls and Performance settings share the home screen. BOTW has a **Touch settings** button that opens its layout and movement editor. **Upscaling** is in **Game**, beside **Console mode**. A Mac app shows the same settings in a [window of its own](#the-mac-settings-window).
+The screen before the game starts shows resource readiness, available memory and About information. Import ROM and graphics packages from the left panel, then press **Play**. **Settings** opens a separate two-column page: section titles on the left and their options on the right. Both columns remain visible on compact phones. BOTW's touch editor lives in its Touch section. The Mac launcher uses the same status-and-settings layout.
 
 **About** at the bottom shows the build time in the device's local time zone and date format, on both iPhone and Mac.
 
@@ -56,7 +56,7 @@ Breath of the Wild renders 1280x720 in handheld mode. Docked it renders its worl
 
 - **When to change it:** choose a MetalFX mode if the picture looks soft and the device has GPU time to spare: on a Mac, or on an iPhone in handheld mode at 30 fps. For long sessions at 60 fps on an iPhone leave it at Standard.
 - **Cost:** more GPU time each frame, which can increase heat on an iPhone. [Breath of the Wild's measurements](../dm/games/01007EF00011E000/README.md#upscaling-current) cover Mac and iPhone; the matching iPhone Standard run and MetalFX's share of the thermal cost remain unmeasured. Full-screen MetalFX only acts when the final picture is smaller than the display; Scene MetalFX only acts when the verified 3D input is smaller than its UI canvas. Unsupported devices and sizes use Standard scaling.
-- **On the Mac:** choose **Full-screen MetalFX** under **Upscaling** in the [settings window](#the-mac-settings-window)'s Advanced settings, or set `DM_PRESENT_UPSCALE=metalfx` in its `env.txt` (off by default). It helps in a large window or on a 4K screen.
+- **On the Mac:** choose **Full-screen MetalFX** under **Settings** > **Game** > **Upscaling** in the [settings window](#the-mac-settings-window), or set `DM_PRESENT_UPSCALE=metalfx` in its `env.txt` (off by default). It helps in a large window or on a 4K screen.
 
 ### Game language
 
@@ -109,7 +109,9 @@ Size at 100% keeps the existing dimensions: a 140-point outer diameter when the 
 
 On the Mac, touch preview uses the same parameters through `DM_BOTW_MOVE_DEADZONE`, `DM_BOTW_MOVE_CURVE`, `DM_BOTW_MOVE_FULL` and `DM_BOTW_MOVE_SIZE` in `env.txt` or the launch environment. Fractions are written as decimals: for example, `DM_BOTW_MOVE_DEADZONE=0.07` means 7%. Packaged Mac apps expose the same Touch settings page; the raw host uses the launch environment. Layout variables use the prefix `DM_BOTW_PAD_` followed by `<CONTROL>_X`, `<CONTROL>_Y` or `<CONTROL>_SCALE`, where `<CONTROL>` is `FACE`, `DPAD`, `ZL`, `L`, `R` or `ZR`. Movement uses `DM_BOTW_PAD_STICK_X` / `_Y` and the existing `DM_BOTW_MOVE_SIZE`. `DM_BOTW_PAD_FACE_GAP` controls XYAB spacing (default `1.060`). Corner letter circles are off by default; `DM_BOTW_PAD_BADGES=1` enables them. The runtime and Restore defaults match the values listed in `dm/games/settings.tsv`; saved custom choices and explicit environment overrides retain precedence.
 
-If a BOTW menu does not respond to direct touch on iPhone, **double-tap with three fingers** to reveal the original full virtual gamepad for that menu visit. It sends ordinary buttons and UI right-stick input. Leaving menus restores the normal touch layout; a controller connection or input reset also ends the temporary override. It is not saved. The gesture is reserved while automatic controls are hidden, so ordinary three-finger combat combinations keep working.
+During BOTW touch gameplay on iPhone, **double-tap with three fingers** to reveal a Settings button. The same settings page is available without restarting the game. Touch layout, stick response, touch feedback, rumble, supported frame-rate/render-scale controls and operation mode apply immediately; other rows say they apply on the next start and are saved without changing the running game. Cloud-save changes remain available before starting the game. A controller connection hides the gesture entry.
+
+If a BOTW menu does not respond to direct touch on iPhone, **double-tap with three fingers** to reveal the original full virtual gamepad and the Settings button for that menu visit. It sends ordinary buttons and UI right-stick input. Leaving menus restores the normal touch layout; a controller connection or input reset also ends the temporary override. It is not saved. Only the hidden-menu fallback reserves the three touches early; ordinary gameplay combinations keep working until a Settings double tap is recognized.
 
 The first **Play** in BOTW touch mode on iPhone explains this gesture and asks players to report buttons that do not respond. Acknowledging the notice starts the game and keeps it from appearing again, including after resetting settings. A connected controller skips the notice without marking it acknowledged.
 
@@ -233,11 +235,15 @@ Sets every setting back to the game's tested default; **Play** then forgets your
 
 ## The Mac settings window
 
-A Mac app ([A Mac app](development.md#a-mac-app)) shows its settings in a window before the game starts. They are the same settings as on the iPhone, with the same defaults. The window shows the most used ones first: **Frame rate**, **Render scale**, **Console mode**, **Game language**, **Display mode** and **Game rumble**, when the game has them. **Render scale** shows the picture's size in pixels beside the percentage for the chosen **Console mode**, when the game's profile has it (Breath of the Wild: 1600 × 900 docked, 1280 × 720 handheld at 100 %). The others are under **Advanced settings**, in the usual sections, with **Reset to tested defaults**. The window remembers whether Advanced settings is open. **Frame-rate counter** and **Touch feedback** are only on the iPhone.
+A Mac app ([A Mac app](development.md#a-mac-app)) opens a dashboard before the game starts, with resource readiness, available memory and About on the right. **Settings** opens the same two-column editor as on iPhone: choose a section on the left and edit its options on the right. The settings and defaults match the game's iPhone list except for **Frame-rate counter** and **Touch feedback**, which are iPhone-only. **Render scale** shows the picture's size in pixels beside the percentage for the chosen **Console mode**, when the game's profile has it (Breath of the Wild: 1600 × 900 docked, 1280 × 720 handheld at 100 %). **Reset to tested defaults** restores all unlocked settings.
 
 Click **Play** (or press Return) to start the game. **Quit**, ⌘Q or closing the window ends the app without the game. The app remembers your choices for that game, and a game started without the window, from a front end or with the window turned off, uses them too ([Saved choices](frontends.md#saved-choices)). A setting fixed by an `env.txt` or by the program that started the app is shown greyed out.
 
 Turn off **Show this window at launch** to start the game at once with your choices. Hold Option while the app opens to see the window again. `DM_LAUNCHER=0` in the app's `env.txt` (`~/Library/Application Support/nxnative/<title ID>/env.txt`) or in its environment, or opening it with `open <app> --args --no-launcher`, also skips the window; your choices still apply. `DM_SAVED_CHOICES=0` starts with the tested defaults instead.
+
+Direct runs through `scripts/run_mac.py` show the same dashboard before loading the game. The dashboard, status rows, first-touch notice, settings page and touch editor share the iOS SwiftUI implementation; Mac code supplies resource paths, images and native window/input handling. The launch-window toggle lives in Game settings and is hidden in touch preview. Preparation records the launcher JSON and localized text with the runtime; an environment or command-line override stays locked, while generated defaults remain editable. During play, **Command-comma** opens the shared settings editor. Supported frame-rate/render-scale, operation-mode, rumble and BOTW touch-preview changes apply immediately; the remaining options are saved for the next start.
+
+In BOTW `--touch-preview`, **Command-Shift-comma** mirrors the iPhone's three-finger double tap: it reveals a Settings button and, in a hidden-controls menu, temporary virtual controls with native UI right-stick input. The override ends when the menu or touch preview ends. A connected controller disables this touch-preview shortcut; the ordinary **Command-comma** Settings command remains available.
 
 ### Display mode
 

@@ -425,3 +425,19 @@ void dm_haptics_apple_init(void) {
         atexit(dm_haptics_apple_shutdown);
     });
 }
+
+// Called by the in-game launcher after it validates and stores one rumble
+// setting. Queue synchronization keeps gain/min reads consistent with output.
+void dm_haptics_apple_settings_changed(void) {
+    if (!queue) return;
+    void (^refresh)(void) = ^{
+        const char *e = getenv("DM_RUMBLE_GAIN");
+        if (e) { float v = strtof(e, NULL); if (isfinite(v)) gain = fmaxf(0, fminf(3, v)); }
+        e = getenv("DM_RUMBLE_MIN");
+        if (e) { float v = strtof(e, NULL); if (isfinite(v)) rumble_min = fmaxf(0, fminf(0.9f, v)); }
+        e = getenv("DM_RUMBLE");
+        dm_haptics_set_enabled(!e || atoi(e) != 0);
+        dm_haptics_refresh();
+    };
+    if (dispatch_get_specific(&queue)) refresh(); else dispatch_sync(queue, refresh);
+}

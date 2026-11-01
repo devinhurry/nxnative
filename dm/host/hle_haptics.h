@@ -16,6 +16,9 @@ void dm_haptics_clear(int player);                 // engine reset: needs a fres
 uint64_t dm_haptics_epoch(int player);
 uint32_t dm_haptics_available(void);
 int dm_haptics_enabled(void);   // an output sink is installed and rumble is on (whether or not a controller has connected yet)
+void dm_haptics_set_enabled(int on); // live launcher change; disabling clears active motor output
+void dm_haptics_refresh(void); // resend current motor state after a live gain/cutoff change
+void dm_haptics_apple_settings_changed(void); // haptics_apple.m: reload gain, cutoff, and enabled state on the output queue
 void dm_haptics_suspend(unsigned reason, int suspended);
 void dm_haptics_send(const dm_vibration_update *updates, int count);   // one atomic batch
 dm_vibration dm_haptics_actual(int player, int motor);

@@ -37,6 +37,8 @@ static int g_mouse_down;
 
 void *front_metal_layer(void) { return (__bridge void *)g_layer; }
 static _Atomic int g_screen_fps;   // the window's screen's maximumFramesPerSecond, kept up to date when the window moves to another screen
+@class DmTouchPreviewView;
+static DmTouchPreviewView *g_preview_view;
 int front_screen_max_fps(void) { return g_screen_fps; }
 static int32_t g_mouse_rx, g_mouse_ry;
 static int32_t g_preview_lx, g_preview_ly;
@@ -67,7 +69,21 @@ static void preview_rune_icon_changed(void);
 static void preview_menu_changed(void);
 static void input_release(void);
 static void input_resume(void);
+static void settings_release_inputs(void);
+static void preview_cancel_for_settings(void);
+static void settings_closed(void) { settings_release_inputs(); input_resume(); }
+int dm_mac_launcher(void);
+int dm_mac_show_game_settings(void *window, void (*done)(void));
+int front_startup_settings(void) {
+    if (!getenv("DM_WINDOW")) return 1;
+    return dm_mac_launcher() != 0;
+}
 void front_look_mode_changed(void) {} // Mac input sources are separate before and after look mode installs.
+static void preview_reload_touch_settings(void);
+void front_refresh_touch_settings(void) {
+    if ([NSThread isMainThread]) preview_reload_touch_settings();
+    else dispatch_sync(dispatch_get_main_queue(), ^{ preview_reload_touch_settings(); });
+}
 void front_botw_touch_hud_mode_changed(void) { dispatch_async(dispatch_get_main_queue(), ^{ preview_refresh(); }); }
 void front_botw_touch_hud_map_region(int valid, float x, float y, float width, float height) {
     dispatch_async(dispatch_get_main_queue(), ^{ preview_set_map_region(valid, x, y, width, height); });
@@ -253,6 +269,21 @@ static void input_resume(void) {
     if (g_merge) { for (GCController *c in GCController.controllers) if (c.extendedGamepad) pad_read(c.extendedGamepad); }
     else for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p].extendedGamepad) pad_read(g_held[p].extendedGamepad);
 }
+static void settings_release_inputs(void) {
+    g_btn = 0; g_w = g_a = g_s = g_d = 0;
+    g_mouse_rx = g_mouse_ry = g_preview_lx = g_preview_ly = 0; g_preview_buttons = 0;
+    push();
+    if (g_mouse_down) { g_mouse_down = 0; dm_touch_set(NULL, 0); }
+    preview_cancel_for_settings();
+    dm_input_cancel_virtual_latch(0xffffull);
+    if (g_merge) dm_pad_set(0, 0, 0, 0, 0);
+    else for (int p = 0; p < DM_PLAYERS; p++) if (g_held[p]) dm_pad_set_player(p, 0, 0, 0, 0, 0);
+}
+static void open_game_settings(void) {
+    if (!g_win) return;
+    settings_release_inputs();
+    dm_mac_show_game_settings((__bridge void *)g_win, settings_closed);
+}
 static void pads_start(void) {
     const char *e = getenv("DM_PAD_MERGE"); g_merge = e && atoi(e);
     e = getenv("DM_KBD_PLAYER"); g_kbd_own = !g_merge && e && !strcmp(e, "own");
@@ -274,9 +305,21 @@ enum { PREVIEW_NONE, PREVIEW_STICK, PREVIEW_DPAD, PREVIEW_FACE, PREVIEW_BUTTON, 
 - (void)botwRuneIconChanged;
 - (void)refreshBotwRuneIcon;
 - (void)setBotwMenuActive:(BOOL)active;
+- (void)setSettingsShortcutVisible:(BOOL)visible;
+- (void)toggleSettingsShortcut:(id)sender;
+- (void)layoutSettingsButton;
+- (void)reloadBotwTouchSettings;
 - (void)sendBotwMenuPointer:(int)phase point:(dm_touchpad_point)p;
 @end
-static DmTouchPreviewView *g_preview_view;
+@interface DmMacSettingsTarget : NSObject
+- (void)openSettings:(id)sender;
+- (void)togglePreviewSettings:(id)sender;
+@end
+@implementation DmMacSettingsTarget
+- (void)openSettings:(id)sender { (void)sender; open_game_settings(); }
+- (void)togglePreviewSettings:(id)sender { [g_preview_view toggleSettingsShortcut:sender]; }
+@end
+static DmMacSettingsTarget *g_settings_target;
 
 static float preview_distance(NSPoint a, NSPoint b) { return hypotf((float)(a.x - b.x), (float)(a.y - b.y)); }
 static NSPoint preview_from_top(float x, float y, float height) { return NSMakePoint(x, height - y); }
@@ -335,6 +378,8 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     NSImage *_runeIcon, *_buttonIcons[12];
     uint64_t _runeIconGeneration;
     BOOL _runeIconValid;
+    NSButton *_settingsButton;
+    BOOL _settingsShortcutVisible, _showControlsDuringMenu;
 }
 - (instancetype)initWithFrame:(NSRect)frame {
     if ((self = [super initWithFrame:frame])) {
@@ -348,6 +393,11 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
             }
             _touchLayout=_touchProfiles[0]; _moveResponse=_moveProfiles[0];
         }
+        _settingsButton = [NSButton buttonWithTitle:NSLocalizedString(@"Settings", nil) target:self action:@selector(openSettings:)];
+        _settingsButton.bezelStyle = NSBezelStyleRounded;
+        _settingsButton.hidden = YES;
+        [self addSubview:_settingsButton];
+        [self layoutSettingsButton];
     }
     return self;
 }
@@ -357,13 +407,19 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     [super setFrameSize:s];
     if (resized && (_hasTouch || _menuPose.active)) [self cancelInput];
     [self syncBotwTouchProfile];
+    [self layoutSettingsButton];
 }
 - (BOOL)acceptsFirstMouse:(NSEvent *)event { (void)event; return YES; }
-- (NSView *)hitTest:(NSPoint)p { return _active && !self.hidden && NSPointInRect(p, self.bounds) ? self : nil; }
+- (NSView *)hitTest:(NSPoint)p {
+    if (!_active || self.hidden || !NSPointInRect(p, self.bounds)) return nil;
+    if (_settingsShortcutVisible && !_settingsButton.hidden && NSPointInRect(p, _settingsButton.frame)) return _settingsButton;
+    return self;
+}
 - (void)setPreviewActive:(BOOL)active {
     if (_active != active) _lookTapPending = NO;
     if (_active != active && !active) { [self cancelInput]; _mapValid = NO; _mapTapConsumed = NO; _mapInvalidAfterTap = NO; }
     _active = active; self.hidden = !active;
+    if (!active) [self setSettingsShortcutVisible:NO];
     [self syncBotwTouchProfile];
     if (!active) { _runeIcon = nil; _runeIconValid = NO; _runeIconGeneration = 0; }
     else [self refreshBotwRuneIcon];
@@ -392,8 +448,37 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     [self cancelInput];
     if (dm_botw_touch_hud_available()) dm_input_cancel_virtual_latch(0xffffull);
     _menuMode = active;
-    if (!active) _mapTapConsumed = _mapInvalidAfterTap = NO;
+    if (!active) {
+        _mapTapConsumed = _mapInvalidAfterTap = NO;
+        _showControlsDuringMenu = NO;
+        [self setSettingsShortcutVisible:NO];
+    }
     [self setNeedsDisplay:YES];
+}
+- (void)layoutSettingsButton {
+    if (!_settingsButton) return;
+    NSEdgeInsets insets = preview_safe_insets();
+    CGFloat width = 92, height = 30, margin = 12;
+    _settingsButton.frame = NSMakeRect(MAX(margin + insets.left, self.bounds.size.width - insets.right - width - margin),
+        self.bounds.size.height - insets.top - height - margin, width, height);
+}
+- (void)setSettingsShortcutVisible:(BOOL)visible {
+    _settingsShortcutVisible = visible && _active;
+    _settingsButton.hidden = !_settingsShortcutVisible;
+    [self layoutSettingsButton];
+    [self setNeedsDisplay:YES];
+}
+- (void)toggleSettingsShortcut:(id)sender {
+    (void)sender;
+    if (!_active || strcmp(DM_GAME_ID, "01007EF00011E000")) return;
+    settings_release_inputs();
+    [self setSettingsShortcutVisible:!_settingsShortcutVisible];
+    _showControlsDuringMenu = _settingsShortcutVisible && _menuMode;
+    [self setNeedsDisplay:YES];
+}
+- (void)openSettings:(id)sender {
+    (void)sender;
+    open_game_settings();
 }
 - (void)setMapRegionValid:(BOOL)valid x:(float)x y:(float)y width:(float)width height:(float)height {
     if (!_active) { _mapTapConsumed = NO; _mapInvalidAfterTap = NO; }
@@ -439,6 +524,21 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     if (_touchLayout.portrait==portrait) return;
     _touchLayout=_touchProfiles[portrait]; _moveResponse=_moveProfiles[portrait];
     [self cancelInput];
+}
+- (void)reloadBotwTouchSettings {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000")) return;
+    [self cancelInput];
+    for (int p = 0; p < 2; p++) {
+        if (!dm_botw_layout_read_for(&_touchProfiles[p], p)) die("[RED] invalid BOTW touch layout setting");
+        const char *invalid = dm_botw_stick_settings_read_for(&_moveProfiles[p], p);
+        if (invalid) die("[RED] %s: invalid touch left-stick setting", invalid);
+    }
+    dm_touchpad_rect area = [self controlArea];
+    NSEdgeInsets insets = preview_safe_insets();
+    int portrait = _active && dm_botw_compact_mode(area.width, area.height, insets.left, insets.right);
+    _touchLayout = _touchProfiles[portrait];
+    _moveResponse = _moveProfiles[portrait];
+    [self setNeedsDisplay:YES];
 }
 - (float)layoutScale:(int)control { return _active ? _touchLayout.control[control].scale : 1; }
 - (float)faceGap { return DM_TP_FACE_GAP*self.u*(_active ? _touchLayout.face_gap*_touchLayout.control[0].scale : 1); }
@@ -603,7 +703,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     dm_touchpad_point p = [self topPoint:e];
     _down = _last = NSMakePoint(p.x, p.y); _hasTouch = YES; _held = _cancelPending; _owner = PREVIEW_NONE;
     [self setBotwMenuActive:_active && !dm_botw_touch_controls_visible()];
-    if (_menuMode && ((!_cameraPadVisible && !preview_seated()) || (preview_seated() && p.y<[self controlArea].y))) {
+    if (_menuMode && !_showControlsDuringMenu && ((!_cameraPadVisible && !preview_seated()) || (preview_seated() && p.y<[self controlArea].y))) {
         if (dm_botw_touch_menu_dpad_visible() && !preview_seated()) {
             dm_touchpad_point center=self.dpadCenter;
             uint64_t direction = hypotf(p.x-center.x,p.y-center.y)<=self.dpadRadius*DM_TP_DPAD_GRAB ? [self dpadAtTop:p] : 0;
@@ -639,7 +739,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     if (_active && _touchLayout.portrait && faceHit) fd = 0;
     if (faceHit && fd <= dd) { _lookTapPending = NO; _owner = PREVIEW_FACE; _held = [self faceAtTop:p]; [self publishButtons]; return; }
     if ((dd <= self.dpadRadius*DM_TP_DPAD_GRAB && dd < fd) || [self compactDpadOwnsTop:p]) { _lookTapPending = NO; _owner = PREVIEW_DPAD; _held = [self dpadAtTop:p]; [self publishButtons]; return; }
-    if (!_cameraPadVisible && [self mapOwnsTop:p]) {
+    if (!_showControlsDuringMenu && !_cameraPadVisible && [self mapOwnsTop:p]) {
         _lookTapPending = NO;
         _owner = PREVIEW_NONE; _hasTouch = NO;
         _mapTapConsumed = YES; _mapInvalidAfterTap = NO; _mapValid = NO; _mapRect = (dm_touchpad_rect){0};
@@ -650,18 +750,18 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         g_preview_buttons |= DM_BTN_MINUS; push(); g_preview_buttons &= ~DM_BTN_MINUS; push();
         return;
     }
-    if (scopePrompt) {
+    if (scopePrompt && !_showControlsDuringMenu) {
         _lookTapPending = NO; _owner = PREVIEW_MENU; _menuPointerActive = YES;
         [self sendBotwMenuPointer:DM_BOTW_MENU_BEGIN point:p];
         return;
     }
-    if (_cameraPadVisible && !preview_seated() && (e.modifierFlags & NSEventModifierFlagOption)) {
+    if (!_showControlsDuringMenu && _cameraPadVisible && !preview_seated() && (e.modifierFlags & NSEventModifierFlagOption)) {
         _owner = PREVIEW_MENU; dm_botw_trackpad_pose_begin(&_menuPose);
         _menuPoseStart = NSMakePoint(p.x, p.y);
         dm_botw_touch_camera_pose(0, 0);
         return;
     }
-    if (_cameraPadVisible && !preview_seated()) {
+    if (!_showControlsDuringMenu && _cameraPadVisible && !preview_seated()) {
         _owner = PREVIEW_MENU; _menuPointerActive = YES;
         [self sendBotwMenuPointer:DM_BOTW_MENU_BEGIN point:p];
         return;
@@ -669,7 +769,8 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     if (dm_look_enabled() && p.x >= self.bounds.size.width * (1.0f-DM_TP_RSWIPE)) {
         _owner = PREVIEW_LOOK; _lookDownTime = e.timestamp; _lookDragged = NO;
         _lookCenter = NSMakePoint(p.x,p.y); g_mouse_rx = g_mouse_ry = 0; push();
-        dm_look_input(DM_LOOK_BEGIN,0,0); return;
+        if (!_showControlsDuringMenu) dm_look_input(DM_LOOK_BEGIN,0,0);
+        return;
     }
     _lookTapPending = NO;
     _owner = PREVIEW_GAME; [self sendGameTouch:p];
@@ -677,7 +778,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
 - (void)mouseDragged:(NSEvent *)e {
     if (!_hasTouch) return;
     dm_touchpad_point p = [self topPoint:e];
-    if (_menuPose.active) {
+    if (_menuPose.active && !_showControlsDuringMenu) {
         if (!dm_botw_touch_camera_active()) { dm_botw_touch_camera_pose(0, 0); dm_botw_trackpad_pose_end(&_menuPose); }
         else {
             dm_botw_trackpad_pose_drag(&_menuPose, (float)(p.x - _menuPoseStart.x),
@@ -706,7 +807,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         _lookDragged |= dm_touchpad_look_dragged((float)_down.x, (float)_down.y, p.x, p.y,
                                                   DM_TP_LOOK_TAP_SLOP * self.u);
         if (_lookDragged) _lookTapPending = NO;
-        float direction = dm_botw_touch_quick_select_active() ? -1 : 1;
+        float direction = !_showControlsDuringMenu && dm_botw_touch_quick_select_active() ? -1 : 1;
         // Match UIKit: native UI reads the virtual stick while scene callers
         // replace it with the relative impulse below.
         float dx=p.x-_lookCenter.x, dy=p.y-_lookCenter.y, radius=60*self.u, d=hypotf(dx,dy);
@@ -714,19 +815,19 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
             _lookCenter=NSMakePoint(p.x-dx*radius/d,p.y-dy*radius/d);
             dx=p.x-_lookCenter.x; dy=p.y-_lookCenter.y;
         }
-        dm_touchpad_stick_axis(direction*dx,direction*dy,radius,0,&g_mouse_rx,&g_mouse_ry); push();
-        if (scale > 0) dm_look_input(DM_LOOK_MOVE, direction*(p.x-_last.x)/scale, direction*(p.y-_last.y)/scale);
+        dm_touchpad_stick_axis(direction*dx,direction*dy,radius,_showControlsDuringMenu,&g_mouse_rx,&g_mouse_ry); push();
+        if (!_showControlsDuringMenu && scale > 0) dm_look_input(DM_LOOK_MOVE, direction*(p.x-_last.x)/scale, direction*(p.y-_last.y)/scale);
     }
     _last = NSMakePoint(p.x,p.y);
 }
 - (void)flagsChanged:(NSEvent *)e {
-    if (!_menuPose.active) return;
+    if (!_menuPose.active || _showControlsDuringMenu) return;
     if (!_active || !dm_botw_touch_camera_active()) { [self cancelInput]; return; }
     NSUInteger modifier = _hasTouch ? NSEventModifierFlagShift : NSEventModifierFlagOption;
     dm_botw_touch_camera_pose_modifier((e.modifierFlags & modifier) != 0);
 }
 - (void)magnifyWithEvent:(NSEvent *)e {
-    if (!_active || !_menuMode) return;
+    if (!_active || !_menuMode || _showControlsDuringMenu) return;
     if (!_menuMagnifying && (e.phase == NSEventPhaseBegan || e.phase == NSEventPhaseChanged)) {
         if (!dm_botw_touch_menu_active() || _owner == PREVIEW_MENU || _menuScrolling) return;
         dm_touchpad_point p = [self topPoint:e];
@@ -753,6 +854,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     }
 }
 - (void)scrollWheel:(NSEvent *)e {
+    if (_showControlsDuringMenu) return;
     if (_menuPose.active && !_hasTouch &&
         (!dm_botw_touch_camera_active() || !(e.modifierFlags & NSEventModifierFlagShift))) {
         dm_botw_touch_camera_pose(0, 0); dm_botw_trackpad_pose_end(&_menuPose);
@@ -819,7 +921,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     if (!_hasTouch) return;
     dm_touchpad_point release = [self topPoint:e];
     _cancelOutside = NO;
-    if (_menuPose.active) {
+    if (_menuPose.active && !_showControlsDuringMenu) {
         dm_botw_touch_camera_pose_modifier(0); dm_botw_touch_camera_pose(0, 0);
         dm_botw_trackpad_pose_end(&_menuPose);
         _owner = PREVIEW_NONE; _hasTouch = NO; _held = _cancelPending;
@@ -853,11 +955,11 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         _lookDragged |= dm_touchpad_look_dragged((float)_down.x, (float)_down.y, p.x, p.y,
                                                   DM_TP_LOOK_TAP_SLOP * self.u);
         if (_lookDragged) _lookTapPending = NO;
-        dm_look_input(DM_LOOK_END,0,0);
+        if (!_showControlsDuringMenu) dm_look_input(DM_LOOK_END,0,0);
         g_mouse_rx=g_mouse_ry=0;
         if (dm_touchpad_look_tap((float)(e.timestamp - _lookDownTime), _lookDragged)) {
             float u = self.u;
-            if (_lookTapPending && dm_touchpad_look_double_tap((double)_lookTapTime, (double)e.timestamp,
+            if (!_showControlsDuringMenu && _lookTapPending && dm_touchpad_look_double_tap((double)_lookTapTime, (double)e.timestamp,
                     (float)_lookTapPoint.x, (float)_lookTapPoint.y, (float)_down.x, (float)_down.y, u)) {
                 _lookTapPending = NO;
                 g_preview_buttons |= DM_BTN_RS; push(); g_preview_buttons &= ~DM_BTN_RS; push();
@@ -928,7 +1030,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
 - (void)drawRect:(NSRect)dirtyRect {
     (void)dirtyRect; if (!_active) return;
     float h = self.bounds.size.height, w = self.bounds.size.width, u = self.u;
-    if (_menuMode && !_cameraPadVisible && !preview_seated()) {
+    if (_menuMode && !_cameraPadVisible && !preview_seated() && !_showControlsDuringMenu) {
         if (dm_botw_touch_menu_dpad_visible()) {
             dm_touchpad_point d=self.dpadCenter;
             NSColor *color=[NSColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:.8];
@@ -1035,12 +1137,14 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
 }
 @end
 
+static void preview_cancel_for_settings(void) { [g_preview_view cancelInput]; }
 static void preview_set_map_region(int valid, float x, float y, float width, float height) {
     [g_preview_view setMapRegionValid:valid x:x y:y width:width height:height];
 }
 static void preview_action_changed(void) { [g_preview_view botwTouchActionChanged]; }
 static void preview_rune_icon_changed(void) { [g_preview_view botwRuneIconChanged]; }
 static void preview_menu_changed(void) { preview_refresh(); }
+static void preview_reload_touch_settings(void) { [g_preview_view reloadBotwTouchSettings]; }
 static void preview_refresh(void) {
     if (!g_preview_view) return;
     if (!strcmp(DM_GAME_ID,"01007EF00011E000") && dm_aspect_native()) {
@@ -1259,6 +1363,14 @@ void front_run(void (*guest)(void)) {
         NSMenu *bar = [NSMenu new], *app = [NSMenu new], *wm = [[NSMenu alloc] initWithTitle:@"Window"];
         [[bar addItemWithTitle:@"" action:nil keyEquivalent:@""] setSubmenu:app];
         [app addItemWithTitle:@"Quit " DM_GAME_NAME action:@selector(terminate:) keyEquivalent:@"q"];
+        g_settings_target = [DmMacSettingsTarget new];
+        [app addItem:[NSMenuItem separatorItem]];
+        [app addItemWithTitle:NSLocalizedString(@"Settings…", nil) action:@selector(openSettings:) keyEquivalent:@","].target = g_settings_target;
+        if (g_touch_preview_requested && !strcmp(DM_GAME_ID, "01007EF00011E000")) {
+            NSMenuItem *previewSettings = [app addItemWithTitle:NSLocalizedString(@"Show Touch Controls and Settings", nil) action:@selector(togglePreviewSettings:) keyEquivalent:@","];
+            previewSettings.target = g_settings_target;
+            previewSettings.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+        }
         [[bar addItemWithTitle:@"Window" action:nil keyEquivalent:@""] setSubmenu:wm];
         [wm addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"].keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagCommand;
         NSApp.mainMenu = bar;

@@ -2,6 +2,7 @@
 // fps_target (DM_FPS_TARGET overrides; 0 = leave the game's own limit), the same key that drives Tears of the Kingdom's frame step (loader.c install_fps_state). Called on every present
 // (hle_nvn.c); the game sets the values after boot and may set them again, so each is written whenever it differs. Fixed addresses: each row runs only on the main build it was found in (AGENTS.md)
 #include "hle.h"
+#include <stdatomic.h>
 #include <mach/mach.h>
 
 // What a field holds: the frame rate as a float, double or int32, vsyncs per frame (60 / frame rate) as an int32, or the frame time in milliseconds as a float. Copies: consecutive copies of the
@@ -208,9 +209,14 @@ static void fb_tick(int target, const char *src) {
     }
 }
 
+static _Atomic int g_launcher_fps_target = -1;
+void dm_fps_lock_setting_changed(int target) { atomic_store_explicit(&g_launcher_fps_target, target, memory_order_relaxed); }
 void dm_fps_lock_tick(void) {
     dynamic_resolution_tick();   // separate from the FPS cap
     static int state = -2, rows[NLOCKS], nrow, nlog[NLOCKS], target, nier; static uint8_t *base; static const char *src; static uint32_t display;
+    int requested = atomic_load_explicit(&g_launcher_fps_target, memory_order_relaxed);
+    if (state == -1 && requested > 0) { target = requested; src = "launcher runtime setting"; state = 0; }
+    if (state == -3) return;
     if (state == -1) return;
     if (state == -2) {
         state = -1;
@@ -218,12 +224,17 @@ void dm_fps_lock_tick(void) {
             for (int k = 0; k < (int)(sizeof k_nier_dr / sizeof *k_nier_dr); k++) if (!strcmp(g_mod[i].build_id, k_nier_dr[k].build)) { base = g_mod[i].base; nier = 1; display = k_nier_dr[k].display; }
             for (int k = 0; k < NLOCKS; k++) if (!strcmp(g_mod[i].build_id, k_locks[k].build)) { rows[nrow++] = k; base = g_mod[i].base; }
         }
-        fb_find(); if (!nrow && !nier && !fb.n) return;
-        const char *e = getenv("DM_FPS_TARGET"); int t = e ? atoi(e) : DM_GAME_FPS_TARGET; src = e ? "DM_FPS_TARGET" : "game profile fps_target";
+        fb_find(); if (!nrow && !nier && !fb.n) { state = -3; return; }
+        const char *e = getenv("DM_FPS_TARGET"); int t = requested >= 0 ? requested : e ? atoi(e) : DM_GAME_FPS_TARGET; src = requested >= 0 ? "launcher runtime setting" : e ? "DM_FPS_TARGET" : "game profile fps_target";
         if (t != 0 && t != 30 && t != 60) { LOG("[RED] DM_FPS_TARGET=%s: must be 0, 30 or 60; leaving the game's frame limit", e); t = 0; }
         if (!t) { for (int r = 0; r < nrow; r++) LOG("main: %s left as the game sets it (%s)", k_locks[rows[r]].what, src); if (nier) LOG("main: NieR frame interval left as the game sets it (%s)", src);
                   if (fb.n) LOG("main: Frostbite simulation rate left as the game sets it (%s)", src); return; }
         target = t; state = 0;
+    }
+    requested = atomic_load_explicit(&g_launcher_fps_target, memory_order_relaxed);
+    if (requested >= 0 && requested != target) {
+        target = requested; src = "launcher runtime setting";
+        if (!target) { state = -1; return; }
     }
     if (nier) {
         // NieR:Automata US/EU 1.0.3 (3c10ec35c5ef4c3686b4053afb0e58e7):

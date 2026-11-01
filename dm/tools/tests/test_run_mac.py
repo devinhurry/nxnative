@@ -36,6 +36,24 @@ def stamp_nvn(lib, g):
 
 
 class MacLauncherTests(unittest.TestCase):
+    def test_only_explicit_launch_values_lock_settings(self):
+        g = game_profile('01007EF00011E000')
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            plan = dict(game=g, base=root, romfs=root, msl=root, patched=root,
+                        runtime_env={'DM_OPMODE': '1', 'DM_FPS_TARGET': '60'})
+            captured = {}
+            with redirect_stdout(io.StringIO()):
+                run_mac.launch_host(plan, run_mac.parser().parse_args(['--windowed']),
+                                    {'DM_FPS_TARGET': '30'}, REPO,
+                                    exec_call=lambda exe, argv, env: captured.update(env))
+            locked = set(captured['DM_ENV_LAUNCH_KEYS'].split())
+            self.assertIn('DM_FPS_TARGET', locked)
+            self.assertIn('DM_FULLSCREEN', locked)
+            self.assertNotIn('DM_OPMODE', locked)
+            self.assertEqual(captured['DM_FPS_TARGET'], '30')
+            self.assertEqual(captured['DM_OPMODE'], '1')
+
     def test_touch_safe_area_option(self):
         from contextlib import redirect_stderr
         args=run_mac.parser().parse_args(['--touch-preview','--touch-safe-area','62, 0,0,21'])
@@ -163,6 +181,8 @@ class MacLauncherTests(unittest.TestCase):
             _, romfs, patched, msl = self.make_layout(root, g)
             romfs.rmdir(); romfs = romfs.with_name('RomFS.img'); romfs.write_bytes(b'romfs image')
             host = root / 'prepared host'; host.write_bytes(b'prepared host'); host.chmod(0o755)
+            control = bytearray(0x4000); control[0x3060:0x3065] = b'1.9.0'
+            (romfs.parent / 'control.nacp').write_bytes(control)
             (patched / 'build_src.sha256').write_text('prepared source')
             for mod in g.words('modules'):
                 for suffix in ('patched.bin', 'fixups.tsv', 'gates.tsv'):
@@ -176,9 +196,19 @@ class MacLauncherTests(unittest.TestCase):
             (lib / 'test_b.metallib').write_bytes(b'prepared shaders'); stamp_nvn(lib, g)
             self.record_host_source(host, old_chain)
             (root/'run').mkdir()
-            builder.write_mac_runtime(root, host, patched,
+            runtime_file = builder.write_mac_runtime(root, host, patched,
                                       dict(DM_ROMFS=romfs, DM_MSL_DIR=msl, DM_NVN_SHMAP=g.table('shader_map.tsv'),
                                            DM_SAVE='/old/test/save', DM_TEMP='/old/test/temp'), g, 'nvn', old_chain)
+            runtime = json.loads(runtime_file.read_text())
+            launcher = Path(runtime['environment']['DM_LAUNCHER_FILE'])
+            self.assertIn(str(launcher), runtime['checksums'])
+            settings = json.loads(launcher.read_text())
+            keys = {s['env'] for s in settings['settings']}
+            self.assertIn('DM_FULLSCREEN', keys)
+            self.assertNotIn('DM_SHOW_FPS', keys)
+            self.assertNotIn('DM_TOUCH_HAPTICS', keys)
+            self.assertIn('DMCommit', settings['metadata'])
+            self.assertEqual(settings['metadata']['CFBundleShortVersionString'], '1.9.0')
             g.table('shader_map.tsv').write_text('new working-tree shader map')
             args = run_mac.parser().parse_args(['--game', str(root.parent), '--release', '--touch-preview', '--touch-safe-area', '62,0,0,21', '--windowed'])
             plan = run_mac.resolve(args, {}, REPO)

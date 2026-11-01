@@ -23,7 +23,7 @@ class Startup(unittest.TestCase):
         main = (REPO / 'dm/ios/Sources/main.m').read_text()
         locator = main[main.index('static int romfs_image_complete'):main.index('// Boot prerequisites')]
         source = root / 'locator.m'
-        source.write_text('#import <Foundation/Foundation.h>\n#include <stdio.h>\n#include "romfs_image.h"\n#include "romfs_identity.h"\n#import "GameFiles.h"\n'
+        source.write_text('#import <Foundation/Foundation.h>\n#include <stdio.h>\n#include "romfs_image.h"\n#include "aoc_files.h"\n#include "romfs_identity.h"\n#import "GameFiles.h"\n'
                           'static NSString *fixture_doc, *fixture_tmp, *fixture_bundle;\n#define DM_GAME_ROMFS_MARKER "marker"\n'
                           'static int g_boot_ok, g_argc; static char **g_argv;\n'
                           'static void dm_host_preload_start(int argc, char **argv) { (void)argc; (void)argv; }\n'

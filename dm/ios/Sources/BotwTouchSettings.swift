@@ -13,6 +13,7 @@ struct BotwTouchSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     var viewport = CGSize(width: 932, height: 430)
     var safeInsets = EdgeInsets()
+    var embedded = false
     @State private var selected = BotwTouchControl.all[1]
     @State private var copied = false
     @State private var portrait = false
@@ -71,8 +72,10 @@ struct BotwTouchSettingsView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     #if os(iOS)
-                    Button(action: { dismiss() }) { Image(systemName: "chevron.left") }
-                        .accessibilityLabel(Text("Back"))
+                    if !embedded {
+                        Button(action: { dismiss() }) { Image(systemName: "chevron.left") }
+                            .accessibilityLabel(Text("Back"))
+                    }
                     #endif
                     Text("Touch layout").font(.headline)
                 }
@@ -97,7 +100,7 @@ struct BotwTouchSettingsView: View {
                     .frame(width: previewViewport.width*scale, height: previewViewport.height*scale)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                Text("Select a control, then drag to move or pinch to resize. Outlines show its size. Changes are saved when you tap Play.")
+                Text(LocalizedStringKey(m.isRunning ? "Select a control, then drag to move or pinch to resize. Changes apply immediately." : "Select a control, then drag to move or pinch to resize. Outlines show its size. Changes are saved when you tap Play."))
                     .font(.footnote).foregroundStyle(.secondary)
             }
             .frame(height: stacked ? max(200, geometry.size.height * 0.42) : nil)

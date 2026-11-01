@@ -82,10 +82,17 @@ static void check(int which) {
         assert(*unity == 60 && writes == 1);
         dm_fps_lock_tick(); assert(writes == 1);
         *unity = 30; dm_fps_lock_tick(); assert(*unity == 60 && writes == 2);
+        dm_fps_lock_setting_changed(30); dm_fps_lock_tick(); assert(*unity == 30 && writes == 3);
+        dm_fps_lock_setting_changed(60); dm_fps_lock_tick(); assert(*unity == 60 && writes == 4);
     } else if (which == 1) assert(*unity == 30 && writes == 1);
     else if (which >= 2 && which <= 5) {
         assert(writes == 0);
         assert(*unity == (which == 4 ? -1 : which == 5 ? 0 : 30));
+        if (which == 2) {
+            dm_fps_lock_setting_changed(60); dm_fps_lock_tick(); assert(*unity == 60 && writes == 1);
+            dm_fps_lock_setting_changed(0); dm_fps_lock_tick(); assert(*unity == 60 && writes == 1);
+            dm_fps_lock_setting_changed(30); dm_fps_lock_tick(); assert(*unity == 30 && writes == 2);
+        }
     } else if (which == 6) assert(*f == 60 && writes == 1);
     else if (which == 7) assert(fabsf(*f - (1000.0f / 60 - 0.5f)) < 0.001f && writes == 1);
     else if (which == 8) assert(f[0] == 60 && f[1] == 60 && sync[0] == 1 && sync[1] == 1 && writes == 4);

@@ -235,17 +235,20 @@ void dm_fps_state_apply(void) {
     if (!dm_fps_state) return;
     const char *e = getenv("DM_FPS_TARGET"); int t = e ? atoi(e) : DM_GAME_FPS_TARGET;
     if (t != 0 && t != 30 && t != 60) { LOG("[RED] DM_FPS_TARGET=%s: must be 0, 30 or 60; using the game's own frame step", e); t = 0; }
-    float f = (float)t; memcpy(dm_fps_state, &f, sizeof f);
+    float f = (float)t; uint32_t word; memcpy(&word, &f, sizeof word);
+    __atomic_store_n((uint32_t *)dm_fps_state, word, __ATOMIC_RELAXED);
     // Render scale of the 3D views (the stubs at Tears of the Kingdom's main+0xd5cc0, Breath of the Wild's main+0x1266880): 1.0 keeps the game's own size and dynamic resolution;
     // another factor fixes the size at that fraction (DM_RENDER_SCALE, 0.5 to 1.0). Independent of the frame step: written at target 0 too
     const char *rs = getenv("DM_RENDER_SCALE"); float sc = 1.0f;
     if (rs) { char *end; sc = strtof(rs, &end); if (end == rs || *end || !(sc >= 0.5f && sc <= 1.0f)) { LOG("[RED] DM_RENDER_SCALE=%s: must be 0.5 to 1.0; keeping the game's size", rs); sc = 1.0f; } else LOG("%s: 3D views rendered at %.2f of the game's size (DM_RENDER_SCALE)", g_fps_mod, sc); }
-    memcpy(dm_fps_state + 0x10, &sc, sizeof sc);
+    memcpy(&word, &sc, sizeof word);
+    __atomic_store_n((uint32_t *)(dm_fps_state + 0x10), word, __ATOMIC_RELAXED);
     // BOTW's verified budget stub reads this normalization; other state-page
     // builds leave it unused. A manual scale retains its fixed-size semantics.
     const char *dr = getenv("DM_DYNAMIC_RESOLUTION");
     float percent = dr && !strcmp(dr, "1") && sc == 1.0f ? (t == 60 ? 200.0f : 100.0f) : 0;
-    memcpy(dm_fps_state + 0x38, &percent, sizeof percent);
+    memcpy(&word, &percent, sizeof word);
+    __atomic_store_n((uint32_t *)(dm_fps_state + 0x38), word, __ATOMIC_RELAXED);
     char cap[32]; snprintf(cap, sizeof cap, ", capped at %d fps", t);
     LOG("%s: frame step %s%s (%s)", g_fps_mod, !t ? "as the game sets it" : "in whole vsyncs decided by the host", t ? cap : "", e ? "DM_FPS_TARGET" : "game profile fps_target");
 }
