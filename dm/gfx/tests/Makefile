@@ -152,7 +152,7 @@ t_upload_source_lifetime: t_upload_source_lifetime.m ../../host/file_backed_heap
 .PHONY: check_t_readback
 check_t_readback: t_readback
 	MTL_DEBUG_LAYER=1 ./t_readback
-t_present_crop: t_present_crop.m ../nvn/hle_nvn.c ../../host/hle_aspect.c ../../host/dm.h ../../host/hle.h ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(GFX_H)
+t_present_crop: t_present_crop.m ../nvn/hle_nvn.c ../../host/hle_aspect.c ../../host/touchpad_geometry.h ../../host/dm.h ../../host/hle.h ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_present_crop.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
 t_scene_upscale: t_scene_upscale.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_scene_upscale.m $(MTL_T_SRC) $(FW)

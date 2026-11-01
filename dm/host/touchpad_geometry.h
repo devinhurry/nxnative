@@ -69,9 +69,13 @@ static inline int dm_touchpad_seated_split(dm_touchpad_rect area, dm_touchpad_re
 #define DM_TP_BOTW_MAP_TOP 340.0f
 #define DM_TP_BOTW_MENU_SIZE 39.0f
 #define DM_TP_BOTW_MENU_GLYPH_SIZE 19.0f
+#define DM_TP_BOTW_MENU_EDGE (DM_TP_BOTW_HEART_EDGE-(DM_TP_BOTW_MENU_SIZE-DM_TP_BOTW_MENU_GLYPH_SIZE)*.5f)
 #define DM_TP_BOTW_MENU_Y_OFFSET 4.0f
 #define DM_TP_BOTW_MENU_GAP 8.0f
 #define DM_TP_BOTW_DOCK_TOP 8.0f
+static inline float dm_touchpad_botw_edge_margin(float safe, float fallback) {
+    return safe > 0 ? safe : fallback;
+}
 static inline dm_touchpad_rect dm_touchpad_seated_map(dm_touchpad_rect area) {
     float size=fminf(166.f*430/720,area.width*.16f);
     // The linked gauges extend 118 native units to the map's left.
@@ -207,11 +211,11 @@ static inline float dm_touchpad_botw_map_right_inset(float points_to_native) {
 }
 static inline dm_touchpad_rect dm_touchpad_botw_menu_rect(float canvas_x, float canvas_y,
                                                            float canvas_width, float canvas_height,
-                                                           int minus) {
+                                                           float safe_right, int minus) {
     float scale = fminf(canvas_width, canvas_height) / 720.0f;
     float size = DM_TP_BOTW_MENU_SIZE * scale;
-    return (dm_touchpad_rect){canvas_x + canvas_width -
-        (DM_TP_BOTW_HEART_EDGE + (DM_TP_BOTW_MENU_SIZE + DM_TP_BOTW_MENU_GLYPH_SIZE)*.5f)*scale - DM_TP_BOTW_EDGE_EXTRA,
+    float margin=dm_touchpad_botw_edge_margin(safe_right,DM_TP_BOTW_MENU_EDGE*scale+DM_TP_BOTW_EDGE_EXTRA);
+    return (dm_touchpad_rect){canvas_x + canvas_width - size - margin,
         canvas_y + (360.0f - DM_TP_BOTW_MAP_TOP) * scale + DM_TP_BOTW_MENU_Y_OFFSET +
             (minus ? size + DM_TP_BOTW_MENU_GAP : 0), size, size};
 }

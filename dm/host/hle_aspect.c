@@ -14,6 +14,7 @@ static int g_on;
 static float g_custom;
 static _Atomic float g_screen = 16.0f / 9.0f;
 static _Atomic float g_hud_safe_left;
+static _Atomic float g_hud_safe_right;
 static _Atomic float g_hud_safe_top;
 static _Atomic float g_ui_point_scale = 1;
 static _Atomic float g_display_height = 430;
@@ -126,15 +127,13 @@ void dm_aspect_touch_rect(float w, float h, float rect[4]) {
     rect[0] = x+(ow-cw)/2; rect[1] = y+(oh-ch)/2; rect[2] = cw; rect[3] = ch;
 }
 
-// Extra logical space beside the centered UI. The right HUD already has its
-// authored corner padding; adding the landscape safe inset leaves another
-// notch-width gap. This display rule is independent of the input mode.
-// The left side retains its safe inset. Menus still use touch_rect.
+// The stable coordinate canvas spans the picture. Edge margins translate HUD
+// content inside it, without changing icon size or hit-coordinate scaling.
 float dm_aspect_hud_offset(int right) {
-    float extra = fmaxf(0, 360 * dm_aspect_control_ratio() - 640);
-    float safe = right ? 0 : atomic_load(&g_hud_safe_left);
-    return fmaxf(0, extra - safe);
+    (void)right;
+    return fmaxf(0, 360 * dm_aspect_control_ratio() - 640);
 }
+float dm_aspect_hud_safe_right(void) { return atomic_load(&g_hud_safe_right); }
 float dm_aspect_ui_point_scale(void) { return atomic_load(&g_ui_point_scale); }
 void dm_aspect_set_safe_area(float w, float h, float left, float top, float right) {
     if (!isfinite(w) || !isfinite(h) || !isfinite(left) || !isfinite(top) || !isfinite(right) || w <= 0 || h <= 0) return;
@@ -144,6 +143,7 @@ void dm_aspect_set_safe_area(float w, float h, float left, float top, float righ
     float bar = (w - frame_width) * .5f, scale = 720 / canvas[3];
     atomic_store(&g_ui_point_scale, scale);
     atomic_store(&g_hud_safe_left, fmaxf(0, left - bar) * scale);
+    atomic_store(&g_hud_safe_right, fmaxf(0, right - bar) * scale);
     float picture_height = dm_aspect_native() ? fminf(h*region[3], w/dm_aspect_ratio()) : canvas[3];
     atomic_store(&g_hud_safe_top, fmaxf(0, top-h*region[1]-(h*region[3]-picture_height)*.5f)*720/picture_height);
 }
@@ -156,9 +156,11 @@ void dm_aspect_hud_rect(float w, float h, float rect[4]) {
     } else dm_aspect_touch_rect(w,h,rect);
     float yscale = dm_aspect_hud_y_scale();
     if (yscale < 1) { rect[3] /= yscale; rect[1] = h*region[1]+(h*region[3]-rect[3])*.5f; }
-    float scale = rect[3] / 720, left = dm_aspect_hud_offset(0) * scale;
+    // This is the HUD's coordinate canvas, not its safe-area layout bounds.
+    // Keep its scale fixed while individual anchors move within it.
+    float scale = rect[2] / 1280, left = dm_aspect_hud_offset(0) * scale;
     rect[0] -= left;
-    rect[2] += left + dm_aspect_hud_offset(1) * scale;
+    rect[2] += 2*left;
 }
 
 static void aspect_apply_projection(uint8_t *proj) {
@@ -426,17 +428,18 @@ void dm_aspect_ui_pane(uint8_t *pane) {
     entry->written_scale_x=entry->native_scale_x*xscale;
     entry->written_scale_y=entry->native_scale_y*yscale;
     if (cover) { entry->written_x *= wide; entry->written_y *= wide; }
-    // Landscape's horizontal safe inset reserves the notch at mid-height.
-    // Hearts sit above it, with their own authored top/corner padding; adding
-    // the entire inset here leaves an unnecessary gap on iPhone.
-    if (hud == -1) entry->written_x += DM_TP_BOTW_EDGE_EXTRA*dm_aspect_ui_point_scale() - fmaxf(0, 360 * dm_aspect_ratio() - 640);
+    if (hud == -1) {
+        float authored=DM_TP_BOTW_HEART_EDGE*gain;
+        float padding=authored+DM_TP_BOTW_EDGE_EXTRA*dm_aspect_ui_point_scale();
+        entry->written_x += dm_touchpad_botw_edge_margin(atomic_load(&g_hud_safe_left),padding)-authored - fmaxf(0, 360 * dm_aspect_ratio() - 640);
+    }
     if (hud == -1 && narrow) {
         entry->written_x += 640*(xscale-1);
         entry->written_y += 360*(1-yscale)-atomic_load(&g_hud_safe_top);
     }
     // AppMap's ScissorPane::Draw rejects clips outside its native 16:9
     // target before submitting draws. Anchor that subtree during GPU replay.
-    else if (hud == 1 && !dm_botw_touch_hud_active() && !seated)
+    else if (hud == 1 && !dm_botw_touch_hud_active() && !seated && dm_aspect_hud_safe_right()==0)
         entry->written_x += dm_aspect_hud_offset(1);
     if (title_right) {
         // The native origin is the right edge. Extending width and moving that

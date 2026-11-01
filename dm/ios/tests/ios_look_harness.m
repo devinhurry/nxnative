@@ -1673,13 +1673,13 @@ static void test_motion_orientation(void) {
     dm_test_motion_publish(right, accel, rate);
     CHECK(g_motion_samples[4].flags == DM_MOTION_RESET && g_motion_samples[5].flags == 0,
           "requested recenter remains one-shot and independent of orientation changes");
-    setenv("DM_BOTW_PORTRAIT","1",1);
+    setenv("DM_BOTW_PORTRAIT","0",1);
     dm_test_motion_reset(); g_motion_count=0;
     dm_gamepad_geometry_changed(UIInterfaceOrientationLandscapeRight); dm_test_motion_publish(right,accel,rate);
     dm_gamepad_geometry_changed(UIInterfaceOrientationPortrait); dm_test_motion_publish(quarter_turn,accel,rate);
     mapped_pose=(CMQuaternion){.w=g_motion_samples[1].quat[0],.x=g_motion_samples[1].quat[1],.y=g_motion_samples[1].quat[2],.z=g_motion_samples[1].quat[3]};
     CHECK(g_motion_count==2 && !g_motion_samples[1].flags && motion_quaternion_matches(mapped_pose,right),
-          "opt-in portrait compensates a physical quarter-turn without changing the neutral pose");
+          "wide portrait compensates a physical quarter-turn with the compact portrait switch off");
     CHECK(fabsf(g_motion_samples[1].acc[0]-.5f)<1e-6f && fabsf(g_motion_samples[1].acc[1]-.25f)<1e-6f &&
           fabsf(g_motion_samples[1].gyro[0]+(float)(.2/(2*M_PI)))<1e-6f,
           "portrait motion rotates acceleration and angular rate together");

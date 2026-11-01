@@ -13,7 +13,7 @@ GINC = $(if $(strip $(GAME)),-I../gen/$(GAME) -I../../games/$(GAME),$(error GAME
 $(B)/t_fs $(B)/t_fs_case $(B)/t_fs_commit_list $(B)/t_fs_commit_list_tsan $(B)/t_pctl: ../romfs_image.h
 $(B)/t_fs $(B)/t_pctl: game_image_fixture.h
 GAME_H = ../gen/$(GAME)/game_profile.h
-run: $(B)/t_memory_mode $(B)/t_language $(B)/t_aspect $(B)/t_look $(B)/t_botw_touchhud $(B)/t_botw_touch_actions $(B)/t_botw_touch_menu $(B)/t_botw_touch_trackpad $(B)/t_gate_obs_result $(B)/t_device_motion $(B)/t_motion $(B)/t_heap_size $(B)/t_touch $(B)/t_gesture $(B)/t_oe $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_audio_spsc $(B)/t_swkbd $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pctl $(B)/t_time $(B)/t_shared_font $(B)/t_vorbis $(B)/t_vorbis_divides $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple
+run: $(B)/t_memory_mode $(B)/t_language $(B)/t_aspect $(B)/t_look $(B)/t_botw_touchhud $(B)/t_botw_touch_actions $(B)/t_botw_touch_menu $(B)/t_botw_touch_trackpad $(B)/t_gate_obs_result $(B)/t_device_motion $(B)/t_botw_portrait $(B)/t_motion $(B)/t_heap_size $(B)/t_touch $(B)/t_gesture $(B)/t_oe $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_audio_spsc $(B)/t_swkbd $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pctl $(B)/t_time $(B)/t_shared_font $(B)/t_vorbis $(B)/t_vorbis_divides $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple
 	TMPDIR="$(abspath $(B))" $(B)/t_memory_mode
 	$(B)/t_language
 	$(B)/t_aspect
@@ -25,6 +25,7 @@ run: $(B)/t_memory_mode $(B)/t_language $(B)/t_aspect $(B)/t_look $(B)/t_botw_to
 	$(B)/t_gate_obs_result
 	$(B)/t_gate_reentry
 	$(B)/t_device_motion
+	$(B)/t_botw_portrait
 	$(B)/t_motion
 	$(B)/t_heap_size
 	$(B)/t_touch
@@ -212,7 +213,9 @@ touchpad_geometry: $(B)/t_touchpad_geometry
 	$(B)/t_touchpad_geometry
 $(B)/t_touchpad_geometry: t_touchpad_geometry.c ../touchpad_geometry.h ../botw_stick_settings.h ../botw_touch_layout.h ../dm_input.h | $(B)
 	clang -O1 -Wall -Werror -I.. -o $@ t_touchpad_geometry.c -lm
-$(B)/t_aspect: t_aspect.c ../hle_aspect.c ../hle.h ../dm.h $(GAME_H) | $(B)
+$(B)/t_botw_portrait: t_botw_portrait.c ../touchpad_geometry.h ../botw_touch_layout.h ../dm_input.h | $(B)
+	clang -O1 -Wall -Werror -I.. -o $@ t_botw_portrait.c -lm
+$(B)/t_aspect: t_aspect.c ../hle_aspect.c ../hle.h ../dm.h ../touchpad_geometry.h ../botw_touch_layout.h $(GAME_H) | $(B)
 	clang -O1 -Wall -I.. $(GINC) -o $@ t_aspect.c
 $(B)/t_look: t_look.c ../hle_look.c ../front.h ../hle.h ../dm.h ../dm_input.h $(GAME_H) | $(B)
 	clang -O1 -Wall -Werror -Wno-unused-function -DDM_TEST_HOOKS -I.. $(GINC) -o $@ t_look.c

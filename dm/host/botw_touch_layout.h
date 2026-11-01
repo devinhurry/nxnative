@@ -16,6 +16,14 @@ static inline int dm_botw_compact_mode(float width, float height, float left, fl
     // when the player has not enabled portrait rotation.
     return height > width && width-left-right < 600;
 }
+static inline int dm_botw_portrait_allowed(float width,float height,float left,float right) {
+    if (dm_botw_portrait_enabled()) return 1;
+    if (width<=0 || height<=0) return 0;
+    // Evaluate the prospective upright window when queried from landscape.
+    // Landscape side cutouts do not become portrait side insets.
+    if (width>height) { float swap=width; width=height; height=swap; left=right=0; }
+    return !dm_botw_compact_mode(width,height,left,right);
+}
 static inline const char *dm_botw_control_name(int id) {
     switch (id) {
         case 0: return "FACE"; case 4: return "STICK"; case 6: return "L";
@@ -161,7 +169,8 @@ static inline dm_touchpad_rect dm_botw_layout_control(const dm_botw_touch_layout
         case 7: case 9: p = dm_touchpad_right_shoulder(width,height,left,top,right,bottom,id==9); radius = DM_TP_ZL_R*u; break;
         case 8: p = dm_touchpad_shield_stick_home(width,height,left,top,right,bottom); radius = dm_touchpad_botw_stick_radius(height); break;
         case 10: case 11: {
-            dm_touchpad_rect r = dm_touchpad_botw_menu_rect(canvas.x,canvas.y,canvas.width,canvas.height,id==11);
+            float safe_right=fmaxf(0,right-(width-canvas.x-canvas.width));
+            dm_touchpad_rect r = dm_touchpad_botw_menu_rect(canvas.x,canvas.y,canvas.width,canvas.height,safe_right,id==11);
             if (canvas.height > canvas.width * 9.f/16.f) r.y += fmaxf(0,top-canvas.y);
             p = (dm_touchpad_point){r.x+r.width*.5f,r.y+r.height*.5f}; radius=r.width*.5f; break;
         }

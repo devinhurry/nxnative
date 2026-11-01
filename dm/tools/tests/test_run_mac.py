@@ -36,6 +36,18 @@ def stamp_nvn(lib, g):
 
 
 class MacLauncherTests(unittest.TestCase):
+    def test_touch_safe_area_option(self):
+        from contextlib import redirect_stderr
+        args=run_mac.parser().parse_args(['--touch-preview','--touch-safe-area','62, 0,0,21'])
+        self.assertEqual(args.touch_safe_area,'62,0,0,21')
+        self.assertIsNone(run_mac.parser().parse_args([]).touch_safe_area)
+        for value in ('1,2,3','-1,0,0,0','nan,0,0,0','0,0,inf,0','a,0,0,0'):
+            with self.subTest(value=value),redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):
+                run_mac.parser().parse_args(['--touch-preview','--touch-safe-area',value])
+        args=run_mac.parser().parse_args(['--game','01007EF00011E000','--touch-safe-area','62,0,0,21'])
+        with self.assertRaisesRegex(run_mac.LaunchError,'requires --touch-preview'):
+            run_mac.resolve(args,{},REPO)
+
     def test_only_test_and_release_modes_are_accepted(self):
         from contextlib import redirect_stderr
         self.assertEqual(run_mac.parser().parse_args([]).mode, 'test')
@@ -168,7 +180,7 @@ class MacLauncherTests(unittest.TestCase):
                                       dict(DM_ROMFS=romfs, DM_MSL_DIR=msl, DM_NVN_SHMAP=g.table('shader_map.tsv'),
                                            DM_SAVE='/old/test/save', DM_TEMP='/old/test/temp'), g, 'nvn', old_chain)
             g.table('shader_map.tsv').write_text('new working-tree shader map')
-            args = run_mac.parser().parse_args(['--game', str(root.parent), '--release', '--touch-preview', '--windowed'])
+            args = run_mac.parser().parse_args(['--game', str(root.parent), '--release', '--touch-preview', '--touch-safe-area', '62,0,0,21', '--windowed'])
             plan = run_mac.resolve(args, {}, REPO)
             rewrite, make, execute = Mock(), Mock(), Mock()
             execute.side_effect = lambda *_: self.assertEqual(Path.cwd(), (root/'run').resolve())
@@ -182,6 +194,7 @@ class MacLauncherTests(unittest.TestCase):
             self.assertEqual(env['DM_NVN_SHMAP'], plan['runtime_env']['DM_NVN_SHMAP'])
             self.assertNotEqual(env['DM_NVN_SHMAP'], str(g.table('shader_map.tsv')))
             self.assertEqual(env['DM_TOUCH_PREVIEW'], '1'); self.assertEqual(env['DM_FULLSCREEN'], '0')
+            self.assertEqual(env['DM_TEST_BOTW_SAFE_AREA'],'62,0,0,21')
             source = root / 'original save'; source.mkdir()
             original = source / 'game_data.sav'; original.write_bytes(b'original progress')
             (source / 'linked.sav').symlink_to(original)

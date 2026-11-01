@@ -21,6 +21,7 @@ extern char **environ;
 
 int dm_main(int argc, char **argv);   // dm/host/main.c compiled in with -Dmain=dm_main
 UIViewController *front_ios_root(void);
+UIInterfaceOrientationMask front_ios_orientations(UIWindow *window);
 void front_ios_focus_event(int ev);
 void dm_gamepad_geometry_changed(UIInterfaceOrientation orientation);
 
@@ -236,10 +237,8 @@ int front_ios_boot_ok(void) { return g_boot_ok; }
 @end
 @implementation App
 - (UIInterfaceOrientationMask)application:(UIApplication *)application supportedInterfaceOrientationsForWindow:(UIWindow *)window {
-    (void)application; (void)window;
-    const char *enabled=getenv("DM_BOTW_PORTRAIT");
-    return !strcmp(DM_GAME_ID,"01007EF00011E000") && enabled && !strcmp(enabled,"1") ?
-        UIInterfaceOrientationMaskLandscape | UIInterfaceOrientationMaskPortrait : UIInterfaceOrientationMaskLandscape;
+    (void)application;
+    return front_ios_orientations(window);
 }
 - (UISceneConfiguration *)application:(UIApplication *)a configurationForConnectingSceneSession:(UISceneSession *)s options:(UISceneConnectionOptions *)o {
     return [[UISceneConfiguration alloc] initWithName:@"Default" sessionRole:s.role];

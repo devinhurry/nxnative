@@ -112,8 +112,9 @@ or automatic sprint. BOTW movement-stick grabs and L3 double taps are silent;
 camera dragging and its R3 double tap are also silent. Face buttons and the ZL
 shield-stick grab keep their press feedback.
 The map/environment cluster reserves space for + with an 8-point gap. The
-visible Plus cross has the same right-edge padding as the first heart's left
-edge, including the additional 2 frontend points. Both +/- use a white cross over a 40%-opaque black
+visible Plus cross and first heart retain their current padding on zero-inset
+sides, including the additional 2 frontend points. A nonzero side inset replaces
+that padding, aligning the complete button or first-heart edge to the safe boundary. Both +/- use a white cross over a 40%-opaque black
 circle, with no border. Plus has one fixed anchor beside the minimap; its circle
 sits 4 frontend points below the minimap top. The circle is 39 native layout
 units across, and its centered cross is 19 units long with thickness set to 11%
@@ -447,21 +448,27 @@ no input while controls are hidden, and invalidation before menu return.
 The production source compiles for iPhone arm64. Evidence is in
 `ios-map-return-20261030/`; physical iPhone retesting remains pending.
 
-The top heart group keeps its authored corner padding against the full game
-view. Landscape's horizontal safe inset, intended for the notch at mid-height,
-no longer adds an extra gap to those topmost hearts; map and button safe-area
-geometry now follows the right-edge rule below. Physical iPhone edge placement remains for acceptance.
+**HUD safe-area edges (2026-11-01).** Left and right are independent. A zero
+safe inset retains the existing heart/HUD/Plus margin; a nonzero inset replaces
+that margin, with no extra gap inside the safe boundary. This supersedes the
+2026-10-30 rule that ignored the landscape right inset. The native heart group
+moves as one container, preserving full/partial heart spacing. Touch mode keeps
+the map-to-Plus gap and aligns the full Plus button, including its background
+and hit circle. Without the virtual Plus,
+the native map's measured edge anchors the linked environment HUD instead.
+Existing centered Seated controls and explicit picture bars retain their layout.
+The HUD coordinate canvas stays fixed: margins translate anchors rather than
+rescaling buttons or map hits. At 16:9 and narrower the native matrix receives
+the translation; wide map draws retain the post-scissor GPU anchor.
 
-**Right HUD edge padding (2026-10-30).** The minimap/environment cluster and
-adjacent +/- controls use the game's authored right-corner padding against the
-actual game picture. Landscape's extra right safe inset is no longer added on
-top of that padding; it previously left another notch-width gap beside Plus on
-iPhone. This is display geometry, independent of touch/controller input. The
-map-to-Plus gap, fixed Plus position when the map is hidden, button size and
-shared drawing/hit geometry are unchanged. Explicit aspect-ratio bars still
-bound the HUD to the game picture. Native tests cover both landscape safe-inset
-arrangements and both input modes; 160 graphics checks pass. Evidence is in
-`touch-top-right-inset-20261030/`; physical iPhone appearance remains pending.
+Mac touch preview accepts `--touch-safe-area left,top,right,bottom` in points
+(default all zero). Its virtual pad and native HUD receive the same insets.
+Native fixtures cover one-sided/asymmetric insets, small positive insets,
+wide/narrow/16:9 canvases, fixed-aspect bars, controller map bounds and stable
+glyph size/hits. Mac live evidence and compiler checks are in
+`hud-safe-area-20261101/` in the external game work folder. Physical iPhone
+appearance still requires acceptance; shader regression retains the compiler
+pin limitation documented in the Duo entry.
 
 **Album and Hyrule Compendium touch (2026-10-30).** `AppPictureBook_00`
 was missing from the Slate page family; its retained layout could not own
@@ -885,8 +892,15 @@ native aspect/HUD fixtures, 189 NVN recording checks, 192 graphics checks and
 remains pending; the full shader regression has the compiler-version limitation
 described below.
 
-The BOTW touch editor's **Enable portrait mode** switch (`DM_BOTW_PORTRAIT`,
-off by default) permits upright iOS gameplay. The compact touch profile is used
+The BOTW touch editor's **Enable compact portrait mode** switch (`DM_BOTW_PORTRAIT`,
+off by default) permits upright iOS gameplay below 600pt of usable width.
+Wider upright windows always allow portrait rotation, including unfolded Duo
+and iPad windows of that size. Permission uses the same compact-layout predicate
+as the controls; the application and game view controller share that decision, and
+motion follows the actual interface orientation even with the switch off.
+The [Duo inner display may ignore supported orientations](https://developer.apple.com/videos/play/tech-talks/111461/),
+so system-driven resizing still selects a layout from actual window geometry.
+The compact touch profile is used
 only when the display is taller than it is wide and its width after left/right
 safe insets is below 600pt. At 600pt or wider, portrait uses the normal profile;
 landscape always retains the normal profile. Compact L sits at the bottom-left
@@ -962,7 +976,7 @@ ownership until lift, preventing a resize from becoming a new tap or pinch.
 Display scale comes from the current view traits; Metal drawables, text and icon
 layers refresh after display changes. Compact/normal selection follows the usable
 control pane's geometry and the existing 600pt boundary, independently of the
-portrait rotation-permission switch. The touch editor stacks its preview and
+compact portrait rotation-permission switch. The touch editor stacks its preview and
 settings in narrow windows. Core Motion's view-relative samples retain their
 single conversion to Switch axes, with a fixture covering all four orientations.
 
@@ -988,6 +1002,38 @@ fixtures pass. The geometry fixture's original portrait minimum-spacing assertio
 fails identically on that main revision and the merge after main's compact-spacing
 change; this integration preserves the new positions rather than changing that
 unrelated layout. No GPU tests were repeated during the exclusive measurement pause.
+
+**Seated reflection and compact portrait permission (2026-11-01).** BOTW Seated
+adds a decorative reflection behind the lower HUD and controls, following the
+[low-resolution frame reuse approach](https://www.mux.com/blog/what-the-iphone-duo-means-for-web-development).
+The final upper picture is downsampled into two private RGBA16F textures, at most
+384 pixels on their longer side and sized by the displayed aspect. Horizontal
+and vertical Gaussian passes smooth the small image before enlargement; the
+last pass mirrors it, dims linear light to 40% below the fold and fades toward
+the bottom. The fold center is the mirror axis. Its reserved band gets a soft
+background transition, while content and touch geometry still avoid it. A
+pixel-aligned scissor keeps the background from spilling into the upper picture.
+The native lower HUD composites afterward; virtual controls remain a separate
+frontend layer. No input regions, button layout, other game or non-Seated
+rendering path changes. Scratch images retire behind the existing submission
+fence; there is no CPU readback, duplicate scene or translation-chain change.
+
+Validation: 285 real-Metal checks pass, including 88 focused Seated checks under
+Metal validation (both origins, fixed-aspect side bars, short lower panes,
+zero-width folds, unchanged upper pixels, smooth source grain and sharp HUD
+overlays). The portrait-permission fixture covers both orientations, safe insets
+and the 600pt boundary. The 191 NVN checks, 190 iOS source checks, 21 settings
+tests and Swift storage check pass. UIKit verifies portrait motion with the
+compact switch off and fold/controller input isolation; its full run still
+reports three old compact-position assertions after main's layout changes.
+Mac `run_mac.py --test` verifies gameplay, minimap/plus hits, lower A/B in menus
+and Seated/whole-window restoration with deferred Metal encoding. GPU timings
+are recorded for the four reflection passes; device thermal impact remains
+unmeasured. Logs and the blocked
+shader regression report are in `seated-reflection-20261101/` in the external
+game work folder. Full Metal validation also encounters a native zero-work
+compute dispatch; focused reflection validation is clean. The pinned compiler
+and physical Duo/iOS 27.1 acceptance limits described above still apply.
 
 **Resolved: minimap disappeared in very wide windows (2026-10-29).**
 The D-pad center is published relative to the centered 16:9 UI canvas. At 32:9,
@@ -1259,6 +1305,8 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 ## Found on this game
 
 - **Implemented; physical iPhone acceptance pending:** [Feedback snapshot usage preserves compression eligibility](../../../docs/reference/rendering.md#feedback-snapshot-usage-preserves-compression-eligibility). Same-format snapshots no longer request arbitrary format reinterpretation; required reinterpretations preserve the cached version when upgrading their allocation.
+
+- **Resolved in packaging; iPhone acceptance pending:** [Language selection after combining game images](../../../docs/reference/packing.md#language-selection-disappears-after-combining-game-images). Separate IPA and Xcode builds keep the original control metadata path, preserving all 15 language choices independently of the combined image's location.
 
 - **Implemented; physical iPhone acceptance pending:** [Separate game images include installed DLC](../../../docs/reference/packing.md#separate-game-images-include-installed-dlc). `--romfs separate` now keeps both installed DLCs in the same directly readable image as the base/update, outside the IPA and Xcode app. Unchanged data reuses that image.
   Existing `Documents/game-data` imports remain usable without an image. Missing data opens an import/check screen before the launcher; see the same packing entry for directory selection and failure-preserving import behavior.
