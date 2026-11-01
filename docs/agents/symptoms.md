@@ -404,6 +404,7 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 
 ## Rendering
 
+- an A16 device aborts while uploading a texture: `MTLTextureDescriptor has invalid pixelFormat (140)`, `CRASH sig=6`, with `pkg_upload` in the backtrace. → [BC textures on GPUs without BC support](../reference/rendering.md#bc-textures-on-gpus-without-bc-support)
 - clang reports null dereferences in `nvnWindowInitialize` and `clear_tex`; clearing a null texture crashes with `DM_NVN_PASSDUMP=1`. → [Null textures in diagnostic logs](../reference/rendering.md#null-textures-in-diagnostic-logs)
 - Metal aborts on a texture descriptor with an absurd size (`height (1869367126) greater than … 16384`). → [Texture objects copied into command records](../reference/rendering.md#texture-objects-copied-into-command-records)
 - a decoded movie stays black even though its YUV textures contain the picture; disabling its depth test makes it visible. → [New textures start as zero](../reference/rendering.md#new-textures-start-as-zero)

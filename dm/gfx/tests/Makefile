@@ -217,6 +217,14 @@ check_t_rast_discard: RUN_ENV = MTL_DEBUG_LAYER=1
 t_initial_uncached: t_initial_uncached.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_initial_uncached.m $(MTL_T_SRC) $(FW)
 check_t_initial_uncached: RUN_ENV = MTL_DEBUG_LAYER=1
+t_bc: t_bc.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_bc.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_bc
+check_t_bc: t_bc
+	python3 ../tex/bcdec_msl.py --check
+	DM_TEST_NO_BC=0 MTL_DEBUG_LAYER=1 ./t_bc
+	DM_TEST_NO_BC=1 MTL_DEBUG_LAYER=1 ./t_bc
+	DM_TEST_NO_BC=1 DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_bc
 t_upload_slots: t_upload_slots.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_upload_slots.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_upload_slots
