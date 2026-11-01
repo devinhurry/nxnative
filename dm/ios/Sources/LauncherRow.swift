@@ -10,7 +10,7 @@ struct SettingRow: View {
     let s: Setting
     @ObservedObject var m: LauncherModel
 
-    private var locked: Bool { m.fixed.contains(s.env) }
+    private var locked: Bool { m.lockingKey(s) != nil }
     private var note: String {
         let text = NSLocalizedString(s.note, comment: "Launcher setting description")
         guard locked else {
@@ -18,7 +18,7 @@ struct SettingRow: View {
             let timing = NSLocalizedString(m.appliesImmediately(s) ? "Applies immediately." : "Applies next time you start the game.", comment: "Setting application timing")
             return (text.isEmpty ? "" : text + " · ") + timing
         }
-        return (text.isEmpty ? "" : text + " · ") + NSLocalizedString(m.fromLaunch.contains(s.env) ? "Set at launch" : "Set by an env file", comment: "Locked launcher setting")
+        return (text.isEmpty ? "" : text + " · ") + NSLocalizedString(m.fromLaunch.contains(m.lockingKey(s) ?? s.env) ? "Set at launch" : "Set by an env file", comment: "Locked launcher setting")
     }
     private var rangeValue: Binding<Double> {
         Binding(get: { Double(m.values[s.env] ?? s.def) ?? s.max ?? 1 },
@@ -36,6 +36,13 @@ struct SettingRow: View {
     var body: some View {
         Group {
             switch s.kind {
+            case "choice" where s.env == "DM_FRAMEGEN":
+                Toggle(isOn: Binding(get: { m.frameGenerationEnabled }, set: { enabled in
+                    m.setValue(enabled ? (m.values["DM_FPS_TARGET"] ?? "60") : "0", for: s)
+                })) {
+                    settingLabel
+                }
+                .accessibilityIdentifier(s.env)
             case "choice":
                 if s.env == "DM_FPS_TARGET" {
                     VStack(alignment: .leading, spacing: 8) {

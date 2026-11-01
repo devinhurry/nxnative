@@ -230,6 +230,13 @@ int main(void) { @autoreleasepool {
             waitForCondition(window, @"startup settings sheet", ^{ return (BOOL)(window.attachedSheet != nil); }, ^{
                 NSWindow *sheet = window.attachedSheet;
                 check(YES, "startup editor is a separate sheet");
+                waitForCondition(sheet, @"frame-rate segments", ^{
+                    NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
+                    return hasAXLabel(sheet, @"30 fps", NSAccessibilityRadioButtonRole, nodes, 0);
+                }, ^{
+                    NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
+                    check(hasAXLabel(sheet, @"60 fps", NSAccessibilityRadioButtonRole, nodes, 0),
+                          "frame rate offers 30 and 60 as segments");
                 waitForControlsSection(sheet, "startup Controls navigation responds", ^{
                     {
                         NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
@@ -240,6 +247,7 @@ int main(void) { @autoreleasepool {
                                          "Play leaves the launcher", ^{});
                         });
                     }
+                });
                 });
             });
             });

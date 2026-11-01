@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Run the production Mac launcher/settings UI against synthetic resources."""
-import json
 import os
 from pathlib import Path
 import plistlib

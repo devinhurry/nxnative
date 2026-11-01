@@ -115,6 +115,7 @@ final class LauncherModel: ObservableObject {
             let saved = ignoreSaved ? nil : defaults.object(forKey: "launcher." + s.env) as? String   // a string, as launcher.c reads it: not string(forKey:), which turns a number into one
             values[s.env] = saved.flatMap { s.accepts($0) ? $0 : nil } ?? defaultValue(s)
         }
+        alignFrameGeneration()
     }
 
     private func memoryDefault() -> String {
@@ -135,12 +136,37 @@ final class LauncherModel: ObservableObject {
     // Automatic defaults are never saved. An explicit On or Off is remembered
     // immediately, including a choice equal to this launch's automatic value.
     func setValue(_ v: String, for s: Setting) {
-        guard !fixed.contains(s.env), s.accepts(v) else { return }
+        guard lockingKey(s) == nil, s.accepts(v) else { return }
         if s.env == Self.lowMemoryKey {
             lowMemoryOverride = v
             if !ignoreSaved { defaults.set(v, forKey: "launcher." + s.env) }
         }
-        values[s.env] = v
+        var next = values
+        next[s.env] = v
+        if s.env == "DM_FPS_TARGET", frameGenerationEnabled { next["DM_FRAMEGEN"] = v }
+        values = next
+    }
+
+    var frameGenerationEnabled: Bool {
+        guard let value = values["DM_FRAMEGEN"] else { return false }
+        return value != "0"
+    }
+
+    func lockingKey(_ s: Setting) -> String? {
+        if fixed.contains(s.env) { return s.env }
+        // A launch override that pins interpolation to a source rate also pins
+        // the rate selector; otherwise changing it would have no visible effect.
+        if s.env == "DM_FPS_TARGET", fixed.contains("DM_FRAMEGEN"), frameGenerationEnabled { return "DM_FRAMEGEN" }
+        return nil
+    }
+
+    private func alignFrameGeneration() {
+        guard let rate = values["DM_FRAMEGEN"], ["30", "60"].contains(rate), values["DM_FPS_TARGET"] != nil else { return }
+        if fixed.contains("DM_FPS_TARGET") && !fixed.contains("DM_FRAMEGEN") {
+            values["DM_FRAMEGEN"] = values["DM_FPS_TARGET"]
+        } else if !fixed.contains("DM_FPS_TARGET") {
+            values["DM_FPS_TARGET"] = rate
+        }
     }
 
     func beginRuntime() { isRunning = true }
@@ -271,6 +297,7 @@ final class LauncherModel: ObservableObject {
             values[s.env] = defaultValue(s)
             if isRunning { storeChoice(s, defaultValue(s)) }
         }
+        alignFrameGeneration()
         fputs("launcher: settings reset to the game's defaults\n", stderr)
     }
 
