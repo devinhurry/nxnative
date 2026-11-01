@@ -122,8 +122,16 @@ struct LauncherDashboard: View {
                         }
                         Text(title)
                             .font(.title3.weight(.bold)).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.8)
-                        Text(String(format: NSLocalizedString(model.touchSettingsKeys.isEmpty ? "Version %@" : "BOTW version %@", comment: "Game version and BOTW creator"), version))
+                        Text(String(format: NSLocalizedString("Version %@", comment: "Game version"), version))
                             .font(.caption).foregroundStyle(.secondary)
+                        if !model.touchSettingsKeys.isEmpty {
+                            Text("BOTW creator notice").font(.caption2).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(.secondary.opacity(0.4), lineWidth: 1))
+                            .accessibilityIdentifier("startup.botw.creator")
+                        }
                         playButton.disabled(importBusy || checkingResources || !romReady || !shadersReady)
                         HStack(spacing: 8) {
                             if let onImportROM {
