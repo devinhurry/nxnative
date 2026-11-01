@@ -12,6 +12,14 @@
 // Each front end refreshes its own virtual controls on the UI thread.
 void front_refresh_touch_settings(void);
 
+void dm_launcher_settings_pause(int on) {
+    // Stop guest clock reads before draining graphics; host work can finish at
+    // the frozen time. Resuming subtracts the pause instead of catching up.
+    guest_clock_freeze_for(3, on);
+    dm_gfx_suspend_for(DM_SUSPEND_SETTINGS, on);
+    dm_audio_suspend_for(DM_SUSPEND_SETTINGS, on);
+}
+
 static int known_key(const char *key) {
     static const char *const keys[] = {
         "DM_FPS_TARGET", "DM_DYNAMIC_RESOLUTION", "DM_RENDER_SCALE", "DM_OPMODE",

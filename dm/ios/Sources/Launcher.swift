@@ -7,6 +7,7 @@ import UIKit
 import GameController
 import UniformTypeIdentifiers
 import os
+import DmTouchPad
 
 private final class LandscapeLauncherController<Content: View>: UIHostingController<Content> {
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscape }
@@ -250,12 +251,13 @@ public func dmShowGameSettings(_ viewController: UnsafeMutableRawPointer, _ done
     let page = LauncherSettingsPage(m: model) {
         guard let presented = host else { return }
         host = nil
-        presented.dismiss(animated: false) { done() }
+        presented.dismiss(animated: false) { dm_launcher_settings_pause(0); done() }
     }
     let controller = UIHostingController(rootView: page.preferredColorScheme(.dark))
     controller.modalPresentationStyle = .fullScreen
     controller.isModalInPresentation = true
     host = controller
+    dm_launcher_settings_pause(1)
     parent.present(controller, animated: false)
     return true
 }

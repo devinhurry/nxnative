@@ -66,6 +66,13 @@ static int render(void *out, int count, int with_pcm) {
 static void *drain_stats(void *unused) { (void)unused; stats_drain(); return NULL; }
 int main(void) {
     setenv("DM_AUDIO", "0", 1); setenv("DM_AUDIO_MUTE", "0", 1);
+    dm_audio_suspend_for(DM_SUSPEND_SETTINGS, 1);
+    dm_audio_suspend(1); dm_audio_suspend(0);
+    CHECK(g_suspended, "foregrounding keeps audio silent while settings remain open");
+    dm_audio_suspend(1); dm_audio_suspend_for(DM_SUSPEND_SETTINGS, 0);
+    CHECK(g_suspended, "closing settings keeps background audio suspended");
+    dm_audio_suspend(0);
+    CHECK(!g_suspended, "audio resumes after both pause owners release it");
     report_entered = dispatch_semaphore_create(0); report_allow = dispatch_semaphore_create(0);
     report_done = dispatch_semaphore_create(0); released_event = dispatch_semaphore_create(0);
     uint32_t out[16] = {0}; uint8_t prm[8] = {0}, ev[64] = {0};

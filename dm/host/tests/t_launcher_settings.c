@@ -8,6 +8,10 @@ uint8_t *dm_fps_state;
 static uint8_t state_page[0x40];
 static int opmode, fps_apply_count, fps_lock_target, haptics_refresh_count, touch_refresh_count;
 static int framegen_mode, framegen_available = 1;
+static unsigned clock_pauses, graphics_pauses, audio_pauses;
+void guest_clock_freeze_for(int reason, int on) { if (on) clock_pauses |= 1u << reason; else clock_pauses &= ~(1u << reason); }
+void dm_gfx_suspend_for(int reason, int on) { if (on) graphics_pauses |= 1u << reason; else graphics_pauses &= ~(1u << reason); }
+void dm_audio_suspend_for(int reason, int on) { if (on) audio_pauses |= 1u << reason; else audio_pauses &= ~(1u << reason); }
 int dm_fg_set_mode(int mode) { if (!framegen_available) return 0; framegen_mode = mode; return 1; }
 void dm_set_opmode(int value) { opmode = value; }
 void dm_fps_state_apply(void) { fps_apply_count++; }
@@ -16,6 +20,14 @@ void dm_haptics_apple_settings_changed(void) { haptics_refresh_count++; }
 void front_refresh_touch_settings(void) { touch_refresh_count++; }
 
 int main(void) {
+    dm_launcher_settings_pause(1);
+    dm_launcher_settings_pause(1);
+    assert(clock_pauses == (1u << 3) && graphics_pauses == (1u << DM_SUSPEND_SETTINGS) && audio_pauses == graphics_pauses);
+    clock_pauses |= 1u << 1; graphics_pauses |= 1u << DM_SUSPEND_LIFECYCLE; audio_pauses |= 1u << DM_SUSPEND_LIFECYCLE;
+    dm_launcher_settings_pause(0);
+    dm_launcher_settings_pause(0);
+    assert(clock_pauses == (1u << 1) && graphics_pauses == (1u << DM_SUSPEND_LIFECYCLE) && audio_pauses == graphics_pauses);
+    clock_pauses = graphics_pauses = audio_pauses = 0;
     unsetenv("DM_DYNAMIC_RESOLUTION");
     assert(dm_launcher_setting_is_live("missing") == -1);
     assert(dm_launcher_setting_is_live("DM_DYNAMIC_RESOLUTION") == 0);
