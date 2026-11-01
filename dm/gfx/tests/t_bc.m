@@ -133,7 +133,81 @@ static void linear_blocks(void) {
     CHECK("linear GPU mirror keeps neighboring blocks",((uint8_t *)mem)[0]==255&&((uint8_t *)mem)[8]==0);
     mtl_tex_release(&t);mtl_pool_del(mem);mtl_drain();free(mem);
 }
-int main(void){@autoreleasepool{mtl_init();if(!g_dev.supportsBCTextureCompression){puts("native BC differential reference unavailable");return 77;}
-    formats();copies();render_blocks(NVN_TEXTURE_TARGET_2D_ARRAY,2,9993);render_blocks(NVN_TEXTURE_TARGET_3D,3,9994);linear_blocks();
+// Known constant colours check sampling independently of the transcoder; raw
+// block reads/copies remain bit-exact even though the sampled representation is lossy.
+static void transcodes(void) {
+    CHECK("transcoding test uses the fallback", g_no_bc);
+    tex_t probe=texture(NVN_TEXTURE_TARGET_2D,1,10999);probe.d.format=0x41;uint32_t probe_pf=0;
+    unsetenv("DM_LOW_MEMORY");setenv("DM_NVN_BC_TRANSCODE","1",1);g_bc_transcode_on=-1;
+    CHECK("component flag cannot bypass the low-memory preset",!bc_sampled_format(&probe,&probe_pf));
+    setenv("DM_LOW_MEMORY","1",1);setenv("DM_NVN_BC_TRANSCODE","0",1);g_bc_transcode_on=-1;
+    CHECK("explicit disable preserves decoding in low-memory mode",!bc_sampled_format(&probe,&probe_pf));
+    unsetenv("DM_NVN_BC_TRANSCODE");g_bc_transcode_on=-1;
+    CHECK("low-memory mode selects transcoding on the no-BC path",bc_sampled_format(&probe,&probe_pf)&&probe_pf==MTLPixelFormatASTC_4x4_LDR);
+    const unsigned formats[] = {0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48,0x49,0x4b,0x4d,0x4e};
+    for (unsigned fi=0;fi<sizeof formats/sizeof *formats;fi++) {@autoreleasepool {
+        unsigned f=formats[fi]; int bw,bh,bb=nvn_fmt_bpb(f,&bw,&bh); uint8_t block[16]={0};
+        float want[4]={1,0,0,1};
+        if(f==0x49||f==0x4b) {block[0]=128;want[0]=128.f/255;if(f==0x4b){block[8]=64;want[1]=64.f/255;}}
+        else if(f==0x4d||f==0x4e) {block[0]=64;memset(want,0,sizeof want);}   // BC7 mode 6, zero endpoints/indices
+        else {unsigned c=f==0x43||f==0x44||f==0x47||f==0x48?8:0;block[c]=0;block[c+1]=0xf8;
+            if(f==0x43||f==0x47)memset(block,255,8);else if(c)block[0]=block[1]=255;}
+        void *mem=NULL;CHECK("transcode pool allocated",!posix_memalign(&mem,getpagesize(),65536));memset(mem,0,65536);
+        pool_t pool={.mem=mem,.size=65536,.flags=NVN_MEMORY_POOL_FLAGS_CPU_CACHED|NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
+        tex_t t={.magic=MAGIC('T','E','X',0),.serial=11000+f,.pool=&pool,.mem=mem,.has_layout=1};
+        t.d=(nvn_texdesc){.target=NVN_TEXTURE_TARGET_2D_ARRAY,.format=f,.width=12,.height=8,.depth=2,.levels=3,.samples=1};nvn_tex_layout(&t.d,&t.L);
+        for(unsigned lv=0;lv<3;lv++)for(unsigned sl=0;sl<2;sl++) {
+            unsigned w=MAX(12u>>lv,1u),h=MAX(8u>>lv,1u);size_t row=((w+3)/4)*bb,n=row*((h+3)/4);uint8_t bytes[96];
+            for(size_t i=0;i<n;i+=bb)memcpy(bytes+i,block,bb);
+            CHECK("fixture swizzled",!nvn_swizzle(&t.d,lv,sl,bytes,row,mem));
+        }
+        mtl_pool_add(mem,65536);mtl_sub_begin();id<MTLTexture> image=tex_mtl(&t);finish();
+        CHECK("sampled format is compressed",image.pixelFormat==bc_transcode_format(f));
+        CHECK("compressed texture does not request shader writes",!(image.usage&MTLTextureUsageShaderWrite));
+        for(unsigned lv=0;lv<3;lv++) {
+            id<MTLBuffer> out=pixels(image,lv);float *values=out.contents;int bad=0;
+            for(size_t i=0;i<out.length/4;i++)bad+=!isfinite(values[i])||fabsf(values[i]-want[i%4])>.006f;
+            CHECK("ASTC/EAC decodes the expected colour in every mip/layer",!bad);
+        }
+        id<MTLTexture> view=[image newTextureViewWithPixelFormat:image.pixelFormat textureType:MTLTextureType2DArray levels:NSMakeRange(1,2) slices:NSMakeRange(1,1)];
+        id<MTLBuffer> raw=[g_dev newBufferWithLength:2*bb options:MTLResourceStorageModeShared];res_add(raw);
+        mtl_sub_begin();enc_b_copy_texture_buffer(blit(),view,0,0,MTLOriginMake(0,0,0),MTLSizeMake(6,4,1),raw,0,2*bb,2*bb);finish();
+        CHECK("transcoding preserves original BC blocks through mip/layer views",!memcmp(raw.contents,block,bb)&&!memcmp((uint8_t *)raw.contents+bb,block,bb));
+        if(f==0x49) {
+            CHECK("copy source is outside the texture storage",t.L.size<=32768);
+            mtl_sub_begin();mtl_sub_fill((uint64_t)mem+32768,8,0xffffffff);
+            p_copy_b2t put={.tex=&t,.src=(uint64_t)mem+32768,.r={4,0,1,4,4,1}};copy_b2t(&put);
+            // copy_b2t resolves/renames the packaged destination internally.
+            // Inspect that version without requesting another upload first.
+            image=((NvPkg *)tex_get(t.serial))->tex;finish();
+            id<MTLBuffer> out=pixels(image,0);float *values=out.contents;
+            if (!(values[(12*8+4)*4]>.99f&&fabsf(values[0]-128.f/255)<.006f))
+                fprintf(stderr,"BC4 partial copy: changed %.8g, untouched %.8g\n",values[(12*8+4)*4],values[0]);
+            CHECK("GPU-written blocks are transcoded on the GPU timeline",values[(12*8+4)*4]>.99f&&fabsf(values[0]-128.f/255)<.006f);
+            uint8_t bytes[8];NVNcopyRegion r={4,0,1,4,4,1};mtl_read_texels(&t,0,0,&r,bytes,8,8);
+            int same=1;for(unsigned i=0;i<8;i++)same&=bytes[i]==255;
+            CHECK("ReadTexels returns the original GPU-written BC bytes",same);
+        }
+        if(f==0x44) {
+            mtl_sub_begin();id<MTLTexture> writable=tex_upgrade(&t,image,MTLTextureUsageShaderWrite,image.pixelFormat);finish();
+            CHECK("image writes upgrade to the decompressed representation",writable.pixelFormat==MTLPixelFormatRGBA8Unorm&&(writable.usage&MTLTextureUsageShaderWrite));
+            id<MTLBuffer> out=pixels(writable,0);float *values=out.contents;
+            CHECK("upgrade decodes retained original blocks",values[0]>.99f&&values[1]<.01f&&values[3]>.99f);
+            dm_guest_write_prepare(mem,t.L.size);memset(mem,0,t.L.size);
+            mtl_sub_begin();writable=tex_mtl(&t);finish();
+            CHECK("CPU re-upload preserves the writable representation",writable.pixelFormat==MTLPixelFormatRGBA8Unorm&&(writable.usage&MTLTextureUsageShaderWrite));
+        }
+        res_remove(raw);mtl_tex_release(&t);mtl_pool_del(mem);mtl_drain();free(mem);
+    }}
+    tex_t t=texture(NVN_TEXTURE_TARGET_3D,3,11999);uint32_t pf=0;
+    CHECK("3D BC keeps the existing decoder",!bc_sampled_format(&t,&pf));
+    t.d.target=NVN_TEXTURE_TARGET_2D;t.d.format=0x4a;
+    CHECK("signed BC keeps the existing decoder",!bc_sampled_format(&t,&pf));
+    g_no_bc=0;t.d.format=0x41;
+    CHECK("native BC bypasses transcoding",!bc_sampled_format(&t,&pf));g_no_bc=1;
+}
+int main(int argc,char **argv){@autoreleasepool{mtl_init();if(!g_dev.supportsBCTextureCompression){puts("native BC differential reference unavailable");return 77;}
+    if(argc>1&&!strcmp(argv[1],"--transcode"))transcodes();
+    else {g_bc_transcode_on=0;formats();copies();render_blocks(NVN_TEXTURE_TARGET_2D_ARRAY,2,9993);render_blocks(NVN_TEXTURE_TARGET_3D,3,9994);linear_blocks();}
     printf("t_bc (%s): %d checks, %d failed\n",g_no_bc?"fallback":"native",checks,failed);return failed!=0;
 }}

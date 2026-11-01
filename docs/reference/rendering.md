@@ -10,6 +10,7 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Cause:** format 140 is BC4_RUnorm. The NVN format mapping was correct, but this GPU has no BC texture formats, and the old decompression path had been removed.
 - **Fix:** `supportsBCTextureCompression` selects native BC or GPU decoding once at initialization. Native BC keeps its descriptors, uploads and copies. The fallback (`nvn_bc.inc`) uses bcdec's scalar algorithms adapted to Metal for BC1-7, including signed channels and BC6H. It stores the compressed blocks separately from the sampled pixels, so buffer and texture copies, readbacks, mip/array views and block render targets preserve the original bytes. Writes decode their destination region after the GPU copy; a BC4 block-encoder render pass continues through its existing shadow. No CPU wait is needed to decode a GPU-written source.
 - **Check:** `t_bc` compares every BC format against native GPU decoding across mip levels and array layers (allowing interpolation/8-bit quantization differences for BC1-5), and checks GPU-written partial copies plus loaded 2D/3D BC4 render-target passes, in native and forced-fallback modes and with the encoding thread. `bcdec_msl.py --check` verifies the generated source. A forced Mac run cannot establish physical A16 memory or performance acceptance; decoded textures use more memory.
+- **Optional memory tradeoff:** Low-memory mode uses MacNativeGames' MIT-licensed BC1/2/3/7-to-ASTC and unsigned BC4/5-to-EAC GPU kernels for eligible sampled 2D/array/cube assets. It retains the original BC blocks for byte-exact copies and readbacks; a later image-write/render-target upgrade restores the decoded representation. Re-compression can lose detail, so ordinary mode keeps decoding; `DM_NVN_BC_TRANSCODE=0` also disables it under the low-memory preset. The component flag cannot bypass the preset. Native BC, signed channels, BC6H and 3D retain their existing paths. Tests sample every eligible format across mip levels and array layers, check GPU-written partial updates, and preserve raw blocks and later writable upgrades.
 - **Lifetime:** the fallback retires block allocations and completed upload sources on its own queue. In a low-memory Mac run, residency commit stopped in `IOGPUResourceGroupUpdateResources` while Metal's completion callback waited on `g_res_mu`; moving the fallback's reclamation off that callback allowed the completion queue to drain. Native BC retains its existing reclamation route. The file-backed/transient-source tests cover GPU completion before source release.
 - **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md), user-provided A16 log (`log-susan.txt`, build `68b7dd4e663e`, 2026-11-01).
 
@@ -320,6 +321,15 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Fix:** a slot whose texture, level and layer repeat an earlier slot is left unattached (`rt_dup_slot`), also in pipeline prediction; a draw that really writes such a slot is reported once (`color slot … holds the same texture as an earlier slot`). Records hold copies of texture objects (`tex_snap`), so slots are compared by serial, not by pointer.
 - **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md): the G-buffer passes attach the albedo and another buffer twice each (c1 = c2, c3 = c4), the duplicate slots with write mask 0; the albedo held only scattered squares.
 
+### Render-pass reuse with local write proofs
+
+- **Symptom:** repeated identical render targets create separate load/store passes; loaded color attachments that the pipeline cannot write are stored anyway.
+- **Cause:** exact-target continuation was tied to the experimental global lookahead, which remains off because it does not cover bindless readers. Color-write bookkeeping used channel-mask OR shader-output presence, whereas ordinary pipelines need both.
+- **Fix:** identical targets and views may continue with all attachment planes present, no pending clear, no earlier shader writes and unchanged texture-registry, resource-serial and CPU-dirty generations. Before a later draw samples an attachment (including unknown/bindless readers) or writes shader resources, restore the boundary; recheck resource generations after binding the draw's arguments. For ordinary pipeline outputs, an attachment changes only when both its channel mask and shader output permit writes; remapped, geometry, dock and writable-alias cases keep the conservative proof. Neither rule enables the global lookahead. Feedback snapshot invalidation at barriers and submission boundaries remains unchanged.
+- **Diagnostics:** `DM_NVN_PASS_REUSE=0` restores the previous split/store policy for equivalence and performance comparisons; `ab` uses the existing `DM_AB` phases. Every power-summary window reports `feedback snapshots`: copies/bytes, reuse, refreshes due to first use/eviction, barrier, submission, shape (format/size), or forced diagnostic mode, and identical-target continuations. Pass dumps include the old/new cache epochs and exact-target checks.
+- **Check:** `check_t_feedback`, `check_t_unwritten_store` and `check_t_rt_range` cover literal GPU color/depth/stencil readback, required snapshot refreshes after real clears and shader writes, pass-boundary and registry-mutation fallback, writable aliases, unknown outputs, attachment sampling, identical draw/occlusion counts and two passes becoming one. Feedback tests also run with encoding on its worker thread, the reference policy and write tracking disabled. Three BOTW frame captures have identical before/after replay digests; the game's note records their costs and the existing capture/live mismatch.
+- **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md#render-pass-cost-audit-2026-11-01), investigating iPhone Air thermal slowdown and the Metal HUD warning about similar attachments. Actual iPhone benefit remains unmeasured.
+
 ### Passes with no render target
 
 - **Symptom:** `no render target could get an MTLTexture` (the pass skipped).
@@ -446,6 +456,14 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Fix:** `present_now` commits the residency set after resolving the presented texture (`res_commit`, free when nothing changed), for every game.
 - **Found on:** [Super Smash Bros. Ultimate](../../dm/games/01006A800016E000/README.md) (13.0.5, `DM_WINDOW=1`).
 - **Check:** Breath of the Wild windowed with the change: its title, 60 fps, no GPU error.
+
+### Feedback snapshot usage preserves compression eligibility
+
+- **Symptom:** frequent same-pass feedback copies use shader-read snapshots with `MTLTextureUsagePixelFormatView`, even when every sampled view has the source pixel format.
+- **Cause:** `fb_snap` requested arbitrary pixel-format views for every allocation. [Apple documents](https://developer.apple.com/documentation/metal/mtltextureusage/pixelformatview) that this usage disables lossless texture compression on Apple GPU family 5 and later. Ordinary reads, channel swizzles and linear/sRGB view pairs do not require it.
+- **Fix:** allocate shader-read-only snapshots unless `tex_need_pfv` finds an actual format reinterpretation. If a valid cached snapshot later needs that capability, copy the cached version into a capable allocation, rather than recopying the attachment: intervening draws may already have changed the source. Preserve barrier/submission invalidation and all required feedback copies. Usage upgrades count as copies and in the refresh counter's `shape` category. `DM_NVN_PASS_REUSE=0` retains the former allocation policy; compare allocation policies in fresh processes because cached allocations retain their capabilities.
+- **Check:** `check_t_feedback` tests production binding, swizzled shader readback, linear/sRGB views, an integer reinterpretation after the source changed, and refresh after a real barrier. The upgraded snapshot must retain red while the current attachment is green. Lossless-compression eligibility is restored; actual bandwidth, temperature and sustained device FPS require device measurements.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#render-pass-cost-audit-2026-11-01), iPhone Air, 88 of 93 copies in one frame refresh two same-format G-buffer attachments.
 
 ### A present snapshot's copy needs the same residency commit
 
@@ -779,6 +797,14 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Cause:** the game copies its depth-stencil target (Metal `Depth32Float_Stencil8`, 260) into a depth-only texture (`Depth32Float`, 252) of the same size. A Metal blit copies only between equal formats, and the draw path does not take depth formats.
 - **Fix:** such a copy, either way between the two formats, goes through a staging buffer kept from copy to copy: the 32-bit float depth is copied out of the source with `MTLBlitOptionDepthFromDepthStencil` and into the destination's depth plane the same way (`nvn_mtl.m`, the texture copy).
 - **Found on:** [EA SPORTS FC 27](../../dm/games/0100C49025D3E000/README.md) (Frostbite): from the title on.
+
+### Repeated driver metadata bank allocations
+
+- **Symptom:** rebuilding draw/dispatch arguments allocates and fills another driver c0/c2 bank even when its bindings have not changed.
+- **Cause:** the outer argument cache cannot reuse an entire block when a different argument changes; the driver banks previously had no independent reuse.
+- **Fix:** retain immutable metadata allocations within one submission, adapted from MacNativeGames' MIT-licensed cache. Keys include the local ABI's storage/uniform bindings, direct dispatch dimensions, base instance, texture/sampler/image handles and dynamic/pool modes and bases. Every submission changes the arena epoch. Indirect dispatches receive fresh c0 storage because the GPU patches their dimensions. Resource residency and guest-data freshness checks still run. `DM_NVN_DRV_CACHE=1` enables reuse; the allocation/fill reference path remains the default because the BOTW paired replay did not show a repeatable timing gain; `DM_NVN_DRV_CACHE_CHECK=1` compares every hit with a fresh fill.
+- **Check:** `t_driver_bank` checks reuse and immutability across binding changes, indirect dispatches, handle modes and submission boundaries. This establishes metadata correctness, not an iPhone frame-rate gain.
+- **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md), comparison with MacNativeGames `92ec79bd`, 2026-11-01.
 
 ### Inline uniform updates as ordered GPU copies
 
