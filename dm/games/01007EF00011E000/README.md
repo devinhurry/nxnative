@@ -35,6 +35,23 @@ signal. Touch X, Back to the regular map and Back to gameplay pass with both
 DLCs mounted. The automated routes and evidence are described in the progress
 tracker; iPhone acceptance remains pending.
 
+**Resolved: DLC Purchased buttons ignored touches (2026-11-01).** The shared
+guide hit test clipped Staff Credits (Y) and Cancel (B) against each other even
+though they occupy separate rows. Only glyphs in the same rendered row now
+limit a guide's horizontal touch area. Opening the credits also leaves
+DLCWindow shown and input-enabled underneath; prompt ownership now follows the
+native ScreenMgr's registry order for distinct roots on the same draw layer
+(`main+0xf7145c`), so the credits' Return button remains available.
+Native regression checks cover both labels and glyphs, horizontal neighbors,
+overlaid owners, hidden overlays and ambiguous shared roots. The
+[DLC Purchased route](touch_routes/dlc-purchased.json) exercises entry, credits,
+Return and Cancel; all four steps passed in the current-checkout Mac touch
+preview with both DLCs mounted and matching shaders. The full regression
+harness remains blocked during preparation by the installed Metal compiler
+(`32023.883`, lock `32023.921`). Runtime evidence is kept in
+`01007EF00011E000-work/dlc-buttons-20261101/`; physical iPhone acceptance remains
+pending.
+
 The current Mac checks cover direct quest
 selection, category changes and paging, and
 Options adjustments and list swipes, stable control visibility during menu

@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "fixture": "Start at Title with both DLCs installed and the initial downloaded-content notice acknowledged; use a disposable save copy.",
+  "steps": [
+    {
+      "name": "DLC Purchased opens its information page",
+      "when": {"screen": "Title_00", "active": 1},
+      "tap": {"path_suffix": "/Pa_SaveFile_04/B_Hit_00"},
+      "expect": {"screen": "DLCWindow_00", "active": 1}
+    },
+    {
+      "name": "Staff Credits opens the DLC credits",
+      "when": {"screen": "DLCWindow_00", "active": 1},
+      "tap": {"kind": "hint", "button": 8},
+      "expect": {"screen": "StaffRollDLC_00", "active": 1}
+    },
+    {
+      "name": "Leave the credits",
+      "when": {"screen": "StaffRollDLC_00", "active": 1},
+      "tap": {"kind": "back"},
+      "expect": {"screen": "DLCWindow_00", "active": 1}
+    },
+    {
+      "name": "Cancel returns to Title",
+      "when": {"screen": "DLCWindow_00", "active": 1},
+      "tap": {"kind": "back"},
+      "expect": {"screen": "Title_00", "active": 1}
+    }
+  ]
+}

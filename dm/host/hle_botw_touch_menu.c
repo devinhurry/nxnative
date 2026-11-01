@@ -1115,6 +1115,12 @@ static int generic_action_prompt_snapshot(uintptr_t root, uint64_t frame,
             generic_back_prompt_t *other = &g_generic_back_prompts[j];
             if (other == prompt || other->root != root || !other->icon_valid ||
                 frame < other->icon_seen || frame - other->icon_seen > 2) continue;
+            // Only glyphs on the same rendered row are horizontal neighbors.
+            // Stacked guides can share an X coordinate and slightly overlap
+            // at their pane edges, as on DLCWindow's Staff Credits / Cancel.
+            float dy = other->icon[1] + other->icon[3] * .5f -
+                       prompt->icon[1] - prompt->icon[3] * .5f;
+            if (fabsf(dy) >= fminf(other->icon[3], prompt->icon[3]) * .5f) continue;
             float center = other->icon[0] + other->icon[2] * .5f;
             if (center < icon_center && center > nearest_left) nearest_left = other->icon[0] + other->icon[2];
             if (center > icon_center && center < nearest_right) nearest_right = other->icon[0];
@@ -4420,7 +4426,7 @@ static void selector_paging_prompts(uintptr_t root, uint64_t frame,
 
 // A help page, empty album or other prompt-only menu need not have a
 // BoxCursor selection. Resolve its live native screen from the registry and
-// accept only one visible, input-enabled owner with matching live prompts.
+// resolve the foremost input-enabled owner with matching live prompts.
 static int selector_cursorless_prompt_view(uintptr_t manager, uint64_t frame,
                                            uintptr_t shown, uintptr_t group_getter,
                                            dm_botw_touch_menu_view *view) {
@@ -4465,7 +4471,7 @@ static int selector_cursorless_prompt_view(uintptr_t manager, uint64_t frame,
     if (!count || count > 256 || !selector_range(screens, count * sizeof(uintptr_t)) ||
         !selector_range(active, count)) return 0;
     dm_botw_touch_menu_view selected = {0};
-    int matches = 0;
+    int matches = 0, selected_layer = -1;
     for (uint32_t i = 0; i < count; i++) {
         if (((const uint8_t *)active)[i] & 0x80) continue;
         uintptr_t screen = selector_read_ptr(screens, i * sizeof(uintptr_t));
@@ -4527,10 +4533,17 @@ static int selector_cursorless_prompt_view(uintptr_t manager, uint64_t frame,
         candidate.prompt_owner_valid = 1; candidate.prompt_owner_screen = screen;
         candidate.prompt_owner_root = root; candidate.prompt_owner_group = candidate.generic_group;
         candidate.prompt_owner_frame = frame;
+        // ScreenMgr draws a layer in registry-index order (main+F7145C).
+        // A later root covers an earlier help page that retains input state,
+        // as when DLC credits open over DLCWindow. Reused roots and different
+        // layers still require an unambiguous owner.
+        int layer = ((const uint8_t *)active)[i];
+        if (matches && (layer != selected_layer || selected.generic_root == root)) return 0;
         selected = candidate;
-        if (++matches > 1) return 0;
+        selected_layer = layer;
+        matches++;
     }
-    if (matches != 1) return 0;
+    if (!matches) return 0;
     *view = selected;
     return 1;
 }
