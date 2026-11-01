@@ -101,6 +101,13 @@
 
 ## Launcher metadata
 
+### Language selection disappears after combining game images
+
+- **Symptom:** the startup settings omit Game language in an IPA or prepared Xcode project built with `--romfs separate` and installed DLC.
+- **Cause:** the combined image lives outside the extraction folder. `build_ipa.sh` inferred `control.nacp` from the image's parent, then silently generated no language row when that file and its legacy fallback were absent.
+- **Fix:** the NSP script passes the packed version's original control file as `VNACP`, falling back to the base control file when absent. `build_ipa.sh` honors that path independently of `ROMFS`; direct callers retain automatic discovery. Synthetic preparation and IPA archive tests check language options and the selected default with metadata stored away from the image.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game). The actual update control file lists 15 languages; the combined-image directory has no control file.
+
 ### A Mac front end's default settings change Metal execution paths
 
 - **Symptom:** starting a Mac app through a front end with unchanged settings enables the encode thread, and can disable Metal 4 pipelines and the pipeline archive; starting the same app from Finder keeps the host's defaults.

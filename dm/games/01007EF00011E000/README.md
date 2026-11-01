@@ -1154,6 +1154,8 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 
 ## Found on this game
 
+- **Resolved in packaging; iPhone acceptance pending:** [Language selection after combining game images](../../../docs/reference/packing.md#language-selection-disappears-after-combining-game-images). Separate IPA and Xcode builds keep the original control metadata path, preserving all 15 language choices independently of the combined image's location.
+
 - **Implemented; physical iPhone acceptance pending:** [Separate game images include installed DLC](../../../docs/reference/packing.md#separate-game-images-include-installed-dlc). `--romfs separate` now keeps both installed DLCs in the same directly readable image as the base/update, outside the IPA and Xcode app. Unchanged data reuses that image.
   Existing `Documents/game-data` imports remain usable without an image. Missing data opens an import/check screen before the launcher; see the same packing entry for directory selection and failure-preserving import behavior.
   The real combined image is 16,521,938,617 bytes. A headless current-source `scripts/run_mac.py --test` run with a save copy mounted the base and DLC 1 from that image, reported owned indices `{1,2}`, and passed frame 3,300 without a `[RED]` line or crash. Evidence is in `combined-image-20261031/` in the game's work folder. The independent chain-regression command was blocked by the existing local Metal compiler/lock mismatch before shader comparison; this is not an iPhone delivery check.

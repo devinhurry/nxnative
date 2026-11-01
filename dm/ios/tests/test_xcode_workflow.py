@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import struct
 import subprocess
 import sys
 import tempfile
@@ -52,6 +53,7 @@ class XcodePipelineTests(unittest.TestCase):
             extraction = root / 'extracted' / version
             (extraction / 'RomFS').mkdir(parents=True)
             (extraction / 'ExeFS').mkdir()
+            (extraction / 'control.nacp').touch()
             combined = root / 'game-data/RomFS.img'; combined.parent.mkdir(); combined.write_bytes(b'combined fixture')
             aoc = root / 'aoc'; aoc.mkdir(); (aoc / '1.img').touch()
             mocks = {}
@@ -92,6 +94,7 @@ class XcodePipelineTests(unittest.TestCase):
             command = mocks['run'].call_args.args[0]
             self.assertEqual(command[-1], '--prepare-xcode')
             environment = mocks['run'].call_args.kwargs['env']
+            self.assertEqual(environment['VNACP'], str(extraction / 'control.nacp'))
             self.assertEqual(environment['DM_LANG'], 'ja')
             self.assertEqual(environment['DM_SHOW_FPS'], '0')
             if external_romfs:
@@ -161,7 +164,10 @@ class ResourceStagingTests(unittest.TestCase):
                 (patched / f'{module}.fixups.tsv').write_text('# TEXT_END\t0x4000\n# PATCH_OFF\t0x8000\n# KEY_PAGE_OFF\t0x4000\n# KEY_PAGE_SIZE\t0x4000\n')
                 for suffix in ('gates', 'cuts', 'obs'):
                     (patched / f'{module}.{suffix}.tsv').touch()
-            (root / 'control.nacp').write_bytes(bytes(0x4000))
+            control = root / 'metadata/control.nacp'; control.parent.mkdir()
+            data = bytearray(0x4000)
+            struct.pack_into('<I', data, 0x302C, (1 << 0) | (1 << 2) | (1 << 14))
+            control.write_bytes(data)
             xcode = root / 'bin/xcodebuild'
             xcode.write_text('''#!/usr/bin/env python3
 import pathlib, sys
@@ -176,7 +182,8 @@ for directory in ('romfs', 'aoc', 'dm'):
             xcode.chmod(0o755)
             environment = dict(os.environ, PATH=str(root / 'bin') + os.pathsep + os.environ['PATH'],
                                GAME='010015100B514000', W=str(root / 'work'), PATCHED=str(patched), ROMFS=str(romfs),
-                               MSL_IOS=str(shaders), AOC=str(aoc), GFXAPI='gl', DM_DISPLAY_NAME='Fixture', DM_APP_VERSION='1.2.1')
+                               MSL_IOS=str(shaders), AOC=str(aoc), GFXAPI='gl', DM_DISPLAY_NAME='Fixture', DM_APP_VERSION='1.2.1',
+                               VNACP=str(control), DM_LANG='ja')
             for excluded in ('1', '0'):
                 with self.subTest(excluded=excluded):
                     environment['DM_COPY_ROMFS'] = 'NO' if excluded == '1' else 'YES'
@@ -185,6 +192,10 @@ for directory in ('romfs', 'aoc', 'dm'):
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     with zipfile.ZipFile(out) as archive:
                         names = archive.namelist()
+                        settings = json.loads(archive.read('Payload/DmIOS.app/dm/launcher.json'))['settings']
+                        language = next(row for row in settings if row['env'] == 'DM_LANG')
+                        self.assertEqual(language['default'], 'ja')
+                        self.assertEqual([option[0] for option in language['options']], ['en-US', 'ja', 'zh-Hans'])
                         self.assertIn('Payload/DmIOS.app/msl/gl/gl_shaders.metallib', names)
                         self.assertEqual('Payload/DmIOS.app/romfs/System/Resource/file' in names, excluded == '0')
                         self.assertEqual('Payload/DmIOS.app/aoc/1/file' in names, excluded == '0')
