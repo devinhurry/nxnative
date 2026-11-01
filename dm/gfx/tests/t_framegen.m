@@ -454,6 +454,13 @@ static void live_mode_regression(void) {
 }
 int main(int argc,char **argv) { @autoreleasepool {
     alarm(90); setbuf(stdout,NULL);
+    uint64_t generated_count=mtl_generated_present_count(), source_count=mtl_present_count();
+    framegen_presented(0,0,1,0,0,0,0);
+    framegen_presented(0,0,1,0,-1,0,0);
+    CHECK("FPS HUD excludes generated pictures without a positive display time",mtl_generated_present_count()==generated_count);
+    framegen_presented(0,0,1,0,1,0,0);
+    CHECK("FPS HUD counts a confirmed generated picture",mtl_generated_present_count()==generated_count+1);
+    CHECK("FPS HUD keeps source and generated counts separate",mtl_generated_present_count()==generated_count+1 && mtl_present_count()==source_count);
     unsetenv("DM_FRAMEGEN");
     CHECK("frame generation is off by default",!dm_framegen_requested());
     CHECK("early launcher lifecycle cannot enable interpolation",!dm_fg_enabled());

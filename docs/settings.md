@@ -69,7 +69,7 @@ The game's own languages. The app was packed with one of them; pick another here
 
 ### Frame-rate counter
 
-Shows the frames per second at the top left.
+Shows the frames per second at the top left. With frame generation enabled, it shows source frames plus confirmed generated frames, for example **30+30 fps** or **60+60 fps**. Both values are measured over the last second; missing generated pictures are not counted.
 
 ## Controls
 
