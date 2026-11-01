@@ -257,7 +257,7 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 - `[RED] ro::LookupModuleSymbol BuiltDebug: not defined in that module` once at boot; nothing goes wrong after it. → [`ro::LookupModuleSymbol` for a name the module does not define](../reference/services.md#rolookupmodulesymbol-for-a-name-the-module-does-not-define)
 - harmless on the build it was written for, silent memory corruption on any other. → [Code inherited from another title at fixed addresses](../reference/services.md#code-inherited-from-another-title-at-fixed-addresses)
 - the three-finger double tap shows the full virtual gamepad and Settings, then they immediately disappear during gameplay. → [Temporary BOTW gamepad disappears immediately in gameplay](../reference/services.md#temporary-botw-gamepad-disappears-immediately-in-gameplay)
-- changes made from an in-game settings sheet appear saved but do not affect controls, frame rate, rendering size or rumble until relaunch. → [In-game launcher settings use the runtime state owners](../reference/services.md#in-game-launcher-settings-use-the-runtime-state-owners)
+- changes made from an in-game settings sheet appear saved but do not affect controls, frame rate, rendering size or rumble until relaunch; the game keeps advancing behind the settings page. → [In-game launcher settings use the runtime state owners](../reference/services.md#in-game-launcher-settings-use-the-runtime-state-owners)
 
 ## Movies
 

@@ -14,6 +14,12 @@ $(B)/t_fs $(B)/t_fs_case $(B)/t_fs_commit_list $(B)/t_fs_commit_list_tsan $(B)/t
 $(B)/t_fs $(B)/t_pctl: game_image_fixture.h
 $(B)/t_pctl: ../aoc_files.h
 GAME_H = ../gen/$(GAME)/game_profile.h
+$(B)/t_guest_clock: t_guest_clock.c ../hle_os.c ../hle.h ../dm.h $(GAME_H) | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_guest_clock.c
+.PHONY: guest-clock
+guest-clock: $(B)/t_guest_clock
+	$(B)/t_guest_clock
+run: guest-clock
 $(B)/t_framegen_fps: t_framegen_fps.c ../loader.c ../dm.h ../../gfx/nvn/framegen_policy.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -Wno-deprecated-declarations -I.. $(GINC) -o $@ t_framegen_fps.c ../loader.c
 .PHONY: framegen-fps

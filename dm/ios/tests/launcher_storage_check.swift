@@ -3,6 +3,8 @@
 import Foundation
 #if DM_HOST_UI
 private var nativeApplied: [String: String] = [:]
+@_cdecl("dm_launcher_settings_pause")
+func mockNativeSettingsPause(_ on: Int32) {}
 @_cdecl("dm_launcher_setting_is_live")
 func mockNativeSettingIsLive(_ key: UnsafePointer<CChar>) -> Int32 {
     ["DM_BOTW_MOVE_CURVE", "DM_RUMBLE", "DM_FPS_TARGET", "DM_FRAMEGEN"].contains(String(cString: key)) ? 1 : 0

@@ -26,7 +26,7 @@ int dm_detclock_enabled(void);
 void dm_guest_clock_advanced(void);
 uint64_t dm_guest_frame(void);        // Incremented each time the host presents a frame; unaffected by machine load
 void guest_clock_freeze(int on);
-void guest_clock_freeze_for(int reason, int on);   // Freeze by reason (1 background, 2 system keyboard); see hle_os.c
+void guest_clock_freeze_for(int reason, int on);   // Freeze by reason (1 background, 2 system keyboard, 3 host settings); see hle_os.c
 void guest_clock_read_wait(void);     // A guest read of the system counter: waits while the app is in the background (hle_os.c)
 
 // Forced takeover: even if the SDK module has a definition, all references to that symbol at load time (JUMP_SLOT/GLOB_DAT/ABS64) are resolved to the host implementation.
@@ -85,5 +85,6 @@ void dm_fps_state_apply(void);  // loader.c: apply launcher frame target and ren
 void dm_fps_lock_setting_changed(int target); // hle_fpslock.c: reapply verified engine frame caps at the next present
 int dm_movie_playing(void);   // hle_movie.c: a video decoder of the SDK's movie library handed out a picture in the last half second (the frame step then holds 30 fps)
 void dm_audio_suspend(int on);
+void dm_audio_suspend_for(int reason, int on);   // Same owners as dm_gfx_suspend_for.
 uint64_t dm_audio_render_calls(void);   // Cumulative sound card callback count (the silent sink is not counted)
 void dm_audio_reset(void);   // iOS media services reset: recreate the AudioUnits (hle_audio.c)

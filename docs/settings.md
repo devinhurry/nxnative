@@ -4,6 +4,8 @@ The screen before the game starts shows resource readiness, available memory and
 
 **About** at the bottom shows the build time in the device's local time zone and date format, on both iPhone and Mac.
 
+Opening **Settings** during a game pauses gameplay and silences game audio until the page closes. Returning from another app keeps the game paused while Settings remains open.
+
 On iOS, **Import ROM** and **Import shaders** sit below **Play** on this same page.
 Each button is replaced by an imported status with a checkmark once its resource is ready.
 Use **Refresh** to recheck files copied into the app manually.

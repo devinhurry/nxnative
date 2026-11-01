@@ -9,6 +9,8 @@
 int dm_mac_launcher(void);
 int dm_mac_show_game_settings(void *, void (*)(void));
 static int applied, failed, timed_out;
+static int settings_paused, pause_opens, pause_closes;
+void dm_launcher_settings_pause(int on) { settings_paused = !!on; if (on) pause_opens++; else pause_closes++; }
 
 int dm_launcher_setting_is_live(const char *key) { return !strcmp(key, "DM_RUMBLE"); }
 int dm_launcher_setting_apply(const char *key, const char *value) {
@@ -199,6 +201,7 @@ static void waitForSection(NSWindow *sheet, NSString *section, NSInteger index, 
 }
 
 static void settingsClosed(void) {
+    check(!settings_paused && pause_opens == 1 && pause_closes == 1, "closing settings releases its pause exactly once");
     NSWindow *game = NSApp.mainWindow;
     waitForCondition(game, @"in-game settings sheet to detach", ^{
         return (BOOL)(game.attachedSheet == nil);
@@ -267,6 +270,7 @@ int main(void) { @autoreleasepool {
     }
     check(result == 1 && getenv("DM_RUMBLE") && !strcmp(getenv("DM_RUMBLE"), "1"),
           "Play applies startup values before game initialization");
+    check(!settings_paused && !pause_opens && !pause_closes, "startup settings do not pause a game that has not started");
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
     NSWindow *game = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 1100, 700)
         styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
@@ -274,6 +278,9 @@ int main(void) { @autoreleasepool {
     [game makeKeyAndOrderFront:nil];
     check(dm_mac_show_game_settings((__bridge void *)game, settingsClosed) == 1,
           "the same process opens in-game settings after startup");
+    check(settings_paused && pause_opens == 1, "in-game settings acquire the game pause before presentation");
+    check(dm_mac_show_game_settings((__bridge void *)game, settingsClosed) == 1 && pause_opens == 1,
+          "reopening the existing settings sheet does not acquire another pause");
     waitForCondition(game, @"in-game settings sheet", ^{ return (BOOL)(game.attachedSheet != nil); }, ^{
         NSWindow *sheet = game.attachedSheet;
         waitForSection(sheet, @"Controls", 1, "in-game Controls navigation responds", ^{

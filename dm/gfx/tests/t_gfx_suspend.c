@@ -107,6 +107,12 @@ int main(void) {
     if (!reached(prepared, "the prepare step finishes in the background")) return 1;
     CHECK("no submission returns while graphics are suspended", dispatch_semaphore_wait(returned, dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC)) != 0);
     CHECK("no submission commits while graphics are suspended", atomic_load(&commits) == 0);
+    dm_gfx_suspend_for(DM_SUSPEND_SETTINGS, 1);
+    dm_gfx_suspend(0);
+    CHECK("returning to foreground does not release the settings pause", g_susp && atomic_load(&commits) == 0);
+    dm_gfx_suspend(1);
+    dm_gfx_suspend_for(DM_SUSPEND_SETTINGS, 0);
+    CHECK("closing settings does not release the background pause", g_susp && atomic_load(&commits) == 0);
     dm_gfx_suspend(0);
     if (!reached(returned, "a submission returns after resume") || !reached(returned, "both submissions return after resume")) return 1;
     pthread_join(first, NULL); pthread_join(second, NULL);

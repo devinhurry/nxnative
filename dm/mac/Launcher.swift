@@ -226,6 +226,7 @@ private final class GameSettingsWindow: NSObject, NSWindowDelegate {
         parent?.endSheet(window); window.orderOut(nil)
         parent?.makeKeyAndOrderFront(nil)
         gameSettings = nil
+        dm_launcher_settings_pause(0)
         done()
     }
     func windowWillClose(_ notification: Notification) { finish() }
@@ -239,6 +240,7 @@ public func dmMacShowGameSettings(_ parentPointer: UnsafeMutableRawPointer, _ do
     }
     let parent = Unmanaged<NSWindow>.fromOpaque(parentPointer).takeUnretainedValue()
     model.beginRuntime()
+    dm_launcher_settings_pause(1)
     gameSettings = GameSettingsWindow(model: model, parent: parent, done: done)
     return 1
 }

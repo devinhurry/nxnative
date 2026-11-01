@@ -48,6 +48,7 @@ typedef struct {
 static aout *g_aos[AOMAX];
 static pthread_mutex_t g_aos_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_suspended;
+static unsigned g_suspend_reasons;
 static aout *ao(const void *g) { aout *a = objmap_get(g); if (!a) die("AudioOut %p was not created by the host", g); return a; }
 // the call site as "module+offset"; "host" when the host itself calls (in-process audio renderer)
 static const char *site(void *lr, char *buf, size_t n) {
@@ -532,8 +533,11 @@ void *dm_pcmout_released(void *k) { return h_au_Released(k); }
 
 // Front-end lifecycle / audio session interruption: suspend real audio output, with the silent sink taking over real-time consumption meanwhile (pacing unbroken); switch back to the AudioUnit on resume.
 // The front end calls with 1 on going to background / interruption began, and with 0 on returning to foreground / interruption ended (shouldResume).
-void dm_audio_suspend(int on) {
+void dm_audio_suspend_for(int reason, int on) {
+    if ((unsigned)reason > DM_SUSPEND_SETTINGS) die("invalid audio suspension reason %d", reason);
     pthread_mutex_lock(&g_aos_lock);
+    if (on) g_suspend_reasons |= 1u << reason; else g_suspend_reasons &= ~(1u << reason);
+    on = g_suspend_reasons != 0;
     if (g_suspended != on) {
         g_suspended = on; int failed = 0;
         for (int i = 0; i < AOMAX; i++) {
@@ -545,10 +549,11 @@ void dm_audio_suspend(int on) {
                 // The session may still be held by someone else (back in the game with a call not yet hung up): not fatal, the silent sink keeps covering and the watchdog retries
                 null_stop(a); a->stalled = 0; au_go(a, now_ns()); failed |= a->backend != BK_AU; }
         }
-        LOG("audio %s", on ? "suspended (background / interruption)" : failed ? "resumed, an AudioUnit still refuses to start (retrying)" : "resumed (foreground / interruption ended)");
+        LOG("audio %s", on ? "suspended (background / interruption / settings)" : failed ? "resumed, an AudioUnit still refuses to start (retrying)" : "resumed");
     }
     pthread_mutex_unlock(&g_aos_lock);
 }
+void dm_audio_suspend(int on) { dm_audio_suspend_for(DM_SUSPEND_LIFECYCLE, on); }
 // The media services were reset (iOS): every AudioUnit is invalid. Create each output's unit again and restart the ones that were playing; the front end has set the audio session up again first
 void dm_audio_reset(void) {
     pthread_mutex_lock(&g_aos_lock);
