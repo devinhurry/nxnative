@@ -37,12 +37,14 @@ struct SettingRow: View {
         Group {
             switch s.kind {
             case "choice":
-                Picker(selection: m.binding(s)) {
-                    ForEach(s.options ?? [], id: \.[0]) { Text(LocalizedStringKey($0[1])).tag($0[0]) }
-                } label: {
-                    settingLabel
+                if s.env == "DM_FPS_TARGET" {
+                    VStack(alignment: .leading, spacing: 8) {
+                        settingLabel
+                        choices.pickerStyle(.segmented)
+                    }
+                } else {
+                    choices.pickerStyle(.menu)
                 }
-                .pickerStyle(.menu)
             case "range":
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -62,6 +64,15 @@ struct SettingRow: View {
             }
         }
         .disabled(locked)
+    }
+
+    private var choices: some View {
+        Picker(selection: m.binding(s)) {
+            ForEach(s.options ?? [], id: \.[0]) { Text(LocalizedStringKey($0[1])).tag($0[0]) }
+        } label: {
+            settingLabel
+        }
+        .accessibilityIdentifier(s.env)
     }
 }
 
@@ -86,6 +97,7 @@ struct LauncherDashboard: View {
     let onSettings: () -> Void
     let onImportROM: (() -> Void)?
     let onImportShaders: (() -> Void)?
+    var onRefresh: (() -> Void)? = nil
     @State private var showTouchNotice = false
 
     var body: some View {
@@ -104,20 +116,50 @@ struct LauncherDashboard: View {
                         Text(String(format: NSLocalizedString("Version %@", comment: "Game version"), version))
                             .font(.caption).foregroundStyle(.secondary)
                         playButton.disabled(importBusy || checkingResources || !romReady || !shadersReady)
-                        if let onImportROM {
-                            Button("Import ROM", action: onImportROM)
-                                .accessibilityIdentifier("startup.import.rom")
-                                .buttonStyle(.bordered).disabled(importBusy || checkingResources)
+                        HStack(spacing: 8) {
+                            if let onImportROM {
+                                if romReady {
+                                    Label("ROM imported", systemImage: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                        .accessibilityIdentifier("startup.import.rom.ready")
+                                } else {
+                                    Button("Import ROM", action: onImportROM)
+                                        .accessibilityIdentifier("startup.import.rom")
+                                        .buttonStyle(.bordered).disabled(importBusy || checkingResources)
+                                }
+                            }
+                            if let onImportShaders {
+                                if shadersReady {
+                                    Label("Shaders imported", systemImage: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                        .accessibilityIdentifier("startup.import.shaders.ready")
+                                } else {
+                                    Button("Import shaders", action: onImportShaders)
+                                        .accessibilityIdentifier("startup.import.shaders")
+                                        .buttonStyle(.bordered).disabled(importBusy || checkingResources)
+                                }
+                            }
                         }
-                        if let onImportShaders {
-                            Button("Import shaders", action: onImportShaders)
-                                .accessibilityIdentifier("startup.import.shaders")
-                                .buttonStyle(.bordered).disabled(importBusy || checkingResources)
+                        if let onRefresh {
+                            Button(action: onRefresh) {
+                                Label {
+                                    Text("Refresh")
+                                } icon: {
+                                    Image(systemName: "arrow.clockwise")
+                                        .opacity(checkingResources ? 0 : 1)
+                                        .overlay {
+                                            if checkingResources { ProgressView().controlSize(.mini) }
+                                        }
+                                        .accessibilityHidden(true)
+                                }
+                            }
+                            .accessibilityIdentifier("startup.resources.refresh")
+                            .buttonStyle(.bordered).disabled(importBusy || checkingResources)
                         }
                         if importBusy {
                             ProgressView(value: importProgress)
                             Text("Importing…").font(.caption).foregroundStyle(.secondary)
-                        } else if checkingResources {
+                        } else if checkingResources && onRefresh == nil {
                             ProgressView().controlSize(.small)
                         } else if let resourceStatus {
                             Text(resourceStatus).font(.caption).foregroundStyle(.secondary)

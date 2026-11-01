@@ -11,7 +11,7 @@
 #   The app name is the game name in the base NSP's control data ($W/data/v0/control.nacp, else the one next to the RomFS), the app version is the display version in the packed game's control data (the one next to the RomFS:
 #   nx_extract saves the update's there when an update is packed, else the base game's), the bundle ID is org.nxnative.<base game title ID in lowercase> (DM_DISPLAY_NAME / DM_APP_VERSION / DM_BUNDLE_ID override them);
 #   VNACP=<control.nacp> supplies the packed version's metadata when ROMFS has moved away from its extraction (for example, a combined external image);
-#   DM_COPY_GRAPHICS=NO (default) writes a stored graphics ZIP (DM_GRAPHICS_OUT, else $W/graphics.zip); YES bundles graphics instead.
+#   DM_COPY_GRAPHICS=NO (default) writes a stored graphics ZIP (DM_GRAPHICS_OUT, else $W/graphics.zip, with .v<version> added); YES bundles graphics instead.
 #   DM_METAL_CAPTURE=1 makes a development build that can write GPU frame captures (MetalCaptureEnabled in Info.plist, for the host's DM_GPU_CAPTURE switch);
 #   DM_SHOW_FPS=1 turns the frame-rate counter on (DMShowFPS in Info.plist; DM_SHOW_FPS in the app's Documents/env.txt overrides it on the phone);
 #   DM_LANG=<language code> is the game language (DMLanguage in Info.plist, default en-US; DM_LANG in the app's Documents/env.txt overrides it on the phone);
@@ -99,12 +99,16 @@ else cp "$GD/shader_map.tsv" "$GD/pso_manifest.tsv" "$GD/c1_full.tsv" Gen/dm/ ||
   # the shader pairs, beside the shader map where the pipeline prebuild reads them (nvn_mtl.m pso_prebuild): without them the app makes no pulling bases, and a hybrid draw has no stand-in
   for f in shader_pairs.tsv pso_pairs.tsv; do if [ -f "$GD/$f" ]; then cp "$GD/$f" Gen/dm/ || die "copy $f"; fi; done; fi   # optional
 # The pipeline archive made offline (dm/gfx/tools/pso_offline.py): the base of every shader pair, compiled here by metal-tt for each GPU architecture in DM_PSO_GPUS (comma-separated:
-# g18p = A19 / A19 Pro; none = no archive), so the device does not build them on its first start (Breath of the Wild: 15,767 bases, 7-8 minutes on an iPhone 17 Pro Max).
-# Only the Metal 4 path reads it, which iOS turns on for a game whose profile sets pso_mtl4 on: the default is g18p for such a game and none for the others (their app would carry
-# it unread). It goes into the app as pso/ (main.m hands it to the host as DM_PSO_BUNDLE), with the pulling vertex libraries the bases are made of. Each architecture adds about
-# 650 MB to the app (Breath of the Wild; 220 MB in the IPA) and 4 minutes to the first build; made again only when its inputs change (the libraries, the pairs, the profile's depth_mode, metal-tt)
-PSO=; P4=$(python3 "$DM/games/game.py" "$GAME" pso_mtl4 off) || die "game profile $GD: pso_mtl4"
-if [ -n "${DM_PSO_GPUS+set}" ]; then GPUS=$DM_PSO_GPUS; elif [ "$P4" = on ]; then GPUS=g18p; else GPUS=none; fi
+# g18p = A19 / A19 Pro; another family's device has its own architecture, applegpu_g19p = the family after the A19 (its archive compiles with the current toolchain); none = no archive), so the device
+# does not build them on its first start (Breath of the Wild: 15,767 bases, 7-8 minutes on an iPhone 17 Pro Max).
+# Only the Metal 4 path reads it, which iOS turns on for a game whose profile sets pso_mtl4 on: the default is what the profile's pso_gpu key names (whitespace-separated architectures, joined for
+# pso_offline.py's --gpu), else g18p, and none for the games that do not set pso_mtl4 on (their app would carry it unread). It goes into the app as pso/ (main.m hands it to the host as
+# DM_PSO_BUNDLE), with the pulling vertex libraries the bases are made of. Each architecture adds about 650 MB to the app (Breath of the Wild; 220 MB in the IPA) and 4 minutes to the first build;
+# made again only when its inputs change (the libraries, the pairs, the profile's depth_mode, metal-tt)
+PSO=; P4=$(python3 "$DM/games/game.py" "$GAME" pso_mtl4 off) || die "game profile $GD: pso_mtl4"; PG=$(python3 "$DM/games/game.py" "$GAME" pso_gpu '') || die "game profile $GD: pso_gpu"
+PGK=g18p; N=0; for w in $PG; do case $w in none) N=9; break ;; esac; case ${w#applegpu_} in '' | *[!A-Za-z0-9]*) N=9; break ;; esac; N=$((N+1)); done
+if [ "$P4" = on ] && [ "$PG" ]; then case $N in 1 | 2 | 3 | 4) PGK=$(echo "$PG" | tr -s ' \t' ',') ;; *) t "profile $GD: pso_gpu '$PG' is not 1-4 whitespace-separated GPU architectures (each one such as g18p or applegpu_g19p, with or without the applegpu_ prefix; there is no none: without the key the archive defaults follow pso_mtl4) - taking g18p" ;; esac; fi
+if [ -n "${DM_PSO_GPUS+set}" ]; then GPUS=$DM_PSO_GPUS; elif [ "$P4" = on ]; then GPUS=$PGK; else GPUS=none; fi
 if [ -n "${DM_GRAPHICS_REUSE:-}" ]; then
   PSO=${DM_GRAPHICS_PSO:-}
   t "pipeline archive: reusing the graphics package"
@@ -127,11 +131,12 @@ if [ "$GFXAPI" = vulkan ]; then MSLDIR=vk; elif [ "$GFXAPI" = gl ]; then MSLDIR=
 GRAPHICS_ARGS=(--game "$GAME" --build "$PKG" --api "$GFXAPI" --library "$MSLDIR" --shaders "$MSL_IOS/$MSLDIR" --tables "$GD" --requirements "$IOS/Gen/dm/graphics-required.json")
 [ -z "$PSO" ] || GRAPHICS_ARGS+=(--pso "$PSO")
 if [ "$DM_COPY_GRAPHICS" = NO ]; then
-  GRAPHICS_ARGS+=(--out "$GRAPHICS_OUT")
+  GRAPHICS_ARGS+=(--out "$GRAPHICS_OUT" --result "$W/graphics-result.json")
   [ -z "${DM_GRAPHICS_REUSE:-}" ] || GRAPHICS_ARGS+=(--reuse "$DM_GRAPHICS_REUSE")
 else GRAPHICS_ARGS+=(--bundle); fi
 python3 "$DM/tools/graphics_pack.py" "${GRAPHICS_ARGS[@]}" || die "graphics package"
 if [ "$DM_COPY_GRAPHICS" = NO ]; then
+  GRAPHICS_OUT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["path"])' "$W/graphics-result.json") || die "graphics package output path"
   for table in shader_map.tsv pso_manifest.tsv c1_full.tsv cb_extent.tsv shader_pairs.tsv pso_pairs.tsv; do rm -f "Gen/dm/$table"; done
   t "graphics package: $GRAPHICS_OUT (import it from the launcher's Import shaders button)"
 fi

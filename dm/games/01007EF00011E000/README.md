@@ -6,7 +6,7 @@ Update 1.9.0 (v1114112) over the base game, SDK 20.5.22. Nintendo EPD's engine (
 
 Resolved: rewriting the UI-camera observation at `main+0xd44a2c` after
 `blr x8` was rejected by the generic post-call classifier. See
-[Observation gates where x9-x17 are dead](../../../docs/reference/rewriter.md#observation-gates-where-x9x17-are-dead).
+[Observation gates on any relocatable instruction](../../../docs/reference/rewriter.md#observation-gates-on-any-relocatable-instruction).
 The real `main`, `subsdk0` and `sdk` rewrite and cache-freshness check passed
 on 2026-10-27; the subsequent full Mac shader/host build reaches gameplay.
 
@@ -108,11 +108,23 @@ When enabled, each action label sits in a 20% gray, gold-outlined badge on the u
 edge, half overlapping the main circle. Badges default off. The outer half of each visible badge presses
 the same button; face-button sliding remains available.
 Mac preview and UIKit rendering passed; controller/non-BOTW UIKit checks
-restore the ordinary artwork. The seven `touch_*.png` assets are packaged beside the profile
-tables. ZL shows a shield and four directional arrows without an idle background;
+restore the ordinary artwork. The seven `touch_*.png` assets are packaged in the app's
+`dm` folder. ZL shows a shield and four directional arrows without an idle background;
 holding reveals an unfilled ring and dragging moves a direction arrow just outside its
 perimeter while the center stays at touch-down. Mac and UIKit share the vector
 paths from [zelda-hyrule-ui](https://chaos-xxl.github.io/zelda-hyrule-ui/#/docs).
+**Current:** a short ZL tap (at most 0.35 seconds, without a drag) keeps the
+shield held after finger-up; another short tap or pressing B releases the held mode.
+B also prevents an overlapping shield tap from re-latching, while a finger
+physically holding ZL still permits ZL+B. The ring remains
+visible while held. Long holds and drags release normally, and cancellation,
+menu transitions, controller handoff and app deactivation clear the held shield.
+The focused UIKit tap/hold/drag/movement/reset checks pass. The full UIKit
+harness has the same 11 camera-hit, haptic and portrait-layout failures as the
+pre-change handler, with no new failures; the independent geometry target also
+fails its existing portrait-boundary assertion. Physical iPhone gameplay
+acceptance remains pending. The harness uses the Scene lifecycle required by
+the current iOS SDK.
 BOTW's D-pad direction is captured at touch-down and held until release;
 sliding face-button touches keep their original switching behavior. A movement
 stick gesture that leaves its configured deadzone resets the L3 tap sequence,
@@ -616,6 +628,25 @@ Used at `DM_FPS_TARGET=0` and for the interval the framework keeps while the VFR
 - The dynamic-resolution method (`main+0x12666e4`) keeps its scale in s8 (0.8–1.0 in 0.05 steps, `+0x1218`, `main+0x1266818`, or the forced 0.75 / 0.5 of `+0x284 & 0x1800`) and applies it from `main+0x1266880`: the views' scale (`+0x28a0` / `+0x28a4` = s8 × base width (`+0x1214`: 1600 docked, 1280 handheld) / output width), from which the size function (`main+0x106340c`) sizes the scene buffers each frame, the shader ratio `uking_dynamic_resolution_ratio` and the other readers (`main+0xc3c3f4`, an LOD check at `main+0x14126b4`). That block runs only when the dynamic path has just recomputed the scale (`+0x280` bit 4, set at `main+0x1266830`) or in a forced mode, else `main+0x126686c` skips it. The stub sets s8 at the block and, for a factor other than 1.0, takes the block every frame. A multiply in the size function (Tears of the Kingdom's way) would leave the ratio and those readers at the old scale.
 - At 0.5 the 1600×900 passes become 800×450 and the 800×450, 400×225, 200×112 and 100×56 chains halve too, while the shadow maps and the 1920×1080 output keep their size and the HUD stays sharp. It holds in handheld mode (960×540 at 0.75). On the Mac (M4 Pro) the GPU time does not change (about 13 ms in the first shrine at 1.0 and at 0.5): a frame has about 650 passes, most of them tiny. Whether it helps an iPhone, whose GPU loads and stores each pass's attachments, is what the setting is for.
 
+### Optional thermal frame cap (current, 2026-11-01)
+
+The iOS Performance setting **Reduce to 30 fps when hot** is optional and defaults
+off. It no longer lowers the selected frame-rate cap solely because the system
+reports a serious thermal state. Explicitly enabling it restores the existing
+30 fps cap and cooling recovery. Movie limits, late-frame holds and their return
+to 60 fps are unchanged; iOS still controls hardware frequencies. See
+[the thermal-cap mechanism](../../../docs/reference/frame-rate.md#a-thermally-serious-iphone-holds-30-fps).
+Validation: the production cap tests cover unset, explicit off and explicit on,
+including concurrent readers under ThreadSanitizer; all 64 frame-step checks,
+963 Python tool tests (17 skips), 53 iOS tool tests, launcher persistence,
+localization parsing and the Mac host build pass. Python lint has no baseline
+growth. Targeted C lint has no findings above its baseline, but uses LLVM 19
+rather than CI's LLVM 23. The full regression selects BOTW, the only locally
+prepared game, and stops during shader preparation because installed Metal
+`32023.883` differs from the locked `32023.922.4`; its report is
+`thermal-opt-in-20261101/regress/report.md` in the game's work folder.
+Physical iPhone sustained-performance acceptance remains pending.
+
 ### CPU
 
 - **Resolved: CPU hitches (Mac).** In steady play, frames with 30–210 ms of CPU work came every 1–10 s (Zora's Domain, M2 Max): the main thread and the two workers spinning in one job queue poll (`main+0xef62dc`). The first item of some of its jobs is for the thread of core 0; the threads of cores 1 and 2 wait until it is taken (the queue's flag at +0x98, its cursor at +0x94), taking and releasing the queue's lock (+0x1c) on every pass. Polled at full speed by the two workers, the lock went back and forth between their cores, and the main thread lost nearly every exclusive store: in 40 s of a Time Profiler trace it never held the lock while each worker held it about 750 times, and the three spun for 30–210 ms at a time. The spin-wait rule's lock case takes that loop: the workers leave the lock a moment between passes. Zora's Domain on an M2 Max at 120 Hz (42 s of steady play, three runs each, before → after): standing still, frames over 30 ms of CPU work 2.8 / 6.3 / 3.5 → 0 per 30 s, the frame's work p99 20–21 → 8.3–8.4 ms, late frames 2.8 / 5.6 / 2.8 → 2.1 / 0.7 / 2.1 per 30 s; turning the camera, CPU hitches 11.9 / 13.3 / 6.3 → 0, p99 21–25 → 9–15 ms, late frames 12.6 / 13.3 / 7.7 → 1.4 each. Found with `DM_HITCH_DUMP` (the main thread and two workers in one guest loop with no SVC; x0 held the item index) and an `xctrace` Time Profiler trace.
@@ -707,6 +738,8 @@ remains pending.
 - **Present snapshots (Mac).** The game's two swapchain textures held its CPU work to display ticks and the GPU at 444 MHz on an M2 Max ([present snapshots](../../../docs/reference/frame-rate.md#present-snapshots-the-games-swapchain-texture-free-at-once)). Judged by cost, the frame step stepped to 30 at a GPU time of 0.75 vsyncs. Zora's Domain from a Cemu save (120 Hz), frames on screen longer than 1/60 s by a quarter: 64 of 8,684 with neither, 41 with the GPU filler alone, 4 of 10,800 with snapshots alone (no step to 30 in 3 minutes, at 444 MHz throughout).
 
 ## Rendering
+
+**Feedback snapshot bypass (experimental, current, 2026-11-01).** Performance settings now offer **Skip feedback snapshots (experimental)**, off by default. Turning it on uses the existing `DM_NVN_FB_SNAP=0` path; turning it off restores automatic snapshots (`1`). This is an explicit correctness tradeoff, with no replacement protection. The setting and its saved choice apply on iPhone and Mac; iPhone rendering, sustained frame rate and thermal effects remain unverified. See [same-pass feedback](../../../docs/reference/rendering.md#same-pass-feedback-read-through-a-snapshot) for the mechanism and [the setting](../../../docs/settings.md#skip-feedback-snapshots-experimental) for comparison and reset instructions.
 
 **Native widescreen UI backgrounds (2026-10-28).** Widescreen is independent of touch/controller mode. Menu foreground content and touch coordinates retain the centered 16:9 layout; full-width native background Pictures and Windows extend to the display edges. Windows retain their own corner sizes, and title illustrations use proportional cover sizing. Returning to 16:9 restores native dimensions without accumulating scale.
 
@@ -1063,7 +1096,49 @@ On this Mac the background prewarm also ends before the save loads, so the step 
 
 ## Mac routes
 
-### Upstream integration (2026-10-30, current)
+### Upstream integration and performance discussion audit (2026-11-01)
+
+Integrated upstream `0e16e0e0` while retaining this fork's native touch adapters,
+Seated layout, BC fallback, resource imports and optional memory/resolution modes.
+The ordinary defaults, with low-memory mode off, already implement the useful
+paths discussed in [issue #159](https://github.com/seedds/nxnative/issues/159):
+present snapshots and Metal 4 pipelines, preparation before play and offline
+archives, early GPU-fence wake-up, layered cube filtering and compute hoisting.
+The encode thread remains on for iOS and off for Mac. The optional low-memory
+preset deliberately disables whole-game prebuilding and the bundled offline
+archive for a smaller working set, so it is not the performance baseline of #159.
+See [GPU work](#gpu-work), [Pipelines on a cold start](#pipelines-on-a-cold-start)
+and [Experimental resolution and scene upscaling](#experimental-resolution-and-scene-upscaling)
+for their mechanisms, measurements and validation limits.
+
+The new upstream command-record compaction, shared host-shader precompilation,
+per-key warm-load coalescing and completion-object release fixes are included.
+No new BOTW FPS gain is claimed from this integration. The discussion's rejected
+TBDR/kernel-pass/barrier/fast-math experiments and parked CPU/GPU pipelining are
+not enabled: the author reported no benefit or worse tail latency. MetalFX stays
+optional because its own GPU cost can shorten sustained 60 fps play.
+
+[PR #76](https://github.com/seedds/nxnative/pull/76) remains open and is not part of
+this merge. It adds variable game steps above 60 fps and larger Mac render pools
+and heaps, rather than making an existing frame cheaper; its iPhone 60+ path is
+unvalidated. [PR #303](https://github.com/seedds/nxnative/pull/303) measures pool
+occupancy and is a diagnostic, not a speed improvement. Neither changes this
+fork's tested 30/60 fps launcher choices.
+
+Validation: the Mac host build, full host and graphics suites, 953 Python tool
+tests (17 optional skips), 167 shader-tool tests (7 optional skips), 53 iOS tool
+tests and the 192-file iOS source compile pass. Python lint passes in a clean
+Python 3.14 environment with the pinned CI
+requirements and no baseline growth. C lint is not qualified: the installed
+clang-tidy is LLVM 19.1.2, versus the baseline's LLVM 23.1.4; its partial run was
+stopped without changing the baseline. The full BOTW regression selected the
+only locally prepared game and stopped during baseline shader preparation:
+installed Metal `32023.883` does not match the lock's `32023.921.6`. No compiler
+override, older graphics runtime or physical-device result is substituted.
+The report is `upstream-merge-20261101/regress/report.md` in the game's work folder.
+Other games and physical iPhone/TV behavior remain unverified by this integration.
+
+### Upstream integration (2026-10-30)
 
 Merged upstream `ee6648cb`, preserving the BOTW touch adapters and their separate
 physical-controller input path. Movement-stick feedback and camera-area R3
@@ -1139,6 +1214,12 @@ camera control/gesture coexistence and physical-controller suppression.
 
 `smoke.tsv` takes the outdoors save (`saves/outdoors` in the NSP folder) with frame-numbered presses, `f300:A` to `f1700:A`; the Zora's Domain save it used before is no longer on the test Mac. Link stands in a field from about 50 s; with the window on screen (M4 Pro) frame 3,000 comes at 57 s and 6,000 at 107 s, while a covered window runs at 20 fps ([covered windows](../../../docs/reference/frame-rate.md)). `regress.py capture` records frame 5000 for `regress.py replay`: noise up to about 150 pixels with 5d2bf73f; one capture at chain `a31235713eee` differed from every replay in 1,603 pixels, a rare live outcome of the depth-EQUAL variation (Frame capture and replay, under Open); later captures replay within 0 to 246 pixels. The current one (chain `f3ceca86cac5`, 2026-10-30): no replay of 8 equals the live frame, noise 122 pixels; 4 of 8 and 113 pixels in the one before. In 2 of 6 `regress.py check` runs on 2026-10-29 the game stayed at 20 fps from the start (frame 2500 not reached by 60 s: NEW-FAIL): the frame step went from 1 to 3 vsyncs at presents 12–15 on three late frames costing 0.02 vsyncs and never came back. Resolved (2026-10-30): the window was behind another one in those runs ([a game window another process starts opens behind other windows](../../../docs/reference/frame-rate.md#a-game-window-another-process-starts-opens-behind-other-windows)); every 20 fps run of 2026-10-28 and 29 had 21 to 115 display link stalls, the 60 fps runs 0 to 7. With `DM_WINDOW_TOP` the window stays in front.
 
+### Layered-clear validation (2026-11-01)
+
+The [layered render-target clear correction](../../../docs/reference/rendering.md#clears-of-layered-render-targets-in-a-pass-that-is-not-layered) from #808 passed the full 110-second outdoors route against `4a1f6830`: 19,592 shaders on both revisions, no new shader or interface failures, matching screenshots, and no red diagnostics. Baseline → candidate: 6,241 → 6,239 frames, 58.4 → 58.0 fps, frame p99 33.56 → 33.52 ms, peak footprint 3,981 → 4,006 MB. The candidate window was kept active during this completed comparison; the shared compiler qualification is in the reference entry.
+
+An earlier candidate run missed frame 2,500 at 60 seconds after CPU-side stalls, including a 5.8-second frame with 5.7 ms of recorded GPU work and no pipeline or texture upload work. The unchanged candidate then reached 3,456 frames by 60 seconds in a startup control. The cause of that initial stall was not isolated. Another full repeat passed its frame gate and timing checks but lost its requested screenshots after focus loss; the active-window comparison above passed every check. The original logs and unsuccessful repeats remain in the game's work folder.
+
 ### Final synchronization and pass validation (2026-10-26, current)
 
 #158 and #213 with the review fixes, on base `c6c4fac`, were tested in outdoor gameplay on a Mac M4 Pro, macOS 27.0.1, at the supported 60 fps target and docked 1600x900 rendering. The supplied outdoor save was copied into an isolated seed; each run copied that seed again. The modules were regenerated with that rewriter, and all 19,592 Mac shaders rebuilt for chain `8393d85a4eae`. Every measured run used one retained host binary and the same source/save hashes. No game or graphics code changed during measurement.
@@ -1174,6 +1255,7 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 - **Implemented; physical iPhone acceptance pending:** [In-game launcher settings](../../../docs/reference/services.md#in-game-launcher-settings-use-the-runtime-state-owners). The startup dashboard shows resource readiness and available memory; Settings uses fixed side-by-side sections. Three-finger double tap reveals Settings during touch gameplay and retains the temporary menu gamepad. Supported runtime values apply through their owning subsystems; the remaining values are saved for the next start.
   Direct Mac runs use the shared iOS `LauncherDashboard` before module loading; status rows, the first-touch notice, settings and touch editor come from the same SwiftUI views. Mac code supplies resources and native window/input handling. Command-comma opens settings in-game; Command-Shift-comma reveals the touch-preview Settings entry and temporary menu controls. Native Mac sidebar selection supports keyboard and accessibility navigation.
   Validation: unsigned iOS compile/link, full Mac compile/link and native settings/storage/DLC/haptics checks pass. The shared dashboard, first-touch notice acknowledgement and touch-editor navigation pass in the iOS simulator with synthetic resources. The Mac fixture passes dashboard, section navigation, Play, same-process settings presentation and dismissal; native model bindings verify immediate updates and persistence. Real checkbox mouse input and in-game shortcuts remain gameplay acceptance items. New UIKit gesture, input-release and live stick-refresh checks pass; three existing portrait-layout assertions fail identically at the unchanged baseline. BOTW is the only prepared local title; its full regression stops before boot on the existing Metal compiler/lock mismatch.
+- **Resolved in code; physical iPhone acceptance pending:** [Touch artwork with external graphics](../../../docs/reference/packing.md#touch-button-icons-disappear-with-an-imported-graphics-package). UI artwork stays bundled with the IPA and no longer follows the imported shader-table directory.
 
 - **Current, 2026-11-01:** [Separate graphics packages](../../../docs/reference/packing.md#ipa-updates-repeatedly-include-large-graphics-resources) move runtime shaders and optional offline archives outside the IPA. The launcher imports ROM and graphics on one page and checks series/minimum version. Native import/packaging, production iOS compile/link and simulator picker checks use synthetic fixtures; full game graphics on a physical iPhone remain pending. No shader-chain or graphics execution code changed.
 
@@ -1205,7 +1287,10 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 - **Resolved: widescreen minimap clipped at the old 16:9 edge:** [Edge-anchored UI keeps open scissor edges](../../../docs/reference/rendering.md#edge-anchored-ui-keeps-open-scissor-edges).
 - **Resolved: black Mac title and scene after the shader-chain update.** A manual shader build mixed an older package with the newer profile. Package records are now identity-checked before translation; [Shader package records match profile keys](../../../docs/reference/shaders.md#shader-package-records-match-profile-keys).
 
+- **Resolved, parallel rewriting (2026-10-31):** [Parallel scans preserve rewrite output](../../../docs/reference/rewriter.md#parallel-scans-preserve-rewrite-output). All 21 binary and TSV outputs of the three modules of v1114112 are byte-identical to the sequential rewriter. The full regression against `635e8008` passed: zero red diagnostics, matching screenshots, and no frame-time or memory regression (M4 Pro, Xcode 27.2 with the per-run compiler override on both revisions).
+- [Benchmark captures perturb the measured frame pacing](../../../docs/reference/frame-rate.md#benchmark-captures-perturb-the-measured-frame-pacing).
 - **Resolved, two stale chain folders held 4.4 GB:** [Old shader library folders grew a game's build folder with each chain change](../../../docs/reference/shaders.md#old-shader-library-folders-grew-a-games-build-folder-with-each-chain-change).
+- **Resolved: 1.6.0 (v786432) crashed 10-60 s into the first scene (issue #251)** in `h_nvnBufferGetAddress` (`main+0x14ef6e0`, reader `main+0x14ef440`) and in other places (`main+0x12970dc`, `+0x13615f4`, `+0x1445d48`, `+0x1db5cb8`, `+0x1472470`): the game's job queue (`main+0x13a0730`) takes its lock with a bare `ldxr` (no acquire), so on Apple cores two workers popped the same job, and two threads built draw lists into one view and arena (`main+0x14e8884` begin, commit `main+0x14ee3c0`). [Lock acquire without acquire ordering runs a queue item twice](../../../docs/reference/threads.md#lock-acquire-without-acquire-ordering-runs-a-queue-item-twice).
 - **Resolved build guard and cache isolation; rendering cause open:** [Tested tools and compiler-specific shader caches](../../../docs/reference/shaders.md#tested-tools-and-compiler-specific-shader-caches).
 
 General host changes first needed here; each applies to every game:
@@ -1239,6 +1324,7 @@ General host changes first needed here; each applies to every game:
 - **SDK 20 service calls** and **record sizes against `GetCommandMemoryUsed`** (`draw_rec`): [SDK 20 six-axis sensor and amiibo (`nfp`) calls](../../../docs/reference/services.md#sdk-20-six-axis-sensor-and-amiibo-nfp-calls), [Applet resource user ID, launch parameters and VR mode](../../../docs/reference/services.md#applet-resource-user-id-launch-parameters-and-vr-mode), [Shared font load request](../../../docs/reference/services.md#shared-font-load-request), [Model heaps sized by the host's command record sizes](../../../docs/reference/memory.md#model-heaps-sized-by-the-hosts-command-record-sizes). **SDK 20's audio renderer layout** (`render_once`): [SDK 20's `AudioRenderSystem` layout](../../../docs/reference/audio.md#sdk-20s-audiorendersystem-layout). **Running a 30 fps game at 60**: [sead's dynamic present interval, `ksys::VFR` and the host's frame step](../../../docs/reference/frame-rate.md#seads-dynamic-present-interval-ksysvfr-and-the-hosts-frame-step).
 - **Pipeline bases, hybrid pipelines, the prebuild and the prepare step** (`pso_build_ex`, `hybrid_get`, `pso_prebuild`, `warm_prepare`): [development.md, Hybrid pipelines](../../../docs/development.md#hybrid-pipelines), [Pulling vertex inputs](../../../docs/reference/rendering.md#pulling-vertex-inputs), [the prepare step](../../../docs/development.md#the-prepare-step); measured under [Pipelines on a cold start](#pipelines-on-a-cold-start).
 - **The pipeline archive made offline** (`dm/gfx/tools/pso_offline.py`, `pso_bundle_open`, `pso_bundle_covers`): [development.md, The pipeline archive made offline](../../../docs/development.md#the-pipeline-archive-made-offline); measured under [Pipelines on a cold start](#pipelines-on-a-cold-start).
+- **Concurrent warm tasks prepare each shader once:** [Concurrent warm tasks prepare each shader once](../../../docs/reference/shaders.md#concurrent-warm-tasks-prepare-each-shader-once). Avoids duplicate startup work; no measured wall-time or steady-FPS gain is claimed.
 - **Resolved: a Mac app without its shader-pair tables**: [Shader-pair tables in a Mac app](../../../docs/reference/shaders.md#shader-pair-tables-in-a-mac-app); measured under [Pipelines on a cold start](#pipelines-on-a-cold-start).
 - **Resolved in synthetic archive review checks:** truncated archive containers, zero-probe coverage, stale archives after library bytes change, and plans whose pairs all require device specialization: [Offline pipeline archive reuse and fallback](../../../docs/reference/shaders.md#offline-pipeline-archive-reuse-and-fallback). Checked with generated libraries on the Mac; no new gameplay or iPhone validation.
 - **GPU measurement on the iPhone** (`DM_NVN_GPUPROF=every:n`, `DM_AB`, `DM_GPU_CAPTURE`, `dm/tools/gpuprof.py`) and **captures with pipelines built through the device** (`pso4_on`): [05, GPU time on the device](../../../docs/agents/05-debugging.md#gpu-time-on-the-device), [GPU frame captures need pipelines built through the device](../../../docs/reference/shaders.md#gpu-frame-captures-need-pipelines-built-through-the-device).
@@ -1247,6 +1333,8 @@ General host changes first needed here; each applies to every game:
 - **Resolved: type-compatible views read as not resident** (`tex_fit`): [Compatible views made from the texture under a view](../../../docs/reference/rendering.md#compatible-views-made-from-the-texture-under-a-view). Found by replaying the outdoors frame under shader validation; validation is clean after it, and the replayed digest without validation is unchanged.
 
 ## Open
+
+- **1.6.0 (v786432): the corrupted picture of [issue #251](https://github.com/seedds/nxnative/issues/251) has another cause (current, open):** the 1.9.0 shader map lacks 178 keys that the 1.6.0 shaders use. Not retested after the crash fix.
 
 - The shipped pipeline archive without the device's own earlier prebuild files (the test iPhone's `pso_archive/` still held them, [Pipelines on a cold start](#pipelines-on-a-cold-start)): the footprint against the app's memory limit and the frame times after it.
 

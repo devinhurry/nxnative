@@ -32,6 +32,18 @@ struct CloudSavesSection: View {
                     .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
             Button(folder.isEmpty ? "Choose a folder in iCloud Drive…" : "Choose a different folder…") { picking = true }
+                // The sheet sits on the button, not on the Section: SwiftUI hands a Section's modifiers to every row, so one tap presented a picker per row and they invalidated each other (LNPANDY/NX2Apple#315).
+                .sheet(isPresented: $picking) {
+                    DocumentPicker(types: [.folder]) { url in
+                        picking = false
+                        if dm_store_cloud_saves(url) {
+                            note = "Saved. The game uses this folder when you press Play."
+                            refresh()
+                        } else {
+                            note = "That folder could not be remembered — try a different one."
+                        }
+                    } onCancel: { picking = false }
+                }
             if !folder.isEmpty {
                 Button("Turn off cloud saves", role: .destructive) {
                     dm_clear_cloud_saves(); refresh(); note = ""
@@ -41,17 +53,6 @@ struct CloudSavesSection: View {
             Text(note.isEmpty
                  ? "Choose a folder in iCloud Drive, and the same one in the Mac app's Cloud saves. The save comes in when the game starts and goes out after each save; a save that is replaced is kept in save-backups."
                  : note)
-        }
-        .sheet(isPresented: $picking) {
-            DocumentPicker(types: [.folder]) { url in
-                picking = false
-                if dm_store_cloud_saves(url) {
-                    note = "Saved. The game uses this folder when you press Play."
-                    refresh()
-                } else {
-                    note = "That folder could not be remembered — try a different one."
-                }
-            } onCancel: { picking = false }
         }
         .onAppear(perform: refresh)
     }
@@ -131,7 +132,8 @@ private struct LauncherView: View {
                 graphicsVersion: graphicsVersion, graphicsCompiler: graphicsMetal, buildInfo: [:],
                 shouldShowTouchNotice: { GCController.controllers().isEmpty },
                 onPlay: finishStart, onSettings: { showSettings = true },
-                onImportROM: { importing = .rom }, onImportShaders: { importing = .shaders })
+                onImportROM: { importing = .rom }, onImportShaders: { importing = .shaders },
+                onRefresh: { refreshResources() })
                 .toolbar(.hidden, for: .navigationBar)
         }
         .preferredColorScheme(.dark)
@@ -147,7 +149,7 @@ private struct LauncherView: View {
                 importResource(url, kind: kind)
             } onCancel: { importing = nil }
         }
-        .onAppear(perform: refreshResources)
+        .onAppear { refreshResources() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in refreshResources() }
         .task {
             while !Task.isCancelled {
@@ -164,7 +166,7 @@ private struct LauncherView: View {
         else { refreshResources() }
     }
 
-    private func refreshResources() {
+    private func refreshResources(autoImport: Bool = true) {
         guard !importBusy && !checkingResources else { return }
         checkingResources = true
         DispatchQueue.global(qos: .userInitiated).async {
@@ -174,6 +176,10 @@ private struct LauncherView: View {
             var graphicsError: NSError?
             let info = dm_graphics_current_info(documents, Bundle.main.resourceURL!, &graphicsError)
             let shaders = graphicsError?.localizedDescription
+            var discoveryError: NSError?
+            let package = autoImport && shaders != nil
+                ? dm_graphics_pending_package(documents, Bundle.main.resourceURL!, &discoveryError) : nil
+            let discoveryMessage = discoveryError?.localizedDescription
             let version = (info?["version"] as? NSNumber)?.stringValue
             let compilers = info?["compilers"] as? [String: Any]
             let metal = (compilers?["metal_versions"] as? [String])?.joined(separator: ", ")
@@ -182,6 +188,8 @@ private struct LauncherView: View {
                 resourceStatus = rom ?? shaders
                 graphicsVersion = version; graphicsMetal = metal?.isEmpty == false ? metal : nil
                 checkingResources = false
+                if let message = discoveryMessage { importError = message }
+                if let package { importResource(package, kind: .shaders) }
             }
         }
     }
@@ -213,7 +221,8 @@ private struct LauncherView: View {
                 UIApplication.shared.isIdleTimerDisabled = previousIdle
                 importBusy = false
                 if !ok { importError = error?.localizedDescription ?? NSLocalizedString("Import failed", comment: "Resource import") }
-                refreshResources()
+                // Do not retry a failed automatic import in a refresh/import loop.
+                refreshResources(autoImport: kind == .rom)
             }
         }
     }

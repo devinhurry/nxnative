@@ -44,6 +44,8 @@
 "Game rumble" = "游戏振动";
 "Handheld" = "掌机模式";
 "Hold frames when late" = "帧延迟时保留画面";
+"Reduce to 30 fps when hot" = "\U9AD8\U6E29\U65F6\U964D\U81F3 30 fps";
+"Optional cap while the device is hot. Applies when you press Play." = "\U53EF\U9009\U7684\U9AD8\U6E29\U5E27\U7387\U9650\U5236\UFF0C\U70B9\U51FB\U5F00\U59CB\U6E38\U620F\U540E\U751F\U6548\U3002";
 "Horizontal offset" = "水平偏移";
 "Ignores small movements near the touch-down point." = "忽略触点附近的微小移动。";
 "Keeps a pipeline archive; uses more memory." = "保留渲染管线缓存，会使用更多内存。";
@@ -59,6 +61,8 @@
 "Metal 4 pipelines" = "Metal 4 渲染管线";
 "Performance" = "性能";
 "Experimental low-memory mode" = "实验性低内存模式";
+"Skip feedback snapshots (experimental)" = "实验性关闭反馈快照";
+"May reduce GPU copies but can cause rendering errors. Applies when you press Play." = "可能减少图像复制，但也可能导致画面错误。点击“开始游戏”后生效。";
 "Low-memory mode is enabled to help keep the game running. Performance may be affected." = "为帮助游戏持续运行，已启用低内存模式。部分性能可能受到影响。";
 "May reduce memory use at the cost of more storage activity and pauses in new scenes. Applies when you press Play." = "尝试降低内存占用，但会增加存储读写，新场景可能短暂停顿。点击“开始游戏”后生效。";
 "Performance HUD" = "性能信息";
@@ -158,6 +162,10 @@
 "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately." = "可发送这些紧凑布局参数作为默认值。偏移以整个屏幕为比例，X 为正向右移动，Y 为正向下移动。普通布局设置单独保存。";
 "Import ROM" = "导入 ROM";
 "Import shaders" = "导入着色器";
+"ROM imported" = "ROM 已导入";
+"Shaders imported" = "着色器已导入";
+"Refresh" = "刷新";
+"More than one valid graphics ZIP was found. Use Import shaders to choose a package." = "找到多个有效的着色器 ZIP，请点按“导入着色器”选择资源包。";
 "Import failed" = "导入失败";
 "OK" = "好";
 "Import RomFS.img to start." = "请导入 RomFS.img 后开始游戏。";

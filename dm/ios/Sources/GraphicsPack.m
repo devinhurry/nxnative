@@ -26,6 +26,8 @@ extern const char *archive_entry_symlink(struct archive_entry *);
 extern const char *archive_entry_hardlink(struct archive_entry *);
 
 static const uint64_t graphics_max_bytes = UINT64_C(64) << 30;
+static BOOL graphics_read_package(NSURL *source, NSURL *documents, NSDictionary *required,
+                                  void (^progress)(long long,long long), BOOL validateOnly, NSError **error);
 static NSError *graphics_error(NSString *message) {
     return [NSError errorWithDomain:@"nxnative.graphics" code:1 userInfo:@{NSLocalizedDescriptionKey:message}];
 }
@@ -65,7 +67,7 @@ NSDictionary *dm_graphics_requirements(NSURL *bundle) {
     return r;
 }
 
-NSString *dm_graphics_manifest_error(NSDictionary *manifest, NSDictionary *required) {
+static NSString *graphics_compatibility_error(NSDictionary *manifest, NSDictionary *required) {
     if (![manifest isKindOfClass:NSDictionary.class] || ![manifest[@"schema"] isEqual:@1] || ![manifest[@"kind"] isEqual:@"graphics"])
         return NSLocalizedString(@"This is not a supported graphics package.",nil);
     if (![required isKindOfClass:NSDictionary.class] || ![required[@"schema"] isEqual:@1])
@@ -88,6 +90,11 @@ NSString *dm_graphics_manifest_error(NSDictionary *manifest, NSDictionary *requi
     if (![NSProcessInfo.processInfo isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion){[os[0] integerValue],[os[1] integerValue],0}])
         return [NSString stringWithFormat:NSLocalizedString(@"This graphics package requires iOS %@ or later.",nil),minimumOS];
 #endif
+    return nil;
+}
+
+NSString *dm_graphics_manifest_error(NSDictionary *manifest, NSDictionary *required) {
+    NSString *error=graphics_compatibility_error(manifest,required); if (error) return error;
     NSArray *files=manifest[@"files"];
     if (![files isKindOfClass:NSArray.class] || !files.count || files.count>200000)
         return NSLocalizedString(@"The graphics package manifest is invalid.",nil);
@@ -115,20 +122,30 @@ NSString *dm_graphics_manifest_error(NSDictionary *manifest, NSDictionary *requi
 }
 
 static NSString *graphics_installed_error(NSURL *directory, NSDictionary *manifest, NSDictionary *required) {
-    NSString *error=dm_graphics_manifest_error(manifest,required); if (error) return error;
+    NSString *error=graphics_compatibility_error(manifest,required); if (error) return error;
     NSString *name=[NSString stringWithFormat:@"v%@-%@",manifest[@"version"],manifest[@"id"]];
     if (![directory.lastPathComponent isEqual:name]) return NSLocalizedString(@"The graphics package manifest is invalid.",nil);
+    // Import already verified the complete inventory and hashes. Readiness only
+    // needs the map and a representative library, not a stat for every shader.
+    NSURL *map=[directory URLByAppendingPathComponent:@"tables/shader_map.tsv"];
+    if (![[NSFileManager.defaultManager attributesOfItemAtPath:map.path error:nil][NSFileType] isEqual:NSFileTypeRegular])
+        return NSLocalizedString(@"The graphics package is incomplete. Import it again.",nil);
+    if (![manifest[@"files"] isKindOfClass:NSArray.class]) return NSLocalizedString(@"The graphics package manifest is invalid.",nil);
+    NSString *library=[@"msl/" stringByAppendingFormat:@"%@/",required[@"compatibility"][@"library"]];
     for (NSDictionary *entry in manifest[@"files"]) {
-        @autoreleasepool {
+        if (![entry isKindOfClass:NSDictionary.class]) return NSLocalizedString(@"The graphics package manifest is invalid.",nil);
+        NSString *path=entry[@"path"];
+        if (![path isKindOfClass:NSString.class] || ![path hasPrefix:library] || ![path hasSuffix:@".metallib"]) continue;
+        if (!graphics_path(path) || !graphics_integer(entry[@"size"])) return NSLocalizedString(@"The graphics package manifest is invalid.",nil);
         NSURL *file=[directory URLByAppendingPathComponent:entry[@"path"]];
         NSDictionary *a=[NSFileManager.defaultManager attributesOfItemAtPath:file.path error:nil];
         if (![a[NSFileType] isEqual:NSFileTypeRegular] || ![a[NSFileSize] isEqual:entry[@"size"]])
             return NSLocalizedString(@"The graphics package is incomplete. Import it again.",nil);
-        }
+        return nil;
     }
-    return nil;
+    return NSLocalizedString(@"The graphics package is incomplete. Import it again.",nil);
 }
-static NSURL *graphics_selected(NSURL *documents, NSURL *bundle, NSError **error) {
+static NSURL *graphics_selected(NSURL *documents, NSURL *bundle, NSDictionary **info, NSError **error) {
     NSDictionary *required=dm_graphics_requirements(bundle);
     if (!required) {
         // Legacy apps are usable only when their libraries are actually bundled.
@@ -141,30 +158,73 @@ static NSURL *graphics_selected(NSURL *documents, NSURL *bundle, NSError **error
     NSDictionary *current=graphics_json([root URLByAppendingPathComponent:@"current.json"]);
     NSString *selected=current[@"directory"];
     NSURL *best=nil; long long version=-1; NSString *why=nil;
+    NSDictionary *bestInfo=nil;
+    if (graphics_match(selected,@"^v[0-9]+-[0-9a-f]{64}$")) {
+        NSURL *active=[root URLByAppendingPathComponent:selected isDirectory:YES];
+        if ([[NSFileManager.defaultManager attributesOfItemAtPath:active.path error:nil][NSFileType] isEqual:NSFileTypeDirectory]) {
+            NSDictionary *m=graphics_json([active URLByAppendingPathComponent:@"manifest.json"]);
+            why=graphics_installed_error(active,m,required);
+            if (!why) { if (info) *info=m; return active; }
+        }
+    }
     NSArray *children=[NSFileManager.defaultManager contentsOfDirectoryAtURL:root includingPropertiesForKeys:nil options:NSDirectoryEnumerationSkipsHiddenFiles error:nil] ?: @[];
     for (NSURL *child in children) {
+        if ([child.lastPathComponent isEqual:selected]) continue;
         if (!graphics_match(child.lastPathComponent,@"^v[0-9]+-[0-9a-f]{64}$")) continue;
         if (![[NSFileManager.defaultManager attributesOfItemAtPath:child.path error:nil][NSFileType] isEqual:NSFileTypeDirectory]) continue;
         NSDictionary *m=graphics_json([child URLByAppendingPathComponent:@"manifest.json"]);
         NSString *problem=graphics_installed_error(child,m,required);
-        if (problem) { if ([child.lastPathComponent isEqual:selected]) why=problem; continue; }
-        if ([child.lastPathComponent isEqual:selected]) return child;
-        if ([m[@"version"] longLongValue]>version) { best=child; version=[m[@"version"] longLongValue]; }
+        if (problem) continue;
+        if ([m[@"version"] longLongValue]>version) { best=child; bestInfo=m; version=[m[@"version"] longLongValue]; }
     }
-    if (best) return best;
+    if (best) { if (info) *info=bestInfo; return best; }
     if (![required[@"external"] boolValue]) return bundle;
     if (error) *error=graphics_error(why ?: NSLocalizedString(@"Import a compatible graphics ZIP to start.",nil));
     return nil;
 }
 NSString *dm_graphics_status(NSURL *documents, NSURL *bundle) {
-    NSError *error=nil; graphics_selected(documents,bundle,&error); return error.localizedDescription;
+    NSError *error=nil; graphics_selected(documents,bundle,NULL,&error); return error.localizedDescription;
+}
+NSURL *dm_graphics_pending_package(NSURL *documents, NSURL *bundle, NSError **error) {
+    if (!dm_graphics_status(documents,bundle)) return nil;
+    NSFileManager *fm=NSFileManager.defaultManager;
+    NSArray<NSURL *> *files=[fm contentsOfDirectoryAtURL:documents includingPropertiesForKeys:nil
+                                               options:NSDirectoryEnumerationSkipsHiddenFiles error:error];
+    if (!files) return nil;
+    NSDictionary *required=dm_graphics_requirements(bundle);
+    if (!required) {
+        if (error) *error=graphics_error(NSLocalizedString(@"This app has no graphics package requirements.",nil));
+        return nil;
+    }
+    NSURL *package=nil;
+    NSError *firstError=nil;
+    for (NSURL *file in files) {
+        if (![file.pathExtension.lowercaseString isEqual:@"zip"]) continue;
+        NSDictionary *attributes=[fm attributesOfItemAtPath:file.path error:error];
+        if (!attributes) return nil;
+        if (![attributes[NSFileType] isEqual:NSFileTypeRegular]) continue;
+        NSError *invalid=nil;
+        if (!graphics_read_package(file,documents,required,nil,YES,&invalid)) {
+            fprintf(stderr,"launcher: skipping ZIP %s: %s\n",file.lastPathComponent.UTF8String,invalid.localizedDescription.UTF8String);
+            if (!firstError) firstError=invalid;
+            continue;
+        }
+        if (package) {
+            if (error) *error=graphics_error(NSLocalizedString(@"More than one valid graphics ZIP was found. Use Import shaders to choose a package.",nil));
+            return nil;
+        }
+        package=file;
+    }
+    if (!package && error) *error=firstError;
+    return package;
 }
 NSDictionary *dm_graphics_current_info(NSURL *documents, NSURL *bundle, NSError **error) {
-    NSURL *selected=graphics_selected(documents,bundle,error);
-    return !selected ? nil : [selected isEqual:bundle] ? @{} : graphics_json([selected URLByAppendingPathComponent:@"manifest.json"]);
+    NSDictionary *info=nil;
+    NSURL *selected=graphics_selected(documents,bundle,&info,error);
+    return selected ? (info ?: @{}) : nil;
 }
 BOOL dm_graphics_configure(NSURL *documents, NSURL *bundle, NSError **error) {
-    NSURL *selected=graphics_selected(documents,bundle,error); if (!selected) return NO;
+    NSURL *selected=graphics_selected(documents,bundle,NULL,error); if (!selected) return NO;
     if ([selected isEqual:bundle]) return YES;
     setenv("DM_MSL_DIR",[selected URLByAppendingPathComponent:@"msl"].fileSystemRepresentation,1);
     setenv("DM_NVN_SHMAP",[selected URLByAppendingPathComponent:@"tables/shader_map.tsv"].fileSystemRepresentation,1);
@@ -176,16 +236,24 @@ BOOL dm_graphics_configure(NSURL *documents, NSURL *bundle, NSError **error) {
 
 BOOL dm_import_graphics_package(NSURL *source, NSURL *documents, NSDictionary *required,
                                 void (^progress)(long long,long long), NSError **error) {
+    return graphics_read_package(source,documents,required,progress,NO,error);
+}
+
+// Discovery checks the same manifest, inventory and payload hashes without writing files.
+static BOOL graphics_read_package(NSURL *source, NSURL *documents, NSDictionary *required,
+                                  void (^progress)(long long,long long), BOOL validateOnly, NSError **error) {
     NSFileManager *fm=NSFileManager.defaultManager;
     NSURL *root=[documents URLByAppendingPathComponent:@"graphics" isDirectory:YES];
     NSURL *stage=[root URLByAppendingPathComponent:[@".import-" stringByAppendingString:NSUUID.UUID.UUIDString] isDirectory:YES];
     NSError *failure=nil; __block BOOL imported=NO;
-    NSDictionary *rootAttributes=[fm attributesOfItemAtPath:root.path error:nil];
-    if (rootAttributes && ![rootAttributes[NSFileType] isEqual:NSFileTypeDirectory]) {
-        if (error) *error=graphics_error(NSLocalizedString(@"The graphics destination must be a regular directory.",nil)); return NO;
+    if (!validateOnly) {
+        NSDictionary *rootAttributes=[fm attributesOfItemAtPath:root.path error:nil];
+        if (rootAttributes && ![rootAttributes[NSFileType] isEqual:NSFileTypeDirectory]) {
+            if (error) *error=graphics_error(NSLocalizedString(@"The graphics destination must be a regular directory.",nil)); return NO;
+        }
+        if (![fm createDirectoryAtURL:stage withIntermediateDirectories:YES attributes:nil error:&failure]) { if (error) *error=failure; return NO; }
+        [stage setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:nil];
     }
-    if (![fm createDirectoryAtURL:stage withIntermediateDirectories:YES attributes:nil error:&failure]) { if (error) *error=failure; return NO; }
-    [stage setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:nil];
     BOOL scope=[source startAccessingSecurityScopedResource];
     NSFileCoordinator *coordinator=[[NSFileCoordinator alloc] initWithFilePresenter:nil];
     __block NSError *readError=nil;
@@ -212,7 +280,8 @@ BOOL dm_import_graphics_package(NSURL *source, NSURL *documents, NSDictionary *r
             NSDictionary *m=manifest;
             NSMutableDictionary *remaining=[NSMutableDictionary dictionary]; long long total=0,done=0;
             for (NSDictionary *item in m[@"files"]) { remaining[item[@"path"]]=item; total += [item[@"size"] longLongValue]; }
-            NSNumber *capacity=nil; [stage getResourceValue:&capacity forKey:NSURLVolumeAvailableCapacityKey error:nil];
+            NSNumber *capacity=nil;
+            if (!validateOnly) [stage getResourceValue:&capacity forKey:NSURLVolumeAvailableCapacityKey error:nil];
             if (capacity && total>capacity.longLongValue) { readError=graphics_error(NSLocalizedString(@"Not enough free space to import graphics.",nil)); return; }
             if (progress) progress(0,total);
             unsigned char buffer[256*1024]; int status;
@@ -224,10 +293,13 @@ BOOL dm_import_graphics_package(NSURL *source, NSURL *documents, NSDictionary *r
                     archive_entry_size(entry)!=[item[@"size"] longLongValue]) {
                     readError=graphics_error(NSLocalizedString(@"The graphics ZIP contains an unexpected file.",nil)); return;
                 }
-                NSURL *destination=[stage URLByAppendingPathComponent:path];
-                if (![fm createDirectoryAtURL:destination.URLByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:&readError]) return;
-                int fd=open(destination.fileSystemRepresentation,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
-                if (fd<0) { readError=[NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:nil]; return; }
+                int fd=-1;
+                if (!validateOnly) {
+                    NSURL *destination=[stage URLByAppendingPathComponent:path];
+                    if (![fm createDirectoryAtURL:destination.URLByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:&readError]) return;
+                    fd=open(destination.fileSystemRepresentation,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
+                    if (fd<0) { readError=[NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:nil]; return; }
+                }
                 CC_SHA256_CTX hash; CC_SHA256_Init(&hash); long long bytes=0;
                 @try {
                     ssize_t n;
@@ -236,12 +308,12 @@ BOOL dm_import_graphics_package(NSURL *source, NSURL *documents, NSDictionary *r
                         if (bytes>[item[@"size"] longLongValue]) { readError=graphics_error(@"Graphics file size mismatch."); return; }
                         CC_SHA256_Update(&hash,buffer,(CC_LONG)n);
                         ssize_t offset=0;
-                        while (offset<n) { ssize_t w=write(fd,buffer+offset,(size_t)(n-offset)); if (w<0 && errno==EINTR) continue;
+                        while (fd>=0 && offset<n) { ssize_t w=write(fd,buffer+offset,(size_t)(n-offset)); if (w<0 && errno==EINTR) continue;
                             if (w<=0) { readError=[NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:nil]; return; } offset+=w; }
                         done+=n; if (progress) progress(done,total);
                     }
                     if (n<0) { readError=graphics_error(graphics_text(archive_error_string(archive))); return; }
-                } @finally { close(fd); }
+                } @finally { if (fd>=0) close(fd); }
                 unsigned char sha[CC_SHA256_DIGEST_LENGTH]; CC_SHA256_Final(sha,&hash);
                 if (bytes!=[item[@"size"] longLongValue] || ![graphics_hex(sha,sizeof sha) isEqual:item[@"sha256"]]) {
                     readError=graphics_error(NSLocalizedString(@"A graphics file failed its integrity check.",nil)); return;
@@ -250,6 +322,7 @@ BOOL dm_import_graphics_package(NSURL *source, NSURL *documents, NSDictionary *r
                 }
             }
             if (status!=1 || remaining.count) { readError=graphics_error(NSLocalizedString(@"The graphics ZIP is incomplete.",nil)); return; }
+            if (validateOnly) { imported=YES; return; }
             if (![manifestData writeToURL:[stage URLByAppendingPathComponent:@"manifest.json"] options:NSDataWritingAtomic error:&readError]) return;
             [stage setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:nil];
             NSString *directory=[NSString stringWithFormat:@"v%@-%@",m[@"version"],m[@"id"]];
@@ -265,7 +338,7 @@ BOOL dm_import_graphics_package(NSURL *source, NSURL *documents, NSDictionary *r
         } @finally { archive_read_free(archive); }
     }];
     if (scope) [source stopAccessingSecurityScopedResource];
-    [fm removeItemAtURL:stage error:nil];
+    if (!validateOnly) [fm removeItemAtURL:stage error:nil];
     if (error) *error=readError ?: failure;
     return imported;
 }

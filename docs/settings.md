@@ -5,6 +5,10 @@ The screen before the game starts shows resource readiness, available memory and
 **About** at the bottom shows the build time in the device's local time zone and date format, on both iPhone and Mac.
 
 On iOS, **Import ROM** and **Import shaders** sit below **Play** on this same page.
+Each button is replaced by an imported status with a checkmark once its resource is ready.
+Use **Refresh** to recheck files copied into the app manually.
+When shaders are missing, the sole valid, compatible graphics ZIP in the app's folder is automatically imported
+on launch, on returning to the app or on refresh.
 Choose the game image and separate graphics ZIP in Files. Play is enabled when
 both are ready; incompatible graphics report the reason. Imports survive app
 updates. About also shows the imported graphics version and recorded Metal
@@ -14,8 +18,9 @@ version when available. See [graphics packages](graphics-pack.md).
 - [Game](#game): [Frame rate](#frame-rate), [Render scale](#render-scale), [Console mode](#console-mode), [Upscaling](#upscaling), [Game language](#game-language), [Frame-rate counter](#frame-rate-counter)
 - [Controls](#controls): [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff)
 - [Touch left stick](#touch-left-stick): BOTW movement deadzone, response curve, full movement and size
-- [Performance](#performance): [Experimental low-memory mode](#experimental-low-memory-mode), [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
+- [Performance](#performance): [Experimental low-memory mode](#experimental-low-memory-mode), [Skip feedback snapshots (experimental)](#skip-feedback-snapshots-experimental), [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Reduce to 30 fps when hot](#reduce-to-30-fps-when-hot), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
 - [The Mac settings window](#the-mac-settings-window): [Display mode](#display-mode)
+- [TV](#tv)
 - [Settings in a file](#settings-in-a-file)
 
 ## Tested defaults
@@ -133,6 +138,14 @@ With the switch off, the original heap, GPU pool handling and pipeline/cache set
 
 Mac measurements showed a reduction, but the iPhone result remains unverified. [Preset details, log checks and measurement limits](experiments/file-backed-memory.md#enable-from-the-game-overlay).
 
+### Skip feedback snapshots (experimental)
+
+NVN games only, off by default on iPhone and Mac. Turning this experiment on skips the copies that protect a draw reading a colour attachment it also writes. It may reduce GPU work, but can produce incorrect colours, blocks or other rendering errors. It does not provide replacement protection. Frame-rate and thermal improvements on iPhone have not been established.
+
+The choice is saved when you press **Play** and applies to that game run. To compare it with normal rendering, fully close the app, reopen it, change the switch and load the same scene. Turning it off, or using **Reset to tested defaults** followed by **Play**, restores automatic feedback snapshots. An explicit `env.txt` or launch-environment override takes priority: `DM_NVN_FB_SNAP=0` skips snapshots, `1` restores automatic snapshots, and the existing diagnostic value `all` still requests a fresh snapshot for each sampling draw.
+
+This setting controls [same-pass feedback snapshots](reference/rendering.md#same-pass-feedback-read-through-a-snapshot). **Frame buffering** below controls the separate copies used to display finished frames.
+
 ### Frame buffering
 
 Each finished frame is copied into a buffer of two images that the screen shows from, so the game can start its next frame at once instead of waiting for the screen to give its image back.
@@ -190,7 +203,7 @@ At start, before the game's first frame, the app prepares what it already knows:
 
 ### Pipeline prebuild
 
-Builds a stand-in for every pair of shaders the game has (15,767 for Breath of the Wild) and puts them into the pipeline archive, so that a scene you have never seen has a stand-in for each of its draws instead of a stutter. It runs before the game's first frame, behind a **Preparing pipelines** screen: the first start waits a few minutes for it, once, and so does the first start after a game update or an app update that brings new shaders. Every other start skips it. It needs Metal 4 pipelines.
+Builds a stand-in for every pair of shaders the game has (15,767 for Breath of the Wild) and puts them into the pipeline archive, so that a scene you have never seen has a stand-in for each of its draws instead of a stutter. It runs before the game's first frame, behind a **Preparing pipelines** screen: the first start waits a few minutes for it, once, and so does the first start after a game update or an app update that brings new shaders. Every other start skips it. It needs Metal 4 pipelines, and its row shows only while that option is on.
 
 Built in the background while playing instead, the stand-ins took an iPhone 17 Pro Max's GPU from about 13 to 15–18 ms a frame in Breath of the Wild, so the app does the work up front.
 
@@ -224,6 +237,18 @@ flowchart LR
 - **On** (the default for most games): an even 30 fps (or 20) in heavy scenes instead of a mix of 30 and 60.
 - **Off:** the game keeps aiming at 60; a late frame is shown one refresh later and the next one goes on as usual, so heavy scenes look less even but stay closer to 60 on average.
 - **When to change it:** turn it off if the game often falls to 30 fps although it is only slightly late.
+
+### Reduce to 30 fps when hot
+
+iPhone and iPad only, for builds with the app's frame-step control. Off by default.
+When enabled, a serious or critical system thermal state caps the game at 30 fps.
+The selected cap returns after the device has stayed fair or cooler for 30 seconds.
+The choice is saved when you press **Play** and applies on the next game start.
+
+With it off, the app adds no temperature-based 30 fps cap. The selected frame rate,
+movie limits and **Hold frames when late**, including its recovery to 60 fps,
+continue to apply. iOS still manages the device's frequencies and thermal limits.
+`DM_THERMAL_CAP=1` in `Documents/env.txt` enables the same option; unset or `0` is off.
 
 ### Performance HUD
 
@@ -263,6 +288,10 @@ A save that is replaced, on the device or in iCloud Drive, is kept first, beside
 
 iCloud Drive takes a moment to carry a file from one device to the other. Quit the game on one device and give it a few seconds before you start it on the other. Without a connection the game plays on with the save it has and sends it later. The game log says what came in and what went out (lines starting with `save sync:`).
 
+## TV
+
+Connect a TV or monitor by cable, or start Screen Mirroring to an Apple TV or AirPlay TV. The game fills it in 16:9 at up to 1080p and switches to **Docked**; the iPhone or iPad keeps the controls. Disconnect to bring the game back to the device in its earlier mode. AirPlay adds some delay; a cable has almost none.
+
 ## Settings in a file
 
 A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under the app's name) sets a setting from the file: the settings screen shows it greyed out, and the file wins over your choice and the game's default. Fully close and reopen the app after editing the file. The variables:
@@ -283,6 +312,7 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Rumble cutoff | `DM_RUMBLE_MIN` | `0` to `0.9` |
 | Upscaling | `DM_PRESENT_UPSCALE` | `off`, `scene` (verified profiles), `metalfx` |
 | Experimental low-memory mode (BOTW) | `DM_LOW_MEMORY` | `1`, `0` |
+| Skip feedback snapshots (experimental) | `DM_NVN_FB_SNAP` | `0` skips (switch on), `1` automatic (switch off, default) |
 | Frame buffering | `DM_PRESENT_SNAP` | `1`, `0` |
 | Metal 4 pipelines | `DM_PSO_MTL4` | `1`, `0` |
 | Pipeline prebuild | `DM_PSO_PREBUILD` | `1`, `0` |

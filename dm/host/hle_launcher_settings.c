@@ -34,7 +34,8 @@ static int known_key(const char *key) {
         "DM_BOTW_PORTRAIT_PAD_ZR_X", "DM_BOTW_PORTRAIT_PAD_ZR_Y", "DM_BOTW_PORTRAIT_PAD_ZR_SCALE",
         "DM_BOTW_PORTRAIT_PAD_DPAD_X", "DM_BOTW_PORTRAIT_PAD_DPAD_Y", "DM_BOTW_PORTRAIT_PAD_DPAD_SCALE",
         "DM_BOTW_PORTRAIT_PAD_BADGES", "DM_LOW_MEMORY", "DM_PRESENT_SNAP", "DM_PSO_MTL4",
-        "DM_PSO_PREBUILD", "DM_NVN_ENC_THREAD", "DM_FPS_HOLD", "DM_METAL_HUD"
+        "DM_PSO_PREBUILD", "DM_NVN_ENC_THREAD", "DM_FPS_HOLD", "DM_METAL_HUD",
+        "DM_NVN_FB_SNAP", "DM_THERMAL_CAP"
     };
     if (!key) return 0;
     for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) if (!strcmp(key, keys[i])) return 1;

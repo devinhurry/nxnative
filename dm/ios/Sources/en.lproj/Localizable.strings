@@ -44,6 +44,8 @@
 "Game rumble" = "Game rumble";
 "Handheld" = "Handheld";
 "Hold frames when late" = "Hold frames when late";
+"Reduce to 30 fps when hot" = "Reduce to 30 fps when hot";
+"Optional cap while the device is hot. Applies when you press Play." = "Optional cap while the device is hot. Applies when you press Play.";
 "Horizontal offset" = "Horizontal offset";
 "Ignores small movements near the touch-down point." = "Ignores small movements near the touch-down point.";
 "Keeps a pipeline archive; uses more memory." = "Keeps a pipeline archive; uses more memory.";
@@ -59,6 +61,8 @@
 "Metal 4 pipelines" = "Metal 4 pipelines";
 "Performance" = "Performance";
 "Experimental low-memory mode" = "Experimental low-memory mode";
+"Skip feedback snapshots (experimental)" = "Skip feedback snapshots (experimental)";
+"May reduce GPU copies but can cause rendering errors. Applies when you press Play." = "May reduce GPU copies but can cause rendering errors. Applies when you press Play.";
 "Low-memory mode is enabled to help keep the game running. Performance may be affected." = "Low-memory mode is enabled to help keep the game running. Performance may be affected.";
 "May reduce memory use at the cost of more storage activity and pauses in new scenes. Applies when you press Play." = "May reduce memory use at the cost of more storage activity and pauses in new scenes. Applies when you press Play.";
 "Performance HUD" = "Performance HUD";
@@ -158,6 +162,10 @@
 "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately." = "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately.";
 "Import ROM" = "Import ROM";
 "Import shaders" = "Import shaders";
+"ROM imported" = "ROM imported";
+"Shaders imported" = "Shaders imported";
+"Refresh" = "Refresh";
+"More than one valid graphics ZIP was found. Use Import shaders to choose a package." = "More than one valid graphics ZIP was found. Use Import shaders to choose a package.";
 "Import failed" = "Import failed";
 "OK" = "OK";
 "Import RomFS.img to start." = "Import RomFS.img to start.";

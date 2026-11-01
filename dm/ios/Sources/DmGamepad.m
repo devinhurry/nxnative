@@ -283,6 +283,8 @@ static void pads_start(void);   // Physical controllers, below
     NSMapTable<UITouch *, NSNumber *> *_owner;     // touch → control (with the key for C_BTN or the stick for C_STICK, << 8)
     UITouch *_stick[2]; CGPoint _stickNow[2];      // the touch holding each stick and where it is now (0 left, 1 right)
     UITouch *_leftAxisTouch, *_shieldTouch; CGPoint _shieldNow, _shieldOrigin;
+    NSTimeInterval _shieldDownTime;
+    BOOL _shieldLatched, _shieldTapUnlatches, _shieldDragged;
     uint64_t _botwCancelPending, _botwCancelLatched, _botwCancelOutside;
     CGPoint _lCentre, _rCentre;                    // the stick centres: where their touches landed (the left one returns to the ring's home on release)
     CGPoint _ringAt;                               // where the left stick's ring is drawn now
@@ -486,7 +488,7 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
     BOOL botwActive = [self botwTouchControlsActive];
     _key[B_ZL].hidden = _tap || botwActive;
     _shieldGraph.hidden = !botwActive;
-    _shieldRing.hidden = !botwActive || !_shieldTouch;
+    _shieldRing.hidden = !botwActive || !(_shieldTouch || _shieldLatched);
     _shieldDirection.hidden = YES; // layout supplies a direction only for a non-neutral drag
     if (!botwActive) _botwLookTapPending = NO;
     _key[B_LS].hidden = botwActive || _tap || !_full;
@@ -536,7 +538,7 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
     BOOL hideDpadArt = (botwActive && dm_botw_touch_loadout_visible()) || _padOff;
     _key[B_ZL].hidden = _tap || botwActive;
     _shieldGraph.hidden = !botwActive;
-    _shieldRing.hidden = !botwActive || !_shieldTouch;
+    _shieldRing.hidden = !botwActive || !(_shieldTouch || _shieldLatched);
     _shieldDirection.hidden = YES;
     _key[B_LS].hidden = botwActive || _tap || !_full;
     _key[B_RS].hidden = botwActive || _tap || !_full;
@@ -1000,6 +1002,15 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
 // ---- Touch ----
 - (void)recompute {
     uint64_t face = 0; for (UITouch *t in _faceOf) face |= [_faceOf objectForKey:t].unsignedLongLongValue;
+    if (face & DM_BTN_B) {
+        if (_shieldLatched) {
+            _shieldLatched = NO;
+            dm_input_cancel_virtual_latch(DM_BTN_ZL);
+            [self setNeedsLayout];
+        }
+        // A shield tap already in progress must not re-latch after B is released.
+        if (_shieldTouch) _shieldTapUnlatches = YES;
+    }
     uint64_t btn = 0, dpad = 0; BOOL swap = NO;
     for (UITouch *t in _owner) { uint64_t v = [_owner objectForKey:t].unsignedLongLongValue; int c = (int)(v & 0xff);
         if (c == C_BTN) {
@@ -1011,6 +1022,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     // Keep a canceled trigger published even after its finger lifts. The native
     // sequencer needs one or more real Npad samples to observe R/ZR with B.
     btn |= _botwCancelPending;
+    if (_shieldLatched && [self botwTouchControlsActive]) btn |= DM_BTN_ZL;
     int32_t ax[4] = {0};
     float leftDead = [self botwTouchControlsActive] ? DM_TP_BOTW_STICK_DEAD : DM_TP_DEAD;
     if (_leftAxisTouch) {
@@ -1215,6 +1227,9 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         int hit = _tap ? -1 : [self btnAt:p];
         if ([self botwTouchControlsActive] && hit != B_L && !_shieldTouch && dist(p, self.shieldHome) <= self.shieldR * K_STICK_GRAB) {
             _botwLookTapPending = NO; _shieldTouch = _leftAxisTouch = t; _shieldNow = _shieldOrigin = p;
+            _shieldDownTime = t.timestamp; _shieldDragged = NO;
+            _shieldTapUnlatches = _shieldLatched; _shieldLatched = NO;
+            if (_shieldTapUnlatches) [self emitTouchFeedback];
             [_owner setObject:@(C_SHIELD) forKey:t]; [self setNeedsLayout]; continue;
         }
         if (hit >= 0) {
@@ -1344,7 +1359,11 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
             dm_botw_touch_camera_pose_modifier(_botwCameraGesture.kind == DM_BOTW_CAMERA_GESTURE_POSE);
         }
         else if (c == C_FACE) [_faceOf setObject:@([self faceAt:p]) forKey:t];
-        else if (c == C_SHIELD) { _shieldNow = p; [self setNeedsLayout]; }
+        else if (c == C_SHIELD) {
+            _shieldNow = p;
+            _shieldDragged |= dm_touchpad_look_dragged(_shieldOrigin.x,_shieldOrigin.y,p.x,p.y,DM_TP_LOOK_TAP_SLOP*self.u);
+            [self setNeedsLayout];
+        }
         else if (c == C_BTN && [self botwTouchControlsActive] && ((v >> 8) == B_R || (v >> 8) == B_ZR)) {
             uint64_t bit = 1ull << (v >> 8);
             CGPoint center = [self dropCenter:(int)(v >> 8)];
@@ -1418,7 +1437,15 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         }
         if ((v & 0xff) == C_GAME && (v >> 8) < 16) { _game[v >> 8] = nil; game = YES; }
         [_owner removeObjectForKey:t]; [_faceOf removeObjectForKey:t]; for (int i = 0; i < 2; i++) if (t == _stick[i]) _stick[i] = nil;
-        if (t == _shieldTouch) { _shieldTouch = nil; _shieldNow = _shieldOrigin = CGPointZero; [self setNeedsLayout]; }
+        if (t == _shieldTouch) {
+            CGPoint p = [t locationInView:self];
+            _shieldDragged |= dm_touchpad_look_dragged(_shieldOrigin.x,_shieldOrigin.y,p.x,p.y,DM_TP_LOOK_TAP_SLOP*self.u);
+            _shieldLatched = ended && !_shieldTapUnlatches &&
+                dm_touchpad_look_tap((float)(t.timestamp-_shieldDownTime),_shieldDragged);
+            _shieldTouch = nil; _shieldNow = _shieldOrigin = CGPointZero;
+            _shieldDownTime = 0; _shieldTapUnlatches = _shieldDragged = NO;
+            [self setNeedsLayout];
+        }
         if (t == _leftAxisTouch) {
             _leftAxisTouch = nil;
             for (UITouch *other in _owner) {
@@ -1457,6 +1484,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
 - (void)reset {
     uint64_t cancelMask = DM_BTN_LS | DM_BTN_RS | DM_BTN_MINUS;
     if (_btnBits & DM_BTN_L) cancelMask |= DM_BTN_L;
+    if (_btnBits & DM_BTN_ZL) cancelMask |= DM_BTN_ZL;
     BOOL hadManualPad = _manualMenuPad;
     _manualMenuPad = NO; _menuPadChord = nil;
     if (hadManualPad) {
@@ -1470,6 +1498,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     if (_botwMapPinchTouch) { dm_botw_touch_menu_pinch(0.0f); _botwMapPinchTouch = nil; _botwMapPinchStart = 0; }
     if (botwTouchHudSupported()) dm_botw_touch_actions_reset();
     if (botwTouchHudSupported()) dm_input_cancel_virtual_latch(cancelMask);
+    _shieldLatched = _shieldTapUnlatches = _shieldDragged = NO; _shieldDownTime = 0;
     [self cancelLook]; [_owner removeAllObjects]; [_faceOf removeAllObjects]; _stick[0] = _stick[1] = nil;
     _leftAxisTouch = _shieldTouch = nil; _shieldNow = _shieldOrigin = CGPointZero; _botwCancelPending = _botwCancelLatched = _botwCancelOutside = 0;
     _leftStickTapEnd = 0; _leftStickTapGap = INFINITY;
@@ -1619,7 +1648,7 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
     setPath(_shieldRing, circlePath(sh, sr));
     setPath(_shieldGraph, dm_botw_shield_graph_path(sh, u * [self botwLayoutScale:B_ZL]));
     CGPathRef direction = _shieldTouch ? dm_botw_stick_direction_path(sh, _shieldNow, sr, u * [self botwLayoutScale:B_ZL]) : NULL;
-    _shieldRing.hidden = ![self botwTouchControlsActive] || !_shieldTouch;
+    _shieldRing.hidden = ![self botwTouchControlsActive] || !(_shieldTouch || _shieldLatched);
     _shieldDirection.hidden = _shieldRing.hidden || !direction;
     if (direction) setPath(_shieldDirection, direction);
     int triggerHeld = -1;

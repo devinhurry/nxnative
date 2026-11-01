@@ -1,6 +1,7 @@
 // iOS App entry: set the environment (game files, saves, shader libraries), write the host log to Documents/log.txt, create the window (front_ios.m), then run the host's dm_main on a big-stack thread.
 // The game files (RomFS) ship inside the App at <App>/romfs; Documents/romfs.img (plain or combined base + DLC), Documents/romfs and previously imported Documents/game-data/romfs are also accepted.
 #import <UIKit/UIKit.h>
+#import <Metal/Metal.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
@@ -116,6 +117,21 @@ static NSString *romfs_locate(void) {
     return nil;
 }
 
+// Add-on content (DLC): each DLC's RomFS image at <dir>/<index>.img (or a legacy <index>/ folder). Like the game files, Documents/aoc comes before <App>/aoc.
+// A DM_AOC_DIR that is already set (env.txt, the launch environment) wins. The host mounts and counts the DLC from DM_AOC_DIR (hle_fs.c, hle_misc.c)
+static void aoc_locate(void) {
+    if (getenv("DM_AOC_DIR")) return;
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
+    for (NSString *d in @[[doc stringByAppendingPathComponent:@"aoc"], [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"aoc"]]) {
+        BOOL dir = NO;
+        if (![fm fileExistsAtPath:d isDirectory:&dir] || !dir) continue;
+        setenv("DM_AOC_DIR", d.fileSystemRepresentation, 0);
+        fprintf(stderr, "boot: DLC from %s\n", d.fileSystemRepresentation);
+        return;
+    }
+}
+
 static void romfs_identity_report(NSString *doc);
 int front_ios_prepare_game(void) {
     if (g_boot_ok) return 1;
@@ -143,6 +159,7 @@ int front_ios_prepare_game(void) {
                 setenv("DM_AOC_DIR", folder_aoc.fileSystemRepresentation, 1);   // combined image, then imported DLC, then bundled DLC
         }
     }   // an explicit different DM_AOC_DIR, including empty, remains authoritative
+    aoc_locate();   // explicit selection, combined image and imported DLC precede the standalone Documents/bundled fallback
     dm_host_preload_start(g_argc, g_argv);
     g_boot_ok = 1;
     return 1;
@@ -175,6 +192,17 @@ NSString *dm_startup_graphics_error(void) {
     return dm_graphics_status([NSURL fileURLWithPath:doc isDirectory:YES],NSBundle.mainBundle.resourceURL);
 }
 BOOL dm_startup_prepare(void) { return front_ios_prepare_game() != 0; }
+// Check after the launcher applies its HUD setting: Metal reads MTL_HUD_ENABLED at the first device creation (#840).
+// GPUs without native BC support use the renderer's capability-selected decoding path.
+const char *front_ios_device_check(void) {
+    static char msg[320]; static int done;
+    if (done++) return msg[0] ? msg : NULL;
+    id<MTLDevice> gpu = MTLCreateSystemDefaultDevice();   // the system default device, the one the graphics layers take (mtl_init repeats this check for the other routes)
+    if (gpu) return NULL;
+    snprintf(msg, sizeof msg, "No Metal device is available.");
+    fprintf(stderr, "[RED] boot: %s\n", msg);
+    return msg;
+}
 static void romfs_identity_report(NSString *doc) {
     romfs_id want, got;
     int rc = romfs_id_check([NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"romfs.id"].fileSystemRepresentation,
@@ -227,7 +255,7 @@ static int boot_env(void) {
     }
     setenv("DM_ENV_FILE_KEYS", [from_file componentsJoinedByString:@" "].UTF8String, 1);   // the launcher keeps what an env file set (LauncherSettings.swift)
     setenv("DM_ENV_LAUNCH_KEYS", [from_launch componentsJoinedByString:@" "].UTF8String, 1);   // and what the launch environment set (docs/frontends.md, Saved choices)
-    front_hud_env();   // before the early loading below can make a device
+    front_hud_env();   // an env file's DM_METAL_HUD; nothing in this process makes a Metal device before startGame (front_ios.m), which applies the launcher's
     // Game language (nn::oe::GetDesiredLanguage, hle_oe.c): the one the IPA was packed with (the NSP script's LANGUAGE / --language → DMLanguage in Info.plist), unless an env file sets DM_LANG
     // (or the launcher, which replaces this default before the game starts)
     NSString *lang = [NSBundle.mainBundle objectForInfoDictionaryKey:@"DMLanguage"];
@@ -239,8 +267,6 @@ static int boot_env(void) {
     setenv("DM_NVN_SHMAP", [dm stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation, 0);
     setenv("DM_MSL_DIR", [res stringByAppendingPathComponent:@"msl"].fileSystemRepresentation, 0);
     setenv("DM_FONT_DIR", [dm stringByAppendingPathComponent:@"font"].fileSystemRepresentation, 0);   // Shared-font stand-ins (standard.ttf / nintendo_ext.ttf): iOS lacks the macOS font path
-    NSString *aoc = [res stringByAppendingPathComponent:@"aoc"];   // add-on content: build_ipa.sh puts the RomFS extracted from the player's DLC NSPs at <App>/aoc/<index>/
-    if ([fm fileExistsAtPath:aoc]) setenv("DM_AOC_DIR", aoc.fileSystemRepresentation, 0);
     NSString *pso = [res stringByAppendingPathComponent:@"pso"];   // the pipeline archive made offline (build_ipa.sh, dm/gfx/tools/pso_offline.py): the shader pairs' bases, which the device then does not build
     if ([fm fileExistsAtPath:pso]) setenv("DM_PSO_BUNDLE", pso.fileSystemRepresentation, 0);
     chdir(doc.fileSystemRepresentation);
@@ -270,7 +296,7 @@ void front_ios_boot(void) {   // Called by front_ios.m once the window and Metal
     return front_ios_orientations(window);
 }
 - (UISceneConfiguration *)application:(UIApplication *)a configurationForConnectingSceneSession:(UISceneSession *)s options:(UISceneConnectionOptions *)o {
-    return [[UISceneConfiguration alloc] initWithName:@"Default" sessionRole:s.role];
+    return [[UISceneConfiguration alloc] initWithName:[s.role isEqualToString:UIWindowSceneSessionRoleExternalDisplayNonInteractive] ? @"TV" : @"Default" sessionRole:s.role];   // a TV (front_ios.m DmTVSceneDelegate)
 }
 @end
 
