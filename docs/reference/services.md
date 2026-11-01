@@ -830,6 +830,14 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Found on:** [Super Mario Bros. Wonder](../../dm/games/010015100B514000/README.md) (v0, code inherited from d2r-mobile).
 
 
+### Temporary BOTW gamepad disappears immediately in gameplay
+
+- **Symptom:** the three-finger double tap shows the full virtual gamepad and Settings, then they immediately disappear during gameplay.
+- **Cause:** UIKit disabled native touch HUD publication when the temporary pad was active. `dm_botw_touch_controls_visible()` requires that publication, so the next refresh misread the disabled HUD as a menu transition and cleared the manual override. The original UIKit fixture ignored this dependency.
+- **Fix:** publish the native HUD for both custom touch controls and the temporary full pad. A manual pad changes artwork and input routing while keeping scene observation alive. Physical controllers still disable touch publication. Mac preview already follows this rule.
+- **Check:** the UIKit fixture now gates gameplay visibility on published touch HUD state, matching the native dependency. Repeated scene refreshes must preserve the open pad and Settings; the second gesture, a real menu transition and controller connection still clear them through their existing owners.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game).
+
 ### In-game launcher settings use the runtime state owners
 
 - **Symptom:** changes made from an in-game settings sheet appear saved but do not affect controls, frame rate, rendering size or rumble until relaunch.

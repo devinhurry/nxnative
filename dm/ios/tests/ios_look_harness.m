@@ -143,6 +143,7 @@ static int g_touch_count, g_touch_sets;
 static dm_motion g_motion_samples[16];
 static int g_motion_count;
 static BOOL g_botw_touchhud_available;
+static BOOL g_published_touchhud_active;
 static dm_botw_rune_icon_state g_botw_rune_icon_snapshot;
 static BOOL g_botw_touch_actions_available;
 static uint64_t g_botw_cancel_complete;
@@ -176,7 +177,7 @@ int dm_botw_touch_loadout_visible(void) { return g_botw_loadout_visible; }
 int dm_botw_touch_quick_select_active(void) { return g_botw_quick_select; }
 int dm_botw_touch_menu_dpad_visible(void) { return g_botw_hero_path; }
 int dm_botw_touch_controls_visible(void) {
-    if (g_force_controls_hidden) return 0;
+    if (g_force_controls_hidden || (g_botw_touchhud_available && !g_published_touchhud_active)) return 0;
     return !g_botw_touchhud_available || (g_botw_gameplay_ready && !dm_botw_touch_menu_visible());
 }
 int dm_botw_touch_map_active(void) { return g_botw_touch_map_active; }
@@ -209,7 +210,7 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
 }
 int dm_botw_rune_icon_snapshot(dm_botw_rune_icon_state *out) { if (!out) return 0; *out = g_botw_rune_icon_snapshot; return 1; }
 static float g_published_dpad_scale;
-void dm_botw_touch_hud_publish(int active, float center_x, float center_y, float dpad_scale) { (void)center_x; (void)center_y; if (active) g_published_dpad_scale=dpad_scale; }
+void dm_botw_touch_hud_publish(int active, float center_x, float center_y, float dpad_scale) { (void)center_x; (void)center_y; g_published_touchhud_active=active; if (active) g_published_dpad_scale=dpad_scale; }
 void dm_botw_touch_hud_map_tapped(void) {}
 int dm_botw_touch_actions_available(void) { return g_botw_touch_actions_available; }
 void dm_botw_touch_cancel_trigger(uint64_t bit) { g_botw_cancel_requested |= bit; }
@@ -1849,6 +1850,11 @@ static void test_botw_gameplay_settings(DmGamepad *view) {
     CHECK([gesture.delegate gestureRecognizer:gesture shouldReceiveTouch:touch(300,100)],
           "the existing three-finger double tap is eligible during BOTW gameplay");
     [view revealBotwMenuPad:[RecognizedMenuTap new]]; [view layoutIfNeeded];
+    for (int frame=0;frame<4;frame++) {
+        [view refreshBotwTouchMenuMode]; [view layoutIfNeeded];
+    }
+    CHECK(g_published_touchhud_active && [view dm_testManualMenuPad] && ![view dm_testControlsHidden] && !button.hidden,
+          "gameplay scene refresh keeps the manually opened gamepad and its HUD state active");
     CHECK(!button.hidden && [view dm_testSettingsRevealed] && [view dm_testManualMenuPad] &&
           ![view dm_testL3ArtworkHidden] && ![view dm_testR3ArtworkHidden],
           "gameplay gesture opens the full handpad and Settings together over custom touch controls");
