@@ -22,6 +22,7 @@
 #include "framegen.h"
 static void framegen_note_pass(MTL4RenderPassDescriptor *pd);
 static int framegen_present_active(void);
+static int framegen_ui_canvas(void);
 #include "../tex/nvn_fmt_mtl.h"
 #include "../tex/nvn_deswizzle.h"
 #include "../tex/nvn_deswizzle_gpu.h"
@@ -2991,7 +2992,7 @@ static void rr_reset(void);
 static id<MTL4RenderCommandEncoder> g_enc;
 static int enc_open(void) { return g_enc != nil; }
 // Target info of the current render pass: determined once from the attachments at rp_begin and shared by all draws in the pass (pipeline key, depth-stencil, viewport / scissor all depend only on it)
-static struct { uint32_t cfmt[8], dfmt, sfmt, samples; int hd, hs; NSUInteger tw, th; uint64_t serial, reg_gen, ser_gen, range_dirty; int range_external, range_depth_nonro, layered; __unsafe_unretained id<MTLTexture> range_color, range_depth; } g_pass;
+static struct { uint32_t cfmt[8], dfmt, sfmt, samples; int hd, hs; NSUInteger tw, th; uint64_t serial, reg_gen, ser_gen, range_dirty; int range_external, range_depth_nonro, layered, framegen_ui; __unsafe_unretained id<MTLTexture> range_color, range_depth; } g_pass;
 static int g_rp_layered;   // the pass about to open is for a vertex shader that writes the layer (draw → rp_begin_ex)
 // Slice-merged passes (DM_NVN_SLICE_MERGE, on by default; 0 off): consecutive passes that each draw into another layer of one level of the same array or cube texture,
 // with nothing between them but state, uniform updates and draws (no game barrier, clear, copy or dispatch: sm_scan), run as one layered pass. Each draw reaches its layer through a vertex
@@ -3856,6 +3857,7 @@ static void shmap_load(void) {
     uint64_t mis[4];   // mis: texture slots 0-255 already reported for a type mismatch (tex_mis_note)
     NSString *ventry; id<MTLFunction> vfn; int vfn_state;
     id<MTLFunction> pfn; int pfn_state, has_pull;
+    id<MTLLibrary> uilib; id<MTLFunction> uifn[4]; int ui_state, has_ui;
     id<MTLFunction> afn[4]; int afn_state, has_alpha;
     id<MTLLibrary> llib; NSMutableDictionary<NSNumber *, id<MTLFunction>> *lfn; int lfn_state, has_logic; } @end   // llib: the logic operation library <key>_bl, lfn: its fn_u / fn_m specialized per set of targets (lo_fn; lfn_state as afn_state; has_logic: the reflection names one, dmsh_logic.py)   // afn: fn, fn_u, fn_m, fn_d of the alpha test library <key>_ba (at_fn; afn_state 0 untried, 1 loaded, 2 failed; has_alpha: the reflection names one, dmsh_alpha.py)   // pfn: the same entry of the pulling library <key>_bp (pull_fn; has_pull: the reflection names one, dmsh_pull.py)   // vertex: the entry point loaded (by the depth mode); vfn: the same entry of the shadow-input library <key>_bv (vin_fn; state 0 untried, 1 loaded, 2 failed)
 @implementation NvShader
@@ -4055,6 +4057,7 @@ static NvShader *shader_load(NSString *pc, int stage, int layer) {
     if (stage == 0 && !layer) o->has_pull = [j[@"pull"] isKindOfClass:[NSDictionary class]];
     if (stage == 1) o->has_alpha = [j[@"alpha"] isKindOfClass:[NSDictionary class]];
     if (stage == 1) o->has_logic = [j[@"logic"] isKindOfClass:[NSDictionary class]];
+    if (stage == 1) o->has_ui = [j[@"ui_capture"] isKindOfClass:[NSDictionary class]];
     // A function that declares function constants cannot go into a pipeline until it is specialized, even when every constant is optional. SPIRV-Cross declares one for shaders that read a
     // texel buffer (spvLinearTextureAlignmentOverride, used only through is_function_constant_defined; one of Pokémon Legends: Z-A's imgui pixel shaders, 2bd5037003980716): an empty set of
     // values keeps its default. Without it the first pipeline with that shader failed Metal's validation (`fragmentFunction main0 cannot be used to build a pipeline state`)
@@ -5666,6 +5669,29 @@ static void lo_bind(id<MTLCommandEncoder> en) {
     }
     enc_r_args((id<MTL4RenderCommandEncoder>)en, MTLRenderStageFragment, gpu, DMSH_LOGIC_BUFFER);
 }
+static id<MTLFunction> framegen_ui_fn(NvShader *fs,int opaque,int alpha) {
+    if (!fs || !fs->has_ui) return nil;
+    static os_unfair_lock lock=OS_UNFAIR_LOCK_INIT;
+    os_unfair_lock_lock(&lock);
+    NSError *error=nil;
+    if (!fs->ui_state) {
+        size_t n=strlen(fs->key);
+        fs->uilib=lib_from_file([NSString stringWithFormat:@"%@/%.*s_bui.metallib",g_msl_dir,(int)(n>2?n-2:n),fs->key],&error);
+        fs->ui_state=fs->uilib?1:2;
+    }
+    unsigned index=(opaque?2:0)|(alpha?1:0);
+    if (fs->ui_state==1 && !fs->uifn[index]) {
+        MTLFunctionConstantValues *values=[MTLFunctionConstantValues new];
+        bool force=opaque!=0; [values setConstantValue:&force type:MTLDataTypeBool atIndex:DMSH_LOGIC_FC+8]; // after the eight logic-target flags (dmsh_ui.py)
+        NSString *entry=alpha?@"main0_alpha":@"main0";
+        id<MTLFunction> f=fn4_note([fs->uilib newFunctionWithName:entry constantValues:values error:&error],fs->uilib,entry,values);
+        if (f && fs->rf.nb && [f newArgumentEncoderWithBufferIndex:fs->rf.abi].encodedLength!=fs->arg_len) f=nil;
+        fs->uifn[index]=f;
+    }
+    id<MTLFunction> f=fs->uifn[index];
+    if (!f) { static int errors; if (errors++<8) MLOG("[RED] separate UI library of %s cannot be used: %s",fs->key,error.localizedDescription.UTF8String?:"missing compatible entry point"); }
+    os_unfair_lock_unlock(&lock); return f;
+}
 static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvShader *fs, id<MTLFunction> fsfn, int merged) {
     MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
     d.vertexFunction = vs->fn; d.fragmentFunction = fsfn ? fsfn : fs ? fs->fn : nil;
@@ -5709,7 +5735,7 @@ static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvS
     if (k->fsfn == TF_MARK || k->fsfn == GEO_MARK) { d.vertexFunction = k->fsfn == GEO_MARK ? vs->geo_fn : vs->tf_fn; d.fragmentFunction = nil; d.rasterizationEnabled = NO; }   // transform feedback capture (tf_draw)
     if (k->fsfn == DISCARD_MARK) { d.vertexFunction = vs->discard_fn; d.fragmentFunction = nil; d.rasterizationEnabled = NO; }
     d.rasterSampleCount = k->samples ? k->samples : 1;
-    d.alphaToCoverageEnabled = k->a2c;
+    d.alphaToCoverageEnabled = k->a2c & 1;
     for (int i = 0; i < 8; i++) {
         if (!k->cfmt[i]) continue;
         MTLRenderPipelineColorAttachmentDescriptor *c = d.colorAttachments[i];
@@ -5732,6 +5758,24 @@ static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvS
             c.sourceRGBBlendFactor = bfac(bl.src_rgb); c.destinationRGBBlendFactor = bfac(bl.dst_rgb);
             c.sourceAlphaBlendFactor = bfac(bl.src_a); c.destinationAlphaBlendFactor = bfac(bl.dst_a);
             c.rgbBlendOperation = bop(bl.eq_rgb); c.alphaBlendOperation = bop(bl.eq_a);
+        }
+    }
+    if ((k->a2c & 2) && fs && !fsfn && !merged) {
+        id<MTLFunction> ui=framegen_ui_fn(fs,!(k->blend_en&1),k->atest!=0);
+        MTLRenderPipelineColorAttachmentDescriptor *c=d.colorAttachments[7];
+        c.writeMask=MTLColorWriteMaskNone; c.blendingEnabled=NO;
+        if (ui) {
+            d.fragmentFunction=ui;
+            uint32_t mask=k->chmask&15;
+            if (mask&7) c.writeMask=(mask&1?MTLColorWriteMaskRed:0)|(mask&2?MTLColorWriteMaskGreen:0)|(mask&4?MTLColorWriteMaskBlue:0)|MTLColorWriteMaskAlpha;
+            if (k->blend_en&1) {
+                blend_st blend=adv_blend(k->blend[0]); int over=blend.dst_rgb==NVN_BLEND_FUNC_ONE_MINUS_SRC_ALPHA;
+                c.blendingEnabled=YES;
+                c.sourceRGBBlendFactor=bfac(blend.src_rgb); c.destinationRGBBlendFactor=bfac(blend.dst_rgb); c.rgbBlendOperation=bop(blend.eq_rgb);
+                c.sourceAlphaBlendFactor=over?MTLBlendFactorOne:MTLBlendFactorZero;
+                c.destinationAlphaBlendFactor=over?MTLBlendFactorOneMinusSourceAlpha:MTLBlendFactorOne;
+                c.alphaBlendOperation=MTLBlendOperationAdd;
+            }
         }
     }
     d.depthAttachmentPixelFormat = (MTLPixelFormat)k->dfmt; d.stencilAttachmentPixelFormat = (MTLPixelFormat)k->sfmt;
@@ -6183,7 +6227,7 @@ static void pso_key_fill(pso_key *k, NvShader *vs, NvShader *fs, const uint32_t 
     memset(k, 0, sizeof *k);
     k->vs = (__bridge void *)vs; k->fs = (__bridge void *)fs;
     memcpy(k->cfmt, cfmt, sizeof k->cfmt); k->dfmt = dfmt; k->sfmt = sfmt; k->samples = samples;
-    k->blend_en = S.color.blend_en; k->chmask = S.chmask.mask; k->a2c = S.ms.a2c; k->atest = atest_key(fs, cfmt, lmap ? g_pso_lmap : NULL);
+    k->blend_en = S.color.blend_en; k->chmask = S.chmask.mask; k->a2c = S.ms.a2c | (cfmt==g_pass.cfmt && g_pass.framegen_ui && !lmap ? 2u:0); k->atest = atest_key(fs, cfmt, lmap ? g_pso_lmap : NULL);
     for (int i = 0; i < 8; i++) if (k->cfmt[i] || lmap) k->blend[i] = S.blend[i];
     k->logic = lop_key(k, fs, lmap);
     const nvn_refl *rf = &vs->rf;
@@ -7899,7 +7943,7 @@ static void shader_prefetch_rest(void) {
     static int logged; if (logged++ < 8) MLOG("shader prefetch: %u of %lu shader libraries the rest of the submission binds loaded in parallel in %.1f ms", got, (unsigned long)n, dt / 1e6);
 }
 static void pso_predict_rest_(void);
-static void pso_predict_rest(void) { uint64_t t0 = bp_now(); shader_prefetch_rest(); pso_predict_rest_(); g_pt_pred_n++; g_pt_pred_ns += bp_now() - t0; }
+static void pso_predict_rest(void) { if (g_pass.framegen_ui) return; uint64_t t0 = bp_now(); shader_prefetch_rest(); pso_predict_rest_(); g_pt_pred_n++; g_pt_pred_ns += bp_now() - t0; }
 // state_op also sets the scissor, which lives in R, not S: it is restored with S. Without that the replay went on with the last scissor of the rest of the submission until its next
 // OP_SCISSOR. OCTOPATH TRAVELER II (Unreal Engine 4.27) with pipelines built on demand: from Castti's opening flashback and the battlefield of Hikari's opening on, the picture was bright
 // green and white, in every run with the prediction and in none without it (DM_NVN_PREDICT=0); a short prewarm list hid it, as fewer pipelines missed
@@ -8068,6 +8112,7 @@ static int sm_scan(const uint8_t *p, const p_set_rt *rt, int cur, int *lo, int *
 // (every layer between the lowest and the highest drawn into), and the draw's amplified pipeline is built (else it is queued, and this pass stays as it is)
 static int draw_samples_rt(NvProg *pr);
 static void sm_plan(NvProg *pr) {
+    if (framegen_ui_canvas()) return;
     g_sm_plan.on = 0;
     if (!pr || !pr->sh[0] || pr->sh[0]->layer_out || R.clear_d || R.clear_s || draw_samples_rt(pr)) return;
     for (int i = 0; i < 8; i++) if (R.clear_c[i]) return;
@@ -8596,6 +8641,7 @@ static int defer_pre(void) {
     return 1;
 }
 static void defer_try(const p_draw *dw, const p_draw_idx *di) {
+    if (framegen_ui_canvas()) return;
     if (!defer_on() || defer_has_in_p() || g_defer_replaying || g_fz.active || g_fz_checking || !g_exec_next || !R.rt.n) return;
     int slot = defer_slot_free(); if (slot < 0) return;
     g_defer_cur = &g_defer_slots[slot];
@@ -8708,6 +8754,7 @@ static int fz_prefilter(void) {
     return 0;
 }
 static void fuse_try(void) {
+    if (framegen_ui_canvas()) return;
     if (g_fz.active || !g_exec_next || g_hoist_n + 12 > HOIST_MAX || !R.rt.n) return;
     if (!fz_prefilter()) return;
     // One: from the earlier pass to the next SetRenderTargets, only draws and state are allowed
@@ -10103,6 +10150,10 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
     id<MTLRenderCommandEncoder> en = rp_begin_ex(mode);
     g_rp_layered = 0; g_sm_plan.on = 0;
     g_fd_dw = NULL; g_fd_di = NULL;
+    if (g_pass.framegen_ui && (S.chmask.mask&7) && ((S.chmask.mask&7)!=7 || !pr->sh[1] || !framegen_ui_fn(pr->sh[1],!(S.color.blend_en&1),atest_key(pr->sh[1],g_pass.cfmt,NULL)!=0))) {
+        // An incomplete UI layer must never replace the real picture.
+        g_framegen_capture_state.invalid=1;
+    }
     if (!en) { PD("Z %llu draw skipped: the render pass did not begin vs=%.16s fs=%.16s", g_stat_pass, pr && pr->sh[0] ? pr->sh[0]->key : "-", pr && pr->sh[1] ? pr->sh[1]->key : "-"); return; }   // Z lines: why a draw was dropped at these early returns
     if (defer_q_draw) {
         defer_replay();
@@ -12199,6 +12250,7 @@ static void present_gpu_note(double s, int fx) {
     MLOG("present command buffer GPU time over 600 presents %s: p50 %.3f ms, p95 %.3f ms, max %.3f ms", fx ? "through MetalFX" : "through the bilinear pass", a[299], a[569], a[599]);
     n[fx] = 0;
 }
+static _Atomic int g_present_discard;
 static uint64_t g_fg_present_serial, g_fg_displayed, g_fg_display_busy;
 static uint64_t g_fg_last_real_ticket;   // g_pq_mu: preceding submitted real picture; not display confirmation
 static uint64_t g_fg_report_ticket;      // g_pq_mu: separate actual presentation report; pending is not confirmation
@@ -12336,7 +12388,10 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     if (!dr) return 0;
     // A generated and a real picture have distinct GPU submissions, but share
     // one game ticket. Allocator fences must count submissions, not game frames.
-    uint64_t serial = dm_fg_enabled() ? ++g_fg_present_serial : ticket;
+    // Switching off cannot move allocator fences backwards into the game's
+    // ticket sequence. Once enabled, keep one monotonic display sequence.
+    uint64_t serial=ticket;
+    if (dm_fg_enabled() || g_fg_present_serial) { if (g_fg_present_serial<ticket) g_fg_present_serial=ticket; serial=++g_fg_present_serial; }
     int alloc_i = (int)(serial % 3);
     if (g_present_alloc_fence[alloc_i]) {
         pthread_mutex_lock(&g_pq_mu);
@@ -12435,8 +12490,9 @@ static double g_link_vperiod, g_link_vhalf;   // virtual ticks (link_range): sec
 
 @interface NvMetalDisplayLinkDelegate : NSObject <CAMetalDisplayLinkDelegate> {
     double _tickOrigin, _tickLast;
+    double _framegenRealTarget, _framegenPeriod;
     uint64_t _tickBase;
-    int _tickRate;
+    int _tickRate, _framegenMode;
 }
 @end
 
@@ -12494,6 +12550,9 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
     pthread_mutex_unlock(&g_link_mu);
     pthread_mutex_lock(&g_pq_mu);
     if (!g_dm_present_link || g_rescue_mode || g_pq_read == g_pq_in) { if (g_dm_present_link && !g_rescue_mode) g_link_empty++; pthread_mutex_unlock(&g_pq_mu); return; }
+    // Discard/suspend removes the preceding real source. Its fractional phase
+    // cannot carry into a fresh pair, even if the interruption was brief.
+    if (!g_fg_last_real_ticket || !g_link_hold_until) _framegenRealTarget=0;
     // The previous frame's present interval was >= 2 (period > 25 ms): keep it on screen for its whole period before taking the next one, as the Switch flips only every N vertical syncs. This also holds while the link runs at 60 Hz (Mario 1.2.1 sets 2 for single frames, see nvn_game_fps in hle_nvn.c);
     //   before, every tick took the newest frame, so that frame, carrying the extra time step the game advanced for it, was shown for only 16.7 ms and the game looked like it jumped ahead
     if (g_link_hold_until > 0 && update.targetPresentationTimestamp < g_link_hold_until - tol) { g_link_held++; pthread_mutex_unlock(&g_pq_mu); return; }
@@ -12536,7 +12595,25 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
     ext_wait(it.ev_val); snap_commit_wait(it.snap_v);
     double display_period=it.fg_cadence ? it.period/2 : it.period;
     @autoreleasepool { submitted = present_now(&it.t, display_period, it.frame, ticket, it.crop, update.drawable, update.targetPresentationTimestamp, generated ? it.fg_slot : -1, !generated && it.fg_valid ? it.fg_slot : -1,it.canvas_region); }
-    g_link_hold_until = submitted && (it.fg_cadence || display_period > 0.025) ? update.targetPresentationTimestamp + display_period : 0;
+    if (submitted && it.fg_cadence) {
+        // Keep the fractional refresh remainder. At 40/50 real frames on a
+        // 120 Hz screen, rounding each half-period from the last actual tick
+        // would lengthen every pair. Real and midpoint deadlines share one
+        // source phase, rather than accumulating two rounded half-periods.
+        int mode=dm_fg_mode();
+        if (!_framegenRealTarget || mode!=_framegenMode || fabs(it.period-_framegenPeriod)>1e-6 || target>_framegenRealTarget+2*it.period || target<_framegenRealTarget) {
+            _framegenRealTarget=generated?target-it.period/2:target;
+        } else if (!generated) {
+            // A skipped midpoint must not leave a deadline in the future:
+            // the real picture we actually chose becomes the new origin.
+            _framegenRealTarget=it.fg_shown?_framegenRealTarget+it.period:target;
+        }
+        _framegenMode=mode; _framegenPeriod=it.period;
+        g_link_hold_until=_framegenRealTarget+(generated?it.period:it.period/2);
+    } else {
+        _framegenRealTarget=0;
+        g_link_hold_until=submitted && display_period>.025 ? target+display_period:0;
+    }
     if (it.fg_valid || dm_fg_enabled()) {
         pthread_mutex_lock(&g_pq_mu);
         if (submitted && !generated) g_fg_last_real_ticket=ticket;
@@ -12559,7 +12636,9 @@ static int g_link_owns_layer, g_classic_busy;   // Under g_pq_mu: nextDrawable t
 static int link_on(void) { return g_dm_present_link && !atomic_load(&g_rescue_mode) && g_link != nil; }
 static int framegen_present_active(void) {
     pthread_mutex_lock(&g_pq_mu);
-    int active=g_dm_present_link && g_link_owns_layer && !g_rescue_mode && !g_stall_t0;
+    // Classic and rescue own their drawables after link invalidation. Their
+    // presenter consumes the same generated/real pair and lifetime protocol.
+    int active=front_metal_layer() && !g_classic && !atomic_load(&g_present_discard) && (!g_link_owns_layer || (g_dm_present_link && !g_rescue_mode && !g_stall_t0));
     pthread_mutex_unlock(&g_pq_mu);
     return active && !atomic_load(&g_link_paused);
 }
@@ -12567,11 +12646,17 @@ static int framegen_present_active(void) {
 // 55 Hz, and a game paced by the link runs at 55 fps (27.5 at 30). There the link runs at the screen's rate and only the refreshes nearest a steady clock of the wanted rate count as
 // ticks (g_link_vperiod, NvMetalDisplayLinkDelegate): 60 a second on average, each frame shown on the refreshes nearest its 1/60 s slot. DM_LINK_VTICK=0 keeps the system's choice.
 // In fullscreen the Mac front end switches such a screen to a rate that is a multiple where it has one (front_screen_match), and the range is set again for it (link_sync)
-__attribute__((weak)) int front_screen_max_fps(void) { return 0; }   // front_mac.m; graphics unit tests and iOS have none
+__attribute__((weak)) int front_screen_max_fps(void) { return 0; }   // front ends supply their screen; graphics unit tests have none
 __attribute__((weak)) void front_screen_match(int fps) { (void)fps; }   // front_mac.m; graphics unit tests and iOS have none
 static CAFrameRateRange link_range(int mode) {
     static int on = -1; if (on < 0) { const char *e = getenv("DM_LINK_VTICK"); on = !(e && !strcmp(e, "0")); }
     int rate = mode == 3 ? 30 : mode == 2 ? 120 : 60, hz = on ? front_screen_max_fps() : 0;
+    if (dm_fg_enabled() && mode==1) {
+        // Match MacNativeGames: automatic interpolation follows the physical
+        // screen; the source clock decides its own rate independently.
+        int native=front_screen_max_fps(); if (native<=0) native=60;
+        g_link_vperiod=0; return CAFrameRateRangeMake(native,native,native);
+    }
     if (mode != 2 && hz > rate && hz % rate) {
         if (g_link_vperiod != 1.0 / rate) MLOG("display link at the screen's %d Hz, counting a tick every 1/%d s (the screen's rate is not a multiple of it)", hz, rate);
         g_link_vhalf = 0.5 / hz; g_link_vperiod = 1.0 / rate;
@@ -12619,11 +12704,11 @@ static void link_sync(void) {   // Called every frame by the game's present thre
     if (g_rescue_mode) want = 0;
     pthread_mutex_unlock(&g_pq_mu);
     if (want && mtl_fps_target() == 30 && !dm_fg_enabled()) want = 3;   // Power-saving mode: display link at 30 Hz
-    if (want) front_screen_match(want == 3 ? 30 : want == 2 ? 120 : 60);
+    if (want && !dm_fg_enabled()) front_screen_match(want == 3 ? 30 : want == 2 ? 120 : 60);
     // The screen's rate changed (switched by front_screen_match, or another screen): the range again, virtual ticks or none. Taken only once the link object exists, so a change
     // while its thread starts (after link_main read the rate) is not lost
-    static int hz_was; int hz = front_screen_max_fps(); CAMetalDisplayLink *lk = g_link;
-    if (lk && hz != hz_was) { hz_was = hz; if (want && want == applied) { lk.preferredFrameRateRange = link_range(want); MLOG("display link: the screen runs at %d Hz now, range set again (frame %llu)", hz, (unsigned long long)atomic_load(&g_cur_frame)); } }
+    static int hz_was,fg_was; int hz = front_screen_max_fps(),fg_now=dm_fg_enabled(); CAMetalDisplayLink *lk = g_link;
+    if (lk && (hz != hz_was || fg_now!=fg_was)) { hz_was = hz; fg_was=fg_now; if (want && want == applied) { lk.preferredFrameRateRange = link_range(want); MLOG("display link: the screen runs at %d Hz now, range set again (frame %llu)", hz, (unsigned long long)atomic_load(&g_cur_frame)); } }
     int lat = link_latency();   // the window entered or left fullscreen: the latency for it (a link created since took the current one, so a window's link is never set again)
     if (lk && lk.preferredFrameLatency != lat) { lk.preferredFrameLatency = lat; MLOG("display link: frame latency %d (%s; frame %llu)", lat, link_latency_why(), (unsigned long long)atomic_load(&g_cur_frame)); }
     if (want == applied) return;
@@ -12670,17 +12755,23 @@ static void *present_main(void *arg) {
         pthread_mutex_lock(&g_pq_mu);
         while (g_pq_read == g_pq_in || g_link_owns_layer) pthread_cond_wait(&g_pq_cv, &g_pq_mu);   // In display-link mode the display-link callback takes them; an empty queue is judged by "taken"; "done" has to wait for the feedback of the present submit and lags behind taken
         pq_item it = g_pq[g_pq_read % PQ];
-        uint64_t ticket = ++g_pq_read; g_classic_busy = 1; g_pq[(ticket-1)%PQ].fg_valid=0;
+        uint64_t ticket=g_pq_read+1;
+        int failed=g_fg_report_ticket==ticket-1 && g_fg_report_time<=0;
+        int generated=it.fg_valid && !it.fg_shown && ticket==g_fg_last_real_ticket+1 && !failed && ticket==g_pq_in && CACurrentMediaTime()-it.t_in<=it.period;
+        g_classic_busy=1;
+        if (generated) g_pq[(ticket-1)%PQ].fg_shown=1;
+        else { g_pq_read=ticket; g_pq[(ticket-1)%PQ].fg_valid=0; }
+        if (it.fg_valid || it.fg_cadence) g_link_presenting=ticket;
         pthread_mutex_unlock(&g_pq_mu);
         int submitted;
         ext_wait(it.ev_val); snap_commit_wait(it.snap_v);
-        // With no display-link callback, keep real frames; never leave an
-        // interpolation slot owned by an output that will not be displayed.
-        @autoreleasepool { submitted = present_now(&it.t, it.period, it.frame, ticket, it.crop, nil, 0, -1, it.fg_valid ? it.fg_slot : -1,NULL); }
-        if (!submitted && it.fg_valid) dm_fg_display_done(it.fg_slot);
+        @autoreleasepool { submitted = present_now(&it.t,it.fg_cadence?it.period/2:it.period,it.frame,ticket,it.crop,nil,0,generated?it.fg_slot:-1,!generated && it.fg_valid?it.fg_slot:-1,it.canvas_region); }
+        if (!submitted && !generated && it.fg_valid) dm_fg_display_done(it.fg_slot);
         pthread_mutex_lock(&g_pq_mu); g_classic_busy = 0;
+        if (submitted && !generated) g_fg_last_real_ticket=ticket;
+        g_link_presenting=0;
         pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu);
-        if (!submitted) {
+        if (!submitted && !generated) {
             pthread_mutex_lock(&g_pq_mu);
             if (ticket > g_pq_done) g_pq_done = ticket;
             pthread_cond_broadcast(&g_pq_cv);
@@ -12691,7 +12782,7 @@ static void *present_main(void *arg) {
 }
 uint32_t mtl_present_qos(void) { return atomic_load(&g_present_qos); }
 static void present_start(void) { pthread_t th; if (pthread_create(&th, NULL, present_main, NULL)) MDIE("cannot start the present thread"); pthread_detach(th); }
-static _Atomic int g_present_discard;
+
 void mtl_link_pause(int on);
 // The short period when the front end goes to the background and waits for the game to save: presents are dropped directly (the display link does not call back in the background, enqueueing would block the game thread; nobody sees the picture anyway).
 // When turned on, also clear the frames already queued: the system first stops the display-link callback and only afterwards notifies about going to the background, and in that gap the game has already filled the swapchain and is stuck at "before acquiring the next texture, wait for its previous present to be processed"
@@ -12702,7 +12793,12 @@ void mtl_present_discard(int on) {
     if (on) present_drop_for_suspend();
 }
 static uint64_t present_enqueue(const tex_t *t, double period, const int crop[4], uint64_t ev_val);
-uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) { return present_enqueue(t, period, crop, 0); }
+void dm_framegen_mode_will_change(void) { mtl_present_flush(); dm_fg_wait_idle(); }
+uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
+    uint64_t ticket=present_enqueue(t,period,crop,0);
+    dm_fg_latch();
+    return ticket;
+}
 void *mtl_device(void) { mtl_init(); return (__bridge void *)g_dev; }
 void *mtl_device_classic(void) { g_classic_ok = 1; return mtl_device(); }   // the GL and Vulkan layers: a device without Metal 4 is taken too, with presents dropped (mtl_init)
 // An external producer's texture (the Vulkan layer's swapchain images): a serial the present path resolves (serial_put), resident for the Metal 4 queue, never collected by the cross-submit ledger
@@ -12855,6 +12951,7 @@ static uint64_t present_enqueue(const tex_t *t, double period, const int crop[4]
         if (*DM_GAME_ASPECT_CANVAS && g_framegen_capture_state.present_serial!=t->serial) interpolate=0;
         if (g_framegen_capture_state.present_serial==t->serial) memcpy(canvas_region,g_framegen_capture_state.present_region,sizeof canvas_region);
         fg_slot=framegen_generate(period,interpolate); fg_cadence=dm_fg_has_history();
+        if (fg_cadence && period<=0) period=dm_fg_frame_seconds();
     }
     tex_t snap; uint64_t ss = 0; int slot = 0;
     if (t && !ev_val && mtl_snap_on()) {
@@ -12937,8 +13034,11 @@ int mtl_link_wait_tick(int vsyncs, uint64_t timeout_ns) {
     if (vsyncs < 1) vsyncs = 1;
     return mtl_link_wait_ticks(g_link_mode == 3 ? (vsyncs + 1) / 2 : vsyncs * (g_link_mode == 2 ? 2 : 1), timeout_ns);
 }
-// The display link's rate: 120 Hz (DM_PRESENT_LINK=2), 60, or 30 in power-saving mode
-int mtl_link_rate(void) { return g_link_mode == 3 ? 30 : g_link_mode == 2 ? 120 : 60; }
+// Interpolation's automatic mode follows the screen; explicit modes retain 120 / 60 / 30 Hz.
+int mtl_link_rate(void) {
+    if (dm_fg_enabled() && g_link_mode==1) { int hz=front_screen_max_fps(); return hz>0?hz:60; }
+    return g_link_mode == 3 ? 30 : g_link_mode == 2 ? 120 : 60;
+}
 // The same wait counted in the display link's own ticks: one per frame for a frame rate as high as the link's (present_interval display at DM_PRESENT_HZ=120 on a 120 Hz link)
 int mtl_link_wait_ticks(int ticks, uint64_t timeout_ns) {
     if (!mtl_link_active()) return 0;
@@ -12956,15 +13056,27 @@ int mtl_link_wait_ticks(int ticks, uint64_t timeout_ns) {
 
 // The display's vsync for vi::GetDisplayVsyncEvent (hle_sdk16.c): returns 1 at the first display-link tick of the next 60 Hz vsync after *seen (the tick count it last returned, updated),
 // 0 when the link does not run, runs at 30 Hz (power saving: the 60 Hz event cannot come from it) or gives no tick within the timeout; the caller then keeps its own clock
+static uint64_t link_vsync_count(uint64_t ticks,int native_rate) {
+    // Count logical 60 Hz events, retaining fractional refreshes at 144/165 Hz.
+    // Zero preserves the ordinary presenter's existing tick/step convention.
+    return native_rate>0 ? ticks/(uint64_t)native_rate*60 + ticks%(uint64_t)native_rate*60/(uint64_t)native_rate : ticks;
+}
 int mtl_link_wait_vsync(uint64_t *seen, uint64_t timeout_ns) {
     if (!mtl_link_active() || g_link_mode == 3) return 0;
-    const uint64_t step = g_link_mode == 2 ? 2 : 1;
+    int framegen=dm_fg_enabled(),rate=framegen?mtl_link_rate():0;
+    if (framegen && rate<60) return 0;
+    const uint64_t step = framegen ? 1 : g_link_mode == 2 ? 2 : 1;
     pthread_mutex_lock(&g_link_mu);
-    if (*seen > g_link_tick_n || g_link_tick_n > *seen + 4 * step) *seen = g_link_tick_n;   // first call, or far behind (a stall): from the current tick on, no burst
+    uint64_t tick=link_vsync_count(g_link_tick_n,rate);
+    if (*seen > tick || tick > *seen + 4 * step) *seen = tick;   // first call, changed clock, or a stall: no burst
     struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec += timeout_ns / 1000000000ull; ts.tv_nsec += timeout_ns % 1000000000ull;
     if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
-    while (g_link_tick_n < *seen + step) if (pthread_cond_timedwait(&g_link_cv, &g_link_mu, &ts) == ETIMEDOUT) { pthread_mutex_unlock(&g_link_mu); return 0; }
+    while (link_vsync_count(g_link_tick_n,rate) < *seen + step) {
+        if (framegen!=dm_fg_enabled() || (framegen && rate!=mtl_link_rate()) || pthread_cond_timedwait(&g_link_cv,&g_link_mu,&ts)==ETIMEDOUT) {
+            pthread_mutex_unlock(&g_link_mu); return 0;
+        }
+    }
     *seen += step;
     pthread_mutex_unlock(&g_link_mu); return 1;
 }

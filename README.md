@@ -10,9 +10,9 @@ Ask your AI agent how to build the project.
 
 ## Experimental frame generation (`expriment`)
 
-BOTW has an opt-in MetalFX experiment for the validated Docked rendering path: `DM_FRAMEGEN=30` requests 30 real game frames plus one generated picture between each pair. Leave it unset, or use `0`, for the normal renderer. The Game Overlay home page exposes an off-by-default **Experimental frame generation** switch under **Performance** when Docked mode is selected. A supported Metal 4 GPU is required.
+BOTW has an opt-in MetalFX experiment for Docked and Handheld: `DM_FRAMEGEN=30`, `40`, `50`, `60` or `max` inserts one picture between real game frames. Leave it unset, or use `0`, for the normal renderer. Select a rate in **Performance → Experimental frame generation** in the startup Game Overlay. While playing, use the Mac **Frame generation** menu or the iOS top-center sliders menu. A supported Metal 4 GPU is required.
 
-This is a prototype with extra GPU cost and latency. It uses Apple's composited-UI mode, supplying the scene before UI and the completed canvas. It does not guarantee 60 displayed frames per second. See the [BOTW experiment and validation notes](dm/games/01007EF00011E000/README.md#experimental-metalfx-frame-generation).
+This prototype uses a separate native-resolution HUD, captured by offline shader variants. Functional coverage and remaining device acceptance are tracked in the [completion checklist](docs/framegen-parity.md) and [BOTW notes](dm/games/01007EF00011E000/README.md#experimental-metalfx-frame-generation). It is off by default; source rates are choices, not a guarantee of displayed frame rate or performance parity.
 
 ## Credits
 

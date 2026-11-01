@@ -1,7 +1,7 @@
 # The Legend of Zelda: Breath of the Wild (01007EF00011E000): the rewriter's patches of this game's own builds. dm/tools/patch_nso.py loads every profile's patches.py and applies those of a module's NSO build ID;
 # CUTS, OBS and FRAME_STEP as described there ("Registered patches"). Patches of Nintendo SDK module builds are in dm/tools/sdk_patches.py
 import struct
-from nso_asm import ADRP, B, LDRX
+from nso_asm import ADRP, B, LDRX, STP_PRE, LDP_POST
 CUTS = {
   # The Legend of Zelda: Breath of the Wild 1.9.0 (v1114112) main: 60 fps. The main loop of sead::GameFrameworkNx (main+0x112660c) runs a dynamic interval (framework +0x267 = 1):
   # every frame it computes how many vsyncs the last frame needed (rounded up), clamped to [2, max 3] (the max comes from the interval controller +0xc, constructed at main+0x1126c04); it steps up after 3 overrunning frames in a row,
@@ -38,6 +38,8 @@ def frame_step(ctx):
     here, emit, fs_site, fs_put, FS_STATE_OFF = ctx.here, ctx.emit, ctx.site, ctx.put, ctx.state
     fs_site(0x11269b8, 'fd7bbea9'); fs_site(0x151d3d0, 'fd7bbea9')
     start = here(); emit(ADRP(16, here(), FS_STATE_OFF))
+    emit(0xb9404211)   # ldr w17,[x16,#0x40]    next real-frame ratio (0 = original whole-vsync path)
+    emit(0xb9004611)   # str w17,[x16,#0x44]    latch once: both VFR calls and UI readers agree
     for w in (0xb9400211,   # ldr w17,[x16]          target fps (0 = off)
               0x34000191):  # cbz w17,orig (+12)
         emit(w)
@@ -66,6 +68,28 @@ def frame_step(ctx):
         emit(w)
     emit(B(here(), 0x151d3d4))
     fs_put(0x151d3d0, [B(0x151d3d0, start)], 'VFR::updateInterval: its own override published for the host (state page target fps; 0 = original)')
+    # Fractional source rates need a fractional VFR ratio, not a faster display
+    # with the same integer game step. Sites and roles follow MacNativeGames'
+    # verified BOTW 1.9.0 real-time patch (MIT); all instructions are checked
+    # against this build. Zero leaves the original game/off-mode calculation.
+    # Preserve scratch registers and reproduce each replaced instruction's flags.
+    for off, original, replacement in (
+        (0x151d484, 0x1e202020, 0x1e270121),  # fcmp s1,s0: replace s1 with the latched ratio first
+        (0x125f128, 0x1e210800, 0x1e270120),  # fade: fmul s0,s0,s1 -> measured ratio
+        (0x1280ee4, 0x1e210800, 0x1e270120),  # UI animation: same ratio
+        (0x128106c, 0x1e204009, 0x1e2e1009),  # physics: keep six substeps, frame seconds still vary
+    ):
+        fs_site(off, struct.pack('<I', original).hex())
+        start=here(); emit(STP_PRE(9,10,31,-16)); emit(ADRP(9,here(),FS_STATE_OFF))
+        emit(0xb9404529)   # ldr w9,[x9,#0x44]
+        if off==0x151d484:
+            emit(0x34000049); emit(replacement)   # cbz w9,+8 / fmov s1,w9
+            emit(LDP_POST(9,10,31,16)); emit(original)
+        else:
+            emit(0x34000069); emit(replacement)   # cbz w9,+12 / replacement
+            emit(B(here(),here()+8)); emit(original); emit(LDP_POST(9,10,31,16))
+        emit(B(here(),off+4))
+        fs_put(off,[B(off,start)],'optional frame generation: latched real-time VFR / fade / UI / physics step; zero preserves original')
     # Held buttons: sead::ControllerBase::updateDerivativeParams_ (main+0xeb0ef0) adds s8 to each held button's count, a constant 1.0 (main+0xeb0f78..88), and raises the repeat bit
     # when fmod(count - delay, pulse) < s8: delays and pulses are counted in frames, so at 60 fps menus repeated twice as fast as at 30 (MacNativeGames 866beb9). s8 is now the VFR's
     # ratio (+0x3c: interval / base interval 2), 0.5 at a one-vsync step, 1.0 at two as shipped; the constant stays when there is no VFR yet or the ratio is not positive.

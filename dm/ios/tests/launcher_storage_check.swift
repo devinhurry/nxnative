@@ -160,14 +160,14 @@ import Foundation
         unsetenv("DM_FRAMEGEN")
         let fgRow = file.settings.first { $0.env == "DM_FRAMEGEN" }!
         let fg = LauncherModel(file.settings, defaults: fgDefaults)
-        expect(fgRow.kind == "toggle" && fgRow.onValue == "30" && fgRow.offValue == "0" && fg.values[fgRow.env] == "0", "frame generation is an off-by-default native switch")
+        expect(fgRow.kind == "choice" && Set(fgRow.options!.map { $0[0] }) == Set(["0", "30", "40", "50", "60", "max"]) && fg.values[fgRow.env] == "0", "frame generation is an off-by-default native switch")
         expect(fg.rows(in: "Performance", basic: true).contains { $0.env == fgRow.env }, "frame generation switch appears on the overlay home page")
-        fg.setValue(fgRow.onValue, for: fgRow); fg.apply()
+        fg.setValue("30", for: fgRow); fg.apply()
         expect(String(cString: getenv("DM_FRAMEGEN")) == "30" && fgDefaults.string(forKey: "launcher.DM_FRAMEGEN") == "30", "Play enables and remembers frame generation")
         unsetenv("DM_FRAMEGEN")
         let fgReopened = LauncherModel(file.settings, defaults: fgDefaults)
         expect(fgReopened.values[fgRow.env] == "30", "reopening restores the frame generation switch")
-        fgReopened.setValue(fgRow.offValue, for: fgRow); fgReopened.apply()
+        fgReopened.setValue("0", for: fgRow); fgReopened.apply()
         expect(String(cString: getenv("DM_FRAMEGEN")) == "0" && fgDefaults.string(forKey: "launcher.DM_FRAMEGEN") == nil, "turning frame generation off restores the default and forgets its override")
         fgReopened.values["DM_OPMODE"] = "0"
         expect(fgReopened.rows(in: "Performance", basic: true).contains { $0.env == fgRow.env }, "handheld mode also offers frame generation")

@@ -104,6 +104,26 @@ static void missed_callback_regression(void) {
     display_tick(delegate,3000+1./120); display_tick(delegate,3000+1./60);
     CHECK(g_link_tick_n==tick+1,"extra notifications do not invent elapsed refresh intervals");
 }
+static void framegen_vsync_regression(void) {
+    for (int rate=60;rate<=240;rate++) {
+        uint64_t previous=0; int events=0,ordered=1;
+        for (int raw=1;raw<=rate;raw++) {
+            uint64_t tick=link_vsync_count(raw,rate);
+            ordered &= tick>=previous && tick-previous<=1;
+            events+=(int)(tick-previous); previous=tick;
+        }
+        CHECK(ordered && events==60,"every native refresh rate retains 60 logical game vsyncs");
+    }
+    g_link_mode=2;
+    for (int enabled=0;enabled<=1;enabled++) {
+        test_framegen=enabled; g_link_tick_n+=g_link_tick_n&1;
+        uint64_t first=g_link_tick_n,seen=link_vsync_count(first,enabled?120:0);
+        int complete=1;
+        for (int i=0;i<60;i++) complete &= mtl_link_wait_vsync(&seen,100000000ull);
+        CHECK(complete && g_link_tick_n-first==120,"VI waits preserve game time on a 120 Hz screen with interpolation on or off");
+    }
+    test_framegen=0;
+}
 int main(int argc, char **argv) { @autoreleasepool {
     int missed=argc>1 && !strcmp(argv[1],"--framegen-clock");
     int snapshots=missed || (argc>1 && !strcmp(argv[1],"--framegen-snap"));
@@ -114,6 +134,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     CHECK(mtl_link_active(), "the link counts as active");
     if (missed) {
         missed_callback_regression();
+        framegen_vsync_regression();
         printf("t_link_ticks missing callbacks: %d checks, %d failed\n",checks,failed);
         return failed!=0;
     }

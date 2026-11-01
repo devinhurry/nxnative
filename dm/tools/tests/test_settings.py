@@ -42,7 +42,8 @@ class ResolutionSetting(unittest.TestCase):
                 if fg:
                     self.assertEqual(fg[0]['default'],'0')
                     self.assertFalse(fg[0].get('needs'))
-                    self.assertEqual((fg[0]['kind'],fg[0]['on'],fg[0]['off'],fg[0]['level']),('toggle','30','0','basic'))
+                    self.assertEqual((fg[0]['kind'],fg[0]['level']),('choice','basic'))
+                    self.assertEqual([o[0] for o in fg[0]['options']],['0','30','40','50','60','max'])
 
             # Listing follows the supplied capability, not a fixed title ID.
             header=settings.game.header(settings.game.load('010015100B514000'))

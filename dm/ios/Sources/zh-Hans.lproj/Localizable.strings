@@ -160,3 +160,8 @@
 "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately." = "可发送这些紧凑布局参数作为默认值。偏移以整个屏幕为比例，X 为正向右移动，Y 为正向下移动。普通布局设置单独保存。";
 "Experimental frame generation" = "实验性补帧";
 "Supports Handheld and Docked. Handheld's smaller canvas reduces GPU work. MetalFX inserts one picture between 30 real game frames per second. Adds display latency; requires a supported GPU. Applies on Play." = "支持掌机和底座模式。掌机模式的画布更小，可减少 GPU 开销。游戏每秒渲染 30 帧，MetalFX 在相邻画面之间补一帧。会增加显示延迟，需要支持的 GPU。点击“开始游戏”时生效。";
+
+"Inserts one picture between real game frames. Change rates while playing from the frame generation menu. Requires a supported GPU." = "在相邻游戏画面之间生成一帧。游戏中可通过补帧菜单切换档位。需要受支持的 GPU。";
+"Uncapped" = "不限帧";
+
+"Off" = "关闭";

@@ -1,6 +1,6 @@
 // BOTW input identification follows MacNativeGames' scene/camera notes (MIT).
-// UI uses Apple's composited-UI mode: provide the same frame before and after
-// UI, without changing or replaying game draws. See WWDC25 session 211.
+// Offline fragment variants copy colour 0 to a premultiplied UI attachment.
+// The original draw and its queries run once, as in MacNativeGames (MIT).
 static struct {
     uint64_t frames;
     NSUInteger width,height,depth_width,depth_height;
@@ -8,11 +8,15 @@ static struct {
     id<MTLTexture> composited_canvas;
     uint64_t canvas_serial,present_serial,display_canvas_serial;
     int present_region[4];
-    int depth,want_camera,invalid;
+    int depth,want_camera,invalid,ui_ready;
     uint64_t candidate_count,profile_candidate;
     NSUInteger profile_w,profile_h;
     int profile_selected;
 } g_framegen_capture_state;
+static int framegen_ui_canvas(void) {
+    return g_framegen_capture_state.ui_ready && dm_fg_enabled() && R.rt.n>0 && R.rt.color[0] &&
+        R.rt.color[0]->serial==g_framegen_capture_state.canvas_serial;
+}
 static void framegen_resize_wait(const char *kind,NSUInteger old_w,NSUInteger old_h,NSUInteger w,NSUInteger h) {
     int profile=dm_fg_profile_on(); double a=profile?CACurrentMediaTime():0;
     mtl_present_flush(); double b=profile?CACurrentMediaTime():0;
@@ -23,11 +27,22 @@ static void framegen_discard_inputs(void) {
     dm_fg_reset();
     g_framegen_capture_state.composited_canvas=nil;
     g_framegen_capture_state.present_serial=0;
-    g_framegen_capture_state.depth=g_framegen_capture_state.want_camera=g_framegen_capture_state.invalid=0;
+    g_framegen_capture_state.depth=g_framegen_capture_state.want_camera=g_framegen_capture_state.invalid=g_framegen_capture_state.ui_ready=0;
     g_framegen_capture_state.profile_candidate=0;
 }
 static void framegen_note_pass(MTL4RenderPassDescriptor *pd) {
     if (!dm_fg_available(g_dev)) return;
+    if (framegen_ui_canvas()) {
+        id<MTLTexture> canvas=pd.colorAttachments[0].texture;
+        if (!canvas || canvas.width!=g_framegen_capture_state.width || canvas.height!=g_framegen_capture_state.height ||
+            canvas.pixelFormat!=g_framegen_capture_state.format || R.rt.n>7 || pd.colorAttachments[7].texture || pd.colorAttachments[0].level || g_fz.active) {
+            g_framegen_capture_state.invalid=1;
+        } else {
+            pd.colorAttachments[7].texture=dm_fg_ui_target(g_dev,pd.colorAttachments[0].texture.width,pd.colorAttachments[0].texture.height);
+            pd.colorAttachments[7].loadAction=MTLLoadActionLoad; pd.colorAttachments[7].storeAction=MTLStoreActionStore;
+            g_pass.cfmt[7]=MTLPixelFormatRGBA16Float; g_pass.framegen_ui=1;
+        }
+    }
     int profile=dm_fg_profile_on();
     if (g_framegen_capture_state.depth && !profile) return;
     id<MTLTexture> color=pd.colorAttachments[0].texture, depth=pd.depthAttachment.texture;
@@ -120,6 +135,12 @@ static void framegen_after_draw(NvProg *program) {
     g_framegen_capture_state.composited_canvas=canvas;
     g_framegen_capture_state.canvas_serial=R.rt.color[0]->serial;
     g_framegen_capture_state.width=canvas.width; g_framegen_capture_state.height=canvas.height; g_framegen_capture_state.format=canvas.pixelFormat;
+    id<MTLTexture> ui=dm_fg_ui_target(g_dev,canvas.width,canvas.height);
+    MTL4RenderPassDescriptor *clear=[MTL4RenderPassDescriptor new];
+    clear.colorAttachments[0].texture=ui; clear.colorAttachments[0].loadAction=MTLLoadActionClear;
+    clear.colorAttachments[0].storeAction=MTLStoreActionStore; clear.colorAttachments[0].clearColor=MTLClearColorMake(0,0,0,0);
+    ser_gate(); enc_r_end(enc_r_begin(clear));
+    g_framegen_capture_state.ui_ready=1;
     dm_fg_note_scene();
     if (dm_fg_profile_on()) dm_fg_profile_event(@"scene_capture",@{@"frame":@(atomic_load(&g_cur_frame)),@"w":@(canvas.width),@"h":@(canvas.height),@"depth_w":@(g_framegen_capture_state.depth_width),@"depth_h":@(g_framegen_capture_state.depth_height),@"canvas_serial":@(R.rt.color[0]->serial),@"fs":@(program->sh[1]->key)});
 }
@@ -129,8 +150,8 @@ static int framegen_generate(double period,int interpolate) {
     static id<MTL4CommandAllocator> allocators[3];
     static id<MTL4CommandBuffer> buffers[3];
     static id<MTL4CounterHeap> profile_heap; static double profile_hz;
-    // The classic/rescue presenter displays real frames only. Do not capture
-    // or interpolate outputs it cannot consume; the next active pair is fresh.
+    // No capture during a layer-ownership handoff or a paused link.
+    // Both active presenters consume the same generated/real output pair.
     if (!framegen_present_active()) { framegen_discard_inputs(); return -1; }
     int slot=-1;
     if (dm_fg_available(g_dev)) {
@@ -139,7 +160,7 @@ static int framegen_generate(double period,int interpolate) {
             // The game's canvas writes and MetalFX reads use this same queue.
             // The encoder's queue barrier orders them, and its resource payload
             // retains the canvas. A second full-canvas UI copy adds no isolation.
-            dm_fg_note_ui(g_framegen_capture_state.composited_canvas);
+            dm_fg_note_ui(g_framegen_capture_state.ui_ready ? dm_fg_ui_target(g_dev,g_framegen_capture_state.width,g_framegen_capture_state.height) : g_framegen_capture_state.composited_canvas);
             slot=dm_fg_frame_prepare(period,interpolate);
             if (slot>=0) {
                 int profile=dm_fg_profile_on(); double cpu_begin=profile?CACurrentMediaTime():0;
@@ -195,7 +216,7 @@ static int framegen_generate(double period,int interpolate) {
             }
         }
         if (++g_framegen_capture_state.frames%300==0) { char stats[256]; dm_fg_stats(stats,sizeof stats); MLOG("[framegen] real frames=%llu %s",(unsigned long long)g_framegen_capture_state.frames,stats); }
-        g_framegen_capture_state.depth=g_framegen_capture_state.want_camera=g_framegen_capture_state.invalid=0;
+        g_framegen_capture_state.depth=g_framegen_capture_state.want_camera=g_framegen_capture_state.invalid=g_framegen_capture_state.ui_ready=0;
         g_framegen_capture_state.composited_canvas=nil;
         g_framegen_capture_state.present_serial=0;
     }
