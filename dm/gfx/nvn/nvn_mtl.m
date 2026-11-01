@@ -12374,6 +12374,7 @@ static uint64_t g_fg_last_real_ticket;   // g_pq_mu: preceding submitted real pi
 static uint64_t g_fg_report_ticket;      // g_pq_mu: separate actual presentation report; pending is not confirmation
 static double g_fg_report_time;
 static _Atomic uint64_t g_fg_confirmed_displayed;
+uint64_t mtl_generated_present_count(void) { return atomic_load(&g_fg_confirmed_displayed); }
 // Diagnostic only: capture one generated/real pair after interpolation settles.
 // The explicit queue wait is confined to this opt-in screenshot, never pacing.
 static void framegen_debug_shot(id<MTLTexture> src,uint64_t ticket,int generated) {

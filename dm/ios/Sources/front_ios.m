@@ -13,6 +13,7 @@
 #include "haptics_apple.h"
 #include "save_sync.h"
 #include "botw_touch_layout.h"
+#include "framegen_policy.h"
 #import "CloudSaves.h"
 #import "GameFiles.h"
 
@@ -211,7 +212,7 @@ static void game_settings_done(void) { dm_gamepad_settings_done(); }
     // The top row's free stretch, right of the pad's L3 key and left of its central − / layout / + controls.
     CGRect s = UIEdgeInsetsInsetRect(b, self.surface.safeAreaInsets); CGFloat u = MIN(b.size.height / 430.0, 1.3);
     CGFloat x = floor(CGRectGetMinX(s) + 130 * u);
-    if (self.fps) self.fps.frame = CGRectMake(x, floor(CGRectGetMinY(s) + 22 * u - 11), 64, 22);
+    if (self.fps) self.fps.frame = CGRectMake(x, floor(CGRectGetMinY(s) + 22 * u - 11), MAX(64, ceil(self.fps.intrinsicContentSize.width) + 12), 22);
 }
 - (void)viewDidAppear:(BOOL)a {
     [super viewDidAppear:a];
@@ -302,9 +303,10 @@ static void front_ios_power_watch(void) {
     LOG("front end: thermal state %d, brightness %.2f, Low Power Mode %s", dm_thermal_now(), g_brightness, dm_low_power_now() ? "on" : "off");
 }
 
-// Frame-rate counter: the frames put on screen in the last second (nvn_mtl.m counts them for NVN and for the Vulkan layer alike; frames the display link merged away are not counted).
+// Frame-rate counter: source presents in the last second, plus confirmed generated pictures while interpolation is enabled. Queued source frames merged away are not counted.
 // On when the IPA was built with it (the NSP script's SHOW_FPS / --show-fps → DMShowFPS in Info.plist); DM_SHOW_FPS=0 / 1 in Documents/env.txt overrides that without a rebuild. NULL when off
 uint64_t mtl_present_count(void);
+uint64_t mtl_generated_present_count(void);
 static UILabel *front_ios_fps_label(void) {
     const char *e = getenv("DM_SHOW_FPS");
     if (!(e ? atoi(e) != 0 : [[NSBundle.mainBundle objectForInfoDictionaryKey:@"DMShowFPS"] boolValue])) return nil;
@@ -312,11 +314,15 @@ static UILabel *front_ios_fps_label(void) {
     l.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightSemibold]; l.textColor = UIColor.whiteColor; l.textAlignment = NSTextAlignmentCenter;
     l.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45]; l.layer.cornerRadius = 6; l.layer.masksToBounds = YES; l.userInteractionEnabled = NO;
     l.text = @"-- fps";
-    __block uint64_t n0 = mtl_present_count(); __block double t0 = CACurrentMediaTime();
+    __block uint64_t n0 = mtl_present_count(), generated0 = mtl_generated_present_count(); __block double t0 = CACurrentMediaTime();
     [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
-        (void)t; uint64_t n = mtl_present_count(); double now = CACurrentMediaTime();
-        if (now - t0 < 1.5) l.text = [NSString stringWithFormat:@"%.0f fps", (n - n0) / (now - t0)];   // a longer span is the time in the background: no reading
-        n0 = n; t0 = now;
+        (void)t; uint64_t n = mtl_present_count(), generated = mtl_generated_present_count(); double now = CACurrentMediaTime(), elapsed = now - t0;
+        if (elapsed > 0 && elapsed < 1.5) {   // A longer span is time in the background: no reading.
+            double fps = (n - n0) / elapsed;
+            l.text = dm_fg_enabled() ? [NSString stringWithFormat:@"%.0f+%.0f fps", fps, (generated - generated0) / elapsed] : [NSString stringWithFormat:@"%.0f fps", fps];
+            CGRect frame = l.frame; frame.size.width = MAX(64, ceil(l.intrinsicContentSize.width) + 12); l.frame = frame;
+        }
+        n0 = n; generated0 = generated; t0 = now;
     }];
     LOG("front end: frame-rate counter on");
     return l;
