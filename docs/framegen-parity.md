@@ -7,8 +7,8 @@ frame-rate comparisons or further performance acceptance runs.
 
 Code status: all five requested features are implemented and reviewed.
 The user authorized committing and pushing this code, then resuming the build.
-Full shader preparation and current-code gameplay acceptance remain pending
-until that final build completes. No performance benchmarks are requested.
+Full Mac/iOS shader preparation and current-code Mac gameplay checks now pass.
+No performance benchmarks were run. Physical-iPhone acceptance remains open.
 
 | Feature | Implementation | Functional evidence |
 |---|---|---|
@@ -56,9 +56,23 @@ fragment shaders gain separate-UI variants and corresponding reflection.
 Only BOTW has a locally prepared game build. The implementation is a profile
 opt-in; ordinary clocks also retain their previous paths when it is disabled.
 
-Full Mac/iOS shader preparation was interrupted, so no current-code gameplay
-acceptance is claimed. Compiler override `DM_ALLOW_OTHER_METAL=1` used this
-Mac's Metal `32023.883`; the lock still records `32023.921.6`. Compiled entries
-remain in the shared game build's `shader/cache/cas`, with target, source,
-compiler, SDK and flags included in their identities. Existing cache entries
-are retained; incomplete final output directories are not release artifacts.
+The resumed build completes for both targets on chain `54dc92140c8d`, inputs
+`92a16d66b5e4`: 19,592 base libraries and 10,318 separate-UI libraries per target,
+with no compilation failures. This run reuses all 58,416 Mac compile results;
+iOS reuses 54,551 and compiles the remaining 3,865. These are build-cache counts,
+not frame-rate measurements. Compiler override `DM_ALLOW_OTHER_METAL=1` uses
+this Mac's Metal `32023.883`; the lock still records `32023.921.6`.
+
+Commit `828cc1cd`, launched through `scripts/run_mac.py --test
+--allow-other-metal` with matching shaders and an independent save copy,
+reaches Hateno Ancient Tech Lab. Screenshots were inspected; generated-picture
+presentation is recorded. Live transitions 30 → 40 → 50 → 60 → uncapped → Off
+→ 30 apply successfully, with no red log lines or crash. The test window was
+closed after these checks. Artifacts: `shader-build-pushed.log`,
+`current-game-pushed.log`, `live-mode-acceptance.txt`, `build-acceptance.json`
+and `pushed-world-live.png` in the evidence folder above.
+
+Compiled entries remain in the shared game build's `shader/cache/cas`, with
+target, source, compiler, SDK and flags included in their identities. Final
+output folders are stamped independently; copying or relabeling an older
+graphics snapshot does not constitute validation of this implementation.
