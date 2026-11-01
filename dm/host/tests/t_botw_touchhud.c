@@ -26,11 +26,14 @@ void gate_obs_read_set(int id, void (*fn)(const uint64_t *)) { assert(id > 0 && 
 void front_botw_touch_hud_mode_changed(void) {}
 int dm_aspect_native(void) { return aspect_native; }
 static float hud_offset[2];
+static float hud_safe_right;
+float dm_aspect_hud_safe_right(void) { return hud_safe_right; }
 float dm_aspect_hud_offset(int right) { return hud_offset[!!right]; }
 float dm_aspect_ui_point_scale(void) { return 1; }
 static float hud_y_scale=1, hud_gain=1;
 float dm_aspect_hud_y_scale(void) { return hud_y_scale; }
 float dm_aspect_hud_gain(void) { return hud_gain; }
+float dm_aspect_control_ratio(void) { return hud_y_scale<1 ? (16.f/9)*hud_y_scale : (1280+2*hud_offset[0])/720; }
 static int seated;
 int dm_aspect_region(int controls,float rect[4]) { rect[0]=rect[1]=0; rect[2]=rect[3]=1; (void)controls; return seated; }
 float dm_aspect_map_gain(void) { return hud_gain; }
@@ -219,15 +222,31 @@ int main(void) {
     assert(fabsf((315.0f - 257.0f) - 58.0f) < .001f); // gauges retain their native offset from the map
     assert(367.0f + 280.0f * .5f < 640.0f); // linked gauge content fits; Pa_Sensor's extra width is padding
     assert(fabsf((460.0f + 166.0f * .5f) - 543.0f) < .001f);
-    // A wider safe HUD canvas moves the whole touch map cluster and publishes
-    // its hit bounds in that same canvas, independently of centered menus.
-    hud_offset[0]=76; hud_offset[1]=96;
+    // Edge margins move the cluster inside a stable HUD canvas; the drawing
+    // and hit region share its translated position without changing scale.
+    hud_offset[0]=hud_offset[1]=96;
     scaled_matrix(cut,1,510,-240); calculate_entry(cut); calculated_matrix(cut);
     expect_translation(cut,460,257); // GPU replay applies the wide edge offset after native clipping
-    assert(fabsf(map_region[0]-(473.f+640+76)/1452)<.001f && fabsf(map_region[2]-166.f/1452)<.001f);
+    assert(fabsf(map_region[0]-(473.f+640+96)/1472)<.001f && fabsf(map_region[2]-166.f/1472)<.001f);
     matrix_translation(status,392,-182); calculate_entry(status); calculated_matrix(status);
     expect_translation(status,438,315);
-    hud_offset[0]=hud_offset[1]=0;
+    // At 16:9 an inset moves the native matrix directly; there is no wide
+    // projection to apply the translation later. Hits retain the same canvas.
+    hud_offset[0]=hud_offset[1]=0; hud_safe_right=100;
+    scaled_matrix(cut,1,510,-240); calculate_entry(cut); calculated_matrix(cut);
+    expect_translation(cut,410,257);
+    assert(fabsf(map_region[0]-(327.f+640)/1280)<.001f && fabsf(map_region[2]-166.f/1280)<.001f);
+    // Controller HUD has no adjacent Plus glyph: align the measured map edge
+    // itself to the safe boundary and retain its native vertical position.
+    atomic_store(&g_touchhud_active,0);
+    for (int wide=0;wide<2;wide++) {
+        hud_offset[0]=hud_offset[1]=wide ? 116 : 0;
+        scaled_matrix(cut,1,510,-240); calculate_entry(cut); calculated_matrix(cut);
+        expect_translation(cut,457,-240);
+        assert(!map_region_valid);
+    }
+    atomic_store(&g_touchhud_active,1);
+    hud_safe_right=0; hud_offset[0]=hud_offset[1]=0;
     scaled_matrix(cut,1,510,-240); calculate_entry(cut); calculated_matrix(cut);
     expect_translation(cut,460,257);
     int map_events_before_tap = map_region_events;

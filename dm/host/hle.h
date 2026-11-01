@@ -62,6 +62,7 @@ float dm_aspect_hud_y_scale(void);
 float dm_aspect_hud_gain(void);
 float dm_aspect_hud_top(void);
 float dm_aspect_hud_offset(int right);
+float dm_aspect_hud_safe_right(void); // Effective right inset in native UI units.
 float dm_aspect_ui_point_scale(void); // Native 720-unit layout units per frontend point.
 void dm_aspect_ui_pane(uint8_t *pane); // BOTW fullscreen backgrounds and edge HUD, independent of input mode
 int dm_aspect_ui_background_drawing(void); // 0: ordinary, 1: extended native background, 2: stretch complete projected fill

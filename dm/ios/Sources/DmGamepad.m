@@ -100,7 +100,7 @@ static int g_motion_published_first;       // motion_publish runs on one serial 
 static void motion_update_flip_value(UIInterfaceOrientation o) {
     if (o == UIInterfaceOrientationLandscapeLeft) atomic_store(&g_motion_flip, 1);
     else if (o == UIInterfaceOrientationLandscapeRight) atomic_store(&g_motion_flip, 0);   // portrait during launch: wait for a landscape
-    else if (o == UIInterfaceOrientationPortrait && !strcmp(DM_GAME_ID,"01007EF00011E000") && dm_botw_portrait_enabled())
+    else if (o == UIInterfaceOrientationPortrait && !strcmp(DM_GAME_ID,"01007EF00011E000"))
         atomic_store(&g_motion_flip, 2);
 }
 static void motion_update_flip(UIWindowScene *scene) {

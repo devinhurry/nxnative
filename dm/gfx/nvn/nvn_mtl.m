@@ -9495,7 +9495,7 @@ static void ui_region_to_render(float region[4]) {
     if (atomic_load_explicit(&g_origin_ll,memory_order_relaxed)) region[1]=1-region[1]-region[3];
 }
 static void seated_dock_prepare(const tex_t *canvas);
-static void seated_dock_composite(void);
+static void seated_composite(void);
 static _Atomic uint64_t g_rune_source_serial;
 static uint64_t g_rune_last_capture_frame;
 static _Atomic int g_rune_capture_pending;
@@ -9789,7 +9789,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
             rp_flush(); R.clear_c[0]=1; R.cc[0]=MTLClearColorMake(0,0,0,1);
         }
         draw_(dw,di);
-        if (composite && g_ui_dock_frame==atomic_load(&g_cur_frame)) seated_dock_composite();
+        if (composite) seated_composite();
     }
     cp_end(5,start);
 }
@@ -11581,13 +11581,51 @@ static void present_pipeline(MTLPixelFormat format) {
 // Dock draws use a separate transparent target. Keep every game-owned canvas
 // native, so cached menus and 3D UI never accumulate a second region transform.
 // Composite the dock on the final swapchain before its ordinary snapshot/present.
-static void seated_dock_encode(id<MTL4CommandBuffer> cb,id<MTLTexture> source,id<MTLTexture> target,
-                               const float region[4],MTLGPUAddress constants) {
-    static id<MTLRenderPipelineState> ps; static MTLPixelFormat format;
+enum { SEATED_COPY, SEATED_ALPHA, SEATED_BLUR, SEATED_REFLECTION };
+static id<MTLRenderPipelineState> seated_reflection_pipeline(MTLPixelFormat format,int reflection) {
+    static id<MTLLibrary> lib;
+    if (!lib) {
+        // Sigma-6 Gaussian over +/-18 texels, with paired bilinear taps.
+        // Both axes filter the small image before enlargement; the native
+        // target view performs the final sRGB encode.
+        NSString *msl=@"#include <metal_stdlib>\nusing namespace metal;\n"
+            "struct V { float4 p [[position]]; float2 uv; };\n"
+            "vertex V vs(uint id [[vertex_id]]) { float2 uv=float2((id<<1)&2,id&2); return {float4(uv*float2(2,-2)+float2(-1,1),0,1),uv}; }\n"
+            "struct C { float4 rect; float4 edge; float4 effect; };\n"
+            "constant float weights[9]={0.128730854,0.112145708,0.087490720,0.061125088,0.038243137,0.021427025,0.010750829,0.004830484,0.001943589};\n"
+            "constant float offsets[9]={1.489584840,3.475713571,5.461879674,7.448104233,9.434407975,11.420811147,13.407333400,15.393993678,17.380810117};\n"
+            "float3 filtered(texture2d<float> t, sampler s, float2 uv, constant C& c) {\n"
+            "float3 v=t.sample(s,clamp(uv,c.edge.xy,c.edge.zw)).rgb*0.066625132;\n"
+            "for (uint i=0;i<9;i++) { float2 d=c.effect.xy*offsets[i];\n"
+            "v+=(t.sample(s,clamp(uv+d,c.edge.xy,c.edge.zw)).rgb+t.sample(s,clamp(uv-d,c.edge.xy,c.edge.zw)).rgb)*weights[i]; } return v; }\n"
+            "fragment float4 blur(V in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]], constant C& c [[buffer(0)]]) { return float4(filtered(t,s,in.uv*c.rect.zw+c.rect.xy,c),1); }\n"
+            "fragment float4 reflection(V in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]], constant C& c [[buffer(0)]]) {\n"
+            "float y=c.effect.z>0 ? 1-in.uv.y : in.uv.y; float depth=max(0.0,(y-c.effect.x)/(1-c.effect.x));\n"
+            "float gain=c.effect.y>0 ? mix(1.0,c.effect.w,smoothstep(0.0,c.effect.y,y)) : c.effect.w;\n"
+            "float3 v=t.sample(s,clamp(in.uv*c.rect.zw+c.rect.xy,c.edge.xy,c.edge.zw)).rgb; return float4(v*gain*(1-smoothstep(0.0,1.0,depth)),1); }\n";
+        NSError *error=nil; lib=[g_dev newLibraryWithSource:msl options:nil error:&error];
+        if (!lib) MDIE("Seated reflection shader failed: %s",error.localizedDescription.UTF8String);
+    }
+    MTLRenderPipelineDescriptor *pd=[MTLRenderPipelineDescriptor new];
+    pd.vertexFunction=[lib newFunctionWithName:@"vs"];
+    pd.fragmentFunction=[lib newFunctionWithName:reflection ? @"reflection" : @"blur"];
+    pd.colorAttachments[0].pixelFormat=format;
+    NSError *error=nil; id<MTLRenderPipelineState> ps=[g_dev newRenderPipelineStateWithDescriptor:pd error:&error];
+    if (!ps) MDIE("Seated reflection pipeline failed: %s",error.localizedDescription.UTF8String);
+    return ps;
+}
+static void seated_texture_encode(id<MTL4CommandBuffer> cb,id<MTLTexture> source,id<MTLTexture> target,
+                                  const float region[4],MTLGPUAddress constants,int kind) {
+    MTLViewport viewport={target.width*region[0],target.height*region[1],target.width*region[2],target.height*region[3],0,1};
+    NSUInteger x=lround(viewport.originX),y=lround(viewport.originY);
+    MTLScissorRect clip={x,y,lround(viewport.originX+viewport.width)-x,lround(viewport.originY+viewport.height)-y};
+    if (!clip.width || !clip.height) return;
+    static id<MTLRenderPipelineState> ps[4]; static MTLPixelFormat format[4];
     static id<MTLSamplerState> sampler; static id<MTL4ArgumentTable> table;
-    if (!ps || format!=target.pixelFormat) {
-        if (ps) defer_obj_unref(ps);
-        ps=texture_blit_pipeline(target.pixelFormat,1); format=target.pixelFormat;
+    if (!ps[kind] || format[kind]!=target.pixelFormat) {
+        if (ps[kind]) defer_obj_unref(ps[kind]);
+        ps[kind]=kind>=SEATED_BLUR ? seated_reflection_pipeline(target.pixelFormat,kind==SEATED_REFLECTION) : texture_blit_pipeline(target.pixelFormat,kind==SEATED_ALPHA);
+        format[kind]=target.pixelFormat;
     }
     if (!table) {
         NSError *e=nil; MTL4ArgumentTableDescriptor *ad=[MTL4ArgumentTableDescriptor new];
@@ -11597,17 +11635,63 @@ static void seated_dock_encode(id<MTL4CommandBuffer> cb,id<MTLTexture> source,id
         sampler=texture_blit_sampler();
     }
     MTL4RenderPassDescriptor *rp=[MTL4RenderPassDescriptor new];
-    rp.colorAttachments[0].texture=target; rp.colorAttachments[0].loadAction=MTLLoadActionLoad;
+    rp.colorAttachments[0].texture=target;
+    rp.colorAttachments[0].loadAction=kind==SEATED_COPY || kind==SEATED_BLUR ? MTLLoadActionDontCare : MTLLoadActionLoad;
     rp.colorAttachments[0].storeAction=MTLStoreActionStore;
     id<MTL4RenderCommandEncoder> en=[cb renderCommandEncoderWithDescriptor:rp];
     if (!en) MDIE("Seated dock has no render encoder");
     [en barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:resource_vis()];
+    gp_begin(en,'R',rp);
     [en setArgumentTable:table atStages:MTLRenderStageFragment];
     [table setTexture:source.gpuResourceID atIndex:0]; [table setSamplerState:sampler.gpuResourceID atIndex:0];
     [table setAddress:constants atIndex:0];
-    [en setViewport:(MTLViewport){target.width*region[0],target.height*region[1],target.width*region[2],target.height*region[3],0,1}];
-    [en setRenderPipelineState:ps]; [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    // A full-screen triangle must not spill across a pane's pixel boundary.
+    [en setViewport:viewport]; [en setScissorRect:clip];
+    [en setRenderPipelineState:ps[kind]]; [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     m4_end(en);
+}
+// Reflect the upper picture, never the dock or virtual controls. All four
+// passes stay on the replay queue: no CPU readback, second scene, or present
+// thread state. Replaced scratch textures retire behind the submission fence.
+static void seated_reflection_encode(id<MTL4CommandBuffer> cb,id<MTLTexture> target,
+                                     const float picture[4],const float dock[4],float aspect,id<MTLBuffer> buffer,size_t offset) {
+    static id<MTLTexture> images[2];
+    // The native swapchain is stretched at presentation. Size the scratch image
+    // by the displayed picture's aspect so blur stays uniform on both axes.
+    NSUInteger w=MAX(1,lround(384*fmin(1,aspect))),h=MAX(1,lround(384*fmin(1,1/aspect)));
+    if (!images[0] || images[0].width!=w || images[0].height!=h) {
+        MTLTextureDescriptor *d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float width:w height:h mipmapped:NO];
+        d.storageMode=MTLStorageModePrivate; d.usage=MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget;
+        for (int i=0;i<2;i++) {
+            if (images[i]) defer_obj_release(images[i]);
+            images[i]=[g_dev newTextureWithDescriptor:d];
+            if (!images[i]) MDIE("Seated reflection allocation failed");
+            res_add(images[i]);
+        }
+    }
+    int ll=atomic_load_explicit(&g_origin_ll,memory_order_relaxed);
+    float raw[4]; memcpy(raw,picture,sizeof raw); ui_region_to_render(raw);
+    // Content avoids the reserved fold; its decorative background need not
+    // leave a black gap. Bridge that band and mirror about the fold's center.
+    // The picture is centered in its pane even with a fixed aspect ratio.
+    float fold_top=2*picture[1]+picture[3],axis=(fold_top+dock[1])*.5f;
+    float reflected[4]={picture[0],fold_top,picture[2],fminf(1-fold_top,picture[3]+axis-fold_top)};
+    float before_axis=(axis-fold_top)/picture[3],fraction=reflected[3]/picture[3];
+    float axis_y=(axis-fold_top)/reflected[3],dock_y=(dock[1]-fold_top)/reflected[3];
+    ui_region_to_render(reflected);
+    float constants[44]={
+        raw[0],raw[1],raw[2],raw[3],
+        raw[0]+.5f/target.width,raw[1]+.5f/target.height,raw[0]+raw[2]-.5f/target.width,raw[1]+raw[3]-.5f/target.height,
+        0,0,1,1,.5f/w,.5f/h,1-.5f/w,1-.5f/h,1.f/w,0,0,0,
+        0,0,1,1,.5f/w,.5f/h,1-.5f/w,1-.5f/h,0,1.f/h,0,0,
+        0,ll ? fraction-before_axis : 1+before_axis,1,-fraction,.5f/w,.5f/h,1-.5f/w,1-.5f/h,axis_y,dock_y,ll,.40f
+    };
+    memcpy((uint8_t *)buffer.contents+offset,constants,sizeof constants); res_commit();
+    const float full[4]={0,0,1,1}; MTLGPUAddress gpu=buffer.gpuAddress+offset;
+    seated_texture_encode(cb,target,images[0],full,gpu,SEATED_COPY);
+    seated_texture_encode(cb,images[0],images[1],full,gpu+32,SEATED_BLUR);
+    seated_texture_encode(cb,images[1],images[0],full,gpu+80,SEATED_BLUR);
+    seated_texture_encode(cb,images[0],target,reflected,gpu+128,SEATED_REFLECTION);
 }
 static void seated_dock_prepare(const tex_t *canvas) {
     id<MTLTexture> original=tex_mtl(canvas);
@@ -11636,17 +11720,20 @@ static void seated_dock_prepare(const tex_t *canvas) {
         g_ui_dock_frame=frame;
     }
 }
-static void seated_dock_composite(void) {
-    float region[4]; if (!g_ui_dock_image || !dm_aspect_region(1,region)) return;
+static void seated_composite(void) {
+    float region[4],picture[4]; if (!dm_aspect_region(1,region) || !dm_aspect_region(0,picture)) return;
     rp_flush(); ubd_land_compute(); if (g_blit) { enc_b_end(g_blit); g_blit=nil; } up_flush();
     // Respect the game's render-target view, especially its sRGB conversion.
     MTLRenderPassColorAttachmentDescriptor *attachment=[MTLRenderPassColorAttachmentDescriptor new];
     attach(attachment,R.rt.color[0],&R.rt.cview[0],R.rt.has_cview[0]);
+    id<MTLBuffer> reflection; size_t reflection_offset=arena_alloc(176,&reflection);
+    seated_reflection_encode(g_cb,attachment.texture,picture,region,dm_aspect_ratio(),reflection,reflection_offset);
+    if (!g_ui_dock_image || g_ui_dock_frame!=atomic_load(&g_cur_frame)) return;
     id<MTLBuffer> buffer; size_t offset=arena_alloc(32,&buffer); float *uv=(float *)((uint8_t *)buffer.contents+offset);
     float w=g_ui_dock_image.width,h=g_ui_dock_image.height;
     const float values[8]={0,0,1,1,.5f/w,.5f/h,1-.5f/w,1-.5f/h}; memcpy(uv,values,sizeof values);
     ui_region_to_render(region); res_commit();
-    seated_dock_encode(g_cb,g_ui_dock_image,attachment.texture,region,buffer.gpuAddress+offset);
+    seated_texture_encode(g_cb,g_ui_dock_image,attachment.texture,region,buffer.gpuAddress+offset,SEATED_ALPHA);
 }
 // Present samples only the valid source rectangle declared by NVN; kept separate from the raw swapchain readback screenshot. Edges are clamped to the texel centers of the valid area, so bilinear does not read the black texels outside.
 // Present samples the raw bytes stored in the swapchain texture (the Switch's scan-out sends the stored bytes as they are): an sRGB source is replaced by a non-sRGB view of the same storage,

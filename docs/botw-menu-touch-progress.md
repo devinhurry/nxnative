@@ -52,7 +52,35 @@ Implementation, Apple API references and the exact validation boundary are in th
 `duo-adaptation-20261031/` in the game's external work folder. Implementation was
 developed on `codex/botw-duo-adaptation` before integration into main.
 
+### Seated reflection and compact portrait permission (2026-11-01)
+
+- [x] Draw a brighter, blurred reflection only behind BOTW's Seated lower pane.
+  Fill the fold's background continuously; retain its content/input exclusion.
+  Keep the native minimap and virtual controls sharp and independently interactive.
+- [x] Apply the portrait permission switch only below the existing 600pt usable
+  width boundary. Wider portrait windows always allow rotation. App and game-view
+  checks share one decision; motion follows the actual orientation with the switch off.
+- [x] Pass 285 graphics checks, including 88 focused Seated checks with Metal
+  validation, plus the portrait boundary fixture, 191 NVN checks, 190 iOS source
+  checks and launcher schema/storage tests.
+- [x] Mac gameplay/menu/minimap interaction and whole-window/Seated restoration.
+  UIKit motion and fold input checks pass; the full harness has three old
+  compact-position assertions after main's layout changes.
+- [ ] Physical Duo folding, background transition, rotation and gyro acceptance
+  with the actual iOS 27.1 SDK. Shader regression still has the compiler-pin block.
+
+Details and test limits are in the [game note](../dm/games/01007EF00011E000/README.md#rendering).
+Evidence is in `seated-reflection-20261101/` in the game's external work folder.
+
 ### Narrow displays and optional portrait controls (2026-10-31)
+
+HUD edge follow-up (2026-11-01): nonzero side safe insets replace authored
+padding; zero-inset sides retain the existing margin. The whole Plus button and
+the first heart respect their respective boundaries, with shared map/hit geometry.
+Mac preview supports `--touch-safe-area left,top,right,bottom` in points, default
+all zero. Native checks cover asymmetric/zero insets, stable sizes and controller
+map edges. Physical iPhone appearance remains pending; evidence is in
+`hud-safe-area-20261101/` in the game's external work folder.
 
 - [x] Preserve centered 16:9 menu content while anchoring hearts and the collapsed
   minimap/environment group to the top on narrower displays, including 4:3.

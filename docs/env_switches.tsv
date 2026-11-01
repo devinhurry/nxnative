@@ -40,7 +40,7 @@ DM_BOTW_PAD_ZL_Y	player	BOTW touch shield stick vertical offset as a fraction of
 DM_BOTW_PAD_ZR_SCALE	player	BOTW touch ZR button size multiplier.
 DM_BOTW_PAD_ZR_X	player	BOTW touch ZR button horizontal offset as a fraction of layout canvas width.
 DM_BOTW_PAD_ZR_Y	player	BOTW touch ZR button vertical offset as a fraction of layout canvas height.
-DM_BOTW_PORTRAIT	player	Allow BOTW portrait rotation; tall control panes below 600pt usable width select compact controls. Off by default.
+DM_BOTW_PORTRAIT	player	Allow compact BOTW portrait rotation below 600pt usable width. Wide portrait windows always allow rotation and keep normal controls. Off by default.
 DM_BOTW_PORTRAIT_MOVE_CURVE	player	BOTW compact touch movement response exponent; default 0.30, launcher range 0.30 to 2.00.
 DM_BOTW_PORTRAIT_MOVE_DEADZONE	player	BOTW compact touch movement deadzone as a radius fraction; default 0.07.
 DM_BOTW_PORTRAIT_MOVE_FULL	player	BOTW compact touch finger travel for full stick strength, as a radius fraction; default 0.71.
@@ -350,6 +350,7 @@ DM_TEMP	path	Temporary storage folder (default `$DM_ROOT/run/platform/temp`); st
 DM_TEST_ARCHIVE_CONSTANTS	test	Use optional function constants in the synthetic pipeline archive restart fixture
 DM_TEST_ARCHIVE_MIXED	test	Mix a newly compiled shader function with compacted bases in the archive restart fixture
 DM_TEST_BORDER	test	Path to the native t_border executable that test_dmsh_border.py runs a rewritten shader through on the GPU (`make check_t_border` sets it)
+DM_TEST_BOTW_SAFE_AREA	test	BOTW Mac touch preview safe insets in frontend points as left,top,right,bottom; default 0,0,0,0. Also set by run_mac.py --touch-safe-area. Ignored without touch preview.
 DM_TEST_BOTW_SEATED	test	Simulate a horizontal fold in the BOTW Mac preview, with the picture above and controls below; 1 enables it.
 DM_TEST_BUILD	test	Build folder of `dm/host/tests` whose `t_svc_memory` `test_memory_profile.py` runs (default `build`; `make asan` sets `build/asan`)
 DM_TEST_FS_FAIL	diagnostic	`=write:<n>[:<errno>]` makes the nth save write fail with that errno (default ENOSPC), which refuses the save transaction's commit

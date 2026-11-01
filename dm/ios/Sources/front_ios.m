@@ -103,6 +103,11 @@ static UILabel *front_ios_fps_label(void);
 - (void)showLauncher;
 @end
 static DmRootVC *g_root;
+UIInterfaceOrientationMask front_ios_orientations(UIWindow *window) {
+    CGSize size=window.bounds.size; UIEdgeInsets safe=window.safeAreaInsets;
+    return !strcmp(DM_GAME_ID,"01007EF00011E000") && dm_botw_portrait_allowed(size.width,size.height,safe.left,safe.right) ?
+        UIInterfaceOrientationMaskLandscape | UIInterfaceOrientationMaskPortrait : UIInterfaceOrientationMaskLandscape;
+}
 static void launcher_done(void) { [g_root startGame]; }
 static void game_files_done(void) { [g_root showLauncher]; }
 @implementation DmRootVC
@@ -147,6 +152,7 @@ static void game_files_done(void) { [g_root showLauncher]; }
     dm_aspect_region(1,next);
     if (!CGRectEqualToRect(self.surface.frame,frame) || memcmp(previous,next,sizeof next)) {
         dm_gamepad_surface_changed(); [self.pad setNeedsLayout]; [self.game setNeedsLayout];
+        if (!strcmp(DM_GAME_ID,"01007EF00011E000")) [self setNeedsUpdateOfSupportedInterfaceOrientations];
     }
     self.surface.frame=frame;
     CGRect b=self.surface.bounds;
@@ -178,9 +184,12 @@ static void game_files_done(void) { [g_root showLauncher]; }
 - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
 - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }   // Edge gestures need two swipes, to avoid accidental exits
 - (BOOL)prefersStatusBarHidden { return YES; }
+- (void)viewSafeAreaInsetsDidChange {
+    [super viewSafeAreaInsetsDidChange];
+    if (self.game && !strcmp(DM_GAME_ID,"01007EF00011E000")) [self setNeedsUpdateOfSupportedInterfaceOrientations];
+}
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    return self.game && !strcmp(DM_GAME_ID,"01007EF00011E000") && dm_botw_portrait_enabled() ?
-        UIInterfaceOrientationMaskLandscape | UIInterfaceOrientationMaskPortrait : UIInterfaceOrientationMaskLandscape;
+    return self.game ? front_ios_orientations(self.view.window) : UIInterfaceOrientationMaskLandscape;
 }
 @end
 UIViewController *front_ios_root(void) { return [DmRootVC new]; }

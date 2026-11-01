@@ -54,7 +54,7 @@ static void check_seated_dock(id<MTLTexture> src) {
         atomic_store(&g_origin_ll,ll); float picture[]={0,.7f,1,.3f}; ui_region_to_render(picture);
         id<MTL4CommandAllocator> al=[g_dev newCommandAllocator]; id<MTL4CommandBuffer> cb=[g_dev newCommandBuffer];
         id<MTLSharedEvent> event=[g_dev newSharedEvent]; [cb beginCommandBufferWithAllocator:al];
-        seated_dock_encode(cb,src,out,picture,uv.gpuAddress); [cb endCommandBuffer];
+        seated_texture_encode(cb,src,out,picture,uv.gpuAddress,SEATED_ALPHA); [cb endCommandBuffer];
         [g_q4 commit:&cb count:1]; [g_q4 signalEvent:event value:1];
         EXPECT("Seated dock GPU completes",1,[event waitUntilSignaledValue:1 timeoutMS:10000]);
         uint8_t pixels[w*h*4]; [out getBytes:pixels bytesPerRow:w*4 fromRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0];
@@ -67,6 +67,78 @@ static void check_seated_dock(id<MTLTexture> src) {
         EXPECT("Seated composites the whole dock below the fold without overwriting the picture",0,bad);
     }
     atomic_store(&g_origin_ll,0); res_remove(out); res_remove(uv); res_remove(src);
+}
+static void check_seated_reflection(void) {
+    // The upper quadrants remain byte-identical; their mirror is blurred and
+    // dimmed below the fold, behind a sharp opaque patch in the dock texture.
+    const int w=240,h=400;
+    for (int ll=0;ll<2;ll++) for (int inset=0;inset<4;inset++) {
+        const int left=inset==1 ? 40 : 0,right=w-left,top=inset==2 ? 240 : inset==1 ? 120 : 160,bottom=inset==2 ? 320 : inset==3 ? 160 : 240;
+        const int axis=(top+bottom)/2,reflected=MIN(top+axis-top,h-top),mirror=MIN(top,h-axis);
+        MTLTextureDescriptor *d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB width:w height:h mipmapped:NO];
+        d.storageMode=MTLStorageModeShared; d.usage=MTLTextureUsageRenderTarget|MTLTextureUsageShaderRead;
+        id<MTLTexture> out=[g_dev newTextureWithDescriptor:d];
+        uint8_t before[w*h*4],pixels[w*h*4]; memset(before,0,sizeof before);
+        for (int y=0;y<h;y++) for (int x=0;x<w;x++) {
+            uint8_t *p=before+4*((ll ? h-1-y : y)*w+x); p[3]=255;
+            if (y<top && x>=left && x<right) memcpy(p,colors[(x>=w/2)+2*(y>=top/2)],4);
+        }
+        [out replaceRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0 withBytes:before bytesPerRow:w*4];
+        id<MTLBuffer> uv=[g_dev newBufferWithLength:208 options:MTLResourceStorageModeShared];
+        res_add(out); res_add(uv); res_commit(); atomic_store(&g_origin_ll,ll);
+        float picture[4]={(float)left/w,0,(float)(right-left)/w,(float)top/h},dock[4]={0,(float)bottom/h,1,1-(float)bottom/h};
+        id<MTL4CommandAllocator> al=[g_dev newCommandAllocator]; id<MTL4CommandBuffer> cb=[g_dev newCommandBuffer];
+        id<MTLSharedEvent> event=[g_dev newSharedEvent]; [cb beginCommandBufferWithAllocator:al];
+        seated_reflection_encode(cb,out,picture,dock,(float)(right-left)/top,uv,0); [cb endCommandBuffer];
+        [g_q4 commit:&cb count:1]; [g_q4 signalEvent:event value:1];
+        EXPECT("Seated reflection GPU completes",1,[event waitUntilSignaledValue:1 timeoutMS:10000]);
+        [out getBytes:pixels bytesPerRow:w*4 fromRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0];
+        int overwritten=0;
+        for (int y=0;y<top;y++) for (int x=0;x<w;x++) {
+            size_t p=4*((ll ? h-1-y : y)*w+x); overwritten+=memcmp(before+p,pixels+p,4)!=0;
+        }
+        EXPECT("Reflection leaves upper picture byte-identical",0,overwritten);
+        #define REF(x,y,c) pixels[4*((ll ? h-1-(y) : (y))*w+(x))+(c)]
+        int x=left+(right-left)/4,near=axis+mirror/8,far=axis+mirror*2/3;
+        if (bottom>top) EXPECT("Fold band contains a continuous decorative background",1,REF(x,top,2)>0 && REF(x,bottom-1,0)+REF(x,bottom-1,2)>0);
+        else EXPECT("Zero-width fold keeps a finite visible mirror",1,REF(x,top,2)>0 && REF(x,top,3)==255);
+        EXPECT("Reflection mirrors and dims the bottom blue quadrant next to the fold",1,REF(x,near,2)>20 && REF(x,near,2)<255 && REF(x,near,0)==0);
+        EXPECT("Reflection keeps horizontal direction",1,REF(w-1-x,near,0)>20 && REF(w-1-x,near,1)>20 && REF(w-1-x,near,2)==0);
+        if (far-axis<top/2) EXPECT("Short lower pane crops the mirror without stretching it",1,REF(x,far,2)>5 && REF(x,far,0)==0);
+        else EXPECT("Reflection mirrors the top red quadrant further from the fold",1,REF(x,far,0)>5 && REF(x,far,2)==0);
+        EXPECT("Reflection blurs the quadrant boundary",1,REF(w/2,near,0)>5 && REF(w/2,near,2)>5);
+        EXPECT("Reflection fades completely to black",0,REF(x,top+reflected-1,0)+REF(x,top+reflected-1,1)+REF(x,top+reflected-1,2));
+        if (left) EXPECT("Fixed-aspect reflection does not stretch into side bars",0,REF(10,near,0)+REF(10,near,1)+REF(10,near,2));
+        #undef REF
+        // Draw an opaque 1px-wide green marker after the reflection. Its edge
+        // must stay crisp: the native dock is never input to the blur passes.
+        MTLTextureDescriptor *mark=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:1 height:1 mipmapped:NO];
+        mark.storageMode=MTLStorageModeShared; mark.usage=MTLTextureUsageShaderRead;
+        id<MTLTexture> overlay=[g_dev newTextureWithDescriptor:mark];
+        [overlay replaceRegion:MTLRegionMake2D(0,0,1,1) mipmapLevel:0 withBytes:colors[1] bytesPerRow:4];
+        int mark_y=MAX(bottom+5,near);
+        res_add(overlay); res_commit(); float at[4]={(float)x/w,(float)mark_y/h,1.f/w,1.f/h}; ui_region_to_render(at);
+        const float values[8]={0,0,1,1,.5f,.5f,.5f,.5f}; memcpy((uint8_t *)uv.contents+176,values,sizeof values);
+        [cb beginCommandBufferWithAllocator:al]; seated_texture_encode(cb,overlay,out,at,uv.gpuAddress+176,SEATED_ALPHA); [cb endCommandBuffer];
+        [g_q4 commit:&cb count:1]; [g_q4 signalEvent:event value:2];
+        EXPECT("Seated dock overlay GPU completes",1,[event waitUntilSignaledValue:2 timeoutMS:10000]);
+        [out getBytes:pixels bytesPerRow:w*4 fromRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0];
+        EXPECT("Dock overlay stays sharp above the reflection",0,memcmp(pixels+4*((ll ? h-1-mark_y : mark_y)*w+x),colors[1],4));
+        if (!ll && !inset) {
+            for (int y=0;y<top;y++) for (int x=0;x<w;x++)
+                memset(before+4*(y*w+x),((x^y)&1)*255,3);
+            [out replaceRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0 withBytes:before bytesPerRow:w*4];
+            [cb beginCommandBufferWithAllocator:al]; seated_reflection_encode(cb,out,picture,dock,(float)w/top,uv,0); [cb endCommandBuffer];
+            [g_q4 commit:&cb count:1]; [g_q4 signalEvent:event value:3];
+            EXPECT("Grain-filter GPU completes",1,[event waitUntilSignaledValue:3 timeoutMS:10000]);
+            [out getBytes:pixels bytesPerRow:w*4 fromRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0];
+            int low=255,high=0;
+            for (int x=40;x<w-40;x++) { int v=pixels[4*(near*w+x)]; low=MIN(low,v); high=MAX(high,v); }
+            EXPECT("Fine source grain becomes a smooth reflection before enlargement",1,low>20 && high<230 && high-low<=1);
+        }
+        res_remove(out); res_remove(uv); res_remove(overlay);
+    }
+    atomic_store(&g_origin_ll,0);
 }
 static void check(id<MTLTexture> src, const char *name, const int crop[4], int w, int h, int color) {
     MTLTextureDescriptor *d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:w height:h mipmapped:NO];
@@ -92,7 +164,7 @@ static void check(id<MTLTexture> src, const char *name, const int crop[4], int w
     EXPECT(name,0,bad);free(out);
 }
 
-int main(void) { @autoreleasepool {
+int main(int argc,char **argv) { @autoreleasepool {
     setenv("DM_ASPECT", "0", 1);
     mtl_init();
     MTLTextureDescriptor *d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:8 height:8 mipmapped:NO];d.storageMode=MTLStorageModeShared;d.usage=MTLTextureUsageShaderRead;
@@ -100,6 +172,8 @@ int main(void) { @autoreleasepool {
     for(int y=0;y<8;y++)for(int x=0;x<8;x++)memcpy(px+4*(y*8+x),colors[(x>=4)+2*(y>=4)],4);
     [src replaceRegion:MTLRegionMake2D(0,0,8,8) mipmapLevel:0 withBytes:px bytesPerRow:32];
     check_seated_dock(src);
+    check_seated_reflection();
+    if (argc==2 && !strcmp(argv[1],"--seated")) { printf("== %d checks, %d failed ==\n",cases,failed); return failed!=0; }
     int zero[4]={0},tl[4]={0,0,4,4},tr[4]={4,0,4,4},bl[4]={0,4,4,4},br[4]={4,4,4,4},one[4]={3,3,1,1},inset[4]={1,1,4,4};
     check(src,"default whole frame 64 pixels",zero,8,8,-1);
     check(src,"NULL default whole frame 64 pixels",NULL,8,8,-1);
