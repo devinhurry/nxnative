@@ -122,7 +122,7 @@ struct LauncherDashboard: View {
                         }
                         Text(title)
                             .font(.title3.weight(.bold)).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.8)
-                        Text(String(format: NSLocalizedString("Version %@", comment: "Game version"), version))
+                        Text(String(format: NSLocalizedString(model.touchSettingsKeys.isEmpty ? "Version %@" : "BOTW version %@", comment: "Game version and BOTW creator"), version))
                             .font(.caption).foregroundStyle(.secondary)
                         playButton.disabled(importBusy || checkingResources || !romReady || !shadersReady)
                         HStack(spacing: 8) {
