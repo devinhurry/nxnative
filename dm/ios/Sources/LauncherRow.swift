@@ -64,6 +64,8 @@ struct SettingRow: View {
 
 // Build identity is shown at the bottom of both startup menus.
 struct AboutSection: View {
+    var graphicsVersion: String? = nil
+    var graphicsMetal: String? = nil
     private func info(_ key: String) -> String {
         Bundle.main.object(forInfoDictionaryKey: key) as? String ?? "unknown"
     }
@@ -73,11 +75,22 @@ struct AboutSection: View {
         return String(commit.prefix(6)) + (commit.hasSuffix("+dirty") ? "+dirty" : "")
     }
 
+    static func localBuildTime(_ timestamp: String, timeZone: TimeZone = .autoupdatingCurrent) -> String {
+        guard let date = ISO8601DateFormatter().date(from: timestamp) else { return timestamp }
+        let formatter = DateFormatter()
+        formatter.timeZone = timeZone
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .medium
+        return formatter.string(from: date)
+    }
+
     var body: some View {
         Section("About") {
             LabeledContent("Repository", value: info("DMRepository"))
             LabeledContent("Commit", value: Self.shortCommit(info("DMCommit")))
-            LabeledContent("Built (UTC)", value: info("DMBuildTime"))
+            LabeledContent("Built", value: Self.localBuildTime(info("DMBuildTime")))
+            if let version = graphicsVersion { LabeledContent("Graphics package", value: "v" + version) }
+            if let metal = graphicsMetal { LabeledContent("Metal compiler", value: metal) }
         }
         .accessibilityIdentifier("nxnative.about")
     }

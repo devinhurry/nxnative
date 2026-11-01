@@ -32,6 +32,20 @@ To enroll a cut for any game's own module:
 3. Add the rule under `MATCH_CUTS = {'main': [rule]}` (or the appropriate non-SDK module) in that game's `patches.py`. Record the evidence and remaining runtime validation in the game's note. Do not transplant a workaround into unrelated games.
 4. Verify an unregistered build-ID copy through the rewriter, comparing its output with the known fixed cut, and run `test_nso_match.py`, `test_patches.py` and `test_nro_pack.py`. The matching tests use synthetic modules from two profiles to check relocation, rejection and isolation without game files.
 
+### Cheats carried across game updates
+
+- **Symptom:** after a game update, the Cheats menu lists only `Cheats for build … (another version of the game)`, and nothing runs. Or a cheat file converted to the new build by hand writes into the wrong place: a table instead of a variable, or code that moved.
+- **Cause:** Atmosphère cheats name fixed offsets into the main NSO, valid for the one build the file is named after. An update moves code and data by different amounts in different parts of the image; a single shift is a guess.
+- **Fix:** `scripts/cheat_anchor.py` anchors each address to the game's code and compiles the cheats for any build ([Cheats that survive game updates](../development.md#cheats-that-survive-game-updates)):
+  - data through the adrp pairs (and relocated `.data` slots) that reference the nearest address at or below it;
+  - code sites through `nso_match.py`'s function fingerprints, then the tool's own fallbacks (the body digest, then a unique masked window), with a code site's original words always checked;
+  - ASM code caves through the padding before the read-only data.
+
+  The result is plain Atmosphère text, so it runs on any engine.
+- **Found on:**
+  - FINAL FANTASY CRYSTAL CHRONICLES Remastered Edition: the 1.0.1 cheatslips file, anchored on the cartridge's `main`, compiles to exactly the hand-verified +0x43680 on 1.0.3 (12 of 12 cheats, 4 of 4 references each). The 1.0.3 file (5 ASM cheats with a code cave, 7 stat cheats, Mog's fatigue) compiles back to identical writes on 1.0.3 and to all 18 entries on the cartridge's build (code sites: 4 exact, 3 by body digest, 2 by window).
+  - [13 Sentinels: Aegis Rim](../../dm/games/01003FC01670C000/README.md#cheats): a 1.10 Ryujinx list compiles back to identical writes and to 1.00, where every site lies 0x330 lower and the hook site was found by its body digest.
+
 ## Jump tables
 
 ### Offset jump tables through x18 read at rewrite time
@@ -64,6 +78,14 @@ To enroll a cut for any game's own module:
 - **Cause:** `jump_offsets` took only a 32-bit `cmp wI, #N` as the bounds check. A 64-bit compare bounds the index as well (the load uses the whole `xI`); here the table base also reaches the load through a copy, so only the far-base pass reads it.
 - **Fix:** in its last pass (`far_base`), `jump_offsets` accepts `cmp xI, #N` on the index too. The earlier passes are unchanged, so modules that rewrote before come out the same.
 - **Found on:** [OCTOPATH TRAVELER](../../dm/games/010057D006492000/README.md) `main+0x1676f58` (1.0.5), the only such site in that `main`.
+
+### Index zero-extended after a 32-bit bounds check
+
+- **Symptom:** `jump table <addr>` assertion in `patch_nso.py` where the index is made with a 64-bit `and` by `0xffffffff` after the check (`cmp w8, #4; b.hi; and x18, x8, #0xffffffff; ldrsw x18, [x16, x18, lsl #2]; add x18, x18, x16; br x18`).
+- **Cause:** `jump_offsets` took the `and` as a mask and looked for the same mask on the checked register, which has none, so no form matched.
+- **Fix:** a 64-bit `and` with `0xffffffff` zero-extends the source's low 32 bits. `jump_zero_extended` recognizes a 32-bit `cmp` of that source followed by `b.hi` out of the dispatch. The source stays unchanged up to the mask, the index up to the load, the loaded entry and base up to the add, and `x18` up to the branch. Calls, system calls, traps, other intervening control flow, undecodable gaps, and known entries past the check are rejected; the table must fit in the image and every target must be a decoded instruction outside the guarded run (or its check).
+- **Check:** this is a separate fallback after every earlier recognizer fails. Adding the rule inside `jump_offsets` before its existing searches could change a previously recognized table's extent by selecting a nearer compare. The fallback preserves those earlier results; synthetic full-rewriter tests cover both the new five-entry form and an existing eight-entry match with a nearer five-entry check.
+- **Found on:** Mario Tennis Aces (0100BDE00862A000) `main+0x35837c` (1.0.0), a five-entry table whose targets all lie in the function ([PR #778](https://github.com/seedds/nxnative/pull/778)). The contributor reported that `main`, `subsdk0` and `sdk` rewrite with zero-extension recognition; gameplay validation remains open.
 
 ### Index masked in the block that branches to the dispatch
 
@@ -113,6 +135,15 @@ To enroll a cut for any game's own module:
 - **Fix:** `jump_adr_offsets`, tried only where the table-relative form is not found. The bounds check can be on a register copied into the index (`mov w16, w15`), and the table base can be built far from the dispatch; then every `adrp` + `add` pair in the function that builds that register is tried, and a table is accepted only if exactly one makes every target an instruction of the function.
 - **Found on:** [The Legend of Zelda: Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md) `main+0x393bb0` and others.
 
+### ADR-relative jump tables with 64-bit bounds
+
+- **Symptom:** `AssertionError: jump table 30ee50c` while rewriting an ADR-relative dispatch with `cmp x9,#4`.
+- **Cause:** `jump_adr_offsets` recognized only 32-bit bounds comparisons, although a comparison of the full 64-bit index also bounds the table. Its backward copy tracking could also retain a destination whose old value had been overwritten.
+- **Fix:** accept either comparison width for the tracked index. When following a 32-bit index copy backward, replace the destination with its source, so an earlier check of the overwritten destination cannot justify the load. Other writes still invalidate the match; table and target validation are unchanged.
+- **Found on:** [DRAGON QUEST I & II HD-2D Remake](../../dm/games/0100D7C01F254000/README.md), `main+0x30ee50c` (five targets).
+- **Check:** `dm/tools/tests/test_jump_copies.py` exercises both comparison widths, unrelated checks, overwritten indices and a bounds check on the copied source with real AArch64 instructions.
+- **Open:** as in the existing 32-bit form, this recognizer assumes the comparison has an effective unsigned bounds guard; it does not prove guard/flag validity or that every incoming path passes the check. This game's actual dispatch has `b.hi` with unchanged flags. Validating those branches remains separate from this fix.
+
 ### Byte tables indexed by x30 (capstone register names)
 
 - **Symptom:** `jump table <addr>` assertion on a byte table indexed by x30 (`adr x18, #L; ldrb w30, [x14, x12]; add x18, x18, x30, lsl #2; br x18`).
@@ -146,11 +177,18 @@ To enroll a cut for any game's own module:
 
 ### Loaded method-pointer tail call before an error block
 
-- **Symptom:** `jump table 53e9c` while rewriting Warm Snow 2.1.4's Unity IL2CPP `main`.
-- **Cause:** a framed thunk loads a method pointer into `x18`, moves arguments, restores its frame and executes `br x18`. A separate null-error call follows it. The terminal-tail recognizer requires the jump to end the function.
-- **Fix:** keep the existing terminal-tail rule unchanged. Only for nonterminal jumps, recognize a contiguous decoded thunk with the standard 16-byte FP/LR frame, a single forward `cbz` to the trailing error call, plain argument moves/transfers, one pointer load into `x18`, and the matching frame restore. Reject additional control flow, stack-pointer/frame-register/link-register writes, pointer clobbers and undecoded gaps. Stores must use a fixed offset of at least 16 from the unchanged `sp` or frame pointer, so they write caller stack arguments above the saved FP/LR. Checking register writes alone does not protect that saved pair; stores through other bases or dynamic offsets may alias it and are rejected. An unframed loaded-pointer jump followed by other blocks remains unsupported: ending a basic block alone does not prove a tail call.
-- **Found on:** Warm Snow 2.1.4, `main` build `306fc054203275803dcbceba7fb7c392`, at `+0x53e9c`. Its game profile is deliberately outside this change.
-- **Check:** `dm/tools/tests/test_tail_call.py` covers acceptance and rejection with synthetic AArch64 instructions, including saved-frame stores, safe caller argument stores, unproven store addresses, 32-bit and 64-bit SP/FP/LR clobbers (including `wsp`), the unframed guarded block and the previously accepted terminal tail with an intervening conditional branch. Actual game rewrite/build results and remaining coverage are recorded in the PR; no game assets are required by the tests.
+- **Symptom:** `jump table 53e9c` while rewriting Warm Snow 2.1.4's Unity IL2CPP `main`, or `jump table 108bb70` on Ori and the Blind Forest: Definitive Edition.
+- **Cause:** a framed IL2CPP method loads a method pointer into `x18` (`ldr`, or `ldp` with the next field), moves its arguments, restores its frame and executes `br x18`, with code after the `br`: error blocks in a small thunk, the function's other paths in a larger one. The terminal-tail recognizer requires the jump to end the function.
+- **Fix:** keep the terminal rule, which proves no frame, unchanged. For a `br x18` with code after it, `tail_call` proves that the frame is gone, because a jump inside a function needs that function's frame. A wrong accept turns a jump table into a call without any error, so what is not proven stays at `jump table <addr>`. It holds for both frames:
+  - **Pointer:** the last write of `x18` is `ldr x18, [xN, #imm]` or `ldp x18, xM, [xN, #imm]`.
+  - **The path to the `br`:** no call or jump after that load or the frame restore, whichever is first, no branch or store after the restore, and no branch from anywhere lands past the restore. A guard may land before it: real code skips a reload of the pointer that way.
+  - **Frame registers:** nothing else on the way writes `sp`, `x29` or `x30`, except that `x29` may be set once to the saved pair's address, and no branch re-enters the frame's setup.
+  - **Stack stores:** a fixed offset from `sp` or the set `x29`, whose bytes stay clear of the saved pair; a register offset or writeback is rejected, and so is any exclusive or atomic access, whatever its base, which the rule does not model.
+  - **After the `br`:** no branch comes back to the `br` or ahead of it, and no direct call lands in the function.
+  - **A 16-byte thunk** (`stp x29, x30, [sp, #-0x10]!; mov x29, sp`, restored by the instruction before the `br`) proves more, as Warm Snow's does: no calls, no stores through other bases, every guard goes to the code after the `br`, at least one does, and that code is error blocks that hold a call out of the function, end in a call, a trap or a branch among themselves, and hold no `ret`, `br` or `blr`.
+  - **A function** (`sub sp, sp, #N` first, `add sp, sp, #N` right before the `br`, `x29, x30` saved to and restored from one slot inside the N bytes) is ordinary compiled code: its body may branch, loop and call, as IL2CPP's lazy init does, its stores through other bases cannot be proven apart from its callees' and are allowed, and any of its other paths may follow the `br`. A jump through another register in its body has unknown targets and is rejected.
+- **Found on:** Warm Snow 2.1.4, `main` build `306fc054203275803dcbceba7fb7c392`, at `+0x53e9c`. Ori and the Blind Forest: Definitive Edition, `main` build `228b944fcb08ae56180369be66727558`, at `+0x108bb70`, `+0x108ca70`, `+0x13ff8f0`, `+0x14008a0`.
+- **Check:** `dm/tools/tests/test_tail_call.py` covers both forms and rejects each broken proof with synthetic AArch64 instructions; no game assets are required by the tests. The function form was measured on real framed tail calls through other registers in Unity mains, whose shapes it must accept.
 
 ## Exclusive windows
 
@@ -224,19 +262,22 @@ To enroll a cut for any game's own module:
 
 ## Cuts and observation gates
 
-### Observation gates where x9–x17 are dead
+### Observation gates on any relocatable instruction
 
 - **Symptom:** `observation gate neither at a function entry nor after a bl`; `observation gate neither at a function entry, after a bl nor before a call` on an epilogue.
-- **Cause:** the host may change x9–x17 in a gate, so a gate sat only where they carry nothing (a function entry, after a `bl`).
-- **Fix:** both `bl` and `blr` establish a safe post-call site under AAPCS64; indirect calls must not be mistaken for plain branches. A site is also accepted when the straight-line code from it to the next `bl` reads none of x9–x17 before writing it (`scratch_dead`); it is tried only after the other two rules fail. `ret` ends the code ahead as a `bl` does: under AAPCS64 none of x9–x17 carries a result, so the straight-line scan (`scratch_dead`) accepts a `ret` too.
-- **Found on:** [DRAGON QUEST VII Reimagined](../../dm/games/0100A9D01C446000/README.md): the gate on `mov x0, x19` at `main+0x32758e4`, after a cut `bl` and an `adrp`. [Pikmin 4](../../dm/games/0100B7C00933A000/README.md): the gate on `ldp x29, x30, [sp, #0x10]` right after the cut allocator constructor call, `main+0x353f78c`; the rule checks the image after the cuts, so the `bl` before it is a `nop` by then (the `ret` case).
-- **Also found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md): `main+0xd44a2c`, immediately after `blr x8`, was rejected because the post-call classifier recognized only the immediate `bl` opcode. The generic classifier now recognizes `blr` too; other branches remain rejected.
+- **Cause:** the rewriter assumed the host may change x9–x17 in a gate. So a gate was placed only where they carry nothing: a function entry, after a `bl`, or (from 2026-10-22, `scratch_dead`) where the straight-line code ahead writes them before reading them. The assumption never held. Since the first host, the gate frame (`dm/host/entry.S`, `_dm_gate`) has saved x0–x28, the vector registers and the flags and restored them, and the gate block borrows only x29 and x30, which it restores from the stack.
+- **Fix:** since 2026-10-31 there is no placement rule: any instruction `site_obs` can relocate takes a gate. A register changes only when the callback writes it (`OBS_STDALLOC_INIT`'s x2, `OBS_UE_REGION`'s size register and x1).
+- **Found on:**
+  - [DRAGON QUEST VII Reimagined](../../dm/games/0100A9D01C446000/README.md): the gate on `mov x0, x19` at `main+0x32758e4`, after a cut `bl` and an `adrp`.
+  - [Pikmin 4](../../dm/games/0100B7C00933A000/README.md): the gate on `ldp x29, x30, [sp, #0x10]` right after the cut allocator constructor call, `main+0x353f78c`.
+  - Both gates were removed on 2026-10-30: the engine-wide allocator rule puts its gate on the cut call itself ([Unreal's FMallocBinned3 replaced by the host allocator](memory.md#unreals-fmallocbinned3-replaced-by-the-host-allocator)).
+  - The engine region's gate sits on a store that reads x10 (`str x1, [x10, #0x280]`, Octopath Traveler 0 `main+0x12e20`), which the old rule refused: [Unreal's engine address region and its options](memory.md#unreals-engine-address-region-and-its-options).
 - **Note:** the gate table takes the original instruction as a word value (`aa1303e0`), the cut table as bytes (`e00313aa`).
 
 ### Build-validated interior observation gates
 
-- **Symptom:** an observation gate is needed inside a function, where the normal register-liveness check cannot prove that host instrumentation may safely clobber x9–x17.
-- **Fix:** a profile may list that exact offset in `OBS_SAFE` and provide a same-build `VALIDATE` callback. The rewriter runs the validator against the original, unmodified image before applying any patches; it refuses an `OBS_SAFE` build without a matching validator. The gate still checks its original instruction word and cannot overlap a rewrite site. This is an explicit exception for sites whose register liveness is established by the validator, not a general relaxation of the gate rules.
+- **Symptom:** a fixed-address observation relies on a particular native function, object layout or dispatch sequence and needs validation against its registered build.
+- **Fix:** a profile may list that exact offset in `OBS_SAFE` and provide a same-build `VALIDATE` callback. The rewriter runs the validator against the original, unmodified image before applying any patches; it refuses an `OBS_SAFE` build without a matching validator. The gate still checks its original instruction word and cannot overlap a rewrite site. Full register preservation now permits any relocatable site, as described above; these retained validators check the native assumptions rather than granting a register-liveness exception.
 - **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md): four interior sites in the 1.9.0 `main` (`cd57b23fa4bbad65803d9788c01821ee`), with the build invariants and site-specific liveness notes in `patches.py`.
 - **Profile fields:** `OBS_SAFE` maps build IDs to exceptional offsets; `VALIDATE` maps those same build IDs to callbacks taking the original-image context. Keep both keyed to the exact NSO build and update the validator whenever a site or its surrounding code changes.
 
@@ -320,6 +361,16 @@ To enroll a cut for any game's own module:
 - **Cause:** shader builds use a writable profile copy for generated tables. Passing that copy to the rewriter exposes its `patches.py` alongside the revision's original, registering every cut twice.
 - **Fix:** registered games rewrite with the revision's original profile; provisional games retain their external profile path. Shader builds continue using their writable copies. The harness regression covers both selections.
 - **Found on:** [NieR:Automata geometry review](../../dm/games/010056B015FE8000/README.md#geometry-optimization-review), when comparing rewrites after reconciling PRs #336 and #416.
+
+## Rewriter performance
+
+### Parallel scans preserve rewrite output
+
+- **Symptom:** packing spends most of the rewrite step on the x18 scan and the spin-wait search, using one core per module. Cancelling a parallel rewrite can leave its workers running; `DM_REWRITE_J=0` or a negative value can silently omit spin gates, and the NSP script can ignore an explicit worker limit.
+- **Cause:** both searches analyse an unchanged image, but ran sequentially. A default SIGTERM exits without unwinding the pool's context manager. The spin search's job count assumed a positive worker count, and the NSP script always replaced the caller's setting with its automatic budget.
+- **Fix:** `patch_nso.py` scans code ranges in 1 MB pieces and distributes spin candidates across forked workers. Each pool inherits the image and analysis state at that pass; workers return addresses, and the parent rebuilds accepted spin regions in address order before emitting patches. SIGTERM exits through Python's cleanup so the pool terminates and joins its children. `DM_REWRITE_J` must be a positive integer (`1` runs serially), checked before loading modules; the NSP script honours an explicit value and otherwise chooses its budget from the core and module counts. These changes apply to every NSO and NRO; patch selection and runtime semantics stay the same.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game).
+- **Check:** synthetic tests cover SIGTERM during active pool jobs, invalid counts and explicit worker limits through the packing script. The original speed measurements and module comparisons are in [PR #761](https://github.com/seedds/nxnative/pull/761); their timings are contributor measurements, not local regression results. Local game validation is recorded in Breath of the Wild's note; other games and NROs have no new local runtime validation here.
 
 ## Checking a rewriter change
 

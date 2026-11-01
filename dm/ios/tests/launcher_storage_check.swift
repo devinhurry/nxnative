@@ -8,6 +8,12 @@ import Foundation
         expect(AboutSection.shortCommit("abcdef012345") == "abcdef", "About shows a six-character commit")
         expect(AboutSection.shortCommit("abcdef012345+dirty") == "abcdef+dirty", "About preserves the local-changes marker")
         expect(AboutSection.shortCommit("unknown") == "unknown", "About handles missing source metadata")
+        let utc = TimeZone(secondsFromGMT: 0)!
+        expect(AboutSection.localBuildTime("2026-10-31T20:00:00Z", timeZone: TimeZone(identifier: "Asia/Shanghai")!) ==
+               AboutSection.localBuildTime("2026-11-01T04:00:00Z", timeZone: utc), "About converts UTC into local time across a date boundary")
+        expect(AboutSection.localBuildTime("2026-07-01T12:00:00Z", timeZone: TimeZone(identifier: "America/Los_Angeles")!) ==
+               AboutSection.localBuildTime("2026-07-01T05:00:00Z", timeZone: utc), "About respects daylight saving time")
+        expect(AboutSection.localBuildTime("unknown") == "unknown", "About preserves missing build-time metadata")
         let file = try! JSONDecoder().decode(SettingsFile.self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])))
         let suite = "nxnative.launcher-test." + UUID().uuidString
         let d = UserDefaults(suiteName: suite)!
@@ -18,6 +24,13 @@ import Foundation
         d.set("1", forKey: "launcher.DM_FPS_HOLD")       // a value the toggle does not take (on / off): the default
         setenv("DM_ENV_FILE_KEYS", "DM_METAL_HUD", 1); setenv("DM_METAL_HUD", "1", 1)   // set by Documents/env.txt
         let m = LauncherModel(file.settings, defaults: d)
+        expect(m.needsTouchFallbackNotice && LauncherModel(file.settings, defaults: d).needsTouchFallbackNotice,
+               "the first BOTW touch start needs a notice until acknowledged")
+        expect(!LauncherModel([], defaults: d).needsTouchFallbackNotice, "other games do not show the BOTW touch notice")
+        m.acknowledgeTouchFallbackNotice()
+        let acknowledged = LauncherModel(file.settings, defaults: d)
+        acknowledged.reset()
+        expect(!acknowledged.needsTouchFallbackNotice, "acknowledgment survives a new launcher and settings reset")
         let scale = file.settings.first { $0.env == "DM_RENDER_SCALE" }!
         expect(["nan", "inf", "-inf", "0.49", "1.01", "invalid", "0x1p-1", "0X1", " 0.75"].allSatisfy { !scale.accepts($0) } && scale.accepts("0.5") && scale.accepts("1.00"), "saved ranges reject nonfinite, out-of-range, hex and padded values, as launcher.c does")
         d.set("nan", forKey: "launcher.DM_RENDER_SCALE")

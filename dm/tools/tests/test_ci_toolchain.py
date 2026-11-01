@@ -1,6 +1,6 @@
 """CI builds with the toolchain the project supports: the Xcode that .github/workflows/tests.yml names in DEVELOPER_DIR is the one the build guide names and the NSP
 script names beside dmsh_chain.lock, and every macOS job runs on the GitHub image of that Xcode (xcode-<major>). The build check compares the image's Metal compiler with the
-lock itself (own_compilers.py --check-metal); this test keeps the names in step, so raising the toolchain is one change in all of them. No Xcode or network needed."""
+lock itself (own_compilers.py --check-metal); this test keeps the names in step (own_compilers.py's stop message too), so raising the toolchain is one change in all of them. No Xcode or network needed."""
 from pathlib import Path
 import re
 import unittest
@@ -25,6 +25,10 @@ class Toolchain(unittest.TestCase):
         named = re.findall(r'Xcode (\d+\.\d+)', (REPO / 'docs/development.md').read_text())
         self.assertTrue(named, 'docs/development.md names no Xcode version')
         self.assertEqual(set(named), {self.xcode}, f'docs/development.md: the Xcode to install is not CI\'s {self.xcode}')
+
+    def test_metal_stop_names_the_same_xcode(self):   # own_compilers.py's stop message: the Xcode to install and select (GitHub issue #717)
+        named = re.findall(r"XCODE_VERSION = '(\d+\.\d+)'", (REPO / 'dm/gfx/tools/own_compilers.py').read_text())
+        self.assertEqual(named, [self.xcode], f'dm/gfx/tools/own_compilers.py: XCODE_VERSION is not CI\'s {self.xcode}')
 
     def test_nsp_script_names_the_same_xcode(self):
         named = re.findall(r'Xcode (\d+\.\d+)', (REPO / 'scripts/build_ipa_from_nsp.py').read_text())

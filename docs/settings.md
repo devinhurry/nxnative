@@ -2,12 +2,25 @@
 
 The screen before the game starts shows the settings the game supports. A setting that only matters while another is on appears under it and disappears when that one is turned off. Tap **Play** to start; the app remembers your choices for the next start. Game, Controls and Performance settings share the home screen. BOTW has a **Touch settings** button that opens its layout and movement editor. **Upscaling** is in **Game**, beside **Console mode**. A Mac app shows the same settings in a [window of its own](#the-mac-settings-window).
 
+**About** at the bottom shows the build time in the device's local time zone and date format, on both iPhone and Mac.
+
+On iOS, **Import ROM** and **Import shaders** sit below **Play** on this same page.
+Each button is replaced by an imported status with a checkmark once its resource is ready.
+Use **Refresh** to recheck files copied into the app manually.
+When shaders are missing, the sole valid, compatible graphics ZIP in the app's folder is automatically imported
+on launch, on returning to the app or on refresh.
+Choose the game image and separate graphics ZIP in Files. Play is enabled when
+both are ready; incompatible graphics report the reason. Imports survive app
+updates. About also shows the imported graphics version and recorded Metal
+version when available. See [graphics packages](graphics-pack.md).
+
 - [Tested defaults](#tested-defaults)
 - [Game](#game): [Frame rate](#frame-rate), [Render scale](#render-scale), [Console mode](#console-mode), [Upscaling](#upscaling), [Game language](#game-language), [Frame-rate counter](#frame-rate-counter)
 - [Controls](#controls): [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff)
 - [Touch left stick](#touch-left-stick): BOTW movement deadzone, response curve, full movement and size
 - [Performance](#performance): [Experimental frame generation](#experimental-frame-generation), [Experimental low-memory mode](#experimental-low-memory-mode), [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
 - [The Mac settings window](#the-mac-settings-window): [Display mode](#display-mode)
+- [TV](#tv)
 - [Settings in a file](#settings-in-a-file)
 
 ## Tested defaults
@@ -103,6 +116,8 @@ On the Mac, touch preview uses the same parameters through `DM_BOTW_MOVE_DEADZON
 
 If a BOTW menu does not respond to direct touch on iPhone, **double-tap with three fingers** to reveal the original full virtual gamepad for that menu visit. It sends ordinary buttons and UI right-stick input. Leaving menus restores the normal touch layout; a controller connection or input reset also ends the temporary override. It is not saved. The gesture is reserved while automatic controls are hidden, so ordinary three-finger combat combinations keep working.
 
+The first **Play** in BOTW touch mode on iPhone explains this gesture and asks players to report buttons that do not respond. Acknowledging the notice starts the game and keeps it from appearing again, including after resetting settings. A connected controller skips the notice without marking it acknowledged.
+
 ## Performance
 
 These settings change how the app hands frames to the screen and how it prepares the GPU's work. The game's tested defaults are a good start; change them when a game stutters, runs hot, or you want less latency.
@@ -184,7 +199,7 @@ At start, before the game's first frame, the app prepares what it already knows:
 
 ### Pipeline prebuild
 
-Builds a stand-in for every pair of shaders the game has (15,767 for Breath of the Wild) and puts them into the pipeline archive, so that a scene you have never seen has a stand-in for each of its draws instead of a stutter. It runs before the game's first frame, behind a **Preparing pipelines** screen: the first start waits a few minutes for it, once, and so does the first start after a game update or an app update that brings new shaders. Every other start skips it. It needs Metal 4 pipelines.
+Builds a stand-in for every pair of shaders the game has (15,767 for Breath of the Wild) and puts them into the pipeline archive, so that a scene you have never seen has a stand-in for each of its draws instead of a stutter. It runs before the game's first frame, behind a **Preparing pipelines** screen: the first start waits a few minutes for it, once, and so does the first start after a game update or an app update that brings new shaders. Every other start skips it. It needs Metal 4 pipelines, and its row shows only while that option is on.
 
 Built in the background while playing instead, the stand-ins took an iPhone 17 Pro Max's GPU from about 13 to 15–18 ms a frame in Breath of the Wild, so the app does the work up front.
 
@@ -252,6 +267,10 @@ When the game starts, it brings the save from iCloud Drive in if that one is the
 A save that is replaced, on the device or in iCloud Drive, is kept first, beside the save in a folder named after it with `-backups` (on the iPhone `save-backups` in the Files app, under the app's name; on the Mac `~/Library/Application Support/nxnative/<title ID>/save-backups`): `<date> local` holds this device's save, `<date> cloud` the one that was in iCloud Drive. The newest 10 of each kind stay, and older ones are removed; other folders you put there are left alone.
 
 iCloud Drive takes a moment to carry a file from one device to the other. Quit the game on one device and give it a few seconds before you start it on the other. Without a connection the game plays on with the save it has and sends it later. The game log says what came in and what went out (lines starting with `save sync:`).
+
+## TV
+
+Connect a TV or monitor by cable, or start Screen Mirroring to an Apple TV or AirPlay TV. The game fills it in 16:9 at up to 1080p and switches to **Docked**; the iPhone or iPad keeps the controls. Disconnect to bring the game back to the device in its earlier mode. AirPlay adds some delay; a cable has almost none.
 
 ## Settings in a file
 

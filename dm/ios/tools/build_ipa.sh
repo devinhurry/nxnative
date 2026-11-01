@@ -11,6 +11,7 @@
 #   The app name is the game name in the base NSP's control data ($W/data/v0/control.nacp, else the one next to the RomFS), the app version is the display version in the packed game's control data (the one next to the RomFS:
 #   nx_extract saves the update's there when an update is packed, else the base game's), the bundle ID is org.nxnative.<base game title ID in lowercase> (DM_DISPLAY_NAME / DM_APP_VERSION / DM_BUNDLE_ID override them);
 #   VNACP=<control.nacp> supplies the packed version's metadata when ROMFS has moved away from its extraction (for example, a combined external image);
+#   DM_COPY_GRAPHICS=NO (default) writes a stored graphics ZIP (DM_GRAPHICS_OUT, else $W/graphics.zip, with .v<version> added); YES bundles graphics instead.
 #   DM_METAL_CAPTURE=1 makes a development build that can write GPU frame captures (MetalCaptureEnabled in Info.plist, for the host's DM_GPU_CAPTURE switch);
 #   DM_SHOW_FPS=1 turns the frame-rate counter on (DMShowFPS in Info.plist; DM_SHOW_FPS in the app's Documents/env.txt overrides it on the phone);
 #   DM_LANG=<language code> is the game language (DMLanguage in Info.plist, default en-US; DM_LANG in the app's Documents/env.txt overrides it on the phone);
@@ -39,6 +40,8 @@ VNACP=${VNACP:-$(dirname "$ROMFS")/control.nacp}; [ -f "$VNACP" ] || VNACP=$W/da
 export LC_ALL=C DM_BUNDLE_ID=${DM_BUNDLE_ID:-org.nxnative.$(echo "$GAME" | tr 'A-Z' 'a-z')} DM_DISPLAY_NAME DM_APP_VERSION DM_APP_CATEGORY=$(gp app_category) DM_TEAM_ID=${DM_TEAM_ID:-0000000000}   # placeholder identity: unsigned, the install tool replaces it
 if [ "${DM_SHOW_FPS:-0}" = 1 ]; then export DM_SHOW_FPS=YES; else export DM_SHOW_FPS=NO; fi
 export DM_LANG=${DM_LANG:-en-US}
+DM_COPY_GRAPHICS=${DM_COPY_GRAPHICS:-NO}
+GRAPHICS_OUT=${DM_GRAPHICS_OUT:-$W/graphics.zip}
 if [ "${DM_COPY_ROMFS:-YES}" = NO ] && [ -n "$AOC" ] && [ -d "$AOC" ]; then
   mkdir -p "$W/game-data" || die "mkdir $W/game-data"
   python3 "$DM/tools/game_image.py" --reuse "$ROMFS" "$AOC" "$W/game-data/RomFS.img" || die "combine game files and DLC"
@@ -96,13 +99,20 @@ else cp "$GD/shader_map.tsv" "$GD/pso_manifest.tsv" "$GD/c1_full.tsv" Gen/dm/ ||
   # the shader pairs, beside the shader map where the pipeline prebuild reads them (nvn_mtl.m pso_prebuild): without them the app makes no pulling bases, and a hybrid draw has no stand-in
   for f in shader_pairs.tsv pso_pairs.tsv; do if [ -f "$GD/$f" ]; then cp "$GD/$f" Gen/dm/ || die "copy $f"; fi; done; fi   # optional
 # The pipeline archive made offline (dm/gfx/tools/pso_offline.py): the base of every shader pair, compiled here by metal-tt for each GPU architecture in DM_PSO_GPUS (comma-separated:
-# g18p = A19 / A19 Pro; none = no archive), so the device does not build them on its first start (Breath of the Wild: 15,767 bases, 7-8 minutes on an iPhone 17 Pro Max).
-# Only the Metal 4 path reads it, which iOS turns on for a game whose profile sets pso_mtl4 on: the default is g18p for such a game and none for the others (their app would carry
-# it unread). It goes into the app as pso/ (main.m hands it to the host as DM_PSO_BUNDLE), with the pulling vertex libraries the bases are made of. Each architecture adds about
-# 650 MB to the app (Breath of the Wild; 220 MB in the IPA) and 4 minutes to the first build; made again only when its inputs change (the libraries, the pairs, the profile's depth_mode, metal-tt)
-PSO=; P4=$(python3 "$DM/games/game.py" "$GAME" pso_mtl4 off) || die "game profile $GD: pso_mtl4"
-if [ -n "${DM_PSO_GPUS+set}" ]; then GPUS=$DM_PSO_GPUS; elif [ "$P4" = on ]; then GPUS=g18p; else GPUS=none; fi
-if [ "$GFXAPI" = nvn ] && [ -n "$GPUS" ] && [ "$GPUS" != none ] && [ -f "$GD/shader_pairs.tsv" ]; then
+# g18p = A19 / A19 Pro; another family's device has its own architecture, applegpu_g19p = the family after the A19 (its archive compiles with the current toolchain); none = no archive), so the device
+# does not build them on its first start (Breath of the Wild: 15,767 bases, 7-8 minutes on an iPhone 17 Pro Max).
+# Only the Metal 4 path reads it, which iOS turns on for a game whose profile sets pso_mtl4 on: the default is what the profile's pso_gpu key names (whitespace-separated architectures, joined for
+# pso_offline.py's --gpu), else g18p, and none for the games that do not set pso_mtl4 on (their app would carry it unread). It goes into the app as pso/ (main.m hands it to the host as
+# DM_PSO_BUNDLE), with the pulling vertex libraries the bases are made of. Each architecture adds about 650 MB to the app (Breath of the Wild; 220 MB in the IPA) and 4 minutes to the first build;
+# made again only when its inputs change (the libraries, the pairs, the profile's depth_mode, metal-tt)
+PSO=; P4=$(python3 "$DM/games/game.py" "$GAME" pso_mtl4 off) || die "game profile $GD: pso_mtl4"; PG=$(python3 "$DM/games/game.py" "$GAME" pso_gpu '') || die "game profile $GD: pso_gpu"
+PGK=g18p; N=0; for w in $PG; do case $w in none) N=9; break ;; esac; case ${w#applegpu_} in '' | *[!A-Za-z0-9]*) N=9; break ;; esac; N=$((N+1)); done
+if [ "$P4" = on ] && [ "$PG" ]; then case $N in 1 | 2 | 3 | 4) PGK=$(echo "$PG" | tr -s ' \t' ',') ;; *) t "profile $GD: pso_gpu '$PG' is not 1-4 whitespace-separated GPU architectures (each one such as g18p or applegpu_g19p, with or without the applegpu_ prefix; there is no none: without the key the archive defaults follow pso_mtl4) - taking g18p" ;; esac; fi
+if [ -n "${DM_PSO_GPUS+set}" ]; then GPUS=$DM_PSO_GPUS; elif [ "$P4" = on ]; then GPUS=$PGK; else GPUS=none; fi
+if [ -n "${DM_GRAPHICS_REUSE:-}" ]; then
+  PSO=${DM_GRAPHICS_PSO:-}
+  t "pipeline archive: reusing the graphics package"
+elif [ "$GFXAPI" = nvn ] && [ -n "$GPUS" ] && [ "$GPUS" != none ] && [ -f "$GD/shader_pairs.tsv" ]; then
   PSO=$W/build/ios/pso/bundle
   t "pipeline archive for $GPUS (metal-tt; minutes when its inputs changed)"
   python3 "$DM/gfx/tools/pso_offline.py" --game "$GAME" --msl "$MSL_IOS/b-$V" --out "$PSO" --work "$W/build/ios/pso/work" --gpu "$GPUS" ${DM_PSO_IOS_MIN:+--os-min "$DM_PSO_IOS_MIN"} \
@@ -118,6 +128,18 @@ if [ -n "$LD" ] && [ "$LD" != "$DM_LANG" ]; then t "game language: the game has 
 if [ -n "${DM_ENV_FILE:-}" ]; then cp "$DM_ENV_FILE" Gen/dm/env.txt || die "copy DM_ENV_FILE"; t "env: $(grep -v '^#' "$DM_ENV_FILE" | tr '\n' ' ')"; fi
 # The shader libraries go into the archive as DmIOS.app/msl/<folder> (main.m sets DM_MSL_DIR to it)
 if [ "$GFXAPI" = vulkan ]; then MSLDIR=vk; elif [ "$GFXAPI" = gl ]; then MSLDIR=gl; else MSLDIR=b-$V; fi
+GRAPHICS_ARGS=(--game "$GAME" --build "$PKG" --api "$GFXAPI" --library "$MSLDIR" --shaders "$MSL_IOS/$MSLDIR" --tables "$GD" --requirements "$IOS/Gen/dm/graphics-required.json")
+[ -z "$PSO" ] || GRAPHICS_ARGS+=(--pso "$PSO")
+if [ "$DM_COPY_GRAPHICS" = NO ]; then
+  GRAPHICS_ARGS+=(--out "$GRAPHICS_OUT" --result "$W/graphics-result.json")
+  [ -z "${DM_GRAPHICS_REUSE:-}" ] || GRAPHICS_ARGS+=(--reuse "$DM_GRAPHICS_REUSE")
+else GRAPHICS_ARGS+=(--bundle); fi
+python3 "$DM/tools/graphics_pack.py" "${GRAPHICS_ARGS[@]}" || die "graphics package"
+if [ "$DM_COPY_GRAPHICS" = NO ]; then
+  GRAPHICS_OUT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["path"])' "$W/graphics-result.json") || die "graphics package output path"
+  for table in shader_map.tsv pso_manifest.tsv c1_full.tsv cb_extent.tsv shader_pairs.tsv pso_pairs.tsv; do rm -f "Gen/dm/$table"; done
+  t "graphics package: $GRAPHICS_OUT (import it from the launcher's Import shaders button)"
+fi
 # Shared-font stand-ins: standard = macOS's Arial Unicode (absent on iOS), Nintendo extension = button icons generated by make_ext_font.py (needs fontTools; FONT_PY names a python that has it)
 mkdir -p Gen/dm/font && cp "${STD_FONT:-/System/Library/Fonts/Supplemental/Arial Unicode.ttf}" Gen/dm/font/standard.ttf || die "copy standard font (STD_FONT=a TTF)"
 "${FONT_PY:-python3}" "$DM/tools/make_ext_font.py" Gen/dm/font/nintendo_ext.ttf > /dev/null || die "make_ext_font.py (pip install fonttools, or FONT_PY=python with fontTools)"
@@ -144,13 +166,14 @@ if [ "$PREPARE_XCODE" = YES ] && [ -n "${DM_ENTITLEMENTS-default}" ]; then
 fi
 # DM_COPY_ROMFS=NO also for the prepared project: its Copy game resources phase (stage_resources.sh) then leaves the game files out and writes the image's identity; Gen/dm.xcconfig is made again by every run
 [ "${DM_COPY_ROMFS:-YES}" != NO ] || [ "$PREPARE_XCODE" != YES ] || echo "DM_COPY_ROMFS = NO" >> Gen/dm.xcconfig
+[ "$DM_COPY_GRAPHICS" != NO ] || [ "$PREPARE_XCODE" != YES ] || echo "DM_COPY_GRAPHICS = NO" >> Gen/dm.xcconfig
 xcodegen generate -q > /dev/null || die "xcodegen"
 # DMCommit / DMRepository / DMBuildTime are stamped by the Xcode build phase, so a prepared project records every subsequent build too.
 # DMChain names the prepared shader libraries, which the host logs beside DMCommit at start (main.c).
 case "$MSLDIR" in b-*) /usr/libexec/PlistBuddy -c "Add :DMChain string ${MSLDIR#b-}" Gen/Info.plist > /dev/null || die "DMChain";; esac
 # DM_METAL_CAPTURE=1: a development build that may write GPU frame captures (MetalCaptureEnabled; the host's DM_GPU_CAPTURE switch writes them to Documents/gpu_captures)
 if [ "${DM_METAL_CAPTURE:-0}" = 1 ]; then /usr/libexec/PlistBuddy -c "Add :MetalCaptureEnabled bool true" Gen/Info.plist > /dev/null || die "MetalCaptureEnabled"; t "Metal frame capture: enabled (DM_METAL_CAPTURE=1)"; fi
-DM_RESOURCE_BUILD=${PKG:-} GAME=$GAME python3 tools/gen_resources.py "$IOS" "$ROMFS" "$MARKER" "$MSL_IOS/$MSLDIR" "$MSLDIR" "$AOC" "$XCODE_DD" "$DM/gfx/nvn/dmsh_chain.h" "$PSO" || die "generate Xcode resource paths"
+GFXAPI=$GFXAPI DM_COPY_GRAPHICS=$DM_COPY_GRAPHICS DM_RESOURCE_BUILD=${PKG:-} GAME=$GAME python3 tools/gen_resources.py "$IOS" "$ROMFS" "$MARKER" "$MSL_IOS/$MSLDIR" "$MSLDIR" "$AOC" "$XCODE_DD" "$DM/gfx/nvn/dmsh_chain.h" "$PSO" "$GD" || die "generate Xcode resource paths"
 if [ "$PREPARE_XCODE" = YES ]; then
   t "Xcode project: $IOS/DmIOS.xcodeproj"
   t "Xcode derived data: $XCODE_DD"
@@ -201,8 +224,9 @@ if [ "${DM_COPY_ROMFS:-YES}" = NO ]; then
   fi
 elif [ -f "$ROMFS" ]; then MAPS=("$P/romfs.img=$ROMFS"); else MAPS=("$P/romfs=$ROMFS"); fi
 if [ "${DM_COPY_ROMFS:-YES}" != NO ] && [ -n "$AOC" ] && [ -d "$AOC" ]; then MAPS+=("$P/aoc=$AOC"); t "add-on content: $(ls "$AOC" | tr '\n' ' ')"; fi
-if [ -n "${PSO:-}" ]; then MAPS+=("$P/pso=$PSO"); fi
-MAPS+=("$P=$APP" "$P/dm=$IOS/Gen/dm" "$P/msl/$MSLDIR=$MSL_IOS/$MSLDIR")
+if [ "$DM_COPY_GRAPHICS" != NO ] && [ -n "${PSO:-}" ]; then MAPS+=("$P/pso=$PSO"); fi
+MAPS+=("$P=$APP" "$P/dm=$IOS/Gen/dm")
+[ "$DM_COPY_GRAPHICS" = NO ] || MAPS+=("$P/msl/$MSLDIR=$MSL_IOS/$MSLDIR")
 t "pack IPA (already-compressed game files stored, everything else deflated)"
 # The pulling vertex libraries (<key>_bp, dm/gfx/tools/dmsh_pull.py) serve the hybrid pipelines. Default to the same pso_mtl4 setting compiled by gen_build.py; IOS_PULL=0 / 1 overrides it.
 # The pipeline archive's bases are made of them, so an IPA with an archive (pso/) always carries them, whatever IOS_PULL says (an Xcode build copies them always).
@@ -210,5 +234,5 @@ PULL=$(sed -n 's/^#define DM_GAME_PSO_MTL4 //p' "$DM/host/gen/$GAME/game_profile
 case "$PULL" in 0|1) ;; *) die "no DM_GAME_PSO_MTL4 in generated game profile";; esac
 # Keep this array nonempty: macOS Bash 3.2 treats an empty array as unset under set -u.
 PACK_OPTS=(--store "$(gp zip_store)" --skip-suffix-under "$P/msl/$MSLDIR" .metal); [ -n "${PSO:-}" ] || [ "${IOS_PULL:-$PULL}" = 1 ] || PACK_OPTS+=(--skip-suffix _bp.metallib)
-python3 tools/pack_ipa.py "$OUT_IPA" "${PACK_OPTS[@]}" --skip $P/_CodeSignature --skip $P/embedded.mobileprovision --skip $P/msl --skip $P/aoc --skip $P/romfs --skip $P/romfs.img --skip $P/romfs.id --skip $P/romfs.base.id "${MAPS[@]}" || die "pack_ipa"
+python3 tools/pack_ipa.py "$OUT_IPA" "${PACK_OPTS[@]}" --skip $P/_CodeSignature --skip $P/embedded.mobileprovision --skip $P/msl --skip $P/pso --skip $P/aoc --skip $P/romfs --skip $P/romfs.img --skip $P/romfs.id --skip $P/romfs.base.id "${MAPS[@]}" || die "pack_ipa"
 t "done: $OUT_IPA ($(du -h "$OUT_IPA" | cut -f1))"

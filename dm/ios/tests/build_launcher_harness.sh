@@ -6,6 +6,8 @@ ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 WORK="$1"
 APP="$WORK/BOTWLauncherTest.app"
 mkdir -p "$APP/dm" "$WORK/metadata"
+mkdir -p "$APP/msl/fixture"
+printf 'MTLBfixture' > "$APP/msl/fixture/fixture.metallib"   # No GPU is used by this launcher-only app.
 cp -R "$ROOT/dm/ios/Sources/"*.lproj "$APP/"
 cat > "$APP/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -28,11 +30,18 @@ cat > "$APP/Info.plist" <<'PLIST'
 PLIST
 GFXAPI=nvn python3 "$ROOT/dm/games/settings.py" 01007EF00011E000 "$WORK/metadata" "$WORK/control.nacp" "$APP/dm/launcher.json"
 SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+for source in GraphicsPack GameImageImport; do
+    xcrun --sdk iphonesimulator clang -target arm64-apple-ios26.0-simulator -isysroot "$SDK" -fobjc-arc -fblocks \
+        -Wno-deprecated-declarations -c "$ROOT/dm/ios/Sources/$source.m" -o "$WORK/$source.o"
+done
+xcrun --sdk iphonesimulator clang -target arm64-apple-ios26.0-simulator -isysroot "$SDK" -fobjc-arc -fblocks \
+    -I "$ROOT/dm/ios/Sources" -I "$ROOT/dm/host" -c "$ROOT/dm/ios/tests/launcher_resource_harness.m" -o "$WORK/resources.o"
 xcrun --sdk iphonesimulator clang -target arm64-apple-ios26.0-simulator -isysroot "$SDK" -fobjc-arc \
     -c "$ROOT/dm/ios/Sources/CloudSaves.m" -o "$WORK/CloudSaves.o"
 xcrun --sdk iphonesimulator swiftc -swift-version 5 -parse-as-library -target arm64-apple-ios26.0-simulator \
     -sdk "$SDK" -I "$ROOT/dm/host" -module-cache-path "$WORK/module-cache" -o "$APP/BOTWLauncherTest" \
-    -import-objc-header "$ROOT/dm/ios/Sources/CloudSaves.h" "$WORK/CloudSaves.o" \
+    -import-objc-header "$ROOT/dm/ios/Sources/DmIOS-Bridging-Header.h" "$WORK/CloudSaves.o" \
+    "$WORK/GraphicsPack.o" "$WORK/GameImageImport.o" "$WORK/resources.o" -larchive \
     "$ROOT/dm/ios/Sources/LauncherRow.swift" "$ROOT/dm/ios/Sources/LauncherSettings.swift" "$ROOT/dm/ios/Sources/BotwTouchSettings.swift" "$ROOT/dm/ios/Sources/Launcher.swift" "$ROOT/dm/ios/tests/launcher_ui_harness.swift"
 plutil -lint "$APP/Info.plist"
 codesign --force --sign - "$APP"
