@@ -91,8 +91,9 @@ MetalFX/UI/queue controls, display clocks, NVN and loader FPS state. Static BOTW
 regression from `81e0056a` to the merged sources passes all 19,592 shaders with
 no changed base MSL, new shader failure or interface mismatch. Only BOTW has a
 prepared local game build. Evidence is in `framegen-merge-main-20261101/` in the
-game's NSP work folder. No game run or performance benchmark was repeated after
-this merge; the preceding gameplay screenshots remain evidence for `828cc1cd`.
+game's NSP work folder. At that checkpoint, no game run or performance benchmark
+was repeated after this merge; the preceding gameplay screenshots remain evidence
+for `828cc1cd`.
 
 Both targets finish full shader preparation on merged chain `ca8b9c5b4e34`,
 inputs `92a16d66b5e4`, with 19,592 base and 10,318 separate-UI libraries each.
@@ -100,3 +101,8 @@ All 58,416 compile results per target are reused from the shared cache. The
 explicit compiler override uses local Metal `32023.883`; the merged lock
 retains upstream's required `32023.922.4`. The build and static-regression logs
 are `shader-build.log` and `regress-static/report.md` in the evidence folder.
+
+The later main integration and memory-transfer setting received a current-source
+Mac gameplay check with frame generation off; see the
+[overlay follow-up](../dm/games/01007EF00011E000/README.md#render-pass-cost-audit-2026-11-01).
+That check adds no frame-generation or performance acceptance claim.

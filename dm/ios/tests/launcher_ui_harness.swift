@@ -25,7 +25,7 @@ final class LauncherHarnessRoot: UIViewController {
     }
     func showApplied() {
         view.subviews.forEach { $0.removeFromSuperview() }
-        let values = (TouchStickResponse.keys.union(["DM_FPS_TARGET", "DM_LOW_MEMORY", "DM_PRESENT_UPSCALE", "DM_FRAMEGEN"])).sorted().map { "\($0)=\(ProcessInfo.processInfo.environment[$0] ?? "unset")" }.joined(separator: "\n")
+        let values = (TouchStickResponse.keys.union(["DM_FPS_TARGET", "DM_LOW_MEMORY", "DM_PRESENT_UPSCALE", "DM_FRAMEGEN", "DM_NVN_PASS_REUSE", "DM_NVN_FB_SNAP"])).sorted().map { "\($0)=\(ProcessInfo.processInfo.environment[$0] ?? "unset")" }.joined(separator: "\n")
         let text = UILabel(); text.text = "Applied to the game environment\n\n" + values
         text.textColor = .white; text.numberOfLines = 0; text.font = .monospacedSystemFont(ofSize: 16, weight: .regular)
         let reopen = UIButton(type: .system); reopen.setTitle("Reopen launcher", for: .normal)

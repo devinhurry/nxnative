@@ -18,7 +18,7 @@ version when available. See [graphics packages](graphics-pack.md).
 - [Game](#game): [Frame rate](#frame-rate), [Render scale](#render-scale), [Console mode](#console-mode), [Upscaling](#upscaling), [Game language](#game-language), [Frame-rate counter](#frame-rate-counter)
 - [Controls](#controls): [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff)
 - [Touch left stick](#touch-left-stick): BOTW movement deadzone, response curve, full movement and size
-- [Performance](#performance): [Experimental frame generation](#experimental-frame-generation), [Experimental low-memory mode](#experimental-low-memory-mode), [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
+- [Performance](#performance): [Experimental frame generation](#experimental-frame-generation), [Experimental low-memory mode](#experimental-low-memory-mode), [Memory transfer optimization](#memory-transfer-optimization), [Skip feedback snapshots (experimental)](#skip-feedback-snapshots-experimental), [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Reduce to 30 fps when hot](#reduce-to-30-fps-when-hot), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
 - [The Mac settings window](#the-mac-settings-window): [Display mode](#display-mode)
 - [TV](#tv)
 - [Settings in a file](#settings-in-a-file)
@@ -124,9 +124,9 @@ These settings change how the app hands frames to the screen and how it prepares
 
 ### Experimental frame generation
 
-The Game Overlay home page offers **Experimental frame generation** as an off-by-default switch under **Performance**. It is shown only for a game profile with configured frame-generation inputs; currently BOTW's Docked and Handheld paths are adapted. Handheld uses a smaller native canvas and reduces interpolation GPU work. The Mac launcher also puts this switch on its basic page.
+The Game Overlay home page offers **Experimental frame generation** under **Performance**, with Off (the default), 30+30, 40+40, 50+50, 60+60 and Uncapped choices. It is shown only for a game profile with configured frame-generation inputs; currently BOTW's Docked and Handheld paths are adapted. Handheld uses a smaller native canvas and reduces interpolation GPU work. The Mac launcher also puts this choice on its basic page.
 
-On selects `DM_FRAMEGEN=30`: after the GPU passes the native capability check, the game runs up to 30 real frames per second, and MetalFX can insert a generated picture between pairs. Unsupported GPUs keep the original frame-rate setting. Off sets `DM_FRAMEGEN=0` and retains normal rendering and frame pacing. Play applies and remembers the choice. An environment override remains visible and locked, as for other settings. The current experiment has GPU cost and UI reconstruction limitations; [BOTW validation and remaining work](../dm/games/01007EF00011E000/README.md#experimental-metalfx-frame-generation).
+After the GPU passes the native capability check, a selected rate sets the real-game-frame target and MetalFX can insert a generated picture between pairs. Uncapped uses every available real pair. The in-game frame-generation menu can change the selection while playing. Unsupported GPUs keep the original frame-rate setting. Off sets `DM_FRAMEGEN=0` and retains normal rendering and frame pacing. Play applies and remembers the choice. An environment override remains visible and locked, as for other settings. The current experiment has GPU cost and UI reconstruction limitations; [BOTW validation and remaining work](../dm/games/01007EF00011E000/README.md#experimental-metalfx-frame-generation).
 
 ### Experimental low-memory mode
 
@@ -141,6 +141,27 @@ The preset disables whole-game pipeline prebuild and the bundled pipeline archiv
 With the switch off, the original heap, GPU pool handling and pipeline/cache settings remain in use. Older experiment environment flags cannot enable the memory changes on their own.
 
 Mac measurements showed a reduction, but the iPhone result remains unverified. [Preset details, log checks and measurement limits](experiments/file-backed-memory.md#enable-from-the-game-overlay).
+
+### Memory transfer optimization
+
+NVN games only, on by default on iPhone and Mac. It reuses compatible render
+passes, avoids storing unchanged images and allows feedback snapshots to use
+lossless compression. Turn it off if rendering glitches appear. Play applies
+and remembers the choice; changing it requires restarting the game.
+
+This setting is independent of **Skip feedback snapshots (experimental)**.
+With automatic snapshots kept, required protective copies remain. If snapshot
+bypass is enabled, only the optimization's snapshot-allocation part becomes
+inactive; its render-pass and store rules still apply. Reset restores this
+optimization to On and snapshot bypass to Off.
+
+### Skip feedback snapshots (experimental)
+
+NVN games only, off by default on iPhone and Mac. Turning this experiment on skips the copies that protect a draw reading a colour attachment it also writes. It may reduce GPU work, but can produce incorrect colours, blocks or other rendering errors. It does not provide replacement protection. Frame-rate and thermal improvements on iPhone have not been established.
+
+The choice is saved when you press **Play** and applies to that game run. To compare it with normal rendering, fully close the app, reopen it, change the switch and load the same scene. Turning it off, or using **Reset to tested defaults** followed by **Play**, restores automatic feedback snapshots. An explicit `env.txt` or launch-environment override takes priority: `DM_NVN_FB_SNAP=0` skips snapshots, `1` restores automatic snapshots, and the existing diagnostic value `all` still requests a fresh snapshot for each sampling draw.
+
+This setting controls [same-pass feedback snapshots](reference/rendering.md#same-pass-feedback-read-through-a-snapshot). **Frame buffering** below controls the separate copies used to display finished frames.
 
 ### Frame buffering
 
@@ -234,6 +255,18 @@ flowchart LR
 - **Off:** the game keeps aiming at 60; a late frame is shown one refresh later and the next one goes on as usual, so heavy scenes look less even but stay closer to 60 on average.
 - **When to change it:** turn it off if the game often falls to 30 fps although it is only slightly late.
 
+### Reduce to 30 fps when hot
+
+iPhone and iPad only, for builds with the app's frame-step control. Off by default.
+When enabled, a serious or critical system thermal state caps the game at 30 fps.
+The selected cap returns after the device has stayed fair or cooler for 30 seconds.
+The choice is saved when you press **Play** and applies on the next game start.
+
+With it off, the app adds no temperature-based 30 fps cap. The selected frame rate,
+movie limits and **Hold frames when late**, including its recovery to 60 fps,
+continue to apply. iOS still manages the device's frequencies and thermal limits.
+`DM_THERMAL_CAP=1` in `Documents/env.txt` enables the same option; unset or `0` is off.
+
 ### Performance HUD
 
 Apple's performance overlay over the game: frame rate, frame and GPU times, memory. Useful to see what a setting changes; leave it off for play.
@@ -291,8 +324,10 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Rumble strength | `DM_RUMBLE_GAIN` | `0` to `3` |
 | Rumble cutoff | `DM_RUMBLE_MIN` | `0` to `0.9` |
 | Upscaling | `DM_PRESENT_UPSCALE` | `off`, `scene` (verified profiles), `metalfx` |
-| Experimental frame generation | `DM_FRAMEGEN` | `30` on (30+30), `0` off |
+| Experimental frame generation | `DM_FRAMEGEN` | `0` Off (default), `30`, `40`, `50`, `60`, `max` Uncapped |
 | Experimental low-memory mode (BOTW) | `DM_LOW_MEMORY` | `1`, `0` |
+| Memory transfer optimization | `DM_NVN_PASS_REUSE` | `1` on (default), `0` off |
+| Skip feedback snapshots (experimental) | `DM_NVN_FB_SNAP` | `0` skips (switch on), `1` automatic (switch off, default) |
 | Frame buffering | `DM_PRESENT_SNAP` | `1`, `0` |
 | Metal 4 pipelines | `DM_PSO_MTL4` | `1`, `0` |
 | Pipeline prebuild | `DM_PSO_PREBUILD` | `1`, `0` |
