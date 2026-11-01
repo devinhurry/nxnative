@@ -5,13 +5,17 @@
 # Usage: push_romfs.sh <device UDID> <bundle ID> <game>_build/xcode/Gen/resources.env [--repack]
 #    or: push_romfs.sh <device UDID> <bundle ID> <RomFS.img>   (the image build_ipa_from_nsp.py --romfs separate prints: <game>_build/extract/<version>/RomFS.img)
 # A build made with DM_COPY_ROMFS=NO carries the identity of its image (romfs.id); the app uses only a Documents/romfs.img with that identity, so push again whenever the game or its version changed.
-# Run it while the app (any build with that bundle ID) is installed. Rerun after a failure.
+# Run it while the app (any build with that bundle ID) is installed. Rerun after a failure, before launching the game. A direct image push leaves DLC unchanged.
 set -eu
 [ "$#" = 3 ] || { [ "$#" = 4 ] && [ "$4" = --repack ]; } || { echo "usage: $0 <device UDID> <bundle ID> <resources.env> [--repack]" >&2; exit 1; }
-dev=$1 id=$2 repack=${4:-}
+dev=$1 id=$2 repack=${4:-} sync_aoc=0
 case "$3" in
     *.env)
-        resource_env=$3; source "$resource_env"
+        resource_env=$3; DM_RESOURCE_AOC=; source "$resource_env"
+        sync_aoc=1
+        if [ -n "$DM_RESOURCE_AOC" ] && [ ! -d "$DM_RESOURCE_AOC" ]; then
+            echo "[RED] Add-on content unavailable: $DM_RESOURCE_AOC" >&2; exit 1
+        fi
         if [ -n "${DM_RESOURCE_AOC:-}" ]; then
             combined=$(dirname "$resource_env")/game-data/RomFS.img
             mkdir -p "$(dirname "$combined")"
@@ -19,6 +23,7 @@ case "$3" in
             [ "$repack" = --repack ] || merge_args=(--reuse "${merge_args[@]}")
             python3 -I "$(dirname "$0")/../dm/tools/game_image.py" "${merge_args[@]}"
             DM_RESOURCE_ROMFS=$combined
+            DM_RESOURCE_AOC=   # all installed DLC is in the image; clear any stale standalone set
         fi;;
     *) DM_RESOURCE_ROMFS=$3; DM_RESOURCE_MARKER=;;
 esac
@@ -32,4 +37,15 @@ fi
 python3 -I "$(dirname "$0")/../dm/tools/romfs.py" "$img" "${DM_RESOURCE_MARKER:-}"
 echo "identity: $(python3 -I "$(dirname "$0")/../dm/tools/romfs_image.py" --identity "$img")"
 xcrun devicectl device copy to --device "$dev" --domain-type appDataContainer --domain-identifier "$id" --source "$img" --destination Documents/romfs.img -q
+# Add-on content (DLC): <index>.img files or legacy <index>/ trees. devicectl merges directories by default, retaining removed DLC that the host would still report owned.
+# resources.env describes the complete DLC set. An empty set replaces old content with an empty directory, which also takes precedence over bundled DLC at startup.
+if [ "$sync_aoc" = 1 ]; then
+    aoc=$DM_RESOURCE_AOC
+    if [ -z "$aoc" ]; then
+        aoc=$(mktemp -d "${TMPDIR:-/tmp}/nxnative-aoc.XXXXXX")
+        trap 'rmdir "$aoc"' EXIT
+    fi
+    xcrun devicectl device copy to --device "$dev" --domain-type appDataContainer --domain-identifier "$id" --source "$aoc" --destination Documents/aoc --remove-existing-content true -q
+    echo "DLC on the phone: $id"
+fi
 echo "game files on the phone: $id"

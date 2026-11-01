@@ -1,6 +1,7 @@
 // BOTW touch artwork only; ordinary gamepads keep their own style.
 #pragma once
 #import <Foundation/Foundation.h>
+#include <TargetConditionals.h>
 #include <CoreGraphics/CoreGraphics.h>
 #include <math.h>
 #include <stdlib.h>
@@ -68,9 +69,14 @@ static inline NSString *dm_botw_touch_button_icon_path(int button) {
     static NSString *const files[] = {@"touch_a.png", @"touch_b.png", @"touch_x.png", @"touch_y.png",
         nil, nil, @"touch_l.png", @"touch_r.png", nil, @"touch_zr.png"};
     if (button < 0 || button >= sizeof files / sizeof *files || !files[button]) return nil;
+#if TARGET_OS_IOS
+    // Touch artwork ships with the app; importing shaders only moves their tables.
+    NSString *folder = [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"dm"];
+#else
     const char *map = getenv("DM_NVN_SHMAP");
     NSString *folder = map && *map ? [[NSString stringWithUTF8String:map] stringByDeletingLastPathComponent] :
         [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"dm"];
+#endif
     return [folder stringByAppendingPathComponent:files[button]];
 }
 

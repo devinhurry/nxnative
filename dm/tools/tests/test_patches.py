@@ -42,27 +42,23 @@ def builds_of(g):   # {build ID: module name} of a profile's build rows (a profi
 
 
 class Registry(unittest.TestCase):
-    def test_observation_gate_after_direct_or_indirect_call(self):
-        # Execute the production classifier: BLR returns through the same ABI
-        # as BL, while BR, RET and plain branches do not establish a call site.
-        nodes: list[ast.stmt] = [n for n in ast.walk(tree) if isinstance(n, ast.Assign) and
-                 any(isinstance(t, ast.Name) and t.id in ('previous', 'after_bl') for t in n.targets)]
-        nodes = nodes[:2]   # Explicit profile loop; later SDK discovery has its own call-site rule.
-        code = compile(ast.Module(body=nodes, type_ignores=[]), str(source), 'exec')
+    def test_observation_gate_preserves_build_and_instruction_checks_at_interior_sites(self):
+        # The full gate frame preserves registers even when the preceding instruction is not a call.
+        node = next(n for n in tree.body if isinstance(n, ast.For) and isinstance(n.iter, ast.Name) and n.iter.id == 'obs')
+        code = compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec')
         import struct
-        for instruction, accepted in (
-            (0x94000001, True), (0x97ffffff, True),
-            (0xd63f0000, True), (0xd63f0100, True), (0xd63f03c0, True),
-            (0xd61f0100, False), (0xd65f03c0, False), (0x14000001, False),
-            (0x54000020, False), (0xd503201f, False),
-        ):
+        for instruction in (0x94000001, 0x97ffffff, 0xd63f0100, 0xd61f0100, 0xd65f03c0, 0x14000001, 0x54000020, 0xd503201f):
             with self.subTest(instruction=hex(instruction)):
-                env = {'struct': struct, 'IMG': struct.pack('<II', instruction, 0), 'off': 4}
+                site = mock.Mock(return_value='gate')
+                env = dict(struct=struct, IMG=struct.pack('<II', instruction, 0xd503201f),
+                           obs=[(4, 29, 'd503201f', 'fixture')], PATCHES={'OBS_SAFE': {}}, BUILD_ID='fixture', validate=None,
+                           TEXT_END=8, kinds={}, windows=[], use_area=mock.Mock(), put_branch=mock.Mock(), site_obs=site, stat=mock.Mock())
                 exec(code, env)
-                self.assertEqual(env['after_bl'], accepted)
-        env = {'struct': struct, 'IMG': b'', 'off': 0}
-        exec(code, env)
-        self.assertFalse(env['after_bl'])
+                site.assert_called_once_with(4, 29, 0xd503201f)
+                for change, message in (({'obs': [(4, 29, '00000000', 'fixture')]}, 'instruction mismatch'),
+                                        ({'kinds': {4: 'rewrite'}}, 'conflicts with a rewrite'),
+                                        ({'PATCHES': {'OBS_SAFE': {'fixture': {4}}}}, 'no matching build validator')):
+                    with self.subTest(check=message), self.assertRaisesRegex(AssertionError, message): exec(code, env | change)
 
     def test_generic_rewriter_requires_validator_for_obs_safe(self):
         src = (REPO / 'dm/tools/patch_nso.py').read_text()

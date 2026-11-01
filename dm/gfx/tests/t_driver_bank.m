@@ -29,6 +29,18 @@ int main(void) { @autoreleasepool {
     g_draw_binst = 8; ga = driver_bank_gpu(0, 0, sh, &a);
     CHECK("different base instance cannot reuse the old bank", ga != gb && word(a, ga, 0x644) == 8);
 
+    g_pass.samples = 1;
+    ga = driver_bank_gpu(0, 1, sh, &a); gb = driver_bank_gpu(0, 1, sh, &b);
+    CHECK("unchanged pixel sample count reuses metadata", ga == gb);
+    CHECK("single-sample table places the sample at pixel centre", word(a, ga, DMSH_C0_SAMPLE_TABLE) == 0x88 && word(a, ga, DMSH_C0_SAMPLE_INFO) == 0);
+    g_pass.samples = 4; gb = driver_bank_gpu(0, 1, sh, &b);
+    CHECK("pixel sample count participates in the key", gb != ga && word(b, gb, DMSH_C0_SAMPLE_INFO) == 3 && word(b, gb, DMSH_C0_SAMPLE_INFO + 4) == 2);
+    CHECK("earlier pixel draw retains its sample table", word(a, ga, DMSH_C0_SAMPLE_TABLE) == 0x88 && word(a, ga, DMSH_C0_SAMPLE_INFO) == 0);
+    g_driver_cache_on = 0;
+    uint64_t pixel_reference = driver_bank_gpu(0, 1, sh, &a);
+    CHECK("pixel sample table matches uncached metadata", pixel_reference != gb && !memcmp((uint8_t *)a.contents + pixel_reference - a.gpuAddress, (uint8_t *)b.contents + gb - b.gpuAddress, DMSH_DRV_SIZE));
+    g_driver_cache_on = 1;
+
     g_dispatch_dim[0] = 3; g_dispatch_dim[1] = 4; g_dispatch_dim[2] = 5;
     S.ubo[5][7].addr = 0x22334455; S.ubo[5][7].size = 144;
     ga = driver_bank_gpu(0, 5, sh, &a); gb = driver_bank_gpu(0, 5, sh, &b);

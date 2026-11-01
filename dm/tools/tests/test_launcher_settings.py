@@ -131,7 +131,7 @@ class LauncherSettingsTests(unittest.TestCase):
             row = botw['DM_LOW_MEMORY']
             self.assertEqual((row['kind'], row['default'], row['section']), ('toggle', '0', 'Performance'))
             self.assertIn('Play', row['note'])
-            self.assertEqual(botw['DM_PSO_PREBUILD']['needs'], 'DM_LOW_MEMORY=0')
+            self.assertEqual(botw['DM_PSO_PREBUILD']['needs'], 'DM_PSO_MTL4=1')
             self.assertNotIn('DM_LOW_MEMORY', build(WONDER, 'nvn', platform))
 
     def test_defaults_follow_each_platform_host(self):

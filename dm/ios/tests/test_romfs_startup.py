@@ -27,10 +27,13 @@ class Startup(unittest.TestCase):
                           'static NSString *fixture_doc, *fixture_tmp, *fixture_bundle;\n#define DM_GAME_ROMFS_MARKER "marker"\n'
                           'static int g_boot_ok, g_argc; static char **g_argv;\n'
                           'static void dm_host_preload_start(int argc, char **argv) { (void)argc; (void)argv; }\n'
+                          'static BOOL dm_graphics_configure(NSURL *doc, NSURL *bundle, NSError **err) { (void)doc; (void)bundle; (void)err; return YES; }\n'
                           '@interface FixtureBundle : NSObject\n+ (instancetype)mainBundle;\n- (NSString *)resourcePath;\n'
+                          '- (NSURL *)resourceURL;\n'
                           '- (NSString *)localizedStringForKey:(NSString *)key value:(NSString *)value table:(NSString *)table;\n@end\n'
                           '@implementation FixtureBundle\n+ (instancetype)mainBundle { return [self new]; }\n'
                           '- (NSString *)resourcePath { return fixture_bundle; }\n'
+                          '- (NSURL *)resourceURL { return [NSURL fileURLWithPath:fixture_bundle]; }\n'
                           '- (NSString *)localizedStringForKey:(NSString *)key value:(NSString *)value table:(NSString *)table { (void)value; (void)table; return key; }\n@end\n#define NSBundle FixtureBundle\n'
                           '#define NSSearchPathForDirectoriesInDomains(a,b,c) @[fixture_doc]\n#define NSTemporaryDirectory() fixture_tmp\n' + locator +
                           '\nstatic void romfs_identity_report(NSString *doc) { (void)doc; }\n'

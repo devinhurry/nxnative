@@ -47,7 +47,7 @@ class RomfsOption(unittest.TestCase):
                 [('DM_RESOURCE_ROMFS', base), ('DM_RESOURCE_AOC', aoc), ('DM_RESOURCE_MARKER', 'marker')]))
             bin_dir = root / 'bin'; bin_dir.mkdir(); args_file = root / 'copy.json'
             xcrun = bin_dir / 'xcrun'
-            xcrun.write_text(f'#!{sys.executable}\nimport json,os,sys\nfrom pathlib import Path\nPath(os.environ["PUSH_ARGS"]).write_text(json.dumps(sys.argv[1:]))\n')
+            xcrun.write_text(f'#!{sys.executable}\nimport json,os,sys\nfrom pathlib import Path\nif "Documents/romfs.img" in sys.argv: Path(os.environ["PUSH_ARGS"]).write_text(json.dumps(sys.argv[1:]))\n')
             xcrun.chmod(0o755)
             environment = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ['PATH'], PUSH_ARGS=str(args_file))
             combined = gen / 'game-data/RomFS.img'

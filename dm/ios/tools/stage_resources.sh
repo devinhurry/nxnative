@@ -2,21 +2,31 @@
 # Xcode target phase: copy the active game's resources into the app before CodeSign.
 # Paths come from build_ipa.sh, not from a per-game rule or a phone-visible Mac path.
 set -eu
-[ "${DM_COPY_GAME_RESOURCES:-YES}" != NO ] || exit 0
+[ "${DM_COPY_GAME_RESOURCES:-YES}" != NO ] || [ -f "${SRCROOT:-}/Gen/dm/graphics-required.json" ] || exit 0
 die() { echo "[RED] $*" >&2; exit 1; }
 [ "${PLATFORM_NAME:-}" = iphoneos ] || die 'This game needs a physical iPhone or iPad; choose a device, not a simulator.'
 [ -f "${SRCROOT:?}/Gen/resources.env" ] || die 'Missing game resource paths; run build_ipa_from_nsp.py --prepare-xcode first.'
 source "$SRCROOT/Gen/resources.env"
+resource_dm=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().parents[2])' "$0")
+if [ -f "$SRCROOT/Gen/dm/graphics-required.json" ] && [ -n "${DM_RESOURCE_TABLES:-}" ]; then
+    DM_GAMES_DIR=$(dirname "$DM_RESOURCE_TABLES") DM_GAMES_FIRST=1 python3 "$resource_dm/tools/graphics_pack.py" \
+        --check "$SRCROOT/Gen/dm/graphics-required.json" --game "$DM_RESOURCE_TITLE" --build "$DM_RESOURCE_BUILD" \
+        --api "${DM_RESOURCE_API:-nvn}" --library "$DM_RESOURCE_MSLDIR" --shaders "$DM_RESOURCE_SHADERS" --tables "$DM_RESOURCE_TABLES" \
+        || die 'Graphics compatibility changed; prepare the game again before building.'
+fi
+[ "${DM_COPY_GAME_RESOURCES:-YES}" != NO ] || exit 0
 APP="${TARGET_BUILD_DIR:?}/${UNLOCALIZED_RESOURCES_FOLDER_PATH:?}"
 case "$APP" in /*.app) ;; *) die "Unexpected app resource destination: $APP";; esac
 # Validate every source before copying or removing anything (the external drive may be disconnected).
-resource_dm=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().parents[2])' "$0")
 python3 "$resource_dm/tools/romfs.py" "$DM_RESOURCE_ROMFS" "$DM_RESOURCE_MARKER" || die "Game files unavailable: $DM_RESOURCE_ROMFS/$DM_RESOURCE_MARKER"
 [ -z "$DM_RESOURCE_AOC" ] || [ -d "$DM_RESOURCE_AOC" ] || die "Add-on content unavailable: $DM_RESOURCE_AOC"
 [ -d "$SRCROOT/Gen/dm" ] || die 'Missing generated game tables; prepare the game again.'
-[ -d "$DM_RESOURCE_SHADERS" ] || die "Shader libraries unavailable: $DM_RESOURCE_SHADERS"
 DM_RESOURCE_PSO=${DM_RESOURCE_PSO:-}   # (a project prepared before the pipeline archive has none)
-[ -z "$DM_RESOURCE_PSO" ] || [ -f "$DM_RESOURCE_PSO/prebuilt.tsv" ] || die "Pipeline archive unavailable: $DM_RESOURCE_PSO"
+DM_COPY_GRAPHICS=${DM_COPY_GRAPHICS:-${DM_RESOURCE_COPY_GRAPHICS:-YES}}
+if [ "$DM_COPY_GRAPHICS" != NO ]; then
+    [ -d "$DM_RESOURCE_SHADERS" ] || die "Shader libraries unavailable: $DM_RESOURCE_SHADERS"
+    [ -z "$DM_RESOURCE_PSO" ] || [ -f "$DM_RESOURCE_PSO/prebuilt.tsv" ] || die "Pipeline archive unavailable: $DM_RESOURCE_PSO"
+fi
 # The host is compiled from the repository's current sources and loads only msl/b-<its chain version>: after a chain change (a pull, dmsh_chain.py --header) the prepared shaders are another chain's
 case "$DM_RESOURCE_MSLDIR" in b-*)
     [ -f "$DM_RESOURCE_CHAIN_H" ] || die "No chain version header: $DM_RESOURCE_CHAIN_H (a project prepared before the chain version moved to dm/gfx/nvn: prepare the game again, build_ipa_from_nsp.py --prepare-xcode)"
@@ -48,10 +58,14 @@ else
     rm -f "$APP/romfs.img" "$APP/romfs.id" "$APP/romfs.base.id"
 fi
 # Analysis MSL is an external cache/prefill input, not a runtime resource; remove old copies only from this shader folder.
+if [ "$DM_COPY_GRAPHICS" = NO ]; then
+    rm -rf "$APP/msl" "$APP/pso"
+else
 /usr/bin/rsync -a --delete --delete-excluded --exclude '*.metal' -- "$DM_RESOURCE_SHADERS/" "$APP/msl/$DM_RESOURCE_MSLDIR/"
 for old in "$APP/msl/"*; do
     [ "$old" = "$APP/msl/$DM_RESOURCE_MSLDIR" ] || rm -rf "$old"
 done
+fi
 if [ "${DM_COPY_ROMFS:-YES}" != NO ] && [ -n "$DM_RESOURCE_AOC" ]; then
     mkdir -p "$APP/aoc"
     /usr/bin/rsync -a --delete -- "$DM_RESOURCE_AOC/" "$APP/aoc/"
@@ -59,7 +73,7 @@ else
     rm -rf "$APP/aoc"
 fi
 # The pipeline archive made offline (the shader pairs' bases, build_ipa.sh): the app hands <App>/pso to the host as DM_PSO_BUNDLE
-if [ -n "$DM_RESOURCE_PSO" ]; then
+if [ "$DM_COPY_GRAPHICS" != NO ] && [ -n "$DM_RESOURCE_PSO" ]; then
     mkdir -p "$APP/pso"
     /usr/bin/rsync -a --delete -- "$DM_RESOURCE_PSO/" "$APP/pso/"
 else

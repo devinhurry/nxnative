@@ -7,7 +7,8 @@ frame-rate comparisons or further performance acceptance runs.
 
 Code status: all five requested features are implemented and reviewed.
 The user authorized committing and pushing this code, then resuming the build.
-Full Mac/iOS shader preparation and current-code Mac gameplay checks now pass.
+Full Mac/iOS shader preparation and Mac gameplay checks passed before the later
+main integration recorded below.
 No performance benchmarks were run. Physical-iPhone acceptance remains open.
 
 | Feature | Implementation | Functional evidence |
@@ -76,3 +77,26 @@ Compiled entries remain in the shared game build's `shader/cache/cas`, with
 target, source, compiler, SDK and flags included in their identities. Final
 output folders are stamped independently; copying or relabeling an older
 graphics snapshot does not constitute validation of this implementation.
+
+Main integration (2026-11-01): `origin/main` at `a7e4dfb7` is integrated while
+retaining the frame generator and local render-pass proofs. The merged driver
+metadata cache includes the pixel sample count and sample-position rows; image
+stores retain the upstream physical-target tracking. Automatic refresh follows
+the game view's actual screen when the picture moves to an external display.
+
+The merged Mac host and all 193 iPhone source files compile. Focused checks pass:
+76 Python cases (two ARM-emulator cases skipped because Unicorn is absent),
+driver-bank contents, unwritten stores, render-target reuse, image stores,
+MetalFX/UI/queue controls, display clocks, NVN and loader FPS state. Static BOTW
+regression from `81e0056a` to the merged sources passes all 19,592 shaders with
+no changed base MSL, new shader failure or interface mismatch. Only BOTW has a
+prepared local game build. Evidence is in `framegen-merge-main-20261101/` in the
+game's NSP work folder. No game run or performance benchmark was repeated after
+this merge; the preceding gameplay screenshots remain evidence for `828cc1cd`.
+
+Both targets finish full shader preparation on merged chain `ca8b9c5b4e34`,
+inputs `92a16d66b5e4`, with 19,592 base and 10,318 separate-UI libraries each.
+All 58,416 compile results per target are reused from the shared cache. The
+explicit compiler override uses local Metal `32023.883`; the merged lock
+retains upstream's required `32023.922.4`. The build and static-regression logs
+are `shader-build.log` and `regress-static/report.md` in the evidence folder.

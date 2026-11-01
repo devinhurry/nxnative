@@ -12,6 +12,7 @@
 #include "front.h"
 #include "../../host/botw_rune_icon.h"
 #include "../../host/botw_touch_menu.h"
+#include "../../host/botw_touch_style.h"
 UIView *dm_gamepad_view(CGRect frame);
 void dm_test_motion_reset(void);
 void dm_test_motion_recenter(void);
@@ -509,6 +510,13 @@ static void test_botw_button_artwork(DmGamepad *view) {
 }
 
 static void test_botw_virtual_buttons(DmGamepad *view) {
+    int bundledIcons=0;
+    NSString *artwork=[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"dm/"];
+    for (int button=0; button<16; button++) {
+        NSString *path=dm_botw_touch_button_icon_path(button);
+        if (path && [path hasPrefix:artwork] && [UIImage imageWithContentsOfFile:path].CGImage) ++bundledIcons;
+    }
+    CHECK(bundledIcons==7,"all seven button icons load from the app bundle with an external graphics map");
     g_botw_touchhud_available = NO;
     [view setFull:YES];
     CHECK(![view dm_testL3ArtworkHidden] && ![view dm_testR3ArtworkHidden] && ![view dm_testMinusArtworkHidden],
@@ -672,6 +680,58 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
           "lifting the shield stick restores the ring to its idle home");
     CHECK([view dm_testShieldRingLayer].hidden && [view dm_testShieldDirectionLayer].hidden,
           "release hides the shield ring and moving arrow again");
+
+    FakeTouch *shieldTap=touch(shield.x,shield.y);
+    beganAt(view,shieldTap,10); endedAt(view,shieldTap,shield.x,shield.y,10.1);
+    [view layoutIfNeeded];
+    CHECK((g_buttons&DM_BTN_ZL) && g_lx==0 && g_ly==0 && ![view dm_testShieldRingLayer].hidden &&
+          [view dm_testShieldDirectionLayer].hidden,
+          "a short shield tap keeps ZL held with a visible ring and neutral movement");
+    beganAt(view,shieldTap,10.2); endedAt(view,shieldTap,shield.x,shield.y,10.3);
+    [view layoutIfNeeded];
+    CHECK(!(g_buttons&DM_BTN_ZL) && [view dm_testShieldRingLayer].hidden,
+          "a second short shield tap releases ZL and hides the held ring");
+    beganAt(view,shieldTap,11); endedAt(view,shieldTap,shield.x,shield.y,11.6);
+    CHECK(!(g_buttons&DM_BTN_ZL),"a stationary long shield hold releases on finger-up");
+    beganAt(view,shieldTap,12); moved(view,shieldTap,shield.x+60,shield.y);
+    moved(view,shieldTap,shield.x,shield.y); endedAt(view,shieldTap,shield.x,shield.y,12.1);
+    CHECK(!(g_buttons&DM_BTN_ZL),"a shield drag returning to its origin cannot latch ZL");
+    beganAt(view,shieldTap,13); endedAt(view,shieldTap,shield.x+60,shield.y,13.1);
+    CHECK(!(g_buttons&DM_BTN_ZL),"release-only shield movement cannot latch ZL");
+    shieldTap.point=shield; beganAt(view,shieldTap,14); cancelled(view,shieldTap,shield.x,shield.y);
+    CHECK(!(g_buttons&DM_BTN_ZL),"a cancelled shield tap never latches ZL");
+    beganAt(view,shieldTap,15); endedAt(view,shieldTap,shield.x,shield.y,15.1);
+    beganAt(view,shieldTap,15.2); endedAt(view,shieldTap,shield.x,shield.y,16);
+    CHECK(!(g_buttons&DM_BTN_ZL),"a long hold after a latched tap releases ZL normally");
+    beganAt(view,shieldTap,17); endedAt(view,shieldTap,shield.x,shield.y,17.1);
+    CGPoint walkingHome=[view dm_testStickHome]; FakeTouch *shieldWalk=touch(walkingHome.x,walkingHome.y);
+    began(view,shieldWalk); moved(view,shieldWalk,walkingHome.x+80,walkingHome.y);
+    CHECK((g_buttons&DM_BTN_ZL) && g_lx>0,"a latched shield allows the ordinary movement stick to move");
+    ended(view,shieldWalk,walkingHome.x+80,walkingHome.y);
+    CHECK((g_buttons&DM_BTN_ZL) && g_lx==0,"releasing movement preserves the latched shield without a stuck axis");
+    [view reset]; [view layoutIfNeeded];
+    CHECK(!(g_buttons&DM_BTN_ZL) && (g_virtual_latch_cancel_mask&DM_BTN_ZL) && [view dm_testShieldRingLayer].hidden,
+          "reset clears the held shield, its unread virtual edge and its ring");
+
+    CGPoint shieldCancel=[view facePos:1], shieldOther=[view facePos:0];
+    FakeTouch *shieldB=touch(shieldCancel.x,shieldCancel.y), *shieldA=touch(shieldOther.x,shieldOther.y);
+    beganAt(view,shieldTap,18); endedAt(view,shieldTap,shield.x,shield.y,18.1);
+    began(view,shieldA);
+    CHECK((g_buttons&(DM_BTN_A|DM_BTN_ZL))==(DM_BTN_A|DM_BTN_ZL),"A preserves the latched shield");
+    ended(view,shieldA,shieldOther.x,shieldOther.y);
+    began(view,shieldB); [view layoutIfNeeded];
+    CHECK((g_buttons&DM_BTN_B) && !(g_buttons&DM_BTN_ZL) && g_virtual_latch_cancel_mask==DM_BTN_ZL &&
+          [view dm_testShieldRingLayer].hidden,"B cancels the held shield, its unread edge and its ring immediately");
+    ended(view,shieldB,shieldCancel.x,shieldCancel.y);
+    CHECK(!(g_buttons&(DM_BTN_B|DM_BTN_ZL)),"releasing B does not restore the cancelled shield");
+    beganAt(view,shieldTap,19); endedAt(view,shieldTap,shield.x,shield.y,19.1);
+    began(view,shieldA); moved(view,shieldA,shieldCancel.x,shieldCancel.y);
+    CHECK((g_buttons&DM_BTN_B) && !(g_buttons&DM_BTN_ZL),"sliding a face-button touch onto B cancels the held shield");
+    ended(view,shieldA,shieldCancel.x,shieldCancel.y);
+    beganAt(view,shieldTap,20); began(view,shieldB);
+    CHECK((g_buttons&(DM_BTN_ZL|DM_BTN_B))==(DM_BTN_ZL|DM_BTN_B),"a finger physically holding ZL still permits ZL+B");
+    ended(view,shieldB,shieldCancel.x,shieldCancel.y); endedAt(view,shieldTap,shield.x,shield.y,20.2);
+    CHECK(!(g_buttons&DM_BTN_ZL),"B prevents an overlapping short shield gesture from re-latching on release");
 
     CGPoint stickHome=[view dm_testStickHome], shieldHome=[view dm_testShieldHome];
     FakeTouch *ordinaryStick=touch(stickHome.x,stickHome.y), *shieldConcurrent=touch(shieldHome.x+25,shieldHome.y);
@@ -2000,14 +2060,14 @@ static void run_tests(DmGamepad *view) {
     });
 }
 
-@interface HarnessDelegate : UIResponder <UIApplicationDelegate>
+@interface HarnessSceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property(nonatomic, strong) UIWindow *window;
 @end
-@implementation HarnessDelegate
-- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)options {
-    (void)application; (void)options;
+@implementation HarnessSceneDelegate
+- (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)options {
+    (void)session; (void)options;
     [NSUserDefaults.standardUserDefaults removeObjectForKey:@"DmPadLayout"];
-    self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
+    self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
     UIViewController *root = [UIViewController new]; self.window.rootViewController = root; [self.window makeKeyAndVisible];
     // The artwork fixture covers enabled badges; the custom-layout test checks default-off.
     setenv("DM_BOTW_PAD_BADGES","1",1);
@@ -2016,8 +2076,12 @@ static void run_tests(DmGamepad *view) {
     [root.view addSubview:raw]; [raw setFrame:CGRectMake(0, 0, 844, 390)]; [raw layoutIfNeeded];
     DmGamepad *view = (DmGamepad *)raw;
     dispatch_async(dispatch_get_main_queue(), ^{ run_tests(view); });
-    return YES;
 }
+@end
+
+@interface HarnessDelegate : UIResponder <UIApplicationDelegate>
+@end
+@implementation HarnessDelegate
 @end
 
 int main(int argc, char **argv) {
@@ -2028,6 +2092,9 @@ int main(int argc, char **argv) {
         if (!freopen(log.fileSystemRepresentation, "w", stdout) || dup2(STDOUT_FILENO, STDERR_FILENO) < 0) abort();
         setvbuf(stdout, NULL, _IOLBF, 0);
         setvbuf(stderr, NULL, _IOLBF, 0);
+        // Imported graphics redirects shader tables, while touch artwork stays in the IPA.
+        NSString *externalMap=[documents stringByAppendingPathComponent:@"graphics/fixture/tables/shader_map.tsv"];
+        setenv("DM_NVN_SHMAP",externalMap.fileSystemRepresentation,1);
         return UIApplicationMain(argc, argv, nil, NSStringFromClass(HarnessDelegate.class));
     }
 }

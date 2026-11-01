@@ -47,6 +47,14 @@ cat > "$APP/Info.plist" <<'PLIST'
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>MinimumOSVersion</key><string>26.0</string>
   <key>LSRequiresIPhoneOS</key><true/>
+  <key>UIApplicationSceneManifest</key><dict>
+    <key>UIApplicationSupportsMultipleScenes</key><false/>
+    <key>UISceneConfigurations</key><dict>
+      <key>UIWindowSceneSessionRoleApplication</key><array><dict>
+        <key>UISceneDelegateClassName</key><string>HarnessSceneDelegate</string>
+      </dict></array>
+    </dict>
+  </dict>
   <key>UIDeviceFamily</key><array><integer>1</integer></array>
   <key>UISupportedInterfaceOrientations</key><array>
     <string>UIInterfaceOrientationPortrait</string>
@@ -92,7 +100,8 @@ for _ in $(seq 1 120); do
   sleep 0.25
 done
 if [[ ! -f "$DATA/Documents/result.txt" ]]; then
-  echo "Harness did not finish; simulator app container: $DATA" >&2
+  if [[ -f "$DATA/Documents/details.log" ]]; then cp "$DATA/Documents/details.log" "$WORK/details.log"; fi
+  echo "Harness did not finish; diagnostics (when available): $WORK/details.log" >&2
   exit 1
 fi
 cp "$DATA/Documents/result.txt" "$WORK/run.log"
