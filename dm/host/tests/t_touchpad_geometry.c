@@ -172,8 +172,8 @@ static void test_botw_new_touch_geometry(void) {
         assert(!dm_touchpad_cancel_outside(60,50,50,50,DM_TP_CANCEL_RADIUS));
         assert(dm_touchpad_cancel_outside(50+DM_TP_CANCEL_RADIUS+1,50,50,50,DM_TP_CANCEL_RADIUS));
         float canvas_width = h * 16.0f / 9.0f;
-        dm_touchpad_rect plus = dm_touchpad_botw_menu_rect(40,20,canvas_width,h,0);
-        dm_touchpad_rect minus = dm_touchpad_botw_menu_rect(40,20,canvas_width,h,1);
+        dm_touchpad_rect plus = dm_touchpad_botw_menu_rect(40,20,canvas_width,h,0,0);
+        dm_touchpad_rect minus = dm_touchpad_botw_menu_rect(40,20,canvas_width,h,0,1);
         nearf(plus.width,39*h/720,.01f); nearf(plus.height,plus.width,.01f);
         float glyphRight=plus.x+plus.width*.5f+DM_TP_BOTW_MENU_GLYPH_SIZE*h/1440;
         nearf(40+canvas_width-glyphRight,58*h/720+2,.01f);

@@ -54,7 +54,7 @@ DM_BOTW_PAD_DPAD_Y	range	-0.5:0.5:0.001	0.000	DM_GAME_ID==01007EF00011E000	Touch
 DM_BOTW_PAD_DPAD_SCALE	range	0.5:1.5:0.01	1.000	DM_GAME_ID==01007EF00011E000	Touch layout	D-pad: Size	Applies only to BOTW touch controls.
 DM_BOTW_PAD_FACE_GAP	range	0.5:1.5:0.01	1.060	DM_GAME_ID==01007EF00011E000	Touch layout	XYAB: Button spacing	Changes spacing within the group.
 DM_BOTW_PAD_BADGES	toggle	-	0	DM_GAME_ID==01007EF00011E000	Touch layout	Corner button labels	Shows the small letter circles on L, R, ZR and XYAB.
-DM_BOTW_PORTRAIT	toggle	-	0	DM_GAME_ID==01007EF00011E000	Touch layout	Enable portrait mode	Allows portrait rotation. Tall windows use compact controls below 600pt of available width; wider windows keep the normal layout.
+DM_BOTW_PORTRAIT	toggle	-	0	DM_GAME_ID==01007EF00011E000	Touch layout	Enable compact portrait mode	Allows portrait rotation below 600pt of available width. Wider portrait windows are always supported and keep the normal layout.
 DM_BOTW_PORTRAIT_MOVE_DEADZONE	range	0:0.3:0.01	0.070	DM_GAME_ID==01007EF00011E000	Touch left stick	Deadzone	Ignores small movements near the touch-down point.
 DM_BOTW_PORTRAIT_MOVE_CURVE	range	0.3:2:0.05	0.300	DM_GAME_ID==01007EF00011E000	Touch left stick	Response curve	Lower values make short drags stronger. 1.00 is linear.	format=number
 DM_BOTW_PORTRAIT_MOVE_FULL	range	0.35:1:0.01	0.710	DM_GAME_ID==01007EF00011E000	Touch left stick	Full movement at	Finger travel needed to reach maximum stick strength.

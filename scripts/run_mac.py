@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -16,6 +17,14 @@ sys.dont_write_bytecode = True
 
 class LaunchError(Exception):
     pass
+
+
+def touch_safe_area(value):
+    try: sides = [float(part) for part in value.split(',')]
+    except ValueError as e: raise argparse.ArgumentTypeError('use left,top,right,bottom in points') from e
+    if len(sides) != 4 or any(not math.isfinite(side) or side < 0 for side in sides):
+        raise argparse.ArgumentTypeError('use four finite, nonnegative insets: left,top,right,bottom')
+    return ','.join(f'{side:g}' for side in sides)
 
 
 def profile(repo, game_id, env):
@@ -230,6 +239,8 @@ def resolve(args, env, repo):
     g, discovered_build = resolve_game_input(repo, game_id, env)
     if getattr(args, 'touch_preview', False) and g.id != '01007EF00011E000':
         raise LaunchError('--touch-preview is currently available only for Breath of the Wild (01007EF00011E000)')
+    if getattr(args, 'touch_safe_area', None) is not None and not getattr(args, 'touch_preview', False):
+        raise LaunchError('--touch-safe-area requires --touch-preview')
     base = _path(args.build) or discovered_build or _path(env.get('DM_ROOT'))
     if not base or not base.is_dir(): raise LaunchError('set --build or DM_ROOT to an existing game build folder, or pass a game folder containing <ID>_build / <ID>-work')
     if getattr(args, 'mode', 'test') == 'release':
@@ -423,6 +434,7 @@ def launch_host(plan, args, env, repo, exec_call=None, prepared_host=None):
     env.update(DM_GAME=game_id, DM_ROOT=str(plan['base']), DM_ROMFS=str(plan['romfs']), DM_MSL_DIR=str(plan['msl']))
     if getattr(args, 'touch_preview', False): env['DM_TOUCH_PREVIEW'] = '1'
     else: env.pop('DM_TOUCH_PREVIEW', None)
+    if getattr(args, 'touch_safe_area', None) is not None: env['DM_TEST_BOTW_SAFE_AREA'] = args.touch_safe_area
     env.setdefault('DM_NVN_SHMAP', str(plan['game'].table('shader_map.tsv')))
     env = profile_environment(env, plan['game'], repo)
     env.setdefault('DM_SAVE', str(plan['base'] / 'run' / 'save'))
@@ -480,6 +492,7 @@ def parser():
     p.add_argument('--save-copy', metavar='DIR', help='start from an independent copy of DIR under the game build/run/save-copies; original save unchanged, overrides DM_SAVE for this run')
     p.add_argument('--windowed', action='store_true', help='disable fullscreen; DM_ASPECT_RATIO still sets the window size')
     p.add_argument('--touch-preview', action='store_true', help='BOTW-only Mac preview of the iOS virtual touch controls and relocated touch HUD')
+    p.add_argument('--touch-safe-area', type=touch_safe_area, metavar='LEFT,TOP,RIGHT,BOTTOM', help='simulate safe-area insets in points with --touch-preview (default: 0,0,0,0)')
     p.add_argument('--allow-other-metal', action='store_true', help='allow an untested local Metal compiler when preparing test shaders; keeps the toolchain lock unchanged')
     p.add_argument('--check', action='store_true', help='report resolved paths and rewrite freshness without changing files or building')
     return p

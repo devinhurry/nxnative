@@ -42,6 +42,23 @@ static int32_t g_mouse_rx, g_mouse_ry;
 static int32_t g_preview_lx, g_preview_ly;
 static uint64_t g_preview_buttons;
 static BOOL g_touch_preview_requested, g_touch_preview_active;
+static NSEdgeInsets preview_safe_insets(void) {
+    NSEdgeInsets insets={0};
+    const char *value=getenv("DM_TEST_BOTW_SAFE_AREA");
+    if (!g_touch_preview_requested || strcmp(DM_GAME_ID,"01007EF00011E000") || !value || !*value) return insets;
+    double left,top,right,bottom; char tail;
+    if (sscanf(value,"%lf,%lf,%lf,%lf%c",&left,&top,&right,&bottom,&tail)!=4 ||
+        !isfinite(left) || !isfinite(top) || !isfinite(right) || !isfinite(bottom) ||
+        left<0 || top<0 || right<0 || bottom<0)
+        die("[RED] DM_TEST_BOTW_SAFE_AREA requires left,top,right,bottom in nonnegative points");
+    return NSEdgeInsetsMake(top,left,bottom,right);
+}
+static void preview_publish_safe_area(float width,float height) {
+    NSEdgeInsets i=preview_safe_insets();
+    if (i.left+i.right>=width || i.top+i.bottom>=height)
+        die("[RED] simulated safe area consumes the preview window; reduce --touch-safe-area or enlarge the window");
+    dm_aspect_set_safe_area(width,height,i.left,i.top,i.right);
+}
 static void push(void);
 static void preview_refresh(void);
 static void preview_set_map_region(int valid, float x, float y, float width, float height);
@@ -403,20 +420,22 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
 }
 - (dm_touchpad_rect)layoutRect:(int)control {
     float canvas[4]; dm_aspect_touch_rect(self.bounds.size.width,self.bounds.size.height,canvas);
+    NSEdgeInsets i=preview_safe_insets();
     float region[4];
     if (dm_aspect_region(1,region)) {
         dm_touchpad_rect a=[self controlArea],c=dm_botw_layout_canvas(a.width,a.height);
-        dm_touchpad_rect r=dm_botw_layout_control(&_touchLayout,control,a.width,a.height,0,0,0,0,c);
+        float top=fmaxf(0,i.top-a.y),bottom=fmaxf(0,a.y+a.height-(self.bounds.size.height-i.bottom));
+        dm_touchpad_rect r=dm_botw_layout_control(&_touchLayout,control,a.width,a.height,i.left,top,i.right,bottom,c);
         r.x+=a.x; r.y+=a.y; return r;
     }
-    return dm_botw_layout_control(&_touchLayout,control,self.bounds.size.width,self.bounds.size.height,0,0,0,0,
+    return dm_botw_layout_control(&_touchLayout,control,self.bounds.size.width,self.bounds.size.height,i.left,i.top,i.right,i.bottom,
         (dm_touchpad_rect){canvas[0],canvas[1],canvas[2],canvas[3]});
 }
 - (dm_touchpad_point)layoutCenter:(int)control { dm_touchpad_rect r=[self layoutRect:control]; return (dm_touchpad_point){r.x+r.width*.5f,r.y+r.height*.5f}; }
 - (void)syncBotwTouchProfile {
     if (strcmp(DM_GAME_ID,"01007EF00011E000")) return;
-    dm_touchpad_rect a=[self controlArea]; float region[4];
-    int portrait=_active && (dm_botw_portrait_enabled() || dm_aspect_region(1,region)) && dm_botw_compact_mode(a.width,a.height,0,0);
+    dm_touchpad_rect a=[self controlArea]; NSEdgeInsets i=preview_safe_insets();
+    int portrait=_active && dm_botw_compact_mode(a.width,a.height,i.left,i.right);
     if (_touchLayout.portrait==portrait) return;
     _touchLayout=_touchProfiles[portrait]; _moveResponse=_moveProfiles[portrait];
     [self cancelInput];
@@ -442,7 +461,11 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
 - (dm_touchpad_rect)menuKeyRect:(int)button {
     float region[4]; if (dm_aspect_region(1,region)) return dm_touchpad_seated_menu([self controlArea],button==11);
     float rect[4]; dm_aspect_hud_rect((float)self.bounds.size.width, (float)self.bounds.size.height, rect);
-    return dm_touchpad_botw_menu_rect(rect[0], rect[1], rect[2], rect[3], button == 11);
+    NSEdgeInsets i=preview_safe_insets();
+    float right=fmaxf(0,i.right-(self.bounds.size.width-rect[0]-rect[2]));
+    dm_touchpad_rect r=dm_touchpad_botw_menu_rect(rect[0],rect[1],rect[2],rect[3],right,button==11);
+    if (rect[3]>rect[2]*9.f/16) r.y+=fmaxf(0,i.top-rect[1]);
+    return r;
 }
 - (dm_touchpad_point)faceCenter { if (_active) return [self layoutCenter:0]; return dm_touchpad_face_center(self.bounds.size.width, self.bounds.size.height, 0, 0, 0, 0); }
 - (dm_touchpad_point)dpadCenter { if (_active) return [self layoutCenter:12]; return dm_touchpad_dpad_center(self.bounds.size.width, self.bounds.size.height, 0, 0, 0, 0); }
@@ -1024,8 +1047,8 @@ static void preview_refresh(void) {
         BOOL wanted=getenv("DM_TEST_BOTW_SEATED") && atoi(getenv("DM_TEST_BOTW_SEATED"));
         if (wanted!=preview_seated()) {
             [g_preview_view cancelInput]; dm_aspect_set_seated(wanted ? .49f : 0,wanted ? .51f : 0);
-            NSSize size=g_preview_view.bounds.size; dm_aspect_set_safe_area(size.width,size.height,0,0,0);
         }
+        NSSize size=g_preview_view.bounds.size; preview_publish_safe_area(size.width,size.height);
     }
     BOOL connected = GCController.controllers.count != 0;
     BOOL active = g_touch_preview_requested && !connected && dm_botw_touch_hud_available();
@@ -1074,7 +1097,7 @@ static void preview_refresh(void) {
     // horizontal division, without pretending a Mac has a hinge sensor.
     int seated=getenv("DM_TEST_BOTW_SEATED") && atoi(getenv("DM_TEST_BOTW_SEATED"));
     dm_aspect_set_seated(seated ? .49f : 0,seated ? .51f : 0);
-    dm_aspect_set_safe_area(s.width, s.height, 0, 0, 0);
+    preview_publish_safe_area(s.width,s.height);
     [self fitDrawable];
     preview_refresh();
 }
@@ -1195,7 +1218,7 @@ void front_run(void (*guest)(void)) {
         dm_aspect_set_display((float)ww / wh);
         int seated=getenv("DM_TEST_BOTW_SEATED") && atoi(getenv("DM_TEST_BOTW_SEATED"));
         dm_aspect_set_seated(seated ? .49f : 0,seated ? .51f : 0);
-        dm_aspect_set_safe_area(ww,wh,0,0,0);
+        preview_publish_safe_area(ww,wh);
         NSRect r = NSMakeRect(0, 0, ww, wh);
         NSWindow *win = [[NSWindow alloc] initWithContentRect:r
                                                     styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
