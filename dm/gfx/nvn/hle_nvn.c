@@ -1631,7 +1631,7 @@ static int g_engine_stub = 1;   // the weak dm_fps_lock_engine's answer, for gra
 __attribute__((weak)) int dm_fps_lock_engine(void) { return g_engine_stub; }   // hle_fpslock.c: the host writes fps_target into an engine limiter of this main
 __attribute__((weak)) void dm_ue_cvar_tick(void) {}   // hle_uecvar.c: Unreal's texture streaming pool (profile ue_texture_pool)
 __attribute__((weak)) int dm_movie_playing(void) { return 0; }   // hle_movie.c: a movie's pictures are being handed out; graphics unit tests have no movie decoder
-// Thermal cap (iOS): while the device is thermally serious or worse (NSProcessInfo thermalState >= 2) the frame step holds 30 fps, and it goes back to the cap after the device
+// Optional thermal cap (iOS, DM_THERMAL_CAP=1; off by default): while the device is thermally serious or worse (NSProcessInfo thermalState >= 2) the frame step holds 30 fps, and it goes back to the cap after the device
 // has been fair or better for THERMAL_CALM_NS, so it does not flap. At "serious" iOS caps the GPU clock to about a third: Breath of the Wild's vistas (about 3,000 G-buffer draws)
 // then took 17-26 ms a frame and dropped a frame in most windows; a steady 30 instead also lets the device cool. DM_THERMAL_CAP=0 turns it off; the Mac reports no thermal state
 #define THERMAL_CALM_NS 30000000000ull
@@ -1642,7 +1642,7 @@ static int thermal_capped(void) {
     static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
     static int on = -1, capped; static uint64_t last, calm_since;
     pthread_mutex_lock(&mu);
-    if (on < 0) { const char *e = getenv("DM_THERMAL_CAP"); on = !(e && !strcmp(e, "0")); }
+    if (on < 0) { const char *e = getenv("DM_THERMAL_CAP"); on = e && !strcmp(e, "1"); }
     if (on) {
         uint64_t now = now_ns();
         if (now - last >= 1000000000ull) {   // the thermal state is read once a second

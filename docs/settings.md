@@ -18,7 +18,7 @@ version when available. See [graphics packages](graphics-pack.md).
 - [Game](#game): [Frame rate](#frame-rate), [Render scale](#render-scale), [Console mode](#console-mode), [Upscaling](#upscaling), [Game language](#game-language), [Frame-rate counter](#frame-rate-counter)
 - [Controls](#controls): [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff)
 - [Touch left stick](#touch-left-stick): BOTW movement deadzone, response curve, full movement and size
-- [Performance](#performance): [Experimental low-memory mode](#experimental-low-memory-mode), [Skip feedback snapshots (experimental)](#skip-feedback-snapshots-experimental), [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
+- [Performance](#performance): [Experimental low-memory mode](#experimental-low-memory-mode), [Skip feedback snapshots (experimental)](#skip-feedback-snapshots-experimental), [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Reduce to 30 fps when hot](#reduce-to-30-fps-when-hot), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
 - [The Mac settings window](#the-mac-settings-window): [Display mode](#display-mode)
 - [TV](#tv)
 - [Settings in a file](#settings-in-a-file)
@@ -235,6 +235,18 @@ flowchart LR
 - **On** (the default for most games): an even 30 fps (or 20) in heavy scenes instead of a mix of 30 and 60.
 - **Off:** the game keeps aiming at 60; a late frame is shown one refresh later and the next one goes on as usual, so heavy scenes look less even but stay closer to 60 on average.
 - **When to change it:** turn it off if the game often falls to 30 fps although it is only slightly late.
+
+### Reduce to 30 fps when hot
+
+iPhone and iPad only, for builds with the app's frame-step control. Off by default.
+When enabled, a serious or critical system thermal state caps the game at 30 fps.
+The selected cap returns after the device has stayed fair or cooler for 30 seconds.
+The choice is saved when you press **Play** and applies on the next game start.
+
+With it off, the app adds no temperature-based 30 fps cap. The selected frame rate,
+movie limits and **Hold frames when late**, including its recovery to 60 fps,
+continue to apply. iOS still manages the device's frequencies and thermal limits.
+`DM_THERMAL_CAP=1` in `Documents/env.txt` enables the same option; unset or `0` is off.
 
 ### Performance HUD
 

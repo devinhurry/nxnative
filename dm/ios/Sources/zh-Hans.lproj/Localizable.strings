@@ -44,6 +44,8 @@
 "Game rumble" = "游戏振动";
 "Handheld" = "掌机模式";
 "Hold frames when late" = "帧延迟时保留画面";
+"Reduce to 30 fps when hot" = "\U9AD8\U6E29\U65F6\U964D\U81F3 30 fps";
+"Optional cap while the device is hot. Applies when you press Play." = "\U53EF\U9009\U7684\U9AD8\U6E29\U5E27\U7387\U9650\U5236\UFF0C\U70B9\U51FB\U5F00\U59CB\U6E38\U620F\U540E\U751F\U6548\U3002";
 "Horizontal offset" = "水平偏移";
 "Ignores small movements near the touch-down point." = "忽略触点附近的微小移动。";
 "Keeps a pipeline archive; uses more memory." = "保留渲染管线缓存，会使用更多内存。";

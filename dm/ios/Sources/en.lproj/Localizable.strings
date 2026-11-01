@@ -44,6 +44,8 @@
 "Game rumble" = "Game rumble";
 "Handheld" = "Handheld";
 "Hold frames when late" = "Hold frames when late";
+"Reduce to 30 fps when hot" = "Reduce to 30 fps when hot";
+"Optional cap while the device is hot. Applies when you press Play." = "Optional cap while the device is hot. Applies when you press Play.";
 "Horizontal offset" = "Horizontal offset";
 "Ignores small movements near the touch-down point." = "Ignores small movements near the touch-down point.";
 "Keeps a pipeline archive; uses more memory." = "Keeps a pipeline archive; uses more memory.";

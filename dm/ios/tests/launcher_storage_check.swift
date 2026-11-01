@@ -24,6 +24,8 @@ import Foundation
         d.set("1", forKey: "launcher.DM_FPS_HOLD")       // a value the toggle does not take (on / off): the default
         setenv("DM_ENV_FILE_KEYS", "DM_METAL_HUD", 1); setenv("DM_METAL_HUD", "1", 1)   // set by Documents/env.txt
         let m = LauncherModel(file.settings, defaults: d)
+        expect(m.values["DM_THERMAL_CAP"] == "0", "the optional thermal cap defaults off")
+        m.values["DM_THERMAL_CAP"] = "1"
         expect(m.needsTouchFallbackNotice && LauncherModel(file.settings, defaults: d).needsTouchFallbackNotice,
                "the first BOTW touch start needs a notice until acknowledged")
         expect(!LauncherModel([], defaults: d).needsTouchFallbackNotice, "other games do not show the BOTW touch notice")
@@ -54,9 +56,11 @@ import Foundation
         expect(d.string(forKey: "launcher.DM_PRESENT_SNAP") == nil, "a value equal to the default is not stored (and an old one is dropped)")
         expect(d.string(forKey: "launcher.DM_RENDER_SCALE") == nil && d.string(forKey: "launcher.DM_OPMODE") == nil && d.string(forKey: "launcher.DM_FPS_HOLD") == nil, "defaults are not stored")
         expect(d.string(forKey: "launcher.DM_FPS_TARGET") == "30" && d.string(forKey: "launcher.DM_PSO_MTL4") == "0", "changed choices are stored")
+        expect(d.string(forKey: "launcher.DM_THERMAL_CAP") == "1" && String(cString: getenv("DM_THERMAL_CAP")) == "1", "Play saves and applies the optional thermal cap")
         expect(d.string(forKey: "launcher.DM_METAL_HUD") == nil && String(cString: getenv("DM_METAL_HUD")) == "1", "the env file's value is kept and not stored")
         expect(String(cString: getenv("DM_PSO_MTL4")) == "0" && String(cString: getenv("DM_PRESENT_SNAP")) == "1" && String(cString: getenv("DM_FPS_HOLD")) == "on", "the environment gets every value")
         let reopened = LauncherModel(file.settings, defaults: d)
+        expect(reopened.values["DM_THERMAL_CAP"] == "1", "reopening restores an enabled thermal cap")
         expect(reopened.values["DM_BOTW_MOVE_DEADZONE"] == "0.15" && reopened.values["DM_BOTW_MOVE_SIZE"] == "1.25" && String(cString: getenv("DM_BOTW_MOVE_CURVE")) == "1.00", "Play persists stick settings, reopening restores them, and runtime receives them")
         expect(reopened.values["DM_BOTW_PAD_FACE_X"] == "-0.100" && reopened.values["DM_BOTW_PAD_FACE_GAP"] == "1.200", "layout group offset and spacing persist alongside response settings")
         expect(reopened.values["DM_BOTW_PAD_BADGES"] == "0", "corner badge switch persists")

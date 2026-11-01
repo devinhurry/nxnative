@@ -18,10 +18,11 @@ BOTW, WONDER = '01007EF00011E000', '010015100B514000'
 PERFORMANCE_NVN = ['DM_NVN_FB_SNAP', 'DM_PRESENT_SNAP', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_NVN_ENC_THREAD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
 
 
-def build(gid, api, platform=None):
+def build(gid, api, platform=None, fixups=''):
     env = {'GFXAPI': api, **({'SETTINGS_PLATFORM': platform} if platform else {})}
     with tempfile.TemporaryDirectory() as tmp, patch.object(settings.nacp, 'languages', return_value=['en-US']), patch.dict(os.environ, env):
         if not platform: os.environ.pop('SETTINGS_PLATFORM', None)
+        (Path(tmp) / 'main.fixups.tsv').write_text(fixups)
         return {s['env']: s for s in settings.build(gid, tmp, Path(tmp) / 'control.nacp')['settings']}
 
 
@@ -107,6 +108,17 @@ class LauncherSettingsTests(unittest.TestCase):
         self.assertEqual((s['on'], s['off'], s['default']), ('on', 'off', 'on'))
         s = build(BOTW, 'nvn')['DM_SHOW_FPS']
         self.assertEqual((s['on'], s['off']), ('1', '0'))
+
+    def test_thermal_cap_is_opt_in_for_ios_frame_step_builds(self):
+        for platform in ('ios', 'mac'):
+            for fixups in ('', '# FPS_STATE_OFF\t0x4000\n'):
+                rows = build(BOTW, 'nvn', platform, fixups)
+                self.assertEqual('DM_THERMAL_CAP' in rows, platform == 'ios' and bool(fixups))
+                if 'DM_THERMAL_CAP' in rows:
+                    s = rows['DM_THERMAL_CAP']
+                    self.assertEqual((s['kind'], s['section'], s['default'], s['on'], s['off']),
+                                     ('toggle', 'Performance', '0', '1', '0'))
+                self.assertEqual(rows['DM_FPS_HOLD']['default'], 'on')
 
     def test_touch_layout_defaults_and_game_scope(self):
         expected = {
