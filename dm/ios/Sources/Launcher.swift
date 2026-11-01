@@ -137,17 +137,43 @@ private struct LauncherView: View {
                             .font(.caption).foregroundStyle(.secondary)
                         playButton
                             .disabled(importBusy || checkingResources || !romReady || !shadersReady)
-                        Button("Import ROM") { importing = .rom }
-                            .accessibilityIdentifier("startup.import.rom")
-                            .buttonStyle(.bordered).disabled(importBusy || checkingResources)
-                        Button("Import shaders") { importing = .shaders }
-                            .accessibilityIdentifier("startup.import.shaders")
-                            .buttonStyle(.bordered).disabled(importBusy || checkingResources)
+                        HStack(spacing: 8) {
+                            if romReady {
+                                Label("ROM imported", systemImage: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                    .accessibilityIdentifier("startup.import.rom.ready")
+                            } else {
+                                Button("Import ROM") { importing = .rom }
+                                    .accessibilityIdentifier("startup.import.rom")
+                                    .buttonStyle(.bordered).disabled(importBusy || checkingResources)
+                            }
+                            if shadersReady {
+                                Label("Shaders imported", systemImage: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                    .accessibilityIdentifier("startup.import.shaders.ready")
+                            } else {
+                                Button("Import shaders") { importing = .shaders }
+                                    .accessibilityIdentifier("startup.import.shaders")
+                                    .buttonStyle(.bordered).disabled(importBusy || checkingResources)
+                            }
+                        }
+                        Button { refreshResources() } label: {
+                            Label {
+                                Text("Refresh")
+                            } icon: {
+                                Image(systemName: "arrow.clockwise")
+                                    .opacity(checkingResources ? 0 : 1)
+                                    .overlay {
+                                        if checkingResources { ProgressView().controlSize(.mini) }
+                                    }
+                                    .accessibilityHidden(true)
+                            }
+                        }
+                        .accessibilityIdentifier("startup.resources.refresh")
+                        .buttonStyle(.bordered).disabled(importBusy || checkingResources)
                         if importBusy {
                             ProgressView(value: importProgress)
                             Text("Importing…").font(.caption).foregroundStyle(.secondary)
-                        } else if checkingResources {
-                            ProgressView().controlSize(.small)
                         } else if let status = resourceStatus {
                             Text(status).font(.caption).foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
@@ -223,7 +249,7 @@ private struct LauncherView: View {
                 importResource(url, kind: kind)
             } onCancel: { importing = nil }
         }
-        .onAppear(perform: refreshResources)
+        .onAppear { refreshResources() }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in refreshResources() }
         .task {
             while !Task.isCancelled {
@@ -250,7 +276,7 @@ private struct LauncherView: View {
         else { refreshResources() }
     }
 
-    private func refreshResources() {
+    private func refreshResources(autoImport: Bool = true) {
         guard !importBusy && !checkingResources else { return }
         checkingResources = true
         DispatchQueue.global(qos: .userInitiated).async {
@@ -259,6 +285,10 @@ private struct LauncherView: View {
             var graphicsError: NSError?
             let info = dm_graphics_current_info(documents, Bundle.main.resourceURL!, &graphicsError)
             let shaders = graphicsError?.localizedDescription
+            var discoveryError: NSError?
+            let package = autoImport && shaders != nil
+                ? dm_graphics_pending_package(documents, Bundle.main.resourceURL!, &discoveryError) : nil
+            let discoveryMessage = discoveryError?.localizedDescription
             let version = (info?["version"] as? NSNumber)?.stringValue
             let compilers = info?["compilers"] as? [String: Any]
             let metal = (compilers?["metal_versions"] as? [String])?.joined(separator: ", ")
@@ -267,6 +297,8 @@ private struct LauncherView: View {
                 resourceStatus = rom ?? shaders
                 graphicsVersion = version; graphicsMetal = metal?.isEmpty == false ? metal : nil
                 checkingResources = false
+                if let message = discoveryMessage { importError = message }
+                if let package { importResource(package, kind: .shaders) }
             }
         }
     }
@@ -298,7 +330,8 @@ private struct LauncherView: View {
                 UIApplication.shared.isIdleTimerDisabled = previousIdle
                 importBusy = false
                 if !ok { importError = error?.localizedDescription ?? NSLocalizedString("Import failed", comment: "Resource import") }
-                refreshResources()
+                // Do not retry a failed automatic import in a refresh/import loop.
+                refreshResources(autoImport: kind == .rom)
             }
         }
     }

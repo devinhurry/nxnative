@@ -1,6 +1,10 @@
 # Separate graphics packages
 
-iOS builds now produce an IPA and a sibling `<app>.graphics.zip` by default.
+iOS builds now produce an IPA and a sibling
+`<app>.graphics.v<version>.zip` by default. The filename includes only the
+graphics version; compatibility is read from the manifest. Releases are kept beside
+one another; rebuilding reuses the latest version in the current series when
+its contents are unchanged. Build output reports the actual ZIP path.
 Use `--graphics bundle` to embed graphics instead. ROM deployment is independent:
 `--romfs separate` keeps the combined game/DLC image outside the IPA. Mac builds
 and `run_mac.py --test` retain their existing shader paths.
@@ -9,6 +13,17 @@ On the launch page, use **Import ROM** and **Import shaders** below **Play** to
 choose the image and graphics ZIP in Files. Import each once. Play is enabled
 when both are usable. Updates keep compatible imports. An incompatible or failed
 import reports the reason and preserves the selected package.
+
+Alternatively, copy the graphics ZIP into the app's folder under Files > On My
+iPhone/iPad (the root of `Documents`, beside `romfs.img`). When no usable graphics
+are installed, opening the launcher, returning to the app or tapping **Refresh**
+automatically imports the ZIP with the same compatibility and integrity checks.
+Only valid, compatible graphics ZIPs count as candidates: unrelated, incompatible
+and corrupt archives are skipped. If exactly one qualifies, it is imported;
+multiple valid packages require choosing **Import shaders**. Scanning validates
+the complete inventory and payload hashes without extracting or selecting a package.
+An import failure reports the reason without retrying in a loop. The source ZIP
+is kept, and usable installed graphics are not imported again on each launch.
 
 ## Compatibility and updates
 
@@ -25,8 +40,15 @@ excluded. The existing strict `DMSH_CHAIN` check is unchanged.
 Within one series, identical contents reuse the ZIP; changed contents increment
 the version. `VERSION` and `MINIMUM_VERSION` set the release floor and app
 requirement. Raise `MINIMUM_VERSION` when a fix must replace earlier packages in
-that series. New series start at the floor. A content SHA-256 identifies each
+that series. File versions increase across the output's releases, including a
+change of series, so short filenames never overwrite another release.
+A content SHA-256 identifies each
 distinct package separately from its version.
+
+The build searches the short versioned filenames; existing unversioned ZIPs or
+filenames containing the compatibility series are no longer
+automatically reused by the packager. The launcher still validates packages by
+their manifests, regardless of filename.
 
 The manifest records actual compiler identities/flags from reflection and Metal
 versions/iOS targets from binaries. It does not attribute reused shaders to the
@@ -76,8 +98,13 @@ Documents/
       pso/...              (optional)
 ```
 
-Only a complete import atomically updates `current.json`. Installed sizes and
-compatibility are checked before Play. Graphics are excluded from iCloud backup;
+Only a complete import atomically updates `current.json`. Launch and refresh
+check compatibility, the shader map and the type/size of one representative
+library. They check the selected directory first and parse its manifest once;
+they do not rehash the inventory or stat every installed shader. Full inventory
+and payload validation belongs to ZIP discovery/import, so damage to other
+installed files is detected when those files are used rather than on every refresh.
+Graphics are excluded from iCloud backup;
 saves are unchanged. Older package directories remain available after updates.
 
 ## Validation

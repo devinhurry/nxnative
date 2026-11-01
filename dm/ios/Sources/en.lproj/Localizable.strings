@@ -158,6 +158,10 @@
 "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately." = "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately.";
 "Import ROM" = "Import ROM";
 "Import shaders" = "Import shaders";
+"ROM imported" = "ROM imported";
+"Shaders imported" = "Shaders imported";
+"Refresh" = "Refresh";
+"More than one valid graphics ZIP was found. Use Import shaders to choose a package." = "More than one valid graphics ZIP was found. Use Import shaders to choose a package.";
 "Import failed" = "Import failed";
 "OK" = "OK";
 "Import RomFS.img to start." = "Import RomFS.img to start.";

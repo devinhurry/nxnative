@@ -158,6 +158,10 @@
 "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately." = "可发送这些紧凑布局参数作为默认值。偏移以整个屏幕为比例，X 为正向右移动，Y 为正向下移动。普通布局设置单独保存。";
 "Import ROM" = "导入 ROM";
 "Import shaders" = "导入着色器";
+"ROM imported" = "ROM 已导入";
+"Shaders imported" = "着色器已导入";
+"Refresh" = "刷新";
+"More than one valid graphics ZIP was found. Use Import shaders to choose a package." = "找到多个有效的着色器 ZIP，请点按“导入着色器”选择资源包。";
 "Import failed" = "导入失败";
 "OK" = "好";
 "Import RomFS.img to start." = "请导入 RomFS.img 后开始游戏。";

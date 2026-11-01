@@ -2010,12 +2010,17 @@ def prune_stale_chains(sh, chain):
 
 def reuse_graphics_package(repo, archive, work, g, build, env):
     """A UI-only IPA build can use its published graphics without a shader cache or another Metal compiler."""
-    if not archive.is_file(): return None
-    chain = chain_of(repo)
-    if not chain: return None
     import graphics_pack
+    if not graphics_pack.published_packages(archive): return None
     try:
+        chain = chain_of(repo)
+        if not chain: raise BuildError('the shader chain header is missing; prepare the shaders before reusing a graphics package')
         required = graphics_pack.requirements(g.id, build, 'nvn', 'b-' + chain, g.dir)
+        packages = graphics_pack.published_packages(archive, required['series'])
+        if not packages:
+            say('graphics: UPDATE REQUIRED (graphics compatibility series changed)')
+            return None
+        archive = packages[0]
         directory, manifest = graphics_pack.restore(archive, required, work / 'graphics-cache')
     except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile) as e:
         say(f'graphics: UPDATE REQUIRED ({e})')
@@ -2838,7 +2843,7 @@ def main(args=None):
         say(f'game project: {project}')
         say(f'Xcode derived data: {work / "xcode-derived-data"}')
         if separate: say_push_romfs(game_image, bundle_id)
-        if graphics_mode == 'separate': say('graphics ZIP: ' + ipa_env['DM_GRAPHICS_OUT'] + ' (Import shaders in the launcher)')
+        if graphics_mode == 'separate': say('graphics ZIP: ' + json.loads((work / 'ipa/graphics-result.json').read_text())['path'] + ' (Import shaders in the launcher)')
         say('choose the game scheme in Xcode, select your Team and iPhone or iPad, then Run (Release)')
         report_profile_status(g, reg, pkg_ver, derived, provisional, 'Xcode project', patched)
         return
@@ -2854,7 +2859,7 @@ def main(args=None):
         say(f'deleting the extracted game files: {ex}'); rmtree(ex)
     say(f'done: {out_ipa} ({out_ipa.stat().st_size / 2**30:.1f} GB)')
     if separate: say_push_romfs(game_image, bundle_id)
-    if graphics_mode == 'separate': say('graphics ZIP: ' + ipa_env['DM_GRAPHICS_OUT'] + ' (Import shaders in the launcher)')
+    if graphics_mode == 'separate': say('graphics ZIP: ' + json.loads((work / 'ipa/graphics-result.json').read_text())['path'] + ' (Import shaders in the launcher)')
     report_profile_status(g, reg, pkg_ver, derived, provisional, patched=patched)
 
 

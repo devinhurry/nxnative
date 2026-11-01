@@ -34,6 +34,20 @@
 - **Fix:** iOS builds default to a stored ZIP beside the IPA. A generated series covers the game/build, shader chain, renderer and profile inputs; import and launch require that series and the app's minimum integer version. Actual compiler identities are recorded independently. The system ZIP reader streams, validates and atomically publishes imported files; the launcher owns both ROM and graphics import. A compatible published ZIP also restores build inputs without local shader caches or another Metal compile. `--graphics bundle` remains available. See [format, update rules and installed layout](../graphics-pack.md).
 - **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game); production iOS compile/link, Foundation import, ZIP64, four packaging combinations and simulator Files-picker checks pass with synthetic resources. Complete game graphics on a physical iPhone remain pending.
 
+### Touch button icons disappear with an imported graphics package
+
+- **Symptom:** BOTW's round touch buttons lose their action icons after selecting a separate graphics package.
+- **Cause:** the shared artwork helper located PNGs beside `DM_NVN_SHMAP`. Graphics selection redirects that variable to the imported package's `tables` directory, while `touch_*.png` remains in the IPA's `dm` directory. Image loads returned nil and left blank button layers.
+- **Fix:** iOS resolves touch artwork from the app bundle independently of shader-table selection. Mac command-line/profile lookup is unchanged. The UIKit harness sets an external shader-map path before creating the gamepad and checks all seven bundled PNGs and the rendered button layers.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game); synthetic UIKit resources reproduce the external-map path. Physical iPhone acceptance remains pending.
+
+### Launcher refresh keeps Play disabled after importing shaders
+
+- **Symptom:** opening or refreshing the iOS launcher spends a long time checking resources while Play stays disabled, even after a successful shader import.
+- **Cause:** readiness repeated the full manifest inventory validation and queried every installed file's attributes. Selection could also check older packages before the selected one, then parse the selected manifest again for About.
+- **Fix:** readiness checks the selected package first and reuses its parsed manifest. It checks compatibility and a few key files; full inventory and payload validation remains at the import boundary. See the [installed resource checks](../graphics-pack.md#archive-and-installed-layout).
+- **Found on:** launcher resource checking; [synthetic Foundation tests](../../dm/tools/tests/test_graphics_pack.py) cover a 20,000-entry manifest, skipped auxiliary-file checks, and missing key files. Physical-device latency remains unmeasured.
+
 ## RomFS images
 
 ### Separate game images include installed DLC

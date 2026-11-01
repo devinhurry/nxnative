@@ -5,6 +5,10 @@ The screen before the game starts shows the settings the game supports. A settin
 **About** at the bottom shows the build time in the device's local time zone and date format, on both iPhone and Mac.
 
 On iOS, **Import ROM** and **Import shaders** sit below **Play** on this same page.
+Each button is replaced by an imported status with a checkmark once its resource is ready.
+Use **Refresh** to recheck files copied into the app manually.
+When shaders are missing, the sole valid, compatible graphics ZIP in the app's folder is automatically imported
+on launch, on returning to the app or on refresh.
 Choose the game image and separate graphics ZIP in Files. Play is enabled when
 both are ready; incompatible graphics report the reason. Imports survive app
 updates. About also shows the imported graphics version and recorded Metal

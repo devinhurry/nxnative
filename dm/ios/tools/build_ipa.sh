@@ -11,7 +11,7 @@
 #   The app name is the game name in the base NSP's control data ($W/data/v0/control.nacp, else the one next to the RomFS), the app version is the display version in the packed game's control data (the one next to the RomFS:
 #   nx_extract saves the update's there when an update is packed, else the base game's), the bundle ID is org.nxnative.<base game title ID in lowercase> (DM_DISPLAY_NAME / DM_APP_VERSION / DM_BUNDLE_ID override them);
 #   VNACP=<control.nacp> supplies the packed version's metadata when ROMFS has moved away from its extraction (for example, a combined external image);
-#   DM_COPY_GRAPHICS=NO (default) writes a stored graphics ZIP (DM_GRAPHICS_OUT, else $W/graphics.zip); YES bundles graphics instead.
+#   DM_COPY_GRAPHICS=NO (default) writes a stored graphics ZIP (DM_GRAPHICS_OUT, else $W/graphics.zip, with .v<version> added); YES bundles graphics instead.
 #   DM_METAL_CAPTURE=1 makes a development build that can write GPU frame captures (MetalCaptureEnabled in Info.plist, for the host's DM_GPU_CAPTURE switch);
 #   DM_SHOW_FPS=1 turns the frame-rate counter on (DMShowFPS in Info.plist; DM_SHOW_FPS in the app's Documents/env.txt overrides it on the phone);
 #   DM_LANG=<language code> is the game language (DMLanguage in Info.plist, default en-US; DM_LANG in the app's Documents/env.txt overrides it on the phone);
@@ -131,11 +131,12 @@ if [ "$GFXAPI" = vulkan ]; then MSLDIR=vk; elif [ "$GFXAPI" = gl ]; then MSLDIR=
 GRAPHICS_ARGS=(--game "$GAME" --build "$PKG" --api "$GFXAPI" --library "$MSLDIR" --shaders "$MSL_IOS/$MSLDIR" --tables "$GD" --requirements "$IOS/Gen/dm/graphics-required.json")
 [ -z "$PSO" ] || GRAPHICS_ARGS+=(--pso "$PSO")
 if [ "$DM_COPY_GRAPHICS" = NO ]; then
-  GRAPHICS_ARGS+=(--out "$GRAPHICS_OUT")
+  GRAPHICS_ARGS+=(--out "$GRAPHICS_OUT" --result "$W/graphics-result.json")
   [ -z "${DM_GRAPHICS_REUSE:-}" ] || GRAPHICS_ARGS+=(--reuse "$DM_GRAPHICS_REUSE")
 else GRAPHICS_ARGS+=(--bundle); fi
 python3 "$DM/tools/graphics_pack.py" "${GRAPHICS_ARGS[@]}" || die "graphics package"
 if [ "$DM_COPY_GRAPHICS" = NO ]; then
+  GRAPHICS_OUT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["path"])' "$W/graphics-result.json") || die "graphics package output path"
   for table in shader_map.tsv pso_manifest.tsv c1_full.tsv cb_extent.tsv shader_pairs.tsv pso_pairs.tsv; do rm -f "Gen/dm/$table"; done
   t "graphics package: $GRAPHICS_OUT (import it from the launcher's Import shaders button)"
 fi

@@ -68,6 +68,11 @@ class XcodePipelineTests(unittest.TestCase):
                 'refine_after_rewrite': profile, 'derive_profile': '1.0.0', 'run': None,
             }.items():
                 mocks[name] = stack.enter_context(patch.object(build, name, return_value=value))
+            def prepared_result(*_args, **kwargs):
+                result = Path(kwargs['env']['W']) / 'graphics-result.json'
+                result.parent.mkdir(parents=True, exist_ok=True)
+                result.write_text(json.dumps(dict(path=str(root / 'Fixture.graphics.v3.zip'))))
+            mocks['run'].side_effect = prepared_result
             stack.enter_context(patch.dict(os.environ))  # derived profiles change the tool search environment
             stack.enter_context(patch.object(game, 'by_title', return_value=registered))
             stack.enter_context(patch.object(game, 'load', return_value=profile))
@@ -208,7 +213,12 @@ for directory in ('romfs', 'aoc', 'dm'):
                         self.assertEqual(required['external'], graphics == 'NO')
                         if graphics == 'NO':
                             self.assertNotIn('Payload/DmIOS.app/dm/shader_map.tsv', names)
-                            with zipfile.ZipFile(root / 'work/graphics.zip') as package:
+                            result_info = json.loads((root / 'work/graphics-result.json').read_text())
+                            package_path = Path(result_info['path'])
+                            self.assertEqual(package_path.name, f'graphics.v{result_info["version"]}.zip')
+                            with zipfile.ZipFile(package_path) as package:
+                                manifest = json.loads(package.read('manifest.json'))
+                                self.assertEqual(manifest['version'], result_info['version'])
                                 self.assertIn('msl/gl/gl_shaders.metallib', package.namelist())
                                 self.assertTrue(all(i.compress_type == zipfile.ZIP_STORED for i in package.infolist()))
                         self.assertEqual('Payload/DmIOS.app/romfs/System/Resource/file' in names, excluded == '0')

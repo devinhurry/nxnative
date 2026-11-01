@@ -108,11 +108,23 @@ When enabled, each action label sits in a 20% gray, gold-outlined badge on the u
 edge, half overlapping the main circle. Badges default off. The outer half of each visible badge presses
 the same button; face-button sliding remains available.
 Mac preview and UIKit rendering passed; controller/non-BOTW UIKit checks
-restore the ordinary artwork. The seven `touch_*.png` assets are packaged beside the profile
-tables. ZL shows a shield and four directional arrows without an idle background;
+restore the ordinary artwork. The seven `touch_*.png` assets are packaged in the app's
+`dm` folder. ZL shows a shield and four directional arrows without an idle background;
 holding reveals an unfilled ring and dragging moves a direction arrow just outside its
 perimeter while the center stays at touch-down. Mac and UIKit share the vector
 paths from [zelda-hyrule-ui](https://chaos-xxl.github.io/zelda-hyrule-ui/#/docs).
+**Current:** a short ZL tap (at most 0.35 seconds, without a drag) keeps the
+shield held after finger-up; another short tap or pressing B releases the held mode.
+B also prevents an overlapping shield tap from re-latching, while a finger
+physically holding ZL still permits ZL+B. The ring remains
+visible while held. Long holds and drags release normally, and cancellation,
+menu transitions, controller handoff and app deactivation clear the held shield.
+The focused UIKit tap/hold/drag/movement/reset checks pass. The full UIKit
+harness has the same 11 camera-hit, haptic and portrait-layout failures as the
+pre-change handler, with no new failures; the independent geometry target also
+fails its existing portrait-boundary assertion. Physical iPhone gameplay
+acceptance remains pending. The harness uses the Scene lifecycle required by
+the current iOS SDK.
 BOTW's D-pad direction is captured at touch-down and held until release;
 sliding face-button touches keep their original switching behavior. A movement
 stick gesture that leaves its configured deadzone resets the L3 tap sequence,
@@ -1218,6 +1230,8 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 - The frame step under load: `DM_TEST_PRESENT_LAG=1,12` (12 ms added to every frame: 30 fps at 1.000 of real time).
 
 ## Found on this game
+
+- **Resolved in code; physical iPhone acceptance pending:** [Touch artwork with external graphics](../../../docs/reference/packing.md#touch-button-icons-disappear-with-an-imported-graphics-package). UI artwork stays bundled with the IPA and no longer follows the imported shader-table directory.
 
 - **Current, 2026-11-01:** [Separate graphics packages](../../../docs/reference/packing.md#ipa-updates-repeatedly-include-large-graphics-resources) move runtime shaders and optional offline archives outside the IPA. The launcher imports ROM and graphics on one page and checks series/minimum version. Native import/packaging, production iOS compile/link and simulator picker checks use synthetic fixtures; full game graphics on a physical iPhone remain pending. No shader-chain or graphics execution code changed.
 
