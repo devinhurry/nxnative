@@ -4,6 +4,7 @@
 // in UserDefaults; Reset to tested defaults shows the defaults, and Play then forgets them. DM_LAUNCHER=0 in Documents/env.txt starts the game at once with the saved choices; DM_SAVED_CHOICES=0 ignores them (and keeps them)
 import SwiftUI
 import UIKit
+import GameController
 import UniformTypeIdentifiers
 import os
 
@@ -99,24 +100,58 @@ private struct LauncherView: View {
     @ObservedObject var m: LauncherModel
     let play: () -> Void
     @State private var showTouchSettings = false
+    @State private var showTouchNotice = false
     @State private var memory = os_proc_available_memory()
+    @State private var importing: ImportKind?
+    @State private var importBusy = false
+    @State private var checkingResources = false
+    @State private var romReady = false
+    @State private var shadersReady = false
+    @State private var resourceStatus: String?
+    @State private var importError: String?
+    @State private var importProgress: Double = 0
+    @State private var graphicsVersion: String?
+    @State private var graphicsMetal: String?
+
+    private enum ImportKind: String, Identifiable {
+        case rom, shaders
+        var id: String { rawValue }
+    }
 
     var body: some View {
         NavigationStack {
             GeometryReader { geometry in
                 HStack(spacing: 0) {
-                    VStack(spacing: m.lowMemoryEnabled ? 10 : 16) {
+                    ScrollView {
+                    VStack(spacing: 8) {
                         if let icon = appIcon() {
-                            let size: CGFloat = m.lowMemoryEnabled ? 80 : 96
+                            let size: CGFloat = m.lowMemoryEnabled ? 52 : 64
                             Image(uiImage: icon).resizable().frame(width: size, height: size)
-                                .clipShape(RoundedRectangle(cornerRadius: 22))
+                                .clipShape(RoundedRectangle(cornerRadius: 15))
                                 .accessibilityHidden(true)
                         }
                         Text((info("CFBundleDisplayName") as? String) ?? "Game")
-                            .font(.title.weight(.bold)).multilineTextAlignment(.center)
+                            .font(.title3.weight(.bold)).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.8)
                         Text(String(format: NSLocalizedString("Version %@", comment: "Game version"), (info("CFBundleShortVersionString") as? String) ?? ""))
-                            .font(.callout).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(.secondary)
                         playButton
+                            .disabled(importBusy || checkingResources || !romReady || !shadersReady)
+                        Button("Import ROM") { importing = .rom }
+                            .accessibilityIdentifier("startup.import.rom")
+                            .buttonStyle(.bordered).disabled(importBusy || checkingResources)
+                        Button("Import shaders") { importing = .shaders }
+                            .accessibilityIdentifier("startup.import.shaders")
+                            .buttonStyle(.bordered).disabled(importBusy || checkingResources)
+                        if importBusy {
+                            ProgressView(value: importProgress)
+                            Text("Importing…").font(.caption).foregroundStyle(.secondary)
+                        } else if checkingResources {
+                            ProgressView().controlSize(.small)
+                        } else if let status = resourceStatus {
+                            Text(status).font(.caption).foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("startup.resources.status")
+                        }
                         if m.lowMemoryEnabled {
                             Text(LocalizedStringKey(LauncherModel.lowMemoryNotice))
                                 .font(.caption).foregroundStyle(.secondary)
@@ -124,8 +159,10 @@ private struct LauncherView: View {
                                 .accessibilityIdentifier("botw.low-memory.notice")
                         }
                     }
-                    .padding(16)
-                    .frame(width: geometry.size.width / 3, height: geometry.size.height)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, minHeight: geometry.size.height)
+                    }
+                    .frame(width: geometry.size.width * 0.38, height: geometry.size.height)
                     List {
                         if m.touchStickResponse != nil {
                             Section("Touch") {
@@ -152,11 +189,11 @@ private struct LauncherView: View {
                                 Text(ByteCountFormatter.string(fromByteCount: Int64(memory), countStyle: .memory)).monospacedDigit().foregroundStyle(.secondary)
                             }
                         }
-                        AboutSection()
+                        AboutSection(graphicsVersion: graphicsVersion, graphicsMetal: graphicsMetal)
                     }
                     .listStyle(.insetGrouped)
                     .contentMargins(.horizontal, 12, for: .scrollContent)
-                    .frame(width: geometry.size.width * 2 / 3)
+                    .frame(width: geometry.size.width * 0.62)
                 }
                 .toolbar(.hidden, for: .navigationBar)
                 .navigationDestination(isPresented: $showTouchSettings) {
@@ -168,6 +205,25 @@ private struct LauncherView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .alert("Touch controls", isPresented: $showTouchNotice) {
+            Button("I know I can double-tap with three fingers") {
+                m.acknowledgeTouchFallbackNotice()
+                finishStart()
+            }
+        } message: {
+            Text("Touch UI cannot cover every game screen. If a button does not respond, double-tap with three fingers to temporarily show the virtual gamepad and continue. Please report the issue to the developer.")
+        }
+        .alert("Import failed", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
+            Button("OK") { importError = nil }
+        } message: { Text(importError ?? "") }
+        .sheet(item: $importing) { kind in
+            DocumentPicker(types: kind == .rom ? [.data] : [.zip]) { url in
+                importing = nil
+                importResource(url, kind: kind)
+            } onCancel: { importing = nil }
+        }
+        .onAppear(perform: refreshResources)
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in refreshResources() }
         .task {
             while !Task.isCancelled {
                 memory = os_proc_available_memory()
@@ -178,8 +234,72 @@ private struct LauncherView: View {
     }
 
     @ViewBuilder var playButton: some View {
-        let button = Button(action: play) { Text("Play").font(.title3.weight(.semibold)).frame(maxWidth: 220) }.controlSize(.large)
+        let button = Button(action: startGame) { Text("Play").font(.title3.weight(.semibold)).frame(maxWidth: 220) }.controlSize(.large)
         if #available(iOS 26.0, *) { button.buttonStyle(.glassProminent) } else { button.buttonStyle(.borderedProminent) }
+    }
+
+    private func startGame() {
+        if m.needsTouchFallbackNotice && GCController.controllers().isEmpty { showTouchNotice = true }
+        else { finishStart() }
+    }
+
+    private func finishStart() {
+        m.apply()
+        if dm_startup_prepare() { play() }
+        else { refreshResources() }
+    }
+
+    private func refreshResources() {
+        guard !importBusy && !checkingResources else { return }
+        checkingResources = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let rom = dm_startup_rom_error()
+            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            var graphicsError: NSError?
+            let info = dm_graphics_current_info(documents, Bundle.main.resourceURL!, &graphicsError)
+            let shaders = graphicsError?.localizedDescription
+            let version = (info?["version"] as? NSNumber)?.stringValue
+            let compilers = info?["compilers"] as? [String: Any]
+            let metal = (compilers?["metal_versions"] as? [String])?.joined(separator: ", ")
+            DispatchQueue.main.async {
+                romReady = rom == nil; shadersReady = shaders == nil
+                resourceStatus = rom ?? shaders
+                graphicsVersion = version; graphicsMetal = metal?.isEmpty == false ? metal : nil
+                checkingResources = false
+            }
+        }
+    }
+
+    private func importResource(_ url: URL, kind: ImportKind) {
+        guard !importBusy else { return }
+        importBusy = true; importProgress = 0
+        let scoped = url.startAccessingSecurityScopedResource()
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let previousIdle = UIApplication.shared.isIdleTimerDisabled
+        UIApplication.shared.isIdleTimerDisabled = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            var error: NSError?
+            let ok: Bool
+            if kind == .rom { ok = dm_import_game_image(url, documents, &error) }
+            else {
+                let required = dm_graphics_requirements(Bundle.main.resourceURL!) ?? [:]
+                var lastProgress = Date.distantPast
+                ok = dm_import_graphics_package(url, documents, required, { done, total in
+                    let now = Date()
+                    if now.timeIntervalSince(lastProgress) >= 0.1 || done == total {
+                        lastProgress = now
+                        DispatchQueue.main.async { importProgress = total > 0 ? Double(done) / Double(total) : 0 }
+                    }
+                }, &error)
+            }
+            if scoped { url.stopAccessingSecurityScopedResource() }
+            DispatchQueue.main.async {
+                UIApplication.shared.isIdleTimerDisabled = previousIdle
+                importBusy = false
+                if !ok { importError = error?.localizedDescription ?? NSLocalizedString("Import failed", comment: "Resource import") }
+                refreshResources()
+            }
+        }
     }
 
     private func appIcon() -> UIImage? {
@@ -190,25 +310,27 @@ private struct LauncherView: View {
     }
 }
 
-// Shows the launcher over the root view controller and calls done once the settings are in the environment; false (done is not called) when there is no launcher
+// Shows settings and resource imports; calls done after preparation, or returns false for an explicitly skipped, ready launcher.
 @_cdecl("dm_show_launcher")
 public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
-    guard let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json"), let data = try? Data(contentsOf: url) else { return false }
-    guard let file = try? JSONDecoder().decode(SettingsFile.self, from: data), !file.settings.isEmpty else { fputs("[RED] launcher: dm/launcher.json cannot be read; starting the game\n", stderr); return false }
-    if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" { fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); LauncherModel(file.settings).applySaved(); return false }
+    let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json")
+    let data = url.flatMap { try? Data(contentsOf: $0) }
+    let settings = data.flatMap { try? JSONDecoder().decode(SettingsFile.self, from: $0) }?.settings ?? []
+    if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" && dm_startup_rom_error() == nil && dm_startup_graphics_error() == nil {
+        fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); LauncherModel(settings).applySaved(); return false
+    }
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
-    let model = LauncherModel(file.settings)
+    let model = LauncherModel(settings)
     var host: UIViewController?
     let view = LauncherView(m: model) {
         guard let h = host else { return }
         host = nil
-        model.apply()
         h.dismiss(animated: false) { done() }
     }
     let h = LandscapeLauncherController(rootView: view)
     h.modalPresentationStyle = .fullScreen
     host = h
     parent.present(h, animated: false)
-    fputs("launcher: \(file.settings.count) settings shown\n", stderr)
+    fputs("launcher: \(settings.count) settings shown\n", stderr)
     return true
 }

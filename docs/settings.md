@@ -2,6 +2,14 @@
 
 The screen before the game starts shows the settings the game supports. A setting that only matters while another is on appears under it and disappears when that one is turned off. Tap **Play** to start; the app remembers your choices for the next start. Game, Controls and Performance settings share the home screen. BOTW has a **Touch settings** button that opens its layout and movement editor. **Upscaling** is in **Game**, beside **Console mode**. A Mac app shows the same settings in a [window of its own](#the-mac-settings-window).
 
+**About** at the bottom shows the build time in the device's local time zone and date format, on both iPhone and Mac.
+
+On iOS, **Import ROM** and **Import shaders** sit below **Play** on this same page.
+Choose the game image and separate graphics ZIP in Files. Play is enabled when
+both are ready; incompatible graphics report the reason. Imports survive app
+updates. About also shows the imported graphics version and recorded Metal
+version when available. See [graphics packages](graphics-pack.md).
+
 - [Tested defaults](#tested-defaults)
 - [Game](#game): [Frame rate](#frame-rate), [Render scale](#render-scale), [Console mode](#console-mode), [Upscaling](#upscaling), [Game language](#game-language), [Frame-rate counter](#frame-rate-counter)
 - [Controls](#controls): [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff)
@@ -102,6 +110,8 @@ Size at 100% keeps the existing dimensions: a 140-point outer diameter when the 
 On the Mac, touch preview uses the same parameters through `DM_BOTW_MOVE_DEADZONE`, `DM_BOTW_MOVE_CURVE`, `DM_BOTW_MOVE_FULL` and `DM_BOTW_MOVE_SIZE` in `env.txt` or the launch environment. Fractions are written as decimals: for example, `DM_BOTW_MOVE_DEADZONE=0.07` means 7%. Packaged Mac apps expose the same Touch settings page; the raw host uses the launch environment. Layout variables use the prefix `DM_BOTW_PAD_` followed by `<CONTROL>_X`, `<CONTROL>_Y` or `<CONTROL>_SCALE`, where `<CONTROL>` is `FACE`, `DPAD`, `ZL`, `L`, `R` or `ZR`. Movement uses `DM_BOTW_PAD_STICK_X` / `_Y` and the existing `DM_BOTW_MOVE_SIZE`. `DM_BOTW_PAD_FACE_GAP` controls XYAB spacing (default `1.060`). Corner letter circles are off by default; `DM_BOTW_PAD_BADGES=1` enables them. The runtime and Restore defaults match the values listed in `dm/games/settings.tsv`; saved custom choices and explicit environment overrides retain precedence.
 
 If a BOTW menu does not respond to direct touch on iPhone, **double-tap with three fingers** to reveal the original full virtual gamepad for that menu visit. It sends ordinary buttons and UI right-stick input. Leaving menus restores the normal touch layout; a controller connection or input reset also ends the temporary override. It is not saved. The gesture is reserved while automatic controls are hidden, so ordinary three-finger combat combinations keep working.
+
+The first **Play** in BOTW touch mode on iPhone explains this gesture and asks players to report buttons that do not respond. Acknowledging the notice starts the game and keeps it from appearing again, including after resetting settings. A connected controller skips the notice without marking it acknowledged.
 
 ## Performance
 

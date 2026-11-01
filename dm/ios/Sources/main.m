@@ -12,6 +12,7 @@
 #include "romfs_image.h"
 #include "romfs_identity.h"
 #import "GameFiles.h"
+#import "GraphicsPack.h"
 #include "player_env.h"
 #ifndef DM_PLAYER_BUILD
 #define DM_PLAYER_BUILD 0
@@ -117,6 +118,11 @@ static NSString *romfs_locate(void) {
 static void romfs_identity_report(NSString *doc);
 int front_ios_prepare_game(void) {
     if (g_boot_ok) return 1;
+    NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
+    NSError *graphics_error=nil;
+    if (!dm_graphics_configure([NSURL fileURLWithPath:doc isDirectory:YES],NSBundle.mainBundle.resourceURL,&graphics_error)) {
+        fprintf(stderr,"[RED] boot: %s\n",graphics_error.localizedDescription.UTF8String); return 0;
+    }
     NSString *romfs = romfs_locate();
     if (!romfs) {
         romfs_identity_report(NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0]);
@@ -145,6 +151,14 @@ int front_ios_prepare_game(void) {
 // Why a slim build found no usable game files: the verdict on Documents/romfs.img (the first of romfs_document_images), in the log and for the screen (front_ios_boot_message). NULL when the build has no romfs.id
 static char g_boot_message[640];
 const char *front_ios_boot_message(void) { return g_boot_message[0] ? g_boot_message : NULL; }
+NSString *dm_startup_rom_error(void) {
+    return romfs_locate() ? nil : NSLocalizedString(@"Import RomFS.img to start.",nil);
+}
+NSString *dm_startup_graphics_error(void) {
+    NSString *doc=NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,NSUserDomainMask,YES)[0];
+    return dm_graphics_status([NSURL fileURLWithPath:doc isDirectory:YES],NSBundle.mainBundle.resourceURL);
+}
+BOOL dm_startup_prepare(void) { return front_ios_prepare_game() != 0; }
 static void romfs_identity_report(NSString *doc) {
     romfs_id want, got;
     int rc = romfs_id_check([NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"romfs.id"].fileSystemRepresentation,
@@ -215,7 +229,7 @@ static int boot_env(void) {
     if ([fm fileExistsAtPath:pso]) setenv("DM_PSO_BUNDLE", pso.fileSystemRepresentation, 0);
     chdir(doc.fileSystemRepresentation);
     g_argv[0] = strdup("dmhost"); g_argv[1] = strdup(dm.fileSystemRepresentation); g_argc = 2;
-    return front_ios_prepare_game();   // Preload early when files are ready; otherwise the game-files screen imports or rechecks them.
+    return 0;   // The launcher imports/selects resources and applies settings before starting the preload at Play.
 }
 
 static void *boot_thread(void *p) {
@@ -231,7 +245,6 @@ void front_ios_boot(void) {   // Called by front_ios.m once the window and Metal
     pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 64u << 20);   // the Switch main thread stack is set by npdm; the host gives plenty
     pthread_t t; pthread_create(&t, &a, boot_thread, NULL); pthread_detach(t);
 }
-int front_ios_boot_ok(void) { return g_boot_ok; }
 
 @interface App : UIResponder <UIApplicationDelegate>
 @end

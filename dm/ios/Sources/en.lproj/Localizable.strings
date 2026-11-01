@@ -1,4 +1,8 @@
 // Launcher and BOTW touch settings.
+"Built" = "Built";
+"Touch controls" = "Touch controls";
+"I know I can double-tap with three fingers" = "I know I can double-tap with three fingers";
+"Touch UI cannot cover every game screen. If a button does not respond, double-tap with three fingers to temporarily show the virtual gamepad and continue. Please report the issue to the developer." = "Touch UI cannot cover every game screen. If a button does not respond, double-tap with three fingers to temporarily show the virtual gamepad and continue. Please report the issue to the developer.";
 "30 fps" = "30 fps";
 "60 fps" = "60 fps";
 "Advanced settings" = "Advanced settings";
@@ -137,12 +141,6 @@
 
 "Layout" = "Layout";
 
-"Game files" = "Game files";
-"Import RomFS.img, or copy it to Files > On My iPhone/iPad > %@ and tap Check files." = "Import RomFS.img, or copy it to Files > On My iPhone/iPad > %@ and tap Check files.";
-"Import .img" = "Import .img";
-"Check files" = "Check files";
-"No usable game files found." = "No usable game files found.";
-"No usable game files found. Check the file location and try again." = "No usable game files found. Check the file location and try again.";
 "Importing…" = "Importing…";
 "Choose the original .img file, not an unfinished import." = "Choose the original .img file, not an unfinished import.";
 "This is not a complete RomFS image. Choose the .img created with this app." = "This is not a complete RomFS image. Choose the .img created with this app.";
@@ -158,3 +156,25 @@
 "Allows portrait rotation below 600pt of available width. Wider portrait windows are always supported and keep the normal layout." = "Allows portrait rotation below 600pt of available width. Wider portrait windows are always supported and keep the normal layout.";
 
 "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately." = "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately.";
+"Import ROM" = "Import ROM";
+"Import shaders" = "Import shaders";
+"Import failed" = "Import failed";
+"OK" = "OK";
+"Import RomFS.img to start." = "Import RomFS.img to start.";
+"Import a compatible graphics ZIP to start." = "Import a compatible graphics ZIP to start.";
+"This is not a supported graphics package." = "This is not a supported graphics package.";
+"This app has no graphics package requirements." = "This app has no graphics package requirements.";
+"The graphics compatibility series does not match this app." = "The graphics compatibility series does not match this app.";
+"This app requires graphics package version %@ or later." = "This app requires graphics package version %@ or later.";
+"This graphics package requires iOS %@ or later." = "This graphics package requires iOS %@ or later.";
+"The graphics package manifest is invalid." = "The graphics package manifest is invalid.";
+"The graphics package is too large." = "The graphics package is too large.";
+"The graphics package is incomplete. Import it again." = "The graphics package is incomplete. Import it again.";
+"Not enough free space to import graphics." = "Not enough free space to import graphics.";
+"The graphics ZIP contains an unexpected file." = "The graphics ZIP contains an unexpected file.";
+"A graphics file failed its integrity check." = "A graphics file failed its integrity check.";
+"The graphics ZIP is incomplete." = "The graphics ZIP is incomplete.";
+"Graphics package" = "Graphics package";
+"Metal compiler" = "Metal compiler";
+"This app is missing graphics requirements. Rebuild or reinstall it." = "This app is missing graphics requirements. Rebuild or reinstall it.";
+"The graphics destination must be a regular directory." = "The graphics destination must be a regular directory.";

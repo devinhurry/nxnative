@@ -31,6 +31,7 @@
 # The console shows one line per stage ([k/n] stage, with a bar, done/total, percent, elapsed time and ETA where the work can be counted); the tools' own output goes only to logs/ (PROGRESS / --progress). --progress json writes newline-delimited JSON events to stdout.
 import ast, collections, contextlib, ctypes, errno, getpass, hashlib, importlib.util, json, os, re, shlex, shutil, struct, subprocess, sys, tempfile, threading, time, types
 from pathlib import Path
+import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dm/tools"))
 import romfs as rfs
 import nso   # the code module loader: nso.Error is a damaged module (its file cut short or not what its header says)
@@ -44,6 +45,7 @@ APP_NAME = ''                           # app name on the home screen (empty = t
 BUNDLE_ID = ''                          # the app's bundle ID (empty = saved per-game Xcode ID, else org.nxnative.<base game title ID in lowercase>)
 ROMFS = 'bundle'                        # 'bundle' = game files and DLC go into the app; 'separate' = both stay out (DM_COPY_ROMFS=NO), in one external image reused while its inputs are unchanged.
                                         #   Copy it to the phone once per game version with the scripts/push_romfs.sh command printed at the end (the app checks that the image is the one it was built for)
+GRAPHICS = 'separate'                   # iOS: 'separate' = a stored graphics ZIP imported in the launcher; 'bundle' keeps graphics inside the app.
 PREPARE_XCODE = False                   # prepare a per-game Xcode project and add it to the workspace instead of packing an IPA; requires KEEP_EXTRACTED
 PLATFORM = 'ios'                        # 'ios' = the IPA (or the Xcode project); 'mac-app' = a double-clickable Mac app; 'mac' = development: build only what running the game on this Mac needs (Mac shaders, the Mac host), no iOS shaders,
                                         #   Xcode project or IPA; keeps the extracted files and prints the command that runs the game (needs Apple silicon)
@@ -1908,6 +1910,29 @@ def prune_stale_chains(sh, chain):
     return names
 
 
+def reuse_graphics_package(repo, archive, work, g, build, env):
+    """A UI-only IPA build can use its published graphics without a shader cache or another Metal compiler."""
+    if not archive.is_file(): return None
+    import graphics_pack
+    try:
+        required = graphics_pack.requirements(g.id, build, 'nvn', 'b-' + chain_of(repo), g.dir)
+        directory, manifest = graphics_pack.restore(archive, required, work / 'graphics-cache')
+    except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile) as e:
+        say(f'graphics: UPDATE REQUIRED ({e})')
+        return None
+    for table in ('c1_full.tsv', 'cb_extent.tsv'):
+        source = directory / 'tables' / table
+        if source.is_file():
+            g.dir.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, g.dir / table)
+    env['DM_GRAPHICS_REUSE'] = str(archive)
+    env['DM_GRAPHICS_PSO'] = str(directory / 'pso') if (directory / 'pso').is_dir() else ''
+    PROG.stage('iOS shaders', step='reusing the compatible graphics ZIP')
+    PROG.end(f'graphics v{manifest["version"]}, reused; no Metal compilation')
+    say(f'graphics: REUSE v{manifest["version"]}, series {manifest["series"]}')
+    return directory / 'msl'
+
+
 def build_shaders(py, repo, sh, xlate, env, logs, g, pkg_key=None, mac=False):
     """The iOS shader libraries (dmsh_build.py, which also builds the Mac's into sh/cache when the build wants them), or with mac only the Mac's (a Mac-only build: no IOSOUT). Returns the folder the host takes
     them from. Reused when the shader package (pkg_key, its content; None never reuses) and the chain's tools, translator binaries, profile and compilers are as at the last successful build:
@@ -2304,6 +2329,7 @@ def parse_args(argv):
     ap.add_argument('--bundle-id', help='the app\'s bundle ID (default: saved Xcode ID when preparing again, else org.nxnative.<base game title ID in lowercase>)')
     ap.add_argument('--romfs', choices=('bundle', 'separate'), help='bundle = game files and DLC go into the IPA (default: the ROMFS setting, bundle); separate = both stay outside the IPA and Xcode app in one image, which '
                     'is copied to the phone once per game version with the scripts/push_romfs.sh command printed at the end (the app refuses an image of another version)')
+    ap.add_argument('--graphics', choices=('bundle', 'separate'), help='iOS graphics: separate = a stored ZIP imported from the launcher (default); bundle = include graphics in the app')
     ap.add_argument('--prepare-xcode', action='store_true', help='prepare a per-game Xcode project and add it to the shared workspace instead of packing an IPA (requires keeping extracted files)')
     ap.add_argument('--platform', choices=('ios', 'mac', 'mac-app'), help='ios = the IPA (or the Xcode project); mac = for development: build only what running the game on this Mac needs (the Mac shaders and the Mac host, '
                     'no iOS shaders, Xcode project or IPA), keep the extracted files and print the command that runs the game; mac-app = what mac builds, then a self-contained, double-clickable '
@@ -2423,6 +2449,9 @@ def main(args=None):
     if prepare_xcode and not keep: raise BuildError('--prepare-xcode requires --keep-extracted: Xcode builds from the extracted files')
     if args.xcode_workspace and not prepare_xcode: raise BuildError('--xcode-workspace requires --prepare-xcode')
     romfs_mode = args.romfs or ROMFS
+    graphics_mode = args.graphics or GRAPHICS
+    if graphics_mode not in ('bundle', 'separate'): raise BuildError('GRAPHICS / --graphics must be bundle or separate')
+    if mac and args.graphics: raise BuildError('--graphics is an iOS packaging option')
     if romfs_mode not in ('bundle', 'separate'): raise BuildError(f'ROMFS / --romfs must be bundle or separate: {romfs_mode}')
     if romfs_mode == 'separate' and mac: raise BuildError(f'--romfs separate keeps the game files off the iPhone app: it cannot be combined with --platform {platform}, which runs from the extracted files')
     if romfs_mode == 'separate' and not keep: raise BuildError('--romfs separate requires --keep-extracted: the image must remain available for the one-time transfer to the phone')
@@ -2437,6 +2466,8 @@ def main(args=None):
     want_lang = language_code(lang_in) if lang_in else 'en-US'
     if not want_lang: raise BuildError(f'unknown game language {lang_in!r}; give one of {language_list([c for c, _ in nacp.LANGUAGES])}, by code or by name')
     env = dict(os.environ, PATH=os.pathsep.join(TOOL_PATHS + [os.environ.get('PATH', '/usr/bin:/bin:/usr/sbin:/sbin')]))
+    # Internal handoff values belong to this invocation, never a previous shell.
+    env.pop('DM_GRAPHICS_REUSE', None); env.pop('DM_GRAPHICS_PSO', None)
     env.setdefault('USER', getpass.getuser())   # xcodegen fails without USER (Couldn't find current username)
     configure_dotnet(env)
     env.setdefault('J', str(os.cpu_count() or 8))   # shader_split.py's and dmsh_build.py's workers (their default is 8)
@@ -2549,7 +2580,7 @@ def main(args=None):
     uedec = gfx == 'nvn' and src['ue_decode'][0]   # Unreal Engine shaders, Oodle-compressed in the paks' shader code archives, decoded in the Mac host (decode_ue_shaders)
     if gfx == 'vulkan': say(f'Vulkan game ({src["graphics"][1]}): vk_shaders.py translates the shaders instead of the NVN shader chain')
     if gfx == 'gl': say(f'OpenGL game ({src["graphics"][1]}): gl_shaders.py translates the shaders instead of the NVN shader chain')
-    if gfx == 'nvn': check_metal(py, repo, env)   # before the captures and the shader split, which take minutes
+    if gfx == 'nvn' and mac: check_metal(py, repo, env)   # iOS checks only when it cannot reuse a published graphics package
     for on, k in ((glslc, 'glslc_capture'), (vkcap, 'vk_capture'), (glcap, 'gl_capture'), (uedec, 'ue_decode'), (gfx == 'nvn' and src['oodle_packs'][0], 'oodle_packs'), (gfx == 'nvn' and src['ue_legacy'][0], 'ue_legacy')):
         if on: say(src[k][1])
     PROG.add(glslc + vkcap + glcap + uedec + (gfx == 'nvn'))
@@ -2612,7 +2643,12 @@ def main(args=None):
         derive_dlc = (lambda: derive_shader_tables('the installed DLC shader content differs from the registered tables')) if not own else None
         derive_compute = (lambda: derive_shader_tables('the reader decoded additional compute kernels from this registered build')) if not own else None
         pkey = split_shaders(py, repo, [rfs.source(dirs[v]) for v in sv], [dirs[v] / 'ExeFS/main' for v in sv], sh / 'pkg', env, logs, g, own, oodle, dlc_roms, derive_dlc, derive_compute)
-        ios = build_shaders(py, repo, sh, xlate, env, logs, g, pkey, mac)
+        ios = None
+        if not mac and graphics_mode == 'separate' and not (args.gpu or PSO_GPUS):
+            ios = reuse_graphics_package(repo, out_ipa.with_suffix('.graphics.zip'), work, g, pkg_ver, env)
+        if ios is None:
+            if not mac: check_metal(py, repo, env)
+            ios = build_shaders(py, repo, sh, xlate, env, logs, g, pkey, mac)
     icon = next((d / 'icon.jpg' for d in (game, base) if (d / 'icon.jpg').exists()), None)   # the game icon nx_extract saved from the control data (English, icon.jpg); the packed version's first, then the base game's
     motion = MOTION if args.motion is None else args.motion
     env_file = build_env_file(work, args.env_file or DM_ENV_FILE, motion)
@@ -2643,6 +2679,8 @@ def main(args=None):
     control = game / 'control.nacp'
     if not control.is_file(): control = base / 'control.nacp'
     ipa_env = dict(env, GAME=g.id, W=str(work / 'ipa'), PATCHED=str(patched), ROMFS=str(game_image), VNACP=str(control), MSL_IOS=str(ios), GFXAPI=gfx, FONT_PY=py, DM_DISPLAY_NAME=app_name, DM_BUNDLE_ID=bundle_id, AOC='' if separate else str(aoc or ''), DM_XCODE_DERIVED_DATA=str(work / 'xcode-derived-data'), DM_TEAM_ID=team_id, DM_LANG=lang)
+    ipa_env['DM_COPY_GRAPHICS'] = 'NO' if graphics_mode == 'separate' else 'YES'
+    ipa_env['DM_GRAPHICS_OUT'] = str(out_ipa.with_suffix('.graphics.zip'))
     if prepare_xcode: ipa_env['DM_XCODE_PROJECT_DIR'] = str(project.parent)
     if separate: ipa_env['DM_COPY_ROMFS'] = 'NO'; say('game files and DLC: separate (DM_COPY_ROMFS=NO), left out of the app; the image stays at ' + str(game_image))
     if app_version: ipa_env['DM_APP_VERSION'] = app_version
@@ -2657,9 +2695,11 @@ def main(args=None):
     ipa_env['DM_PSO_GPUS'] = gpus
     if gfx == 'nvn': say(f'pipeline archive: {"none, the device builds the bases on its first start if it takes the Metal 4 path (--gpu g18p builds one)" if gpus == "none" else gpus + " (made on this Mac with metal-tt; --gpu none leaves it out)"}')
     if show_fps: say('frame-rate counter: on (DM_SHOW_FPS=0 in the app\'s Documents/env.txt turns it off)')
+    def graphics_line(line):
+        if line.startswith('graphics:'): say(line)
     if prepare_xcode:
         PROG.stage('prepare Xcode')
-        run(['bash', repo / 'dm/ios/tools/build_ipa.sh', '--prepare-xcode'], logs / 'prepare_xcode.log', env=ipa_env)
+        run(['bash', repo / 'dm/ios/tools/build_ipa.sh', '--prepare-xcode'], logs / 'prepare_xcode.log', env=ipa_env, on_line=graphics_line)
         try: xcode_projects.register_project(workspace, project, app_name, workspace.with_name(workspace.stem + '-derived-data'))
         except ValueError as e: raise BuildError(str(e)) from e
         PROG.end()
@@ -2668,12 +2708,15 @@ def main(args=None):
         say(f'game project: {project}')
         say(f'Xcode derived data: {work / "xcode-derived-data"}')
         if separate: say_push_romfs(game_image, bundle_id)
+        if graphics_mode == 'separate': say('graphics ZIP: ' + ipa_env['DM_GRAPHICS_OUT'] + ' (Import shaders in the launcher)')
         say('choose the game scheme in Xcode, select your Team and iPhone or iPad, then Run (Release)')
         report_profile_status(g, reg, pkg_ver, derived, provisional, 'Xcode project', patched)
         return
     watch = IpaWatch(repo, work / 'ipa', out_ipa)
     PROG.stage('app build', poll=watch.poll, step='starting')   # build_ipa.sh's "pack IPA" line starts the stage "IPA pack"
-    run(['bash', repo / 'dm/ios/tools/build_ipa.sh', out_ipa], logs / 'build_ipa.log', env=ipa_env, on_line=watch.line)
+    def app_line(line):
+        graphics_line(line); watch.line(line)
+    run(['bash', repo / 'dm/ios/tools/build_ipa.sh', out_ipa], logs / 'build_ipa.log', env=ipa_env, on_line=app_line)
     if not out_ipa.is_file(): raise BuildError(f'no IPA at {out_ipa}')
     PROG.end(f'{out_ipa.name}, {amount(out_ipa.stat().st_size, "B")}')
     rmtree(work / 'tmp')
@@ -2681,6 +2724,7 @@ def main(args=None):
         say(f'deleting the extracted game files: {ex}'); rmtree(ex)
     say(f'done: {out_ipa} ({out_ipa.stat().st_size / 2**30:.1f} GB)')
     if separate: say_push_romfs(game_image, bundle_id)
+    if graphics_mode == 'separate': say('graphics ZIP: ' + ipa_env['DM_GRAPHICS_OUT'] + ' (Import shaders in the launcher)')
     report_profile_status(g, reg, pkg_ver, derived, provisional, patched=patched)
 
 

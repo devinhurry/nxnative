@@ -169,6 +169,12 @@ final class LauncherModel: ObservableObject {
     var touchStickChanged: Bool {
         settings.contains { TouchStickResponse.keys.contains($0.env) && !fixed.contains($0.env) && !$0.isDefault(values[$0.env] ?? $0.def) }
     }
+    var needsTouchFallbackNotice: Bool {
+        touchStickResponse != nil && !defaults.bool(forKey: "botw.touchFallbackNoticeAcknowledged")
+    }
+    func acknowledgeTouchFallbackNotice() {
+        defaults.set(true, forKey: "botw.touchFallbackNoticeAcknowledged")
+    }
     var touchStickResponse: TouchStickResponse? {
         touchStickResponse(portrait: false)
     }

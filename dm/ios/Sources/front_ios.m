@@ -19,7 +19,7 @@ void dm_gamepad_reset(void);
 void dm_gamepad_surface_changed(void);
 void dm_gamepad_active(void);
 void front_ios_boot(void);
-int front_ios_boot_ok(void);
+int front_ios_prepare_game(void);
 bool dm_show_launcher(void *view_controller, void (*done)(void));   // Launcher.swift: false = no launcher (no dm/launcher.json, or DM_LAUNCHER=0)
 
 static CAMetalLayer *g_layer;
@@ -109,7 +109,6 @@ UIInterfaceOrientationMask front_ios_orientations(UIWindow *window) {
         UIInterfaceOrientationMaskLandscape | UIInterfaceOrientationMaskPortrait : UIInterfaceOrientationMaskLandscape;
 }
 static void launcher_done(void) { [g_root startGame]; }
-static void game_files_done(void) { [g_root showLauncher]; }
 @implementation DmRootVC
 - (void)loadView { self.view=[[DmPlaySurface alloc] initWithFrame:CGRectZero]; }
 - (void)viewDidLoad {
@@ -121,6 +120,7 @@ static void game_files_done(void) { [g_root showLauncher]; }
 // The game view, the pad and the frame-rate counter are made once the launcher has set the switches they read (DM_SHOW_FPS, DM_METAL_HUD); the host's loading began at app launch (main.m)
 - (void)startGame {
     if (self.game) return;
+    if (!front_ios_prepare_game()) { [self showLauncher]; return; }
     dm_cloud_saves_env();   // DM_SAVE_SYNC from the launcher's Cloud saves pick, before the game's first save mount reads it (CloudSaves.m, save_sync.h)
     front_hud_env();   // before the game view makes its device (an env file's DM_METAL_HUD sets it in main.m already)
     self.surface = [[UIView alloc] initWithFrame:self.view.bounds];
@@ -172,10 +172,6 @@ static void game_files_done(void) { [g_root showLauncher]; }
     [super viewDidAppear:a];
     if (self.launched) return;
     self.launched = YES; g_root = self;
-    if (!front_ios_boot_ok()) {
-        dm_show_game_files((__bridge void *)self, game_files_done);
-        return;
-    }
     [self showLauncher];
 }
 - (void)showLauncher {

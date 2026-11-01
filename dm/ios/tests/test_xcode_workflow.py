@@ -97,6 +97,8 @@ class XcodePipelineTests(unittest.TestCase):
             self.assertEqual(environment['VNACP'], str(extraction / 'control.nacp'))
             self.assertEqual(environment['DM_LANG'], 'ja')
             self.assertEqual(environment['DM_SHOW_FPS'], '0')
+            self.assertEqual(environment['DM_COPY_GRAPHICS'], 'NO')
+            self.assertTrue(environment['DM_GRAPHICS_OUT'].endswith('.graphics.zip'))
             if external_romfs:
                 self.assertEqual(environment['DM_COPY_ROMFS'], 'NO')
                 self.assertEqual(environment['ROMFS'], str(combined))
@@ -178,15 +180,18 @@ for directory in ('romfs', 'aoc', 'dm'):
 (app / 'romfs/stale').write_text('stale game')
 (app / 'aoc/stale').write_text('stale dlc')
 (app / 'DmIOS').write_bytes(b'executable')
+(app / 'msl').mkdir(exist_ok=True); (app / 'msl/stale.metallib').write_bytes(b'stale shader')
+(app / 'pso').mkdir(exist_ok=True); (app / 'pso/stale.mtl4a').write_bytes(b'stale pipeline')
 ''')
             xcode.chmod(0o755)
             environment = dict(os.environ, PATH=str(root / 'bin') + os.pathsep + os.environ['PATH'],
                                GAME='010015100B514000', W=str(root / 'work'), PATCHED=str(patched), ROMFS=str(romfs),
                                MSL_IOS=str(shaders), AOC=str(aoc), GFXAPI='gl', DM_DISPLAY_NAME='Fixture', DM_APP_VERSION='1.2.1',
                                VNACP=str(control), DM_LANG='ja')
-            for excluded in ('1', '0'):
-                with self.subTest(excluded=excluded):
+            for excluded, graphics in (('1', 'YES'), ('0', 'YES'), ('1', 'NO'), ('0', 'NO')):
+                with self.subTest(excluded=excluded, graphics=graphics):
                     environment['DM_COPY_ROMFS'] = 'NO' if excluded == '1' else 'YES'
+                    environment['DM_COPY_GRAPHICS'] = graphics
                     out = root / 'Fixture.ipa'
                     result = subprocess.run(['bash', str(ios / 'tools/build_ipa.sh'), str(out)], env=environment, capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -196,7 +201,16 @@ for directory in ('romfs', 'aoc', 'dm'):
                         language = next(row for row in settings if row['env'] == 'DM_LANG')
                         self.assertEqual(language['default'], 'ja')
                         self.assertEqual([option[0] for option in language['options']], ['en-US', 'ja', 'zh-Hans'])
-                        self.assertIn('Payload/DmIOS.app/msl/gl/gl_shaders.metallib', names)
+                        self.assertEqual('Payload/DmIOS.app/msl/gl/gl_shaders.metallib' in names, graphics == 'YES')
+                        self.assertNotIn('Payload/DmIOS.app/msl/stale.metallib', names)
+                        self.assertNotIn('Payload/DmIOS.app/pso/stale.mtl4a', names)
+                        required = json.loads(archive.read('Payload/DmIOS.app/dm/graphics-required.json'))
+                        self.assertEqual(required['external'], graphics == 'NO')
+                        if graphics == 'NO':
+                            self.assertNotIn('Payload/DmIOS.app/dm/shader_map.tsv', names)
+                            with zipfile.ZipFile(root / 'work/graphics.zip') as package:
+                                self.assertIn('msl/gl/gl_shaders.metallib', package.namelist())
+                                self.assertTrue(all(i.compress_type == zipfile.ZIP_STORED for i in package.infolist()))
                         self.assertEqual('Payload/DmIOS.app/romfs/System/Resource/file' in names, excluded == '0')
                         self.assertEqual('Payload/DmIOS.app/aoc/1/file' in names, excluded == '0')
                         if excluded == '1':

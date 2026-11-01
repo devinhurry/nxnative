@@ -68,6 +68,7 @@ targets:
               - UISceneConfigurationName: Default
                 UISceneDelegateClassName: SceneDelegate
     settings:
+      OTHER_LDFLAGS: "$(inherited) -larchive"
       INFOPLIST_FILE: $(DERIVED_FILE_DIR)/StampedInfo.plist   # The phase's output, processed and signed by Xcode; the Gen/ template stays untouched
       PRODUCT_BUNDLE_IDENTIFIER: ${DM_BUNDLE_ID}
       PRODUCT_NAME: DmIOS

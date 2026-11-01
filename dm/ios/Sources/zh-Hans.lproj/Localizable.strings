@@ -1,4 +1,8 @@
 // Launcher and BOTW touch settings.
+"Built" = "构建时间";
+"Touch controls" = "触控提示";
+"I know I can double-tap with three fingers" = "我知道可以三指双击";
+"Touch UI cannot cover every game screen. If a button does not respond, double-tap with three fingers to temporarily show the virtual gamepad and continue. Please report the issue to the developer." = "触屏 UI 目前难以全面覆盖所有界面。遇到无法点击的按钮时，可以三指双击屏幕，临时显示虚拟按钮继续操作，并请向开发者反馈。";
 "30 fps" = "30 帧/秒";
 "60 fps" = "60 帧/秒";
 "Advanced settings" = "高级设置";
@@ -137,12 +141,6 @@
 
 "Layout" = "布局";
 
-"Game files" = "游戏文件";
-"Import RomFS.img, or copy it to Files > On My iPhone/iPad > %@ and tap Check files." = "导入 RomFS.img，或将它放到“文件 > 我的 iPhone/iPad > %@”中，再点“检查文件”。";
-"Import .img" = "导入 .img";
-"Check files" = "检查文件";
-"No usable game files found." = "未找到可用的游戏文件。";
-"No usable game files found. Check the file location and try again." = "未找到可用的游戏文件，请检查存放位置后重试。";
 "Importing…" = "正在导入…";
 "Choose the original .img file, not an unfinished import." = "请选择原始 .img 文件，而不是未完成的导入文件。";
 "This is not a complete RomFS image. Choose the .img created with this app." = "这不是完整的 RomFS 镜像，请选择与此 App 一起生成的 .img。";
@@ -158,3 +156,25 @@
 "Allows portrait rotation below 600pt of available width. Wider portrait windows are always supported and keep the normal layout." = "允许在可用宽度不足 600pt 时旋转到竖屏。较宽的竖屏窗口始终支持，并沿用普通布局。";
 
 "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately." = "可发送这些紧凑布局参数作为默认值。偏移以整个屏幕为比例，X 为正向右移动，Y 为正向下移动。普通布局设置单独保存。";
+"Import ROM" = "导入 ROM";
+"Import shaders" = "导入着色器";
+"Import failed" = "导入失败";
+"OK" = "好";
+"Import RomFS.img to start." = "请导入 RomFS.img 后开始游戏。";
+"Import a compatible graphics ZIP to start." = "请导入适用于此应用的着色器 ZIP。";
+"This is not a supported graphics package." = "请选择有效的着色器资源 ZIP。";
+"This app has no graphics package requirements." = "此应用未提供图形资源兼容信息。";
+"The graphics compatibility series does not match this app." = "此着色器资源包与当前应用版本不兼容。";
+"This app requires graphics package version %@ or later." = "此应用需要版本 %@ 或更新版本的着色器资源包。";
+"This graphics package requires iOS %@ or later." = "此着色器资源包需要 iOS %@ 或更新系统。";
+"The graphics package manifest is invalid." = "着色器资源包清单无效。";
+"The graphics package is too large." = "着色器资源包过大。";
+"The graphics package is incomplete. Import it again." = "着色器资源包不完整，请重新导入。";
+"Not enough free space to import graphics." = "可用空间不足，无法导入着色器资源包。";
+"The graphics ZIP contains an unexpected file." = "着色器 ZIP 中存在不符合清单的文件。";
+"A graphics file failed its integrity check." = "着色器文件校验失败。";
+"The graphics ZIP is incomplete." = "着色器 ZIP 文件不完整。";
+"Graphics package" = "图形资源包";
+"Metal compiler" = "Metal 编译器";
+"This app is missing graphics requirements. Rebuild or reinstall it." = "此应用缺少图形资源信息，请重新构建或安装。";
+"The graphics destination must be a regular directory." = "图形资源目录无效，请检查 graphics 文件夹。";
