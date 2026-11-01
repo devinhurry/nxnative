@@ -59,6 +59,8 @@
 "Metal 4 pipelines" = "Metal 4 渲染管线";
 "Performance" = "性能";
 "Experimental low-memory mode" = "实验性低内存模式";
+"Skip feedback snapshots (experimental)" = "实验性关闭反馈快照";
+"May reduce GPU copies but can cause rendering errors. Applies when you press Play." = "可能减少图像复制，但也可能导致画面错误。点击“开始游戏”后生效。";
 "Low-memory mode is enabled to help keep the game running. Performance may be affected." = "为帮助游戏持续运行，已启用低内存模式。部分性能可能受到影响。";
 "May reduce memory use at the cost of more storage activity and pauses in new scenes. Applies when you press Play." = "尝试降低内存占用，但会增加存储读写，新场景可能短暂停顿。点击“开始游戏”后生效。";
 "Performance HUD" = "性能信息";

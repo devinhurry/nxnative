@@ -14,7 +14,7 @@ version when available. See [graphics packages](graphics-pack.md).
 - [Game](#game): [Frame rate](#frame-rate), [Render scale](#render-scale), [Console mode](#console-mode), [Upscaling](#upscaling), [Game language](#game-language), [Frame-rate counter](#frame-rate-counter)
 - [Controls](#controls): [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff)
 - [Touch left stick](#touch-left-stick): BOTW movement deadzone, response curve, full movement and size
-- [Performance](#performance): [Experimental low-memory mode](#experimental-low-memory-mode), [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
+- [Performance](#performance): [Experimental low-memory mode](#experimental-low-memory-mode), [Skip feedback snapshots (experimental)](#skip-feedback-snapshots-experimental), [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
 - [The Mac settings window](#the-mac-settings-window): [Display mode](#display-mode)
 - [TV](#tv)
 - [Settings in a file](#settings-in-a-file)
@@ -131,6 +131,14 @@ The preset disables whole-game pipeline prebuild and the bundled pipeline archiv
 With the switch off, the original heap, GPU pool handling and pipeline/cache settings remain in use. Older experiment environment flags cannot enable the memory changes on their own.
 
 Mac measurements showed a reduction, but the iPhone result remains unverified. [Preset details, log checks and measurement limits](experiments/file-backed-memory.md#enable-from-the-game-overlay).
+
+### Skip feedback snapshots (experimental)
+
+NVN games only, off by default on iPhone and Mac. Turning this experiment on skips the copies that protect a draw reading a colour attachment it also writes. It may reduce GPU work, but can produce incorrect colours, blocks or other rendering errors. It does not provide replacement protection. Frame-rate and thermal improvements on iPhone have not been established.
+
+The choice is saved when you press **Play** and applies to that game run. To compare it with normal rendering, fully close the app, reopen it, change the switch and load the same scene. Turning it off, or using **Reset to tested defaults** followed by **Play**, restores automatic feedback snapshots. An explicit `env.txt` or launch-environment override takes priority: `DM_NVN_FB_SNAP=0` skips snapshots, `1` restores automatic snapshots, and the existing diagnostic value `all` still requests a fresh snapshot for each sampling draw.
+
+This setting controls [same-pass feedback snapshots](reference/rendering.md#same-pass-feedback-read-through-a-snapshot). **Frame buffering** below controls the separate copies used to display finished frames.
 
 ### Frame buffering
 
@@ -282,6 +290,7 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Rumble cutoff | `DM_RUMBLE_MIN` | `0` to `0.9` |
 | Upscaling | `DM_PRESENT_UPSCALE` | `off`, `scene` (verified profiles), `metalfx` |
 | Experimental low-memory mode (BOTW) | `DM_LOW_MEMORY` | `1`, `0` |
+| Skip feedback snapshots (experimental) | `DM_NVN_FB_SNAP` | `0` skips (switch on), `1` automatic (switch off, default) |
 | Frame buffering | `DM_PRESENT_SNAP` | `1`, `0` |
 | Metal 4 pipelines | `DM_PSO_MTL4` | `1`, `0` |
 | Pipeline prebuild | `DM_PSO_PREBUILD` | `1`, `0` |
