@@ -157,6 +157,43 @@ static void barrier_case(NvProg *pr, int mode) {
     pixels(result, 0, mode == 1 || mode == 3 ? (const uint8_t[]){0, 255, 0, 255} : (const uint8_t[]){255, 0, 0, 255}, "barrier snapshot contains the literal current color");
     mtl_tex_release(&source);
 }
+// A later format view must preserve the frozen snapshot, even after the
+// attachment itself changed. Swizzling alone must not disable compression.
+static void view_case(NvProg *pr, id<MTLRenderPipelineState> pipeline) {
+    tex_t source, output; target(&source, 99880); id<MTLTexture> destination = target(&output, 99881);
+    int tid = 710; mtl_reg_tex(tid, &source, NULL);
+    NvShader *fs = pr->sh[1]; fs->rf.b[0].reg = 0;
+    id<MTLBuffer> result = [g_dev newBufferWithLength:3072 options:MTLResourceStorageModeShared]; res_add(result);
+    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin();
+    R.has_rt = 1; R.rt.n = 1; R.rt.color[0] = &source; S.tex[1][0] = tid;
+    clear(MTLClearColorMake(1, 0, 0, 1)); fb_prepare(pr);
+    CHECK(g_fb_n == 1, "view fixture has a production snapshot");
+    CHECK(!!(g_fb_use[0].usage & MTLTextureUsagePixelFormatView) == !pass_reuse_on(), "ordinary snapshot only requests shader-read usage");
+    id<MTLTexture> srgb = [g_fb_use[0] newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
+    CHECK(srgb != nil, "linear/sRGB view works without general format-view usage");
+    clear(MTLClearColorMake(0, 1, 0, 1)); rp_end();
+    view_t swizzle = {.set_swizzle=1, .swz={NVN_SWZ_B, NVN_SWZ_G, NVN_SWZ_R, NVN_SWZ_A}};
+    mtl_reg_tex(tid + 1, &source, &swizzle); S.tex[1][0] = tid + 1;
+    fb_prepare(pr);
+    CHECK(!!(g_fb_use[0].usage & MTLTextureUsagePixelFormatView) == !pass_reuse_on(), "swizzled snapshot keeps minimal usage");
+    R.rt.color[0] = &output; sample(fs, pipeline); readback(destination, result, 0);
+    uint64_t copies = g_fb_count;
+    view_t reinterpret = {.set_format=1, .format=NVN_FORMAT_RGBA8UI};
+    mtl_reg_tex(tid + 2, &source, &reinterpret); R.rt.color[0] = &source; S.tex[1][0] = tid + 2;
+    fb_prepare(pr);
+    id<MTLTexture> integer = g_fb_n == 1 ? g_fb_use[0] : nil;
+    CHECK(integer && (integer.usage & MTLTextureUsagePixelFormatView), "required reinterpretation upgrades the cached snapshot");
+    CHECK(g_fb_count == copies + (pass_reuse_on() ? 1 : 0), "format-view usage upgrade is one copy, not a source refresh");
+    CHECK(integer.pixelFormat == MTLPixelFormatRGBA8Uint, "integer format view is supported after upgrade"); readback(integer, result, 1024);
+    g_fb_bar++; R.rt.color[0] = &source; S.tex[1][0] = tid;
+    fb_prepare(pr); readback(g_fb_use[0], result, 2048);
+    CHECK(mtl_wait(mtl_sub_commit(), 5000000000ull), "format-view GPU submission completes");
+    CHECK(!mtl_last_commit_error(), "format-view fixture has no GPU error");
+    pixels(result, 0, (const uint8_t[]){0, 0, 255, 255}, "swizzled shader reads the old red snapshot as blue");
+    pixels(result, 1024, (const uint8_t[]){255, 0, 0, 255}, "usage upgrade preserves red rather than recopying the green attachment");
+    pixels(result, 2048, (const uint8_t[]){0, 255, 0, 255}, "a real barrier refreshes to the green source");
+    mtl_tex_release(&source); mtl_tex_release(&output);
+}
 int main(void) { @autoreleasepool {
     setenv("DM_NVN_TBDR", "0", 1);
     mtl_init(); NSError *error = nil;
@@ -187,6 +224,7 @@ int main(void) { @autoreleasepool {
     barrier_writer->sh[1]->fn = [lib newFunctionWithName:@"green"]; barrier_writer->sh[1]->stage = 1;
     barrier_writer->sh[1]->rf.color_known = 1; barrier_writer->sh[1]->rf.color_mask = 1;
     for (int mode = 0; mode < 4; mode++) barrier_case(pr, mode);
+    view_case(pr, pipeline);
     printf("feedback snapshot: %d checks, %d failed\n", checks, failed);
     return failed != 0;
 } }

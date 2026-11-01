@@ -684,7 +684,7 @@ remains pending.
 
 ### Render-pass cost audit (2026-11-01)
 
-Current: iPhone Air, `eb3bc99ccd83`, frame generation and upscaling off,
+Device baseline (`log2.txt`): iPhone Air, `eb3bc99ccd83`, frame generation and upscaling off,
 handheld with fixed scale 0.8. The actual feedback source is 1024x576. At
 about 54 s the frame step starts dropping from 60; at 60 s thermal state 2
 explicitly caps it at 30. The same 2,773 draws take GPU p50 8.87 ms before
@@ -744,6 +744,93 @@ The general fixes and GPU proofs are described in
 Artifacts, source-save digests, iPhone logs, captures and policy comparisons
 stay in `01007EF00011E000-work/render-pass-audit-20261101/`. The source saves
 are unchanged; physical iPhone acceptance remains pending.
+
+Follow-up (`log3.txt`, 2026-11-01): the phone runs `1983d2d3cc44` with chain
+`715bb867230c`, handheld, native starting scale 1.0, dynamic resolution on,
+frame buffering and the encoding thread on. This differs from the baseline's
+fixed 0.8 scale, so the thermal onset times are not an A/B performance result.
+Thermal state becomes fair at 54 s and serious at 69 s; present 2,736 logs
+the explicit 60-to-30 cap. At frame 2,700, before that cap, GPU p50 is already
+13.72 ms, versus 9.02 ms at frame 1,800. Pipeline and library compilation
+are zero in these steady windows. Later snapshots include 1024x576 sources.
+
+The new counters isolate the high-copy path: the 300-frame window ending at
+frame 1,800 makes 27,637 snapshots (92.12/frame), representing 323.87 MiB/frame
+of texture-copy payload; 26,154 refresh because of barriers (94.63%), 1,483
+because of submission boundaries, and none because of cache misses, shape
+changes or forced-copy mode. These are logical texture bytes, not measured
+DRAM traffic. The first optimization has not resolved sustained phone FPS;
+increasing cache capacity would not address this window's cause.
+
+A current-source Mac portrait run at native starting scale with the same
+dynamic-resolution setting still has six copies in its captured frame,
+despite 135 barriers with bits 0x12. Thus barrier counts alone do not prove
+redundant copying: the writes and sampling between barriers must be traced
+on the phone. Collect one steady gameplay frame using
+`DM_NVN_PASSDUMP=1500` and `DM_NVN_PASSDUMP_ALL=1` in Documents/env.txt. Its
+attachment serials, channel masks, shader keys and cache epochs distinguish
+real feedback dependencies from invalidation caused by unrelated work.
+No further snapshot-invalidation change is accepted from the summary
+counters alone. The follow-up logs and capture stay in
+`01007EF00011E000-work/feedback-barrier-audit-20261101/`.
+
+Further device evidence (`log4.txt`, same build): before the cap, frames
+900-3,300 consistently make 11 snapshots/frame, falling from 38.67 to
+24.75 MiB/frame as source sizes decrease. Frame 3,300 still presents at
+60 fps with GPU p50 13.59 ms; thermal serious then caps present 3,402 to
+30 fps. High snapshot frequency is therefore not a necessary condition
+for this thermal slowdown, although the separate log3 cost remains open.
+This launch starts already serious, cools to nominal at 117 s, and logs
+frame 5 at 176.84 s; the cap at app age 247 s is about 70 s into frame-loop
+execution, not a 247 s cold-gameplay result. There are no pass-dump lines
+or environment-load confirmations in log4, so it is not the requested
+per-draw trace. Environment files are read once by `boot_env` before the
+launcher; a successful load prints `boot: env DM_NVN_PASSDUMP=1500 (env.txt)`
+and the corresponding `_ALL=1` line. A build with the optional
+`DM_PLAYER_BUILD=1` ignores these diagnostic keys. Confirm startup loading
+before another gameplay trace; summary counters alone cannot identify
+redundant barriers or attribute all heat to feedback copies.
+
+Device draw trace (`log5.txt`, same build): both environment settings load,
+and frame 1,500 contains 93 snapshot copies. Two 1280x720 attachments account
+for 44 copies each: serial 71,976, RGBA8 sRGB (color 1), and serial 71,978,
+RGBA8 (color 3). Passes 129,075-129,116 alone copy this pair 42 times (84
+copies); later terrain/VFX draws add four copies of the same pair. The
+draw groups write these attachments (channel mask `0xf0f0ff`, fragment
+outputs 0, 1 and 3) before barriers `0x12` and subsequent reads. These
+are real intervening writes, not evidence of unrelated-barrier invalidation.
+Ignoring these barriers or retaining the frame's initial snapshot would
+read an older version. The steady windows show 93 copies and 326.95 MiB of
+logical payload per frame; this is not measured physical memory traffic.
+The 102,466-line single-frame dump adds substantial diagnostic work, so its
+thermal onset is not an A/B benchmark. Remove both dump settings after use.
+
+The dominant pair uses its original formats, but every snapshot allocation
+formerly requested `MTLTextureUsagePixelFormatView`. The host now requests
+that capability only for actual format reinterpretation, preserving
+lossless-compression eligibility on supported Apple GPUs. A later required
+format view upgrades the cached snapshot by copying its retained version,
+not the newer source attachment. This is a general allocator change, not
+a shader exception, barrier relaxation or reduction in required copy count.
+See [Feedback snapshot usage preserves compression eligibility](../../../docs/reference/rendering.md#feedback-snapshot-usage-preserves-compression-eligibility).
+It does not establish a compression ratio or resolve device thermal limits.
+
+Current validation: the complete graphics `make run` passes all 88 targets
+and the pull/budget checks. Feedback readback passes 123 checks in each of five
+configurations, including integer-view upgrades after source writes;
+geometry feedback passes 110, geometry hazards 22 in each of three modes,
+and texture-view swizzles 379. The iOS source compile passes 190 files.
+A current-checkout `run_mac.py --test --touch-preview` route renders world,
+inventory, world, map and world with no `[RED]` lines; ordinary snapshots
+report usage `0x1` (shader read). Both source-save copies retain all 14 file
+digests. This is Mac coverage, not physical-iPhone acceptance.
+Three retained captures in both encoding modes, four replays each, match
+the archived `1983d2d3` candidate's 24 image digests, draw counts and warm
+pass counts. Capture/live mismatch still predates this change; paired
+replay equality does not resolve it. The five-game regression selection
+is BOTW, Odyssey, Wonder, Origami King and NieR, covering known feedback
+users; the latter four have no prepared local Mac builds, so the selection
+cannot execute. Device bandwidth, temperature and sustained FPS remain open.
 
 ## Rendering
 
@@ -1170,6 +1257,8 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 - The frame step under load: `DM_TEST_PRESENT_LAG=1,12` (12 ms added to every frame: 30 fps at 1.000 of real time).
 
 ## Found on this game
+
+- **Implemented; physical iPhone acceptance pending:** [Feedback snapshot usage preserves compression eligibility](../../../docs/reference/rendering.md#feedback-snapshot-usage-preserves-compression-eligibility). Same-format snapshots no longer request arbitrary format reinterpretation; required reinterpretations preserve the cached version when upgrading their allocation.
 
 - **Implemented; physical iPhone acceptance pending:** [Separate game images include installed DLC](../../../docs/reference/packing.md#separate-game-images-include-installed-dlc). `--romfs separate` now keeps both installed DLCs in the same directly readable image as the base/update, outside the IPA and Xcode app. Unchanged data reuses that image.
   Existing `Documents/game-data` imports remain usable without an image. Missing data opens an import/check screen before the launcher; see the same packing entry for directory selection and failure-preserving import behavior.

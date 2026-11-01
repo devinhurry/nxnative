@@ -9013,7 +9013,7 @@ void ms_after(void) {
 // a fresh snapshot for each took the Mac's GPU time from about 4 to 28 ms a frame, reuse until a barrier needs about ten a frame (GPU time within the noise of none).
 // DM_NVN_FB_SNAP=0 none, all a fresh snapshot for every draw sampling an attachment of its pass (diagnostic)
 static int g_fb_mode = -1;   // 0 none, 1 writers with reuse until a barrier, 2 every sampling draw, fresh
-static uint64_t g_fb_bar, g_fb_reuse, g_fb_split, g_fb_bytes, g_fb_refresh[5];   // refresh: first/evicted, barrier, submission, shape, forced
+static uint64_t g_fb_bar, g_fb_reuse, g_fb_split, g_fb_bytes, g_fb_refresh[5];   // refresh: first/evicted, barrier, submission, shape/usage, forced
 static uint64_t g_fb_pass = UINT64_MAX; static uint32_t g_fb_wmask, g_fb_rmask;   // the current Metal render pass: color attachments written so far, sampled directly
 typedef struct { uint64_t ser, bar, sub; int lv, sl; __strong id<MTLTexture> snap; } fb_cache_t;
 static fb_cache_t g_fbc[8]; static int g_fbc_next;
@@ -9024,21 +9024,39 @@ static int fb_mode(void) {
 }
 static inline void fb_pass_sync(void) { uint64_t p = g_stat_pass + !g_enc; if (p != g_fb_pass) { g_fb_pass = p; g_fb_wmask = g_fb_rmask = 0; } }
 // The snapshot of an attachment's level and layer: the cached one (valid: *fresh = 0) or a texture to copy into (*fresh = 1; the entry is then valid from this barrier and submission on)
-static fb_cache_t *fb_snap(uint64_t ser, int lv, int sl, MTLPixelFormat pf, NSUInteger w, NSUInteger h, int force, int *fresh) {
+static id<MTLTexture> fb_texture(MTLPixelFormat pf, NSUInteger w, NSUInteger h, int need_pfv) {
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:w height:h mipmapped:NO];
+    // PixelFormatView disables lossless compression on Apple GPUs. Ordinary
+    // reads, channel swizzles and linear/sRGB view pairs do not need it.
+    d.usage = MTLTextureUsageShaderRead | (need_pfv ? MTLTextureUsagePixelFormatView : 0); d.storageMode = MTLStorageModePrivate;
+    id<MTLTexture> t = [g_dev newTextureWithDescriptor:d]; if (t) res_add(t); return t;
+}
+static fb_cache_t *fb_snap(uint64_t ser, int lv, int sl, MTLPixelFormat pf, NSUInteger w, NSUInteger h, int need_pfv, int force, int *fresh) {
     fb_cache_t *e = NULL;
     for (int i = 0; i < 8 && !e; i++) if (g_fbc[i].snap && g_fbc[i].ser == ser && g_fbc[i].lv == lv && g_fbc[i].sl == sl) e = &g_fbc[i];
     int matched = e != NULL;
     uint64_t old_bar = e ? e->bar : 0, old_sub = e ? e->sub : 0;
     int shape = e && (e->snap.pixelFormat != pf || e->snap.width != w || e->snap.height != h);
     if (e && (e->snap.pixelFormat != pf || e->snap.width != w || e->snap.height != h)) { defer_obj_release(e->snap); e->snap = nil; }
-    if (e && e->snap && !force && e->bar == g_fb_bar && e->sub == g_sub_serial) { *fresh = 0; return e; }
+    if (e && e->snap && !force && e->bar == g_fb_bar && e->sub == g_sub_serial) {
+        if (need_pfv && !(e->snap.usage & MTLTextureUsagePixelFormatView)) {
+            id<MTLTexture> old = e->snap, t = fb_texture(pf, w, h, 1);
+            if (!t) MDIE("feedback snapshot format-view upgrade allocation failed");
+            // Keep the cached version: later draws since the barrier may have
+            // changed the attachment, so copying that source again is wrong.
+            if (g_enc) rp_end();
+            enc_b_copy_texture(blit(), old, 0, 0, MTLOriginMake(0, 0, 0), MTLSizeMake(w, h, 1), t, 0, 0, MTLOriginMake(0, 0, 0));
+            e->snap = t; defer_obj_release(old); g_fb_count++; g_fb_bytes += att_bytes(t, 0); g_fb_refresh[3]++;
+            PD("F feedback format-view upgrade ser=%llu preserves the cached snapshot", (unsigned long long)ser);
+        }
+        *fresh = 0; return e;
+    }
     PD("F feedback refresh ser=%llu lv%d sl%d matched=%d force=%d barrier=%llu->%llu submission=%llu->%llu", (unsigned long long)ser, lv, sl, matched, force,
        (unsigned long long)old_bar, (unsigned long long)g_fb_bar, (unsigned long long)old_sub, (unsigned long long)g_sub_serial);
     if (!e) { e = &g_fbc[g_fbc_next]; g_fbc_next = (g_fbc_next + 1) & 7;
         if (e->snap && (e->snap.pixelFormat != pf || e->snap.width != w || e->snap.height != h)) { defer_obj_release(e->snap); e->snap = nil; } }
-    if (!e->snap) { MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:w height:h mipmapped:NO];
-        d.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView; d.storageMode = MTLStorageModePrivate;
-        e->snap = [g_dev newTextureWithDescriptor:d]; if (!e->snap) { e->ser = 0; return NULL; } res_add(e->snap); }   // full queue barriers separate a copy from the draws that read the earlier content
+    if (e->snap && need_pfv && !(e->snap.usage & MTLTextureUsagePixelFormatView)) { defer_obj_release(e->snap); e->snap = nil; }
+    if (!e->snap) { e->snap = fb_texture(pf, w, h, need_pfv); if (!e->snap) { e->ser = 0; return NULL; } }   // full queue barriers separate a copy from the draws that read the earlier content
     e->ser = ser; e->lv = lv; e->sl = sl; e->bar = g_fb_bar; e->sub = g_sub_serial;
     g_fb_refresh[force ? 4 : shape ? 3 : !matched ? 0 : old_sub != g_sub_serial ? 2 : 1]++;
     *fresh = 1; return e;
@@ -9081,7 +9099,8 @@ static void fb_prepare(NvProg *pr) {
                 RED_ONCE(80, "same-pass feedback sampling: the sampled view is not a single-level 2D view of the attachment's level and layer (type %lu levels %lu+%lu layer %lu, attachment level %d layer %d, shader %s); left as is", (unsigned long)t.textureType, (unsigned long)tl, (unsigned long)t.mipmapLevelCount, (unsigned long)ts, lv, sl, fs->key);
                 continue; }
             NSUInteger w = MAX(base.width >> lv, 1ul), h = MAX(base.height >> lv, 1ul); int fresh;
-            fb_cache_t *e = fb_snap(ser, lv, sl, base.pixelFormat, w, h, g_fb_mode == 2, &fresh); if (!e) continue;
+            int need_pfv = !pass_reuse_on() || tex_need_pfv(base.pixelFormat, t.pixelFormat);
+            fb_cache_t *e = fb_snap(ser, lv, sl, base.pixelFormat, w, h, need_pfv, g_fb_mode == 2, &fresh); if (!e) continue;
             id<MTLTexture> snap = e->snap;
             if (fresh) {
                 if (g_enc) rp_end();
@@ -9098,8 +9117,8 @@ static void fb_prepare(NvProg *pr) {
             if (!fresh) { g_fb_reuse++; PD("N %llu same-pass feedback sampling: attachment %d ser=%llu level %d layer %d: this draw samples the snapshot taken since the last barrier", g_stat_pass + !g_enc, k, (unsigned long long)ser, lv, sl); continue; }
             g_fb_count++;
             if (g_fb_count == 1 || g_fb_count == 10 || g_fb_count == 1000 || g_fb_count % 100000 == 0)
-                MLOG("same-pass feedback sampling: snapshot #%llu, %llu draws reused one, %llu passes ended before a write to an attachment read directly (frame %llu pass %llu, shader %s slot %d samples attachment %d ser=%llu %lux%lu format %lu)", (unsigned long long)g_fb_count, (unsigned long long)g_fb_reuse, (unsigned long long)g_fb_split,
-                     (unsigned long long)atomic_load(&g_cur_frame), g_stat_pass + !g_enc, fs->key, b->reg, k, (unsigned long long)ser, (unsigned long)w, (unsigned long)h, (unsigned long)base.pixelFormat);
+                MLOG("same-pass feedback sampling: snapshot #%llu, %llu draws reused one, %llu passes ended before a write to an attachment read directly (frame %llu pass %llu, shader %s slot %d samples attachment %d ser=%llu %lux%lu format %lu, snapshot usage %#lx)", (unsigned long long)g_fb_count, (unsigned long long)g_fb_reuse, (unsigned long long)g_fb_split,
+                     (unsigned long long)atomic_load(&g_cur_frame), g_stat_pass + !g_enc, fs->key, b->reg, k, (unsigned long long)ser, (unsigned long)w, (unsigned long)h, (unsigned long)base.pixelFormat, (unsigned long)snap.usage);
             PD("N %llu same-pass feedback sampling: attachment %d ser=%llu level %d layer %d copied into a snapshot; this draw samples the snapshot", g_stat_pass + !g_enc, k, (unsigned long long)ser, lv, sl);
         } }
     g_fb_wmask |= wm;

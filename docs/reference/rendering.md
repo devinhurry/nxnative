@@ -447,6 +447,14 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Found on:** [Super Smash Bros. Ultimate](../../dm/games/01006A800016E000/README.md) (13.0.5, `DM_WINDOW=1`).
 - **Check:** Breath of the Wild windowed with the change: its title, 60 fps, no GPU error.
 
+### Feedback snapshot usage preserves compression eligibility
+
+- **Symptom:** frequent same-pass feedback copies use shader-read snapshots with `MTLTextureUsagePixelFormatView`, even when every sampled view has the source pixel format.
+- **Cause:** `fb_snap` requested arbitrary pixel-format views for every allocation. [Apple documents](https://developer.apple.com/documentation/metal/mtltextureusage/pixelformatview) that this usage disables lossless texture compression on Apple GPU family 5 and later. Ordinary reads, channel swizzles and linear/sRGB view pairs do not require it.
+- **Fix:** allocate shader-read-only snapshots unless `tex_need_pfv` finds an actual format reinterpretation. If a valid cached snapshot later needs that capability, copy the cached version into a capable allocation, rather than recopying the attachment: intervening draws may already have changed the source. Preserve barrier/submission invalidation and all required feedback copies. Usage upgrades count as copies and in the refresh counter's `shape` category. `DM_NVN_PASS_REUSE=0` retains the former allocation policy; compare allocation policies in fresh processes because cached allocations retain their capabilities.
+- **Check:** `check_t_feedback` tests production binding, swizzled shader readback, linear/sRGB views, an integer reinterpretation after the source changed, and refresh after a real barrier. The upgraded snapshot must retain red while the current attachment is green. Lossless-compression eligibility is restored; actual bandwidth, temperature and sustained device FPS require device measurements.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#render-pass-cost-audit-2026-11-01), iPhone Air, 88 of 93 copies in one frame refresh two same-format G-buffer attachments.
+
 ### A present snapshot's copy needs the same residency commit
 
 - **Symptom:** with present snapshots on (`DM_PRESENT_SNAP`, the iOS launcher's **Frame buffering**), a frozen, corrupted picture from the first presents; the first error is already `kIOGPUCommandBufferCallbackErrorSubmissionsIgnored` ("Ignored (for causing prior/excessive GPU errors)") on the display command buffer, then on every upload, segment and submission command buffer, and `[RED] present snapshots: the previous copy into a ring slot did not finish within 2 s`. With snapshots off the same game runs.
