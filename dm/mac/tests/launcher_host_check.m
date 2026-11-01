@@ -237,6 +237,11 @@ int main(void) { @autoreleasepool {
                     NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
                     check(hasAXLabel(sheet, @"60 fps", NSAccessibilityRadioButtonRole, nodes, 0),
                           "frame rate offers 30 and 60 as segments");
+                    nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
+                    BOOL interpolationSwitch = hasAXLabel(sheet, @"Frame generation", NSAccessibilityCheckBoxRole, nodes, 0);
+                    if (!interpolationSwitch) dumpHierarchy(sheet);
+                    check(interpolationSwitch,
+                          "interpolation is a separate switch beside frame rate");
                 waitForControlsSection(sheet, "startup Controls navigation responds", ^{
                     {
                         NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];

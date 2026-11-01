@@ -15,7 +15,7 @@ settings = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(settings)
 
 BOTW, WONDER = '01007EF00011E000', '010015100B514000'
-PERFORMANCE_NVN = ['DM_NVN_FB_SNAP', 'DM_PRESENT_SNAP', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_NVN_ENC_THREAD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
+PERFORMANCE_NVN = ['DM_NVN_PASS_REUSE', 'DM_NVN_FB_SNAP', 'DM_PRESENT_SNAP', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_NVN_ENC_THREAD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
 
 
 def build(gid, api, platform=None, fixups=''):
@@ -76,6 +76,18 @@ class LauncherSettingsTests(unittest.TestCase):
                 self.assertEqual((row['on'], row['off'], row['default']), ('0', '1', '1'))
             for api in ('vulkan', 'gl', ''):
                 self.assertNotIn('DM_NVN_FB_SNAP', build(BOTW, api, platform))
+
+    def test_memory_transfers_default_on_independently_of_snapshot_bypass(self):
+        for platform in ('ios', 'mac'):
+            for gid in (BOTW, WONDER):
+                rows = build(gid, 'nvn', platform)
+                row = rows['DM_NVN_PASS_REUSE']
+                self.assertEqual((row['kind'], row['section'], row['label']), ('toggle', 'Performance', 'Memory transfer optimization'))
+                self.assertEqual((row['on'], row['off'], row['default']), ('1', '0', '1'))
+                self.assertFalse(row.get('needs'))
+                self.assertFalse(rows['DM_NVN_FB_SNAP'].get('needs'))
+            for api in ('vulkan', 'gl', ''):
+                self.assertNotIn('DM_NVN_PASS_REUSE', build(BOTW, api, platform))
 
     def test_sections_keep_the_profile_defaults(self):
         botw, wonder = build(BOTW, 'nvn'), build(WONDER, 'nvn')
@@ -182,7 +194,7 @@ class LauncherSettingsTests(unittest.TestCase):
             listed = settings.build(BOTW, tmp, Path(tmp) / 'control.nacp')
         rows = {s['env']: s for s in listed['settings']}
         self.assertEqual(listed['schema'], 1)
-        self.assertEqual([e for e, s in rows.items() if s.get('level') == 'basic'], ['DM_FPS_TARGET', 'DM_RENDER_SCALE', 'DM_OPMODE', 'DM_LANG', 'DM_RUMBLE'])
+        self.assertEqual([e for e, s in rows.items() if s.get('level') == 'basic'], ['DM_FPS_TARGET', 'DM_FRAMEGEN', 'DM_RENDER_SCALE', 'DM_OPMODE', 'DM_LANG', 'DM_RUMBLE'])
         self.assertEqual(rows['DM_RUMBLE_GAIN']['needs'], 'DM_RUMBLE=1')
         self.assertFalse({'level', 'needs'} & set(rows['DM_METAL_HUD']), 'a row without meta has no optional fields')
 

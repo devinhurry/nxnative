@@ -19,6 +19,10 @@
 #endif
 #include "nvn_mtl.h"
 #include "nvn_obj.h"
+#include "framegen.h"
+static void framegen_note_pass(MTL4RenderPassDescriptor *pd);
+static int framegen_present_active(void);
+static int framegen_ui_canvas(void);
 #include "../tex/nvn_fmt_mtl.h"
 #include "../tex/nvn_deswizzle.h"
 #include "../tex/nvn_deswizzle_gpu.h"
@@ -120,6 +124,8 @@ static int g_no_bc;
 static dispatch_queue_t g_bc_retire_q;
 static int bc_unpacked(uint32_t f, uint32_t *pf), bc_block(id<MTLTexture> t);
 static void bc_register(id<MTLTexture> t, uint32_t format);
+static int bc_sampled_format(const tex_t *t, uint32_t *pf), bc_transcoded_format(MTLPixelFormat f);
+static MTLPixelFormat bc_transcode_format(uint32_t f);
 static int bc_copy_to(id e, id<MTLBuffer> s, NSUInteger so, NSUInteger row, NSUInteger img, MTLSize z, id<MTLTexture> d, NSUInteger sl, NSUInteger lv, MTLOrigin o);
 static int bc_copy_from(id e, id<MTLTexture> s, NSUInteger sl, NSUInteger lv, MTLOrigin o, MTLSize z, id<MTLBuffer> d, NSUInteger off, NSUInteger row, NSUInteger img);
 static int bc_copy_texture(id e, id<MTLTexture> s, NSUInteger sl, NSUInteger lv, MTLOrigin so, MTLSize z, id<MTLTexture> d, NSUInteger dl, NSUInteger dv, MTLOrigin to);
@@ -155,7 +161,9 @@ static int g_cut_copy;                          // a buffer → texture copy was
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_cv = PTHREAD_COND_INITIALIZER;
 static _Atomic uint64_t g_done;                 // GPU complete and all CPU-visible effects through this fence published
-static uint64_t g_arena_made;
+static uint64_t g_arena_made, g_arena_epoch;
+static uint64_t g_driver_hit, g_driver_miss, g_driver_check;
+static int g_driver_cache_on = -1, g_driver_cache_check = -1;
 static int g_allocprof = -1; static uint64_t g_ap_bytes[64], g_ap_fn[8];
 // Diagnostic only: inclusive wall/CPU time on the replay thread. No GPU waits
 // are added, and no clocks are read when DM_NVN_CPUPROF is absent or zero.
@@ -1934,6 +1942,7 @@ static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
     uint32_t pf = 0; uint8_t swz[4];
     if (!nvn_fmt_to_mtl(t->d.format, &pf, swz) || !pf) { RED_ONCE(0, "texture format %#x has no Metal equivalent (first case)", t->d.format); return nil; }
     int unpacked = bc_unpacked(t->d.format, &pf);
+    int transcoded = unpacked && packaged && bc_sampled_format(t, &pf);
     // Metal's limits: 16384 in 2D, 2048 in 3D, 2048 array layers; beyond them Metal aborts the process on an assertion, so they are caught here with a red line
     if (t->d.width > 16384 || t->d.height > 16384 || t->d.depth > 2048) { RED_ONCE(71, "texture size exceeds Metal limits: %u×%u×%u levels %u format %#x target %d (first case ser=%llu)", t->d.width, t->d.height, t->d.depth, t->d.levels, t->d.format, t->d.target, (unsigned long long)t->serial); return nil; }
     MTLTextureDescriptor *d = [MTLTextureDescriptor new];
@@ -1982,7 +1991,7 @@ static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
     d.storageMode = MTLStorageModePrivate;   // Render targets and assets both go in GPU private storage (lossless compression available)
     d.usage = MTLTextureUsageShaderRead | (fmt_compressed(t->d.format) || packaged ? 0 : MTLTextureUsageRenderTarget)
             | img_usage(t, d.pixelFormat);   // Image usage: shader-writable (compute kernels generating the 3D color lookup table, etc.
-    if (unpacked) d.usage |= MTLTextureUsageShaderWrite | MTLTextureUsagePixelFormatView;
+    if (unpacked && !transcoded) d.usage |= MTLTextureUsageShaderWrite | MTLTextureUsagePixelFormatView;
     // A depth-stencil texture has the format-view usage from the start: its stencil is read through an X32_Stencil8 view (stencil-mode views and textures, the depth-stencil copy), which Metal's
     // contract allows only with that usage. Apple GPUs read the view correctly without it, but the API validation layer aborts the process at the first such view (PR #106, found on Luigi's
     // Mansion 3), and upgrading later would recreate a depth buffer in use. Unlike colour formats it costs nothing measured: on an M4 Pro a 2560x1440 one has the same allocated size and the same
@@ -2000,6 +2009,10 @@ static id<MTLTexture> tex_upgrade(const tex_t *t, id<MTLTexture> base, MTLTextur
     d.storageMode = base.storageMode; d.cpuCacheMode = base.cpuCacheMode; d.hazardTrackingMode = base.hazardTrackingMode;
     d.resourceOptions = base.resourceOptions; d.usage = base.usage | add | (tex_atomic_capable(base) ? MTLTextureUsageShaderAtomic : 0);   // the usage property leaves the atomic usage out
     // A linear texture aliases the guest pool. Adding usage must keep that backing: a new standalone texture copies the old pixels once, but later GPU writes never reach the CPU map.
+    if (g_no_bc && bc_block(base) && bc_transcoded_format(base.pixelFormat) && (add & (MTLTextureUsageShaderWrite | MTLTextureUsageRenderTarget))) {
+        uint32_t pf; bc_unpacked(t->d.format, &pf); d.pixelFormat = (MTLPixelFormat)pf;
+        d.usage |= MTLTextureUsageShaderWrite | MTLTextureUsagePixelFormatView;
+    }
     id<MTLBuffer> backing = base.buffer;
     id<MTLTexture> upgraded = backing ? [backing newTextureWithDescriptor:d offset:base.bufferOffset bytesPerRow:base.bufferBytesPerRow] : [g_dev newTextureWithDescriptor:d];
     if (!upgraded) { RED_ONCE(45, "texture upgrade failed ser=%llu format %lu → %lu usage %#lx", t->serial, (unsigned long)base.pixelFormat, (unsigned long)view_pf, (unsigned long)d.usage); return base; }
@@ -2384,6 +2397,9 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
     int rb_shift = rb_packed_shift(t->d.format);   // the RGB565 family is repacked into Metal's order on the CPU (rb_packed_shift)
     uint32_t bc_pf;
     int decoded = bc_unpacked(t->d.format, &bc_pf), linear_bc = decoded && (t->d.flags & (NVN_TEXTURE_FLAGS_LINEAR | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET));
+    if (decoded && bc_transcoded_format(d.pixelFormat) && (keep & (MTLTextureUsageShaderWrite | MTLTextureUsageRenderTarget))) {
+        d.pixelFormat = (MTLPixelFormat)bc_pf; d.usage |= MTLTextureUsageShaderWrite | MTLTextureUsagePixelFormatView;
+    }
     int direct = !decoded && !rb_shift && stamp && direct_upload_on() && g_nvn_deswz_gpu && !(t->pool && nvn_sparse_pool(t->pool)) && nvn_deswz_gpu_direct_supported(&t->d);
     if (direct) d.usage |= MTLTextureUsageShaderWrite | MTLTextureUsagePixelFormatView;
     id<MTLTexture> mt = reuse && reuse.pixelFormat == d.pixelFormat && reuse.width == d.width && reuse.height == d.height && reuse.mipmapLevelCount == d.mipmapLevelCount && reuse.textureType == d.textureType
@@ -2895,6 +2911,8 @@ void mtl_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
     static unsigned long long last_rss, last_gpu, last_frame; static int lines; unsigned long long gpu = (unsigned long long)(g_dev.currentAllocatedSize >> 20);
     unsigned long long dr = rss_mb > last_rss ? rss_mb - last_rss : last_rss - rss_mb, dg = gpu > last_gpu ? gpu - last_gpu : last_gpu - gpu;
     if (lines >= 400 || (lines && dr < 64 && dg < 64 && frame - last_frame < 3000)) return; lines++; last_rss = rss_mb; last_gpu = gpu; last_frame = frame;
+    if (g_driver_hit || g_driver_miss) MLOG("driver metadata cache up to frame %llu: enabled %d, hits %llu, fills %llu, verified hits %llu", frame,
+        g_driver_cache_on, (unsigned long long)g_driver_hit, (unsigned long long)g_driver_miss, (unsigned long long)g_driver_check);
     pthread_mutex_lock(&g_deferred_mu); unsigned long nd = (unsigned long)g_deferred.count; pthread_mutex_unlock(&g_deferred_mu);
     pthread_mutex_lock(&g_res_mu); unsigned long nr = (unsigned long)g_res_objects.count; pthread_mutex_unlock(&g_res_mu);
     int live = 0, peak = 0, cap = 0; nvn_dirty_stat(&live, &peak, &cap);
@@ -2983,7 +3001,7 @@ static void rr_reset(void);
 static id<MTL4RenderCommandEncoder> g_enc;
 static int enc_open(void) { return g_enc != nil; }
 // Target info of the current render pass: determined once from the attachments at rp_begin and shared by all draws in the pass (pipeline key, depth-stencil, viewport / scissor all depend only on it)
-static struct { uint32_t cfmt[8], dfmt, sfmt, samples; int hd, hs; NSUInteger tw, th; uint64_t serial, reg_gen, ser_gen, range_dirty; int range_external, range_depth_nonro, layered; __unsafe_unretained id<MTLTexture> range_color, range_depth; } g_pass;
+static struct { uint32_t cfmt[8], dfmt, sfmt, samples; int hd, hs; NSUInteger tw, th; uint64_t serial, reg_gen, ser_gen, range_dirty; int range_external, range_depth_nonro, layered, framegen_ui; __unsafe_unretained id<MTLTexture> range_color, range_depth; } g_pass;
 static int g_rp_layered;   // the pass about to open is for a vertex shader that writes the layer (draw → rp_begin_ex)
 // Slice-merged passes (DM_NVN_SLICE_MERGE, on by default; 0 off): consecutive passes that each draw into another layer of one level of the same array or cube texture,
 // with nothing between them but state, uniform updates and draws (no game barrier, clear, copy or dispatch: sm_scan), run as one layered pass. Each draw reaches its layer through a vertex
@@ -3186,7 +3204,7 @@ static int udc_on(void) {
         const char *a = getenv("DM_NVN_UDC_AB"); if (a && !strcmp(a, "1")) { g_udc_ab = 0; g_udc_ab_on = 0; } }
     return g_udc_ab || g_udc_ab_on;
 }
-// DM_NVN_TBDR=0 disables lookahead and pass merging. DM_NVN_UNWRITTEN_DC=0 also disables optional unwritten-attachment savings; neither disables image-write preservation.
+// DM_NVN_TBDR=0 disables lookahead merging. Local exact-target and unwritten-attachment proofs run independently; DM_NVN_PASS_REUSE / DM_NVN_UNWRITTEN_DC control them. Image-write preservation is mandatory.
 // Only for equivalence comparison (the same replay run on / off, comparing the picture byte by byte), not a product configuration
 // Mario: off by default (only DM_NVN_TBDR=1 turns it on). These optimizations infer read / write relations from "which textures are bound in texture slots", while 38% of this game's shaders use bindless textures (handles in uniform buffers, NVN_RB_TEXU),
 //   so the inference would miss readers - e.g. deciding an attachment is never read afterwards and not storing it. Turn them back on once they recognize bindless readers.
@@ -3273,6 +3291,7 @@ static uint64_t g_xv_disabled[128]; static int g_xv_ndis;
 static struct { uint64_t tag; int good; } g_xv_trial[128]; static int g_xv_ntrial;   // Number of consecutive compliant touches for each key
 static int xv_trial_get(uint64_t tag, int add) { for (int i = 0; i < g_xv_ntrial; i++) if (g_xv_trial[i].tag == tag) return g_xv_trial[i].good += add; if (g_xv_ntrial < 128) { g_xv_trial[g_xv_ntrial].tag = tag; return g_xv_trial[g_xv_ntrial++].good = add; } return 0; }
 static uint64_t g_xv_present[128]; static int g_xv_npresent;
+static os_unfair_lock g_xv_window_mu=OS_UNFAIR_LOCK_INIT;
 static uint64_t g_xv_dc, g_xv_viol;
 typedef struct { uint64_t ser; uint32_t lv, sl; uint8_t good; } xv_touch;
 static xv_touch g_xv_touch[128]; static int g_xv_ntouch;
@@ -3312,11 +3331,12 @@ static void xv_check(uint64_t ser, uint32_t lv, uint32_t sl, const char *why) { 
 static void xv_good(xv_ent *e) { if (e->state == XV_PROBE) xv_trial_get(e->tag, 1); xv_drop(e->ser, e->lv, e->sl); }   // Compliant touch: counts once toward the trial period, and the entry returns to valid
 static void xv_touch_add(uint64_t ser, uint32_t lv, uint32_t sl, int good) { for (int i = 0; i < g_xv_ntouch; i++) if (g_xv_touch[i].ser == ser && g_xv_touch[i].lv == lv && g_xv_touch[i].sl == sl) return; if (g_xv_ntouch < 128) g_xv_touch[g_xv_ntouch++] = (xv_touch){ser, lv, sl, (uint8_t)good}; }
 static int xv_first_good(uint64_t ser, uint32_t lv, uint32_t sl) { for (int i = 0; i < g_xv_ntouch; i++) if (g_xv_touch[i].ser == ser && g_xv_touch[i].lv == lv && g_xv_touch[i].sl == sl) return g_xv_touch[i].good; return 0; }
-static int xv_present(uint64_t ser) { for (int i = 0; i < g_xv_npresent; i++) if (g_xv_present[i] == ser) return 1; return 0; }
+static int xv_present_locked(uint64_t ser) { for (int i = 0; i < g_xv_npresent; i++) if (g_xv_present[i] == ser) return 1; return 0; }
+static int xv_present(uint64_t ser) { os_unfair_lock_lock(&g_xv_window_mu); int found=xv_present_locked(ser); os_unfair_lock_unlock(&g_xv_window_mu); return found; }
 static void xv_forward(void);
 static int tbdr_on(void);
 static int xv_on(void) { static int off = -1; if (off < 0) { const char *e = getenv("DM_NVN_XV"); off = e && !strcmp(e, "0"); } return !off && tbdr_on(); }
-void mtl_xv_window_tex(uint64_t serial) { if (!xv_present(serial) && g_xv_npresent < 128) g_xv_present[g_xv_npresent++] = serial; }   // Window (swapchain) texture: never enters the ledger
+void mtl_xv_window_tex(uint64_t serial) { os_unfair_lock_lock(&g_xv_window_mu); if (!xv_present_locked(serial) && g_xv_npresent < 128) g_xv_present[g_xv_npresent++] = serial; os_unfair_lock_unlock(&g_xv_window_mu); }   // Window (swapchain) texture: never enters the ledger
 void xv_test_counts(int *dc, int *viol) { if (dc) *dc = (int)g_xv_dc; if (viol) *viol = (int)g_xv_viol; }
 static void sd_finish(void);
 // Load elision (fully covering first draw): if the draw that opens the pass can be proven to cover a color attachment in full (first_draw_covers), that attachment's load becomes DontCare -
@@ -3541,10 +3561,9 @@ static id<MTL4RenderCommandEncoder> rp_begin_ex_(int clear_only) {
     g_enc_mode = clear_only; g_enc_geo_nocolor = g_geo_omit_colors; g_pass_swrite = g_pass_order = g_pass_late_res = 0; g_sm_pass = 0;
     if (!R.has_rt) { RED_ONCE(3, "no render target set before the draw"); return nil; }
     if (g_imfit_npend) img_fit_upgrade();   // no pass is open here: the upgrade's copy may run (img_fit)
-    // The version of the attachment-range candidate is taken before capturing any attachment; if it changes during setup, there is no continuation.
-    uint64_t reg0 = 0, ser0 = 0, dirty0 = 0;
-    if (rt_range_on()) { reg0 = g_reg_gen; ser0 = g_ser_gen; }
-    if (rt_range_on()) dirty0=nvn_dirty_now();
+    // Take versions before resolving attachments: replacement or CPU writes
+    // during setup invalidate either kind of target continuation.
+    uint64_t reg0 = g_reg_gen, ser0 = g_ser_gen, dirty0 = nvn_dirty_now();
     if (g_blit) { enc_b_end(g_blit); g_blit = nil; }
     MTL4RenderPassDescriptor *pd = [MTL4RenderPassDescriptor new];
     int any = 0;
@@ -3711,8 +3730,8 @@ static id<MTL4RenderCommandEncoder> rp_begin_ex_(int clear_only) {
            R.rt.has_dview && R.rt.dview.set_format ? R.rt.dview.format : 0, g_pass.dfmt, g_pass.sfmt, g_pass.hd, g_pass.hs, clear_only);
         if (dt || stt) g_pass.samples = (uint32_t)(dt ? dt : stt).sampleCount;
         pass_dims(pd, (NSUInteger)R.rt.n, &g_pass.tw, &g_pass.th);
-        if (rt_range_on()) { g_pass.reg_gen = reg0; g_pass.ser_gen = ser0; }
-        if (rt_range_on()) { g_pass.range_dirty=dirty0; g_pass.range_color=pd.colorAttachments[0].texture; g_pass.range_depth=pd.depthAttachment.texture; }
+        g_pass.reg_gen = reg0; g_pass.ser_gen = ser0; g_pass.range_dirty = dirty0;
+        if (rt_range_on()) { g_pass.range_color=pd.colorAttachments[0].texture; g_pass.range_depth=pd.depthAttachment.texture; }
         g_enc_pso = nil; g_enc_dss = nil; g_ed.ok = 0;
     }
     if (g_vis_on) {
@@ -3740,6 +3759,7 @@ static id<MTL4RenderCommandEncoder> rp_begin_ex_(int clear_only) {
       void ms_note(id pd, NSUInteger nc); ms_note(pd, (NSUInteger)R.rt.n); }
     if (g_blit) { enc_b_end(g_blit); g_blit = nil; }   // the copy encoder the shadows' blocks were moved in with (bcrt_attach)
     ser_gate();
+    if (*DM_GAME_FRAMEGEN_SCENE && dm_fg_enabled()) framegen_note_pass(pd);
     g_enc = enc_r_begin_pass(pd);
     args_dirty_all();
     g_stat_pass++;
@@ -3868,6 +3888,7 @@ static void shmap_load(void) {
     uint64_t mis[4];   // mis: texture slots 0-255 already reported for a type mismatch (tex_mis_note)
     NSString *ventry; id<MTLFunction> vfn; int vfn_state;
     id<MTLFunction> pfn; int pfn_state, has_pull;
+    id<MTLLibrary> uilib; id<MTLFunction> uifn[4]; int ui_state, has_ui;
     id<MTLFunction> afn[4]; int afn_state, has_alpha;
     id<MTLLibrary> llib; NSMutableDictionary<NSNumber *, id<MTLFunction>> *lfn; int lfn_state, has_logic; } @end   // llib: the logic operation library <key>_bl, lfn: its fn_u / fn_m specialized per set of targets (lo_fn; lfn_state as afn_state; has_logic: the reflection names one, dmsh_logic.py)   // afn: fn, fn_u, fn_m, fn_d of the alpha test library <key>_ba (at_fn; afn_state 0 untried, 1 loaded, 2 failed; has_alpha: the reflection names one, dmsh_alpha.py)   // pfn: the same entry of the pulling library <key>_bp (pull_fn; has_pull: the reflection names one, dmsh_pull.py)   // vertex: the entry point loaded (by the depth mode); vfn: the same entry of the shadow-input library <key>_bv (vin_fn; state 0 untried, 1 loaded, 2 failed)
 @implementation NvShader
@@ -4109,6 +4130,7 @@ static NvShader *shader_load(NSString *pc, int stage, int layer) {
     if (stage == 0 && !layer) o->has_pull = [j[@"pull"] isKindOfClass:[NSDictionary class]];
     if (stage == 1) o->has_alpha = [j[@"alpha"] isKindOfClass:[NSDictionary class]];
     if (stage == 1) o->has_logic = [j[@"logic"] isKindOfClass:[NSDictionary class]];
+    if (stage == 1) o->has_ui = [j[@"ui_capture"] isKindOfClass:[NSDictionary class]];
     // A function that declares function constants cannot go into a pipeline until it is specialized, even when every constant is optional. SPIRV-Cross declares one for shaders that read a
     // texel buffer (spvLinearTextureAlignmentOverride, used only through is_function_constant_defined; one of Pokémon Legends: Z-A's imgui pixel shaders, 2bd5037003980716): an empty set of
     // values keeps its default. Without it the first pipeline with that shader failed Metal's validation (`fragmentFunction main0 cannot be used to build a pipeline state`)
@@ -4592,7 +4614,12 @@ static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
         if (!r.has_v) memset(&r.v, 0, sizeof r.v);
         uint32_t pf = (uint32_t)base.pixelFormat; uint8_t swz[4];
         if (r.v.set_format && !(nvn_fmt_to_mtl(r.v.format, &pf, swz) && pf)) pf = (uint32_t)base.pixelFormat;
-        if (r.v.set_format) bc_unpacked(r.v.format, &pf);
+        if (r.v.set_format) {
+            bc_unpacked(r.v.format, &pf);
+            if (g_no_bc && bc_block(base) && bc_transcoded_format(base.pixelFormat)) {
+                MTLPixelFormat f = bc_transcode_format(r.v.format); if (f) pf = (uint32_t)f;
+            }
+        }
         if (stv) pf = MTLPixelFormatX32_Stencil8;
         if (r.v.set_format && nvn_fmt_bc(rp->t.d.format) && !nvn_fmt_bc(r.v.format)) {   // the raw blocks of a BC texture through an uncompressed view (see rt_view_fmt): Metal has no such view
             RED_ONCE(86, "Metal cannot create the raw-block view of a compressed texture (NVN format %#x → view %#x): treated as an empty slot", rp->t.d.format, r.v.format);
@@ -4826,6 +4853,7 @@ static NvArena *arena_new(size_t minimum) {
 // them again and took 300 ms. The usual 4 MB blocks are always kept
 enum { ARENA_KEEP = 32 << 20, ARENA_IDLE = 600 };
 void arena_begin(void) {
+    g_arena_epoch++;   // Cached arena addresses are valid only within this submission.
     if (!g_arenas) { g_arenas = [NSMutableArray array]; g_sub_arenas = [NSMutableArray array]; }
     g_cur_arena = nil;
     uint64_t done = g_done;   // read as the submission start does (its allocator and visibility ring)
@@ -5063,7 +5091,11 @@ static void swrite_note(NvProg *pr) {
     if (g_pass_swrite) { g_vbuf_write_epoch++; return; }   // further shader writes also invalidate aligned vertex snapshots
     if (prog_swrites(pr)) { g_pass_swrite = 1; g_vbuf_write_epoch++; }
 }
-static void udc_note_draw(NvProg *pr, uint32_t raster_mask) {
+// One diagnostic control for comparing these local pass-reuse proofs against
+// the former split/store policy, including DM_AB phases in the same run.
+static int pass_reuse_on(void) { static int mode = -1; if (mode < 0) mode = sw_mode("DM_NVN_PASS_REUSE", 1); return sw_on(mode); }
+static void udc_note_draw(NvProg *pr, uint32_t raster_mask, int ordinary_outputs) {
+    ordinary_outputs = ordinary_outputs && pass_reuse_on();
     int td = tbdr_on();
     if (td && R.has_rt) for (int i = 0; i < R.rt.n && i < 8; i++) if (R.rt.color[i]) { zskip_del(R.rt.color[i]->serial); g_zskip_cand_ok[i] = 0; }   // Zero-source set: once really drawn it is no longer all zeros
     if (td && pr) for (int st = 0; st < 6; st++) { __unsafe_unretained NvShader *sh = pr->sh[st]; if (!sh) continue; for (int i = 0; i < sh->rf.nb; i++) if (sh->rf.b[i].kind == NVN_RB_IMG) { zskip_clear(); break; } }   // Image slots are writable: conservatively clear
@@ -5084,7 +5116,13 @@ static void udc_note_draw(NvProg *pr, uint32_t raster_mask) {
         if (image_write) t->img = 1;
         if (t->depth == 0 && t->idx >= 0 && (raster_mask >> t->idx & 1)) t->rast = 1;
         if (image_write) { t->wrote = 1; t->wwhy = 1; }
-        else if (t->depth == 0 && t->idx >= 0 && (((S.chmask.mask >> (4 * t->idx)) & 0xf) || (shader_color_mask >> t->idx & 1))) { t->wrote = 1; t->wwhy = (S.chmask.mask >> (4 * t->idx)) & 0xf ? 2 : 3; }
+        else if (t->depth == 0 && t->idx >= 0) {
+            int channels = (S.chmask.mask >> (4 * t->idx)) & 0xf, output = shader_color_mask >> t->idx & 1;
+            // Ordinary pipelines disable writes when either the channel mask or
+            // the shader output is absent (pso_desc). Specialized/remapped
+            // outputs retain the conservative rule; writable aliases above do too.
+            if (ordinary_outputs ? channels && output : channels || output) { t->wrote = 1; t->wwhy = channels ? 2 : 3; }
+        }
         else if (t->depth == 1 && S.ds.dw) { t->wrote = 1; t->wwhy = 4; }
         else if (t->depth == 2 && S.ds.st && (S.st_wmask[0] || S.st_wmask[1])
                 && (S.ds.fail_f != NVN_STENCIL_OP_KEEP || S.ds.zfail_f != NVN_STENCIL_OP_KEEP || S.ds.zpass_f != NVN_STENCIL_OP_KEEP
@@ -5705,6 +5743,29 @@ static void lo_bind(id<MTLCommandEncoder> en) {
     }
     enc_r_args((id<MTL4RenderCommandEncoder>)en, MTLRenderStageFragment, gpu, DMSH_LOGIC_BUFFER);
 }
+static id<MTLFunction> framegen_ui_fn(NvShader *fs,int opaque,int alpha) {
+    if (!fs || !fs->has_ui) return nil;
+    static os_unfair_lock lock=OS_UNFAIR_LOCK_INIT;
+    os_unfair_lock_lock(&lock);
+    NSError *error=nil;
+    if (!fs->ui_state) {
+        size_t n=strlen(fs->key);
+        fs->uilib=lib_from_file([NSString stringWithFormat:@"%@/%.*s_bui.metallib",g_msl_dir,(int)(n>2?n-2:n),fs->key],&error);
+        fs->ui_state=fs->uilib?1:2;
+    }
+    unsigned index=(opaque?2:0)|(alpha?1:0);
+    if (fs->ui_state==1 && !fs->uifn[index]) {
+        MTLFunctionConstantValues *values=[MTLFunctionConstantValues new];
+        bool force=opaque!=0; [values setConstantValue:&force type:MTLDataTypeBool atIndex:DMSH_LOGIC_FC+8]; // after the eight logic-target flags (dmsh_ui.py)
+        NSString *entry=alpha?@"main0_alpha":@"main0";
+        id<MTLFunction> f=fn4_note([fs->uilib newFunctionWithName:entry constantValues:values error:&error],fs->uilib,entry,values);
+        if (f && fs->rf.nb && [f newArgumentEncoderWithBufferIndex:fs->rf.abi].encodedLength!=fs->arg_len) f=nil;
+        fs->uifn[index]=f;
+    }
+    id<MTLFunction> f=fs->uifn[index];
+    if (!f) { static int errors; if (errors++<8) MLOG("[RED] separate UI library of %s cannot be used: %s",fs->key,error.localizedDescription.UTF8String?:"missing compatible entry point"); }
+    os_unfair_lock_unlock(&lock); return f;
+}
 static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvShader *fs, id<MTLFunction> fsfn, int merged) {
     MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
     d.vertexFunction = vs->fn; d.fragmentFunction = fsfn ? fsfn : fs ? fs->fn : nil;
@@ -5748,7 +5809,7 @@ static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvS
     if (k->fsfn == TF_MARK || k->fsfn == GEO_MARK) { d.vertexFunction = k->fsfn == GEO_MARK ? vs->geo_fn : vs->tf_fn; d.fragmentFunction = nil; d.rasterizationEnabled = NO; }   // transform feedback capture (tf_draw)
     if (k->fsfn == DISCARD_MARK) { d.vertexFunction = vs->discard_fn; d.fragmentFunction = nil; d.rasterizationEnabled = NO; }
     d.rasterSampleCount = k->samples ? k->samples : 1;
-    d.alphaToCoverageEnabled = k->a2c;
+    d.alphaToCoverageEnabled = k->a2c & 1;
     for (int i = 0; i < 8; i++) {
         if (!k->cfmt[i]) continue;
         MTLRenderPipelineColorAttachmentDescriptor *c = d.colorAttachments[i];
@@ -5771,6 +5832,24 @@ static MTLRenderPipelineDescriptor *pso_desc(const pso_key *k, NvShader *vs, NvS
             c.sourceRGBBlendFactor = bfac(bl.src_rgb); c.destinationRGBBlendFactor = bfac(bl.dst_rgb);
             c.sourceAlphaBlendFactor = bfac(bl.src_a); c.destinationAlphaBlendFactor = bfac(bl.dst_a);
             c.rgbBlendOperation = bop(bl.eq_rgb); c.alphaBlendOperation = bop(bl.eq_a);
+        }
+    }
+    if ((k->a2c & 2) && fs && !fsfn && !merged) {
+        id<MTLFunction> ui=framegen_ui_fn(fs,!(k->blend_en&1),k->atest!=0);
+        MTLRenderPipelineColorAttachmentDescriptor *c=d.colorAttachments[7];
+        c.writeMask=MTLColorWriteMaskNone; c.blendingEnabled=NO;
+        if (ui) {
+            d.fragmentFunction=ui;
+            uint32_t mask=k->chmask&15;
+            if (mask&7) c.writeMask=(mask&1?MTLColorWriteMaskRed:0)|(mask&2?MTLColorWriteMaskGreen:0)|(mask&4?MTLColorWriteMaskBlue:0)|MTLColorWriteMaskAlpha;
+            if (k->blend_en&1) {
+                blend_st blend=adv_blend(k->blend[0]); int over=blend.dst_rgb==NVN_BLEND_FUNC_ONE_MINUS_SRC_ALPHA;
+                c.blendingEnabled=YES;
+                c.sourceRGBBlendFactor=bfac(blend.src_rgb); c.destinationRGBBlendFactor=bfac(blend.dst_rgb); c.rgbBlendOperation=bop(blend.eq_rgb);
+                c.sourceAlphaBlendFactor=over?MTLBlendFactorOne:MTLBlendFactorZero;
+                c.destinationAlphaBlendFactor=over?MTLBlendFactorOneMinusSourceAlpha:MTLBlendFactorOne;
+                c.alphaBlendOperation=MTLBlendOperationAdd;
+            }
         }
     }
     d.depthAttachmentPixelFormat = (MTLPixelFormat)k->dfmt; d.stencilAttachmentPixelFormat = (MTLPixelFormat)k->sfmt;
@@ -6238,7 +6317,7 @@ static void pso_key_fill(pso_key *k, NvShader *vs, NvShader *fs, const uint32_t 
     memset(k, 0, sizeof *k);
     k->vs = (__bridge void *)vs; k->fs = (__bridge void *)fs;
     memcpy(k->cfmt, cfmt, sizeof k->cfmt); k->dfmt = dfmt; k->sfmt = sfmt; k->samples = samples;
-    k->blend_en = S.color.blend_en; k->chmask = S.chmask.mask; k->a2c = S.ms.a2c; k->atest = atest_key(fs, cfmt, lmap ? g_pso_lmap : NULL);
+    k->blend_en = S.color.blend_en; k->chmask = S.chmask.mask; k->a2c = S.ms.a2c | (cfmt==g_pass.cfmt && g_pass.framegen_ui && !lmap ? 2u:0); k->atest = atest_key(fs, cfmt, lmap ? g_pso_lmap : NULL);
     for (int i = 0; i < 8; i++) if (k->cfmt[i] || lmap) k->blend[i] = S.blend[i];
     k->logic = lop_key(k, fs, lmap);
     const nvn_refl *rf = &vs->rf;
@@ -7329,6 +7408,113 @@ static void c0_sample_rows(uint8_t *d, uint32_t samples) {
 static uint64_t g_geo_bind[5];
 static struct { __strong id<MTLTexture> source, output; } g_scene_up;
 static void scene_upscale_prepare(NvProg *pr, const p_draw *dw, const p_draw_idx *di);
+// Binding-metadata cache adapted from MacNativeGames 92ec79bd (MIT;
+// dm/third_party/macnativegames/LICENSE). It never caches the pointed-to bytes
+// or bypasses resource residency/freshness checks in encode_args.
+typedef struct {
+    uint64_t epoch, gpu;
+    __unsafe_unretained id<MTLBuffer> buffer;
+    size_t offset;
+    p_bind_buf storage[16], uniform[16];
+    uint64_t textures[NTEX], samplers[128], images[32];
+    uint32_t grid[3], base_instance, samples;
+    int dyn, pool, tex_base, samp_base;
+} driver_bank_cache;
+static driver_bank_cache g_driver_bank[6][2];
+static int g_dispatch_indirect;   // c0 is patched by the GPU: it must own a fresh allocation.
+static int driver_cache_on(void) {
+    if (g_driver_cache_on < 0) {
+        const char *e = getenv("DM_NVN_DRV_CACHE");
+        // The paired BOTW replay did not show a repeatable timing benefit.
+        // Keep independent metadata reuse opt-in until a workload justifies it.
+        g_driver_cache_on = e && strcmp(e, "0");
+        MLOG("NVN driver metadata cache: %s (DM_NVN_DRV_CACHE)", g_driver_cache_on ? "on" : "off");
+    }
+    return g_driver_cache_on;
+}
+static void driver_bank_fill(uint8_t *d, int bank, int stage, const NvShader *sh) {
+    memset(d, 0, DMSH_DRV_SIZE);
+    if (bank == 0) {
+        int base = c0_ssbo_base(stage);
+        if (base < 0) RED_ONCE(45, "stage %d shader reads driver segment c0; the storage buffer table base was never measured", stage);
+        else for (int r = 0; r < DMSH_C0_SSBO_SLOTS; r++) { uint64_t a = S.ssbo[stage][r].addr; uint32_t n = (uint32_t)S.ssbo[stage][r].size; memcpy(d + base + DMSH_C0_ROW * r, &a, 8); memcpy(d + base + DMSH_C0_ROW * r + 8, &n, 4); }
+        // Compute also has the dispatch size at 0x200 (x, y, z) and the uniform buffer table at 0x210 + 16 r (address 64 bits, size 32 bits), ending where the storage buffer table
+        // starts (0x310). Measured on Link's Awakening's light culling (light_culling_compute.bfsha): tile index = workgroup y × c0[0x200] + workgroup x, and c0[0x280] is
+        // the address of uniform buffer 7 (the light parameters, 144 bytes per light); Breath of the Wild's compute shaders read 0x280 / 0x290 / 0x2d0 of the same table
+        // Graphics stages: 0x610, right after the pixel stage's storage buffer table, holds the largest point size, to which GLSLC clamps a shader-written
+        // gl_PointSize (Super Mario Odyssey's agl point sprites, alPointSpriteShader: gl_PointSize = min(size attribute, c0[0x610])). It is not SetPointSize: the game
+        // sets that to 1 and sizes its sprites itself (the fog splats ask for 3-18 px). Left at 0, every sprite had size 0, so the splats that push the Cap Kingdom
+        // fog aside never reached its velocity fields and the fog did not part around Mario. 2047 is Maxwell's point size limit (Metal clamps to its own)
+        if (stage != 5) { const float max_point = 2047.0f; memcpy(d + DMSH_C0_POINT_SIZE, &max_point, 4); }
+        // Graphics stages: 0x644 holds the draw's base instance. Maxwell's instance ID leaves it out (GL's gl_InstanceID), and GLSLC adds this word where a shader needs the
+        // absolute instance (gl_InstanceID + gl_BaseInstance): Pokémon Legends: Z-A's occlusion boxes (a793f436dcabd350, one box per draw at base instance 61, 62, …) pick their
+        // transform this way, and 1,550 reads in 793 of its vertex shaders. Left at 0, every box was box 0: all six queries came back empty, and the game, taking its characters for
+        // hidden, posed their legs straight back from the hips. 0x640 (read by 58 shaders, added to the vertex ID) stays 0: what the driver puts there is not established
+        if (stage != 5) memcpy(d + DMSH_C0_BASE_INSTANCE, &g_draw_binst, 4);
+        if (stage == 1) c0_sample_rows(d, g_pass.samples);
+        if (stage == 5) {
+            memcpy(d + DMSH_C0_DISPATCH, g_dispatch_dim, 12);
+            for (int r = 0; r < DMSH_C0_CS_UBO_SLOTS; r++) { uint64_t a = S.ubo[5][r].addr; uint32_t n = (uint32_t)S.ubo[5][r].size; memcpy(d + DMSH_C0_CS_UBO + DMSH_C0_ROW * r, &a, 8); memcpy(d + DMSH_C0_CS_UBO + DMSH_C0_ROW * r + 8, &n, 4); }
+        }
+    } else {
+        // A shader with dynamic handle arrays (TEXD / SAMPD, profile key tex_dyn_slots) picks a table slot at run time and ORs a texture word with a sampler word into a handle,
+        // whose texture / sampler IDs index the arrays. For it the tables hold slot indices instead of handles (texture slot r → r, and r << 20 when a combined handle carries
+        // a sampler; sampler slot r → r << 20), and the arrays hold the bound slots, so the shader's own arithmetic picks the binding (Octopath Traveler 0: separate texture slots 0-10, samplers 0-4)
+        // A shader with pools (TEXP / SAMPP, pool_gpu) indexes them with the IDs it reads, which in the game's own memory are the bound pool's: pool_gpu adds that pool's base. Its
+        // tables therefore hold the handles as the game bound them, without the base bind_handles added (hle_nvn.c), so a handle taken from c2 lands on the same entry
+        const uint64_t *tx = S.tex[stage], *im = S.img[stage]; int dyn = sh->rf.dyn, tb = sh->rf.pool ? S.tex_base : 0, sb = sh->rf.pool ? S.samp_base : 0;
+        #define C2_LOCAL(h) ((uint32_t)((((h) & 0xfffff) ? ((h) & 0xfffff) - (uint64_t)tb : 0) | ((((h) >> 20) & 0xfff) ? ((((h) >> 20) & 0xfff) - (uint64_t)sb) << 20 : 0)))
+        for (int r = 0; r < DMSH_C2_IMG_SLOTS; r++) { uint32_t ih = (uint32_t)im[r]; memcpy(d + DMSH_C2_IMG + DMSH_C2_ROW * r, &ih, 4); }
+        for (int r = 0; r < DMSH_C2_TEX_SLOTS; r++) {   // a combined slot past 31 is written when it is bound and the image slot it shares is not (Hades II binds texture slot 34, no image)
+            if (r >= 32 && (!tx[r] || (r - 32 < DMSH_C2_IMG_SLOTS && im[r - 32]))) continue;
+            uint32_t v = !dyn ? C2_LOCAL(tx[r]) : !tx[r] ? 0 : (uint32_t)r | (tx[r] >> 20 ? (uint32_t)r << 20 : 0); memcpy(d + DMSH_C2_TEX + DMSH_C2_ROW * r, &v, 4); }
+        for (int r = 0; r < DMSH_C2_SEP_SLOTS; r++) { uint64_t h = tx[NVN_SEPTEX_SLOT0 + r]; uint32_t v = !dyn ? C2_LOCAL(h) : h ? (uint32_t)r : 0; memcpy(d + DMSH_C2_SEPTEX + DMSH_C2_ROW * r, &v, 4); }
+        for (int r = 0; r < DMSH_C2_SEP_SLOTS; r++) { uint64_t h = S.samp[stage][r]; uint32_t v = !dyn ? C2_LOCAL(h) : h ? (uint32_t)r << 20 : 0; memcpy(d + DMSH_C2_SAMP + DMSH_C2_ROW * r, &v, 4); }
+        #undef C2_LOCAL
+    }
+}
+static uint64_t driver_bank_gpu(int bank, int stage, const NvShader *sh, __unsafe_unretained id<MTLBuffer> *out) {
+    driver_bank_cache *c = &g_driver_bank[stage][bank == 2];
+    int cache = driver_cache_on() && !(bank == 0 && stage == 5 && g_dispatch_indirect);
+    int same = cache && c->epoch == g_arena_epoch && c->gpu;
+    if (same && bank == 0) {
+        same = !memcmp(c->storage, S.ssbo[stage], sizeof c->storage) &&
+            (stage == 5 ? !memcmp(c->uniform, S.ubo[stage], sizeof c->uniform) && !memcmp(c->grid, g_dispatch_dim, sizeof c->grid)
+                        : c->base_instance == g_draw_binst && (stage != 1 || c->samples == g_pass.samples));
+    } else if (same) {
+        same = c->dyn == sh->rf.dyn && c->pool == sh->rf.pool && c->tex_base == S.tex_base && c->samp_base == S.samp_base &&
+            !memcmp(c->textures, S.tex[stage], sizeof c->textures) && !memcmp(c->samplers, S.samp[stage], sizeof c->samplers) &&
+            !memcmp(c->images, S.img[stage], sizeof c->images);
+    }
+    id<MTLBuffer> buffer; size_t off; uint64_t gpu;
+    if (same) {
+        if (g_driver_cache_check < 0) { const char *e = getenv("DM_NVN_DRV_CACHE_CHECK"); g_driver_cache_check = e && strcmp(e, "0"); }
+        if (g_driver_cache_check) {
+            uint8_t reference[DMSH_DRV_SIZE]; driver_bank_fill(reference, bank, stage, sh);
+            if (memcmp(reference, (const uint8_t *)c->buffer.contents + c->offset, sizeof reference))
+                MDIE("driver metadata cache mismatch: stage %d bank %d", stage, bank);
+            g_driver_check++;
+        }
+        buffer = c->buffer; off = c->offset; gpu = c->gpu; g_driver_hit++;
+    } else {
+        off = arena_alloc(DMSH_DRV_SIZE, &buffer); gpu = g_cur_arena->gpu + off;
+        driver_bank_fill((uint8_t *)buffer.contents + off, bank, stage, sh); g_driver_miss++;
+        if (cache) {
+            c->epoch = g_arena_epoch; c->gpu = gpu; c->buffer = buffer; c->offset = off;
+            if (bank == 0) {
+                memcpy(c->storage, S.ssbo[stage], sizeof c->storage); c->base_instance = g_draw_binst;
+                if (stage == 1) c->samples = g_pass.samples;
+                if (stage == 5) { memcpy(c->uniform, S.ubo[stage], sizeof c->uniform); memcpy(c->grid, g_dispatch_dim, sizeof c->grid); }
+            } else {
+                c->dyn = sh->rf.dyn; c->pool = sh->rf.pool; c->tex_base = S.tex_base; c->samp_base = S.samp_base;
+                memcpy(c->textures, S.tex[stage], sizeof c->textures); memcpy(c->samplers, S.samp[stage], sizeof c->samplers);
+                memcpy(c->images, S.img[stage], sizeof c->images);
+            }
+        }
+    }
+    if (bank == 0 && stage == 5) { g_c0_dim_buf = buffer; g_c0_dim_off = off + DMSH_C0_DISPATCH; }
+    *out = buffer; return gpu;
+}
 static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex);
 static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex) { AP_B; int r = encode_args_(en, sh, nvn_stage, metal_vertex); AP_E(3); return r; }
 static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex) {
@@ -7550,46 +7736,8 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             int bank = b->kind == NVN_RB_DRV2 ? 2 : 0;
             if (!sh->rf.drv_read[bank]) { slots[aid] = zero_bank_gpu(); USE(zero_bank(), MTLResourceUsageRead); }
             else {
-                id<MTLBuffer> db; size_t doff = arena_alloc(DMSH_DRV_SIZE, &db); uint8_t *d = (uint8_t *)db.contents + doff; memset(d, 0, DMSH_DRV_SIZE);
-                if (bank == 0) {
-                    int base = c0_ssbo_base(nvn_stage);
-                    if (base < 0) RED_ONCE(45, "stage %d shader reads driver segment c0; the storage buffer table base was never measured", nvn_stage);
-                    else for (int r = 0; r < DMSH_C0_SSBO_SLOTS; r++) { uint64_t a = S.ssbo[nvn_stage][r].addr; uint32_t n = (uint32_t)S.ssbo[nvn_stage][r].size; memcpy(d + base + DMSH_C0_ROW * r, &a, 8); memcpy(d + base + DMSH_C0_ROW * r + 8, &n, 4); }
-                    // Compute also has the dispatch size at 0x200 (x, y, z) and the uniform buffer table at 0x210 + 16 r (address 64 bits, size 32 bits), ending where the storage buffer table
-                    // starts (0x310). Measured on Link's Awakening's light culling (light_culling_compute.bfsha): tile index = workgroup y × c0[0x200] + workgroup x, and c0[0x280] is
-                    // the address of uniform buffer 7 (the light parameters, 144 bytes per light); Breath of the Wild's compute shaders read 0x280 / 0x290 / 0x2d0 of the same table
-                    // Graphics stages: 0x610, right after the pixel stage's storage buffer table, holds the largest point size, to which GLSLC clamps a shader-written
-                    // gl_PointSize (Super Mario Odyssey's agl point sprites, alPointSpriteShader: gl_PointSize = min(size attribute, c0[0x610])). It is not SetPointSize: the game
-                    // sets that to 1 and sizes its sprites itself (the fog splats ask for 3-18 px). Left at 0, every sprite had size 0, so the splats that push the Cap Kingdom
-                    // fog aside never reached its velocity fields and the fog did not part around Mario. 2047 is Maxwell's point size limit (Metal clamps to its own)
-                    if (nvn_stage != 5) { const float max_point = 2047.0f; memcpy(d + DMSH_C0_POINT_SIZE, &max_point, 4); }
-                    // Graphics stages: 0x644 holds the draw's base instance. Maxwell's instance ID leaves it out (GL's gl_InstanceID), and GLSLC adds this word where a shader needs the
-                    // absolute instance (gl_InstanceID + gl_BaseInstance): Pokémon Legends: Z-A's occlusion boxes (a793f436dcabd350, one box per draw at base instance 61, 62, …) pick their
-                    // transform this way, and 1,550 reads in 793 of its vertex shaders. Left at 0, every box was box 0: all six queries came back empty, and the game, taking its characters for
-                    // hidden, posed their legs straight back from the hips. 0x640 (read by 58 shaders, added to the vertex ID) stays 0: what the driver puts there is not established
-                    if (nvn_stage != 5) memcpy(d + DMSH_C0_BASE_INSTANCE, &g_draw_binst, 4);
-                    if (nvn_stage == 1) c0_sample_rows(d, g_pass.samples);
-                    if (nvn_stage == 5) {
-                        memcpy(d + DMSH_C0_DISPATCH, g_dispatch_dim, 12); g_c0_dim_buf = db; g_c0_dim_off = doff + DMSH_C0_DISPATCH;
-                        for (int r = 0; r < DMSH_C0_CS_UBO_SLOTS; r++) { uint64_t a = S.ubo[5][r].addr; uint32_t n = (uint32_t)S.ubo[5][r].size; memcpy(d + DMSH_C0_CS_UBO + DMSH_C0_ROW * r, &a, 8); memcpy(d + DMSH_C0_CS_UBO + DMSH_C0_ROW * r + 8, &n, 4); }
-                    }
-                } else {
-                    // A shader with dynamic handle arrays (TEXD / SAMPD, profile key tex_dyn_slots) picks a table slot at run time and ORs a texture word with a sampler word into a handle,
-                    // whose texture / sampler IDs index the arrays. For it the tables hold slot indices instead of handles (texture slot r → r, and r << 20 when a combined handle carries
-                    // a sampler; sampler slot r → r << 20), and the arrays hold the bound slots, so the shader's own arithmetic picks the binding (Octopath Traveler 0: separate texture slots 0-10, samplers 0-4)
-                    // A shader with pools (TEXP / SAMPP, pool_gpu) indexes them with the IDs it reads, which in the game's own memory are the bound pool's: pool_gpu adds that pool's base. Its
-                    // tables therefore hold the handles as the game bound them, without the base bind_handles added (hle_nvn.c), so a handle taken from c2 lands on the same entry
-                    const uint64_t *tx = S.tex[nvn_stage], *im = S.img[nvn_stage]; int dyn = sh->rf.dyn, tb = sh->rf.pool ? S.tex_base : 0, sb = sh->rf.pool ? S.samp_base : 0;
-                    #define C2_LOCAL(h) ((uint32_t)((((h) & 0xfffff) ? ((h) & 0xfffff) - (uint64_t)tb : 0) | ((((h) >> 20) & 0xfff) ? ((((h) >> 20) & 0xfff) - (uint64_t)sb) << 20 : 0)))
-                    for (int r = 0; r < DMSH_C2_IMG_SLOTS; r++) { uint32_t ih = (uint32_t)im[r]; memcpy(d + DMSH_C2_IMG + DMSH_C2_ROW * r, &ih, 4); }
-                    for (int r = 0; r < DMSH_C2_TEX_SLOTS; r++) {   // a combined slot past 31 is written when it is bound and the image slot it shares is not (Hades II binds texture slot 34, no image)
-                        if (r >= 32 && (!tx[r] || (r - 32 < DMSH_C2_IMG_SLOTS && im[r - 32]))) continue;
-                        uint32_t v = !dyn ? C2_LOCAL(tx[r]) : !tx[r] ? 0 : (uint32_t)r | (tx[r] >> 20 ? (uint32_t)r << 20 : 0); memcpy(d + DMSH_C2_TEX + DMSH_C2_ROW * r, &v, 4); }
-                    for (int r = 0; r < DMSH_C2_SEP_SLOTS; r++) { uint64_t h = tx[NVN_SEPTEX_SLOT0 + r]; uint32_t v = !dyn ? C2_LOCAL(h) : h ? (uint32_t)r : 0; memcpy(d + DMSH_C2_SEPTEX + DMSH_C2_ROW * r, &v, 4); }
-                    for (int r = 0; r < DMSH_C2_SEP_SLOTS; r++) { uint64_t h = S.samp[nvn_stage][r]; uint32_t v = !dyn ? C2_LOCAL(h) : h ? (uint32_t)r << 20 : 0; memcpy(d + DMSH_C2_SAMP + DMSH_C2_ROW * r, &v, 4); }
-                    #undef C2_LOCAL
-                }
-                slots[aid] = g_cur_arena->gpu + doff;
+                __unsafe_unretained id<MTLBuffer> db;
+                slots[aid] = driver_bank_gpu(bank, nvn_stage, sh, &db);
                 USE(db, MTLResourceUsageRead);
             }
         } else if (b->kind == NVN_RB_BORDER) continue;   // filled below, once every twin has been seen
@@ -7947,7 +8095,7 @@ static void shader_prefetch_rest(void) {
     static int logged; if (logged++ < 8) MLOG("shader prefetch: %u of %lu shader libraries the rest of the submission binds loaded in parallel in %.1f ms", got, (unsigned long)n, dt / 1e6);
 }
 static void pso_predict_rest_(void);
-static void pso_predict_rest(void) { uint64_t t0 = bp_now(); shader_prefetch_rest(); pso_predict_rest_(); g_pt_pred_n++; g_pt_pred_ns += bp_now() - t0; }
+static void pso_predict_rest(void) { if (g_pass.framegen_ui) return; uint64_t t0 = bp_now(); shader_prefetch_rest(); pso_predict_rest_(); g_pt_pred_n++; g_pt_pred_ns += bp_now() - t0; }
 // state_op also sets the scissor, which lives in R, not S: it is restored with S. Without that the replay went on with the last scissor of the rest of the submission until its next
 // OP_SCISSOR. OCTOPATH TRAVELER II (Unreal Engine 4.27) with pipelines built on demand: from Castti's opening flashback and the battlefield of Hikari's opening on, the picture was bright
 // green and white, in every run with the prediction and in none without it (DM_NVN_PREDICT=0); a short prewarm list hid it, as fewer pipelines missed
@@ -8116,6 +8264,7 @@ static int sm_scan(const uint8_t *p, const p_set_rt *rt, int cur, int *lo, int *
 // (every layer between the lowest and the highest drawn into), and the draw's amplified pipeline is built (else it is queued, and this pass stays as it is)
 static int draw_samples_rt(NvProg *pr);
 static void sm_plan(NvProg *pr) {
+    if (framegen_ui_canvas()) return;
     g_sm_plan.on = 0;
     if (!pr || !pr->sh[0] || pr->sh[0]->layer_out || R.clear_d || R.clear_s || draw_samples_rt(pr)) return;
     for (int i = 0; i < 8; i++) if (R.clear_c[i]) return;
@@ -8644,6 +8793,7 @@ static int defer_pre(void) {
     return 1;
 }
 static void defer_try(const p_draw *dw, const p_draw_idx *di) {
+    if (framegen_ui_canvas()) return;
     if (!defer_on() || defer_has_in_p() || g_defer_replaying || g_fz.active || g_fz_checking || !g_exec_next || !R.rt.n) return;
     int slot = defer_slot_free(); if (slot < 0) return;
     g_defer_cur = &g_defer_slots[slot];
@@ -8756,6 +8906,7 @@ static int fz_prefilter(void) {
     return 0;
 }
 static void fuse_try(void) {
+    if (framegen_ui_canvas()) return;
     if (g_fz.active || !g_exec_next || g_hoist_n + 12 > HOIST_MAX || !R.rt.n) return;
     if (!fz_prefilter()) return;
     // One: from the earlier pass to the next SetRenderTargets, only draws and state are allowed
@@ -9203,7 +9354,7 @@ void ms_after(void) {
 // a fresh snapshot for each took the Mac's GPU time from about 4 to 28 ms a frame, reuse until a barrier needs about ten a frame (GPU time within the noise of none).
 // DM_NVN_FB_SNAP=0 none, all a fresh snapshot for every draw sampling an attachment of its pass (diagnostic)
 static int g_fb_mode = -1;   // 0 none, 1 writers with reuse until a barrier, 2 every sampling draw, fresh
-static uint64_t g_fb_bar, g_fb_reuse, g_fb_split;   // game barriers so far (OP_BARRIER with bits); draws that reused a snapshot; passes ended before a write to an attachment an earlier draw read
+static uint64_t g_fb_bar, g_fb_reuse, g_fb_split, g_fb_bytes, g_fb_refresh[5];   // refresh: first/evicted, barrier, submission, shape/usage, forced
 static uint64_t g_fb_pass = UINT64_MAX; static uint32_t g_fb_wmask, g_fb_rmask;   // the current Metal render pass: color attachments written so far, sampled directly
 typedef struct { uint64_t ser, bar, sub; int lv, sl; __strong id<MTLTexture> snap; } fb_cache_t;
 static fb_cache_t g_fbc[8]; static int g_fbc_next;
@@ -9214,17 +9365,49 @@ static int fb_mode(void) {
 }
 static inline void fb_pass_sync(void) { uint64_t p = g_stat_pass + !g_enc; if (p != g_fb_pass) { g_fb_pass = p; g_fb_wmask = g_fb_rmask = 0; } }
 // The snapshot of an attachment's level and layer: the cached one (valid: *fresh = 0) or a texture to copy into (*fresh = 1; the entry is then valid from this barrier and submission on)
-static fb_cache_t *fb_snap(uint64_t ser, int lv, int sl, MTLPixelFormat pf, NSUInteger w, NSUInteger h, int force, int *fresh) {
+static id<MTLTexture> fb_texture(MTLPixelFormat pf, NSUInteger w, NSUInteger h, int need_pfv) {
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:w height:h mipmapped:NO];
+    // PixelFormatView disables lossless compression on Apple GPUs. Ordinary
+    // reads, channel swizzles and linear/sRGB view pairs do not need it.
+    d.usage = MTLTextureUsageShaderRead | (need_pfv ? MTLTextureUsagePixelFormatView : 0); d.storageMode = MTLStorageModePrivate;
+    id<MTLTexture> t = [g_dev newTextureWithDescriptor:d]; if (t) res_add(t); return t;
+}
+static fb_cache_t *fb_snap(uint64_t ser, int lv, int sl, MTLPixelFormat pf, NSUInteger w, NSUInteger h, int need_pfv, int force, int *fresh) {
     fb_cache_t *e = NULL;
     for (int i = 0; i < 8 && !e; i++) if (g_fbc[i].snap && g_fbc[i].ser == ser && g_fbc[i].lv == lv && g_fbc[i].sl == sl) e = &g_fbc[i];
+    int matched = e != NULL;
+    uint64_t old_bar = e ? e->bar : 0, old_sub = e ? e->sub : 0;
+    int shape = e && (e->snap.pixelFormat != pf || e->snap.width != w || e->snap.height != h);
     if (e && (e->snap.pixelFormat != pf || e->snap.width != w || e->snap.height != h)) { defer_obj_release(e->snap); e->snap = nil; }
-    if (e && e->snap && !force && e->bar == g_fb_bar && e->sub == g_sub_serial) { *fresh = 0; return e; }
+    if (e && e->snap && !force && e->bar == g_fb_bar && e->sub == g_sub_serial) {
+        if (need_pfv && !(e->snap.usage & MTLTextureUsagePixelFormatView)) {
+            id<MTLTexture> old = e->snap, t = fb_texture(pf, w, h, 1);
+            if (!t) MDIE("feedback snapshot format-view upgrade allocation failed");
+            // Keep the cached version: later draws since the barrier may have
+            // changed the attachment, so copying that source again is wrong.
+            if (g_enc) rp_end();
+            enc_b_copy_texture(blit(), old, 0, 0, MTLOriginMake(0, 0, 0), MTLSizeMake(w, h, 1), t, 0, 0, MTLOriginMake(0, 0, 0));
+            e->snap = t; defer_obj_release(old); g_fb_count++; g_fb_bytes += att_bytes(t, 0); g_fb_refresh[3]++;
+            PD("F feedback format-view upgrade ser=%llu preserves the cached snapshot", (unsigned long long)ser);
+        }
+        *fresh = 0; return e;
+    }
+    PD("F feedback refresh ser=%llu lv%d sl%d matched=%d force=%d barrier=%llu->%llu submission=%llu->%llu", (unsigned long long)ser, lv, sl, matched, force,
+       (unsigned long long)old_bar, (unsigned long long)g_fb_bar, (unsigned long long)old_sub, (unsigned long long)g_sub_serial);
     if (!e) { e = &g_fbc[g_fbc_next]; g_fbc_next = (g_fbc_next + 1) & 7;
         if (e->snap && (e->snap.pixelFormat != pf || e->snap.width != w || e->snap.height != h)) { defer_obj_release(e->snap); e->snap = nil; } }
-    if (!e->snap) { MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:w height:h mipmapped:NO];
-        d.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView; d.storageMode = MTLStorageModePrivate;
-        e->snap = [g_dev newTextureWithDescriptor:d]; if (!e->snap) { e->ser = 0; return NULL; } res_add(e->snap); }   // full queue barriers separate a copy from the draws that read the earlier content
-    e->ser = ser; e->lv = lv; e->sl = sl; e->bar = g_fb_bar; e->sub = g_sub_serial; *fresh = 1; return e;
+    if (e->snap && need_pfv && !(e->snap.usage & MTLTextureUsagePixelFormatView)) { defer_obj_release(e->snap); e->snap = nil; }
+    if (!e->snap) { e->snap = fb_texture(pf, w, h, need_pfv); if (!e->snap) { e->ser = 0; return NULL; } }   // full queue barriers separate a copy from the draws that read the earlier content
+    e->ser = ser; e->lv = lv; e->sl = sl; e->bar = g_fb_bar; e->sub = g_sub_serial;
+    g_fb_refresh[force ? 4 : shape ? 3 : !matched ? 0 : old_sub != g_sub_serial ? 2 : 1]++;
+    *fresh = 1; return e;
+}
+void mtl_feedback_stats(char *out, size_t n) {
+    static uint64_t prev[9];
+    uint64_t v[9] = {g_fb_count, g_fb_bytes, g_fb_reuse, g_fb_refresh[0], g_fb_refresh[1], g_fb_refresh[2], g_fb_refresh[3], g_fb_refresh[4], g_rt_merge_n}, d[9];
+    for (int i = 0; i < 9; i++) { d[i] = v[i] - prev[i]; prev[i] = v[i]; }
+    snprintf(out, n, "copies %llu / %.1f MB, reused by %llu draws; refresh first/evicted %llu, barrier %llu, submission %llu, shape %llu, forced %llu; identical-target continuations %llu",
+             d[0], d[1] / 1048576.0, d[2], d[3], d[4], d[5], d[6], d[7], d[8]);
 }
 // Called before the draw opens its render pass: if a snapshot is needed, end the current render pass, copy the snapshot (or reuse a valid one) and register the substitution (used by this draw's argument encoding)
 static void fb_prepare(NvProg *pr) {
@@ -9257,11 +9440,13 @@ static void fb_prepare(NvProg *pr) {
                 RED_ONCE(80, "same-pass feedback sampling: the sampled view is not a single-level 2D view of the attachment's level and layer (type %lu levels %lu+%lu layer %lu, attachment level %d layer %d, shader %s); left as is", (unsigned long)t.textureType, (unsigned long)tl, (unsigned long)t.mipmapLevelCount, (unsigned long)ts, lv, sl, fs->key);
                 continue; }
             NSUInteger w = MAX(base.width >> lv, 1ul), h = MAX(base.height >> lv, 1ul); int fresh;
-            fb_cache_t *e = fb_snap(ser, lv, sl, base.pixelFormat, w, h, g_fb_mode == 2, &fresh); if (!e) continue;
+            int need_pfv = !pass_reuse_on() || tex_need_pfv(base.pixelFormat, t.pixelFormat);
+            fb_cache_t *e = fb_snap(ser, lv, sl, base.pixelFormat, w, h, need_pfv, g_fb_mode == 2, &fresh); if (!e) continue;
             id<MTLTexture> snap = e->snap;
             if (fresh) {
                 if (g_enc) rp_end();
                 id<MTL4ComputeCommandEncoder> be = blit(); enc_b_copy_texture(be, base, (NSUInteger)sl, (NSUInteger)lv, MTLOriginMake(0, 0, 0), MTLSizeMake(w, h, 1), snap, 0, 0, MTLOriginMake(0, 0, 0));
+                g_fb_bytes += att_bytes(snap, 0);
             } else if (g_enc && (g_fb_rmask >> k & 1)) rp_end();   // an earlier draw of this pass read the attachment directly: it must not see this pass's writes
             if (!g_enc) fb_pass_sync();
             MTLTextureSwizzleChannels sw = t.swizzle;
@@ -9273,8 +9458,8 @@ static void fb_prepare(NvProg *pr) {
             if (!fresh) { g_fb_reuse++; PD("N %llu same-pass feedback sampling: attachment %d ser=%llu level %d layer %d: this draw samples the snapshot taken since the last barrier", g_stat_pass + !g_enc, k, (unsigned long long)ser, lv, sl); continue; }
             g_fb_count++;
             if (g_fb_count == 1 || g_fb_count == 10 || g_fb_count == 1000 || g_fb_count % 100000 == 0)
-                MLOG("same-pass feedback sampling: snapshot #%llu, %llu draws reused one, %llu passes ended before a write to an attachment read directly (frame %llu pass %llu, shader %s slot %d samples attachment %d ser=%llu %lux%lu format %lu)", (unsigned long long)g_fb_count, (unsigned long long)g_fb_reuse, (unsigned long long)g_fb_split,
-                     (unsigned long long)atomic_load(&g_cur_frame), g_stat_pass + !g_enc, fs->key, b->reg, k, (unsigned long long)ser, (unsigned long)w, (unsigned long)h, (unsigned long)base.pixelFormat);
+                MLOG("same-pass feedback sampling: snapshot #%llu, %llu draws reused one, %llu passes ended before a write to an attachment read directly (frame %llu pass %llu, shader %s slot %d samples attachment %d ser=%llu %lux%lu format %lu, snapshot usage %#lx)", (unsigned long long)g_fb_count, (unsigned long long)g_fb_reuse, (unsigned long long)g_fb_split,
+                     (unsigned long long)atomic_load(&g_cur_frame), g_stat_pass + !g_enc, fs->key, b->reg, k, (unsigned long long)ser, (unsigned long)w, (unsigned long)h, (unsigned long)base.pixelFormat, (unsigned long)snap.usage);
             PD("N %llu same-pass feedback sampling: attachment %d ser=%llu level %d layer %d copied into a snapshot; this draw samples the snapshot", g_stat_pass + !g_enc, k, (unsigned long long)ser, lv, sl);
         } }
     g_fb_wmask |= wm;
@@ -9960,6 +10145,7 @@ static uint32_t draw_color_writes(NvProg *pr) {
     return mask;
 }
 static void draw_(const p_draw *dw, const p_draw_idx *di);
+#include "framegen_capture.inc"
 static void draw(const p_draw *dw, const p_draw_idx *di) {
     cp_stamp start=cp_begin(); float region[4];
     int seated=!strcmp(DM_GAME_ID,"01007EF00011E000") && dm_aspect_region(1,region);
@@ -10052,8 +10238,8 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
         static int once2; if (!once2++) MLOG("same-target continuation: a draw in the continued pass needs a depth / stencil plane that is not attached; split here (first case pass %llu)", g_stat_pass);
         PD("M %llu a draw in the continued pass needs a depth / stencil plane that is not attached; split here", g_stat_pass); rp_end(); }
     if (g_rt_range_active && (!rt_range_pr_ro(pr) || !S.ds.dt || S.ds.dw || S.ds.st)) rp_end();   // The external write visibility at the original encoder boundary is not removed
-    if (g_rt_merged && draw_samples_rt(pr)) { static int once; if (!once++) MLOG("same-target continuation: a draw in the continued pass samples an attachment; split here (first case pass %llu)", g_stat_pass);
-        PD("M %llu a draw in the continued pass samples an attachment; split here", g_stat_pass); rp_end(); }
+    if (g_rt_merged && (draw_samples_rt(pr) || prog_swrites(pr))) { static int once; if (!once++) MLOG("same-target continuation: a draw samples an attachment or writes shader resources; split here (first case pass %llu)", g_stat_pass);
+        PD("M %llu a draw samples an attachment or writes shader resources; split here", g_stat_pass); rp_end(); }
     order_draw(pr, g_fz.active || g_sm_pass || g_defer_replaying);   // a write after an ordering barrier in the pass
     static id<MTLFunction> fz_fn;   // Specialized fragment function for this draw of the later pass in a merged render pass (nil = use the original version)
     if (g_fz.active && g_enc && g_fz.phase == 2 && (lop_on() || !fz_p2_draw(pr, dw, di, g_fz.lmap2, &fz_fn))) {   // Cannot be proven (or a logic operation, which needs the shader's own targets: lop_key): end the merged render pass (the earlier pass's result is stored as usual) and reopen with the later pass's original targets
@@ -10108,6 +10294,10 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
     id<MTLRenderCommandEncoder> en = rp_begin_ex(mode);
     g_rp_layered = 0; g_sm_plan.on = 0;
     g_fd_dw = NULL; g_fd_di = NULL;
+    if (g_pass.framegen_ui && (S.chmask.mask&7) && ((S.chmask.mask&7)!=7 || !pr->sh[1] || !framegen_ui_fn(pr->sh[1],!(S.color.blend_en&1),atest_key(pr->sh[1],g_pass.cfmt,NULL)!=0))) {
+        // An incomplete UI layer must never replace the real picture.
+        g_framegen_capture_state.invalid=1;
+    }
     if (!en) { PD("Z %llu draw skipped: the render pass did not begin vs=%.16s fs=%.16s", g_stat_pass, pr && pr->sh[0] ? pr->sh[0]->key : "-", pr && pr->sh[1] ? pr->sh[1]->key : "-"); return; }   // Z lines: why a draw was dropped at these early returns
     if (defer_q_draw) {
         defer_replay();
@@ -10226,7 +10416,8 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
         again = 1; draw(dw, di); again = 0; return;
     }
     // Parameter binding captures the actual resources under the registry lock; if the version changed between the eligibility check and the binding, split and retry before any GPU draw.
-    if (g_rt_range_active && (g_pass.reg_gen != g_reg_gen || g_pass.ser_gen != g_ser_gen || g_pass.range_dirty != nvn_dirty_now())) { rp_end(); draw(dw, di); return; }
+    if ((g_rt_range_active || (g_rt_merged && !tbdr_on())) &&
+        (g_pass.reg_gen != g_reg_gen || g_pass.ser_gen != g_ser_gen || g_pass.range_dirty != nvn_dirty_now())) { rp_end(); draw(dw, di); return; }
     int prim = dw ? dw->prim : di->prim;
     MTLPrimitiveType mp;
     switch (prim) {
@@ -10248,6 +10439,7 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
             if (g_vis_cur >= 0 && g_enc_vis != g_vis_cur + 1) { enc_r_visibility(en, MTLVisibilityResultModeCounting, (NSUInteger)g_vis_cur * 8); g_enc_vis = g_vis_cur + 1; }
         }
     }
+    if (*DM_GAME_FRAMEGEN_SCENE && dm_fg_enabled()) framegen_take_camera(pr);
     g_stat_draw++;
     if (enc_label_on() && !g_el_draws++ && pr->sh[1]) { memcpy(g_el_key, pr->sh[1]->key, 8); g_el_key[8] = 0; }
     if (passdump()) {   // Characteristics of a render pass's first draw (to judge whether the load can be omitted: full screen, no blending, writes all channels, does not depend on depth); with DM_NVN_PASSDUMP_ALL every draw is recorded
@@ -10302,7 +10494,7 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
 #ifdef NVN_RT_RANGE_TEST
     rr_snap(dw,di);
 #endif
-    udc_note_draw(pr, raster_mask);
+    udc_note_draw(pr, raster_mask, !g_fz.active && !g_defer_replaying && !g_geo_program && !g_geo_mesh.on && !g_ui_dock_draw);
     swrite_note(pr); order_note(pr);
     if (g_geo_mesh.on) { geo_mesh_encode(en); return; }
     if (g_geo_program) {
@@ -10376,6 +10568,7 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
                 di->instances ? di->instances : 1, di->base_vertex, di->base_instance);
     }
     if (g_rt_range_pending) { PD("j rt_level_range pass=%llu vc=%u", g_stat_pass, (unsigned)(dw ? dw->count : di->count)); g_rt_range_pending=0; }
+    if (*DM_GAME_FRAMEGEN_SCENE && dm_fg_enabled()) framegen_after_draw(pr);
 }
 static nvn_hmap g_cps = {.klen = sizeof(void *)};
 static void warm_claim(void) {
@@ -10467,8 +10660,9 @@ static void dispatch(const p_dispatch *dp) {
     id<MTLComputeCommandEncoder> ce = own ? pg_compute() : (id<MTLComputeCommandEncoder>)dispatch_enc();
     enc_c_pso(ce, ps);
     g_dispatch_dim[0] = (uint32_t)dp->x; g_dispatch_dim[1] = (uint32_t)dp->y; g_dispatch_dim[2] = (uint32_t)dp->z;   // read back by the driver segment c0 (encode_args_)
-    g_c0_dim_buf = nil;
+    g_c0_dim_buf = nil; g_dispatch_indirect = dp->ind != 0;
     encode_args(ce, cs, 5, 0);
+    g_dispatch_indirect = 0;
     if (dp->ind) {   // The shader reads the group counts from c0 + 0x200: copy the GPU-written ones there first (Metal 4 orders nothing inside an encoder without a barrier)
         if (g_c0_dim_buf) { [(id<MTL4ComputeCommandEncoder>)ce copyFromBuffer:(__bridge id<MTLBuffer>)ib sourceOffset:io toBuffer:g_c0_dim_buf destinationOffset:g_c0_dim_off size:12];
             [(id<MTL4ComputeCommandEncoder>)ce barrierAfterEncoderStages:MTLStageBlit beforeEncoderStages:MTLStageDispatch visibilityOptions:resource_vis()]; }
@@ -11286,6 +11480,8 @@ void mtl_exec(const uint8_t *p) {
             case OP_SET_RT: {
                 seated_dock_finish();
                 const p_set_rt *r = a;
+                PD("Y set_rt cmd=%p same=%d open=%d previous_pass=%llu colors=%d depth=%llu", p, R.has_rt && rt_same(&R.rt, r), g_enc != nil,
+                   (unsigned long long)g_stat_pass, r->n, (unsigned long long)(r->depth ? r->depth->serial : 0));
                 if (defer_begin_q(p)) break;
                 int pend = R.clear_d || R.clear_s; for (int i = 0; i < 8; i++) pend |= R.clear_c[i];
                 if (g_enc && !pend && R.has_rt && tbdr_on() && rt_range_same(&R.rt,r)) {
@@ -11293,7 +11489,13 @@ void mtl_exec(const uint8_t *p) {
                 if (g_enc && g_fz.active && g_fz.phase == 1 && fz_reuse_op(p) && !pend && g_enc_mode != 1 && R.has_rt && tbdr_on() && rt_same(&g_fz.rt1, r)) {
                     g_rt_merged = 1; if (!g_rt_merge_n++) MLOG("same-target continuation: first case pass %llu", g_stat_pass); PD("M %llu same-target continuation pass", g_stat_pass); break; }
                 // Do not continue a render pass opened only for a clear; one with fewer depth / stencil attachments can be continued (check the planes before drawing)
-                if (g_enc && g_enc_mode != 1 && !pend && R.has_rt && tbdr_on() && rt_same(&R.rt, r)) { g_rt_merged = 1; if (!g_rt_merge_n++) MLOG("same-target continuation: first case pass %llu", g_stat_pass); PD("M %llu same-target continuation pass", g_stat_pass); R.rt = *r; break; }
+                // Keeping identical attachments needs no lookahead. Outside the
+                // experimental path keep all planes, preserve shader-write
+                // boundaries, and split before any later attachment read/write alias.
+                if (g_enc && g_enc_mode != 1 && !pend && R.has_rt && (tbdr_on() || (pass_reuse_on() && g_enc_mode == 0 && !g_pass_swrite &&
+                    g_pass.reg_gen == g_reg_gen && g_pass.ser_gen == g_ser_gen && g_pass.range_dirty == nvn_dirty_now())) && rt_same(&R.rt, r)) {
+                    g_rt_merged = 1; if (!g_rt_merge_n++) MLOG("same-target continuation: first case pass %llu", g_stat_pass);
+                    PD("M %llu same-target continuation pass", g_stat_pass); R.rt = *r; break; }
                 if (g_enc && g_sm_pass && !pend && !g_game_barrier) { int sl;   // another layer of the slice-merged pass's level (sm_scan planned it)
                     if (sm_rt_slice(&R.rt, r, &sl) && sl >= g_sm_lo && sl <= g_sm_hi) { R.rt = *r; g_sm_cur = sl; g_sm_ncont++;
                         { void td_note_layer(id<MTLTexture>, uint64_t, NSUInteger, NSUInteger); td_note_layer(tex_mtl(r->color[0]), r->color[0]->serial, r->cview[0].set_levels ? r->cview[0].base_level : 0, (NSUInteger)sl); } PD("M %llu slice-merged pass goes on in layer %d", g_stat_pass, sl); break; } }
@@ -11373,7 +11575,7 @@ void mtl_exec(const uint8_t *p) {
                 PD("I %llu barrier bits %#x%s", g_stat_pass, bits, split ? ": ends the pass (shader writes)" : order ? " (render pass open; a later shader write is ordered after its draws)" : g_enc ? " (render pass open)" : "");
                 if (split) { rp_end(); static int once; if (!once++) MLOG("a game barrier (bits %#x) after shader writes in a draw pass: the pass ends there (first case pass %llu)", bits, (unsigned long long)g_stat_pass); }
                 else if (order) g_pass_order |= (bits & NVN_BARRIER_ORDER_PRIMITIVES_BIT ? 1 : 0) | (bits & (NVN_BARRIER_ORDER_FRAGMENTS_BIT | NVN_BARRIER_ORDER_FRAGMENTS_TILED_BIT) ? 2 : 0);
-                if (bits) { g_game_barrier = 1; g_fb_bar++; } break; }   // g_fb_bar: snapshots taken before it are stale (see fb_prepare)
+                if (bits) { g_game_barrier = 1; g_fb_bar++; } break; }   // Snapshots taken before a barrier are stale (see fb_prepare).
             case OP_SET_TEX_POOL: case OP_SET_SAMP_POOL: state_op(h.op, a); break;
             default: break;
         }
@@ -12166,11 +12368,76 @@ static void present_gpu_note(double s, int fx) {
     MLOG("present command buffer GPU time over 600 presents %s: p50 %.3f ms, p95 %.3f ms, max %.3f ms", fx ? "through MetalFX" : "through the bilinear pass", a[299], a[569], a[599]);
     n[fx] = 0;
 }
+static _Atomic int g_present_discard;
+static uint64_t g_fg_present_serial, g_fg_displayed, g_fg_display_busy;
+static uint64_t g_fg_last_real_ticket;   // g_pq_mu: preceding submitted real picture; not display confirmation
+static uint64_t g_fg_report_ticket;      // g_pq_mu: separate actual presentation report; pending is not confirmation
+static double g_fg_report_time;
+static _Atomic uint64_t g_fg_confirmed_displayed;
+// Diagnostic only: capture one generated/real pair after interpolation settles.
+// The explicit queue wait is confined to this opt-in screenshot, never pacing.
+static void framegen_debug_shot(id<MTLTexture> src,uint64_t ticket,int generated) {
+    static uint64_t chosen; static int real_saved;
+    const char *prefix=getenv("DM_FRAMEGEN_SHOT");
+    if (!prefix || !*prefix || strlen(prefix)>900 || real_saved) return;
+    if (generated) { if (chosen || g_fg_displayed<600) return; chosen=ticket; }
+    else if (!chosen || chosen!=ticket) return;
+    id<MTLSharedEvent> event=[g_dev newSharedEvent];
+    [g_q4 signalEvent:event value:1];
+    if (![event waitUntilSignaledValue:1 timeoutMS:10000]) { MLOG("[RED] frame generation screenshot: GPU wait timed out"); return; }
+    char path[1024]; snprintf(path,sizeof path,"%s-%s.png",prefix,generated?"generated":"real");
+    shot(src,path,1,NULL);
+    if (!generated) real_saved=1;
+}
 static double g_link_it_tin;   // Enqueue time of the frame the display-link callback is presenting (read and written only on the display-link thread)
-static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts) {
+// Map the window crop through the final canvas copy's destination rectangle.
+// With no captured transfer geometry the whole real texture remains the basis.
+static int framegen_present_crop(id<MTLTexture> real, id<MTLTexture> generated, const int crop[4], const int region[4], int mapped[4]) {
+    NSUInteger r[4],basis[4]={0,0,real.width,real.height};
+    if (!present_crop_rect(real,crop,r) || !real.width || !real.height) return 0;
+    if (region && region[2]>0 && region[3]>0 && !present_crop_rect(real,region,basis)) return 0;
+    if (r[0]<basis[0] || r[1]<basis[1] || r[0]+r[2]>basis[0]+basis[2] || r[1]+r[3]>basis[1]+basis[3]) return 0;
+    mapped[0]=(int)llround((double)(r[0]-basis[0])*generated.width/basis[2]);
+    mapped[1]=(int)llround((double)(r[1]-basis[1])*generated.height/basis[3]);
+    mapped[2]=(int)llround((double)(r[0]+r[2]-basis[0])*generated.width/basis[2])-mapped[0];
+    mapped[3]=(int)llround((double)(r[1]+r[3]-basis[1])*generated.height/basis[3])-mapped[1];
+    return mapped[2]>0 && mapped[3]>0;
+}
+// Optional measurement of actual display callbacks, not just GPU submissions.
+static FILE *g_fg_timing_file;
+static pthread_once_t g_fg_timing_once=PTHREAD_ONCE_INIT;
+static pthread_mutex_t g_fg_timing_mu=PTHREAD_MUTEX_INITIALIZER;
+static void framegen_timing_init(void) {
+    const char *path=getenv("DM_FRAMEGEN_TIMING");
+    if (!path || !*path) return;
+    g_fg_timing_file=fopen(path,"w");
+    if (!g_fg_timing_file) { MLOG("[RED] cannot open frame generation timing file: %s",path); return; }
+    fputs("serial\tticket\tgenerated\ttarget_s\tpresented_s\tenqueued_s\tsubmitted_s\n",g_fg_timing_file);
+}
+static int framegen_timing_active(void) {
+    pthread_once(&g_fg_timing_once,framegen_timing_init);
+    return g_fg_timing_file!=NULL;
+}
+static void framegen_presented(uint64_t serial,uint64_t ticket,int generated,double target,double actual,double enqueued,double submitted) {
+    if (generated && actual>0) atomic_fetch_add(&g_fg_confirmed_displayed,1);
+    if (!generated) {
+        pthread_mutex_lock(&g_pq_mu);
+        if (ticket>g_fg_report_ticket || (ticket==g_fg_report_ticket && actual>0 && g_fg_report_time<=0)) {
+            g_fg_report_ticket=ticket; g_fg_report_time=actual;
+        }
+        pthread_mutex_unlock(&g_pq_mu);
+    }
+    pthread_once(&g_fg_timing_once,framegen_timing_init);
+    if (!g_fg_timing_file) return;
+    pthread_mutex_lock(&g_fg_timing_mu);
+    fprintf(g_fg_timing_file,"%llu\t%llu\t%d\t%.9f\t%.9f\t%.9f\t%.9f\n",(unsigned long long)serial,(unsigned long long)ticket,generated,target,actual,enqueued,submitted);
+    fflush(g_fg_timing_file);
+    pthread_mutex_unlock(&g_fg_timing_mu);
+}
+static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts, int fg_slot, int release_slot, const int canvas_region[4]) {
     if (g_present_stall_ns) { struct timespec ts = {0, (long)g_present_stall_ns}; nanosleep(&ts, NULL); }
-    g_present_n++;
-    if (bootprof() && (g_present_n == 1 || g_present_n % 120 == 0)) {
+    if (fg_slot < 0) g_present_n++;
+    if (fg_slot < 0 && bootprof() && (g_present_n == 1 || g_present_n % 120 == 0)) {
         if (g_present_n == 1) g_bp_first_present = bp_now() - g_bp_t0;
         MLOG("[bootprof] t=%.3f s present #%llu: metallibs loaded %llu / %.1f ms; pipelines created %llu / %.1f ms (all synchronous on the submit thread); prewarmed and used: shaders %llu / render pipelines %llu / compute pipelines %llu; "
              "texture uploads %.1f MB / %llu first uploads + %llu re-uploads / %.1f ms; first present t=%.3f s", (bp_now() - g_bp_t0) / 1e9, g_present_n,
@@ -12179,20 +12446,26 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
              g_up_total_ns / 1e6, g_bp_first_present / 1e9);
     }
     PD("X ser=%llu", t->serial);
-    id<MTLTexture> src = tex_mtl(t);
+    id<MTLTexture> src = fg_slot >= 0 ? dm_fg_output(fg_slot) : tex_mtl(t);
     if (!src) { RED_ONCE(8, "present texture could not get an MTLTexture"); return 0; }
+    int mapped_crop[4];
+    if (fg_slot>=0) {
+        if (!framegen_present_crop(tex_mtl(t),src,crop,canvas_region,mapped_crop)) return 0;
+        crop=mapped_crop;
+    }
     // A texture made on first resolution joins the residency set (res_add), which a submission commits; a window texture presented before any submission has used it was still
     // outside the committed set when the display command buffer sampled it. Super Smash Bros. Ultimate presents its window texture in its first frames before drawing into it:
     // the display queue page-faulted (kIOGPUCommandBufferCallbackErrorPageFault) and macOS then ignored every later command buffer of the process, so the window stayed pink
     // (headless runs never present, and every game before drew into a window texture before presenting it). A commit with nothing new costs nothing
     res_commit();
+    if (dm_fg_enabled()) framegen_debug_shot(src,ticket,fg_slot>=0);
     // DM_NVN_REGLUM=x0,y0,x1,y1:file (normalized coordinates): read back this region on every present and record "present sequence number, present time ns, region mean luminance, subsampled grayscale thumbnail (hex)" (diagnostic: verify that animation speed is independent of frame rate).
     // A separate command buffer is queued after this frame's rendering (the same queue executes in submit order); does not wait for the GPU and does not disturb frame pacing
     static int rl = -1; static float rr[4]; static FILE *rlf; static pthread_mutex_t rlmu = PTHREAD_MUTEX_INITIALIZER;
     if (rl < 0) { const char *e = getenv("DM_NVN_REGLUM"), *c = e ? strchr(e, ':') : NULL;
         rl = c && sscanf(e, "%f,%f,%f,%f", &rr[0], &rr[1], &rr[2], &rr[3]) == 4 && (rlf = fopen(c + 1, "w")) != NULL;
         if (e && !rl) MLOG("[RED] DM_NVN_REGLUM argument or file invalid: %s", e); }
-    if (rl && (src.pixelFormat == MTLPixelFormatRGBA8Unorm || src.pixelFormat == MTLPixelFormatBGRA8Unorm || src.pixelFormat == MTLPixelFormatRGBA8Unorm_sRGB || src.pixelFormat == MTLPixelFormatBGRA8Unorm_sRGB)) {
+    if (fg_slot < 0 && rl && (src.pixelFormat == MTLPixelFormatRGBA8Unorm || src.pixelFormat == MTLPixelFormatBGRA8Unorm || src.pixelFormat == MTLPixelFormatRGBA8Unorm_sRGB || src.pixelFormat == MTLPixelFormatBGRA8Unorm_sRGB)) {
         NSUInteger x0 = (NSUInteger)(rr[0] * src.width), y0 = (NSUInteger)(rr[1] * src.height), w = (NSUInteger)(rr[2] * src.width) - x0, h = (NSUInteger)(rr[3] * src.height) - y0;
         id<MTLBuffer> rb = [g_dev newBufferWithLength:w * h * 4 options:MTLResourceStorageModeShared];
         id<MTLCommandBuffer> cb = q_cb(); id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
@@ -12214,9 +12487,9 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
         nshot = 0; const char *e = getenv("DM_NVN_SHOT"), *c = e ? strchr(e, ':') : NULL;
         if (c) { shot_path = c + 1; for (const char *q = e; q < c && nshot < 4096; q = strchr(q, ',') ? strchr(q, ',') + 1 : c) shots[nshot++] = atol(q); }
     }
-    for (int i = 0; i < nshot; i++) if ((long)g_present_n == shots[i]) { char path[1024]; snprintf(path, sizeof path, shot_path, (int)g_present_n); mtl_finish_gpu(); shot(src, path, 1, crop); }
+    for (int i = 0; fg_slot < 0 && i < nshot; i++) if ((long)g_present_n == shots[i]) { char path[1024]; snprintf(path, sizeof path, shot_path, (int)g_present_n); mtl_finish_gpu(); shot(src, path, 1, crop); }
     pthread_mutex_lock(&g_shotq_mu);
-    for (int i = 0; i < g_nshotq;) if (g_present_n >= g_shotq[i].frame) { mtl_finish_gpu(); shot(src, g_shotq[i].path, 1, crop); g_shotq[i] = g_shotq[--g_nshotq]; } else i++;
+    for (int i = 0; fg_slot < 0 && i < g_nshotq;) if (g_present_n >= g_shotq[i].frame) { mtl_finish_gpu(); shot(src, g_shotq[i].path, 1, crop); g_shotq[i] = g_shotq[--g_nshotq]; } else i++;
     pthread_mutex_unlock(&g_shotq_mu);
 
     CAMetalLayer *layer = (__bridge CAMetalLayer *)front_metal_layer();
@@ -12226,12 +12499,18 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     if (!layer.displaySyncEnabled) layer.displaySyncEnabled = YES;   // Windowed mode follows the display's vsync to prevent tearing
 #endif
     present_pipeline(layer.pixelFormat);   // Same as the original path: the first frame compiles the pipeline before taking the drawable
-    if (g_grab_cb) grab_present(src, crop, layer.drawableSize);   // Game picture needed by the whole-window screenshot (peek without the lock first; the real take locks inside the function)
+    if (fg_slot < 0 && g_grab_cb) grab_present(src, crop, layer.drawableSize);   // Game picture needed by the whole-window screenshot (peek without the lock first; the real take locks inside the function)
     uint64_t dt0 = now_ns();
     id<CAMetalDrawable> dr = supplied ? supplied : [layer nextDrawable];
     if (!supplied) g_drawable_ns += now_ns() - dt0;
     if (!dr) return 0;
-    int alloc_i = (int)(ticket % 3);
+    // A generated and a real picture have distinct GPU submissions, but share
+    // one game ticket. Allocator fences must count submissions, not game frames.
+    // Switching off cannot move allocator fences backwards into the game's
+    // ticket sequence. Once enabled, keep one monotonic display sequence.
+    uint64_t serial=ticket;
+    if (dm_fg_enabled() || g_fg_present_serial) { if (g_fg_present_serial<ticket) g_fg_present_serial=ticket; serial=++g_fg_present_serial; }
+    int alloc_i = (int)(serial % 3);
     if (g_present_alloc_fence[alloc_i]) {
         pthread_mutex_lock(&g_pq_mu);
         while (g_present_alloc_done[alloc_i] < g_present_alloc_fence[alloc_i]) pthread_cond_wait(&g_pq_cv, &g_pq_mu);
@@ -12245,16 +12524,27 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     if (!kind) { [cb endCommandBuffer]; [g_q4 signalDrawable:dr]; return 0; }
     int fx_kind = kind == PRESENT_METALFX;
     [cb endCommandBuffer];
+    // A queue drop can release the pending real picture while this generated
+    // picture is still being sampled by the GPU. Give that submission its own
+    // reference instead of relying on the queued real picture's reference.
+    if (fg_slot>=0) dm_fg_display_retain(fg_slot);
     MTL4CommitOptions *o = [MTL4CommitOptions new];
+    int profile_present=dm_fg_profile_on();
+    double present_submit=profile_present ? CACurrentMediaTime() : 0;
     [o addFeedbackHandler:^(id<MTL4CommitFeedback> f) {
         if (f.error) MLOG("[RED] display command buffer error: %s", f.error.description.UTF8String);
-        pthread_mutex_lock(&g_pq_mu); if (ticket > g_pq_done) g_pq_done = ticket; if (ticket > g_present_alloc_done[alloc_i]) g_present_alloc_done[alloc_i] = ticket; g_pq_inflight--; pthread_cond_broadcast(&g_pq_cv);
+        if (release_slot >= 0) dm_fg_display_done(release_slot);
+        if (fg_slot>=0) dm_fg_display_done(fg_slot);
+        pthread_mutex_lock(&g_pq_mu); if (fg_slot < 0 && ticket > g_pq_done) g_pq_done = ticket; if (serial > g_present_alloc_done[alloc_i]) g_present_alloc_done[alloc_i] = serial; g_pq_inflight--; pthread_cond_broadcast(&g_pq_cv);
         present_gpu_note(f.GPUEndTime - f.GPUStartTime, fx_kind); pthread_mutex_unlock(&g_pq_mu);
+        if (profile_present) dm_fg_profile_event(@"present_gpu",@{
+            @"ticket":@(ticket),@"frame":@(frame),@"generated":@(fg_slot>=0),@"submit_s":@(present_submit),
+            @"gpu_start_s":@(f.GPUStartTime),@"gpu_end_s":@(f.GPUEndTime),@"failed":@(f.error!=nil)});
     }];
     id<MTL4CommandBuffer> buffers[] = {cb};
     pthread_mutex_lock(&g_pq_mu); g_pq_inflight++; pthread_mutex_unlock(&g_pq_mu);
     [g_q4 commit:buffers count:1 options:o];
-    if (target_ts > 0) {
+    if (fg_slot < 0 && target_ts > 0) {
         static double leads[300], e2e[300];   // e2e: game enqueue -> system-scheduled present (including the time waiting in the queue for the display-link callback), the full span of input latency that our side can read
         static uint64_t lead_n;
         leads[lead_n % 300] = (target_ts - CACurrentMediaTime()) * 1000.0; e2e[lead_n % 300] = g_link_it_tin > 0 ? (target_ts - g_link_it_tin) * 1000.0 : 0;
@@ -12264,25 +12554,30 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
             for (int i = 1; i < 300; i++) { double v = a[i]; int j = i - 1; while (j >= 0 && a[j] > v) { a[j + 1] = a[j]; j--; } a[j + 1] = v; }
             double b[300]; memcpy(b, e2e, sizeof b);
             for (int i = 1; i < 300; i++) { double v = b[i]; int j = i - 1; while (j >= 0 && b[j] > v) { b[j + 1] = b[j]; j--; } b[j + 1] = v; }
-            MLOG("display link up to tick %llu: ticks 300, presents %llu, empty ticks %llu (held for the present interval %llu), old frames dropped by merging %llu; submission ahead of target display p50 %.3f ms / min %.3f ms; game enqueue to target display p50 %.3f ms / min %.3f / max %.3f ms",
+            MLOG("display link up to tick %llu: ticks 300, presents %llu, empty ticks %llu (held for the present interval %llu), old frames dropped by merging %llu; submission ahead of target display p50 %.3f ms / min %.3f ms; game enqueue to target display p50 %.3f ms / min %.3f / max %.3f ms; framegen busy updates %llu",
                  (unsigned long long)g_link_tick_n, (unsigned long long)g_present_n, (unsigned long long)g_link_empty, (unsigned long long)g_link_held,
-                 (unsigned long long)g_link_dropped, a[149], a[0], b[149], b[0], b[299]);
+                 (unsigned long long)g_link_dropped, a[149], a[0], b[149], b[0], b[299], (unsigned long long)g_fg_display_busy);
         }
     }
     [g_q4 signalDrawable:dr];
-    g_present_alloc_fence[alloc_i] = ticket;
+    g_present_alloc_fence[alloc_i] = serial;
 #if TARGET_OS_SIMULATOR   // The iOS simulator SDK has no presentation-time callback and no minimum display duration (used only for picture acceptance, display-link ticks are not counted)
     (void)period; [dr present];
 #else
     uint64_t pn = ticket;   // Record the present time by the game's present sequence number (ticket number): hle's present statistics are taken by "the game's nth present"; in the display link path the actual present count != the game's present count (old frames get merged and dropped)
-    [dr addPresentedHandler:^(id<MTLDrawable> d) {   // Actual presentation time (the time this frame is really put on screen, CACurrentMediaTime base)
+    int observe=dm_fg_enabled() || framegen_timing_active();
+    double enqueued=target_ts>0 ? g_link_it_tin : 0, submitted=observe ? CACurrentMediaTime() : 0;
+    if (fg_slot < 0) [dr addPresentedHandler:^(id<MTLDrawable> d) {   // Actual presentation time (the time this frame is really put on screen, CACurrentMediaTime base)
         CFTimeInterval tt = d.presentedTime;
         g_pres[pn % PRING] = (pres_ent){pn, tt > 0 ? tt : -1};
+        if (observe) framegen_presented(serial,pn,0,target_ts,tt,enqueued,submitted);
     }];
+    else [dr addPresentedHandler:^(id<MTLDrawable> d) { framegen_presented(serial,pn,1,target_ts,d.presentedTime,enqueued,submitted); }];
     // Each frame is displayed for at least one present period: when the GPU completion time jitters around a 120 Hz refresh boundary, the paired "25 ms + 8.33 ms" stutter no longer appears
     if (target_ts > 0) [dr present];
     else if (period > 0) [dr presentAfterMinimumDuration:period]; else [dr present];
 #endif
+    if (fg_slot >= 0 && ++g_fg_displayed % 300 == 0) MLOG("[framegen] generated pictures submitted=%llu, confirmed displayed=%llu", (unsigned long long)g_fg_displayed,(unsigned long long)atomic_load(&g_fg_confirmed_displayed));
     (void)frame;
     return 1;
 }
@@ -12293,17 +12588,30 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
 // Swapchain texture return: before AcquireTexture gets a texture it waits for the ticket of that texture's previous present to be processed (mtl_present_wait), after which the commands the game draws into it
 // are necessarily ordered after that blit on the GPU queue.
 #define PQ 8
-typedef struct { tex_t t; double period; uint64_t frame; int crop[4]; double t_in; uint64_t ev_val, snap_v; } pq_item;   // snap_v: the snapshot copy this present shows (snap_commit_wait)   // t_in: the time the game handed this frame into the present queue (CACurrentMediaTime); ev_val: see g_ext_ev
+typedef struct { tex_t t; double period; uint64_t frame; int crop[4]; double t_in; uint64_t ev_val, snap_v; int fg_slot, fg_valid, fg_shown, fg_cadence; int canvas_region[4]; } pq_item;   // snap_v: the snapshot copy this present shows (snap_commit_wait)   // t_in: the time the game handed this frame into the present queue (CACurrentMediaTime); ev_val: see g_ext_ev
 // External producer (the Vulkan layer, dm/gfx/vk) renders on its own queue and signals this event when a frame's rendering is done: the present of that frame waits for the value on g_q4
 static id<MTLSharedEvent> g_ext_ev;
 static void ext_wait(uint64_t v) { if (v && g_ext_ev) [g_q4 waitForEvent:g_ext_ev value:v]; }
 static void snap_commit_wait(uint64_t v);
 static pq_item g_pq[PQ];
+static uint64_t g_link_presenting;   // under g_pq_mu: do not drop a generated picture before its display command is committed
+// Drop only queued owners. A picture already handed to the GPU releases its
+// output slot in that present's completion handler instead.
+static void present_drop_item(uint64_t ticket) {
+    pq_item *it=&g_pq[(ticket-1)%PQ];
+    if (it->fg_valid) { dm_fg_display_done(it->fg_slot); it->fg_valid=0; }
+    g_pres[ticket%PRING]=(pres_ent){ticket,-1};
+}
 static uint64_t g_pq_in;
-static int present_now(const tex_t *, double, uint64_t, uint64_t, const int[4], id<CAMetalDrawable>, double);
+static int present_now(const tex_t *, double, uint64_t, uint64_t, const int[4], id<CAMetalDrawable>, double, int, int, const int[4]);
 static double g_link_vperiod, g_link_vhalf;   // virtual ticks (link_range): seconds per counted tick (0 = every callback is a tick) and half a refresh of the screen
 
-@interface NvMetalDisplayLinkDelegate : NSObject <CAMetalDisplayLinkDelegate>
+@interface NvMetalDisplayLinkDelegate : NSObject <CAMetalDisplayLinkDelegate> {
+    double _tickOrigin, _tickLast;
+    double _framegenRealTarget, _framegenPeriod;
+    uint64_t _tickBase;
+    int _tickRate, _framegenMode;
+}
 @end
 
 // Fallback for the display link going silent while in the foreground (two smoke-test hangs before merge: the display link stopped calling back while the app was in the foreground, nobody takes the queued frames, and the game waits forever for its previous present to be processed before "acquiring the next swapchain texture"):
@@ -12343,32 +12651,95 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
     cb_prev = cb; nticks++;
     pthread_mutex_lock(&g_link_mu);
     __atomic_store_n(&g_link_tick_ns, now_ns(), __ATOMIC_RELAXED);
-    g_link_tick_n++;
+    double tickTime=update.targetPresentationTimestamp;
+    int tickRate=dm_fg_enabled() && isfinite(tickTime) && tickTime>0 ? mtl_link_rate() : 0;
+    if (tickRate) {
+        // Notifications can be omitted under GPU backpressure. The source
+        // waits for elapsed refresh intervals, not two successful callbacks:
+        // counting only callbacks would turn a 30 Hz source into 15 Hz.
+        if (_tickRate!=tickRate || tickTime<_tickLast) {
+            _tickOrigin=tickTime; _tickBase=g_link_tick_n;
+        }
+        uint64_t tick=_tickBase+1+(uint64_t)llround((tickTime-_tickOrigin)*tickRate);
+        if (tick>g_link_tick_n) g_link_tick_n=tick;
+    } else g_link_tick_n++;
+    _tickRate=tickRate; _tickLast=tickTime;
     pthread_cond_broadcast(&g_link_cv);
     pthread_mutex_unlock(&g_link_mu);
     pthread_mutex_lock(&g_pq_mu);
     if (!g_dm_present_link || g_rescue_mode || g_pq_read == g_pq_in) { if (g_dm_present_link && !g_rescue_mode) g_link_empty++; pthread_mutex_unlock(&g_pq_mu); return; }
+    // Discard/suspend removes the preceding real source. Its fractional phase
+    // cannot carry into a fresh pair, even if the interruption was brief.
+    if (!g_fg_last_real_ticket || !g_link_hold_until) _framegenRealTarget=0;
     // The previous frame's present interval was >= 2 (period > 25 ms): keep it on screen for its whole period before taking the next one, as the Switch flips only every N vertical syncs. This also holds while the link runs at 60 Hz (Mario 1.2.1 sets 2 for single frames, see nvn_game_fps in hle_nvn.c);
     //   before, every tick took the newest frame, so that frame, carrying the extra time step the game advanced for it, was shown for only 16.7 ms and the game looked like it jumped ahead
     if (g_link_hold_until > 0 && update.targetPresentationTimestamp < g_link_hold_until - tol) { g_link_held++; pthread_mutex_unlock(&g_pq_mu); return; }
+    if (dm_fg_enabled()) {
+        int index=(g_fg_present_serial+1)%3;
+        // A display-link update must never wait for GPU allocator feedback.
+        // Check before taking a ticket, preserving both source and output
+        // ownership until a later update can submit without blocking.
+        if (g_present_alloc_done[index]<g_present_alloc_fence[index]) {
+            g_fg_display_busy++; pthread_mutex_unlock(&g_pq_mu); return;
+        }
+    }
     uint64_t first = g_pq_read + 1, ticket = g_pq_in;
     // In order, one frame per tick and at most one behind the newest: two waiting, the older now and the newer on the next tick; three or more, the older ones are dropped. Taking the newest
     // dropped the one before whenever two frames landed in the same refresh, as frames of a 60 fps game that take 16-17.5 ms do, and the next frame then stayed up 33 ms
     // (Dark Souls Remastered, from PR #31: presents within 14.7-18.7 ms 98.2 -> 99.98 %, about 2 ms more from enqueue to display). DM_PRESENT_FIFO=0 takes the newest, as before
     static int fifo = -1; if (fifo < 0) { const char *e = getenv("DM_PRESENT_FIFO"); fifo = !(e && !strcmp(e, "0")); MLOG("display link: %s", fifo ? "frames in order, at most one behind" : "the newest frame each tick (DM_PRESENT_FIFO=0)"); }
-    if (fifo && ticket > first) ticket = ticket - first >= 2 ? g_pq_in - 1 : first;
+    if (g_pq[(first-1)%PQ].fg_valid && g_pq[(first-1)%PQ].fg_shown) ticket=first;
+    else if (fifo && ticket > first) ticket = ticket - first >= 2 ? g_pq_in - 1 : first;
     pq_item it = g_pq[(ticket - 1) % PQ]; g_link_it_tin = it.t_in;
-    g_pq_read = ticket;
-    if (ticket > first) { g_link_dropped += ticket - first; for (uint64_t k = first; k < ticket; k++) g_pres[k % PRING] = (pres_ent){k, -1}; }   // Old frames merged and dropped are recorded as "not presented", so the present statistics honestly count them as dropped frames
+    // A generated picture is optional. Prefer the real picture once a newer
+    // real frame is waiting, this picture has aged a whole game interval, or
+    // the preceding real picture is known to have missed the display.
+    // A pending callback is not confirmation: Core Animation prepares pictures
+    // ahead of display, so waiting for it here would starve interpolation.
+    double target=update.targetPresentationTimestamp;
+    int source_failed=g_fg_report_ticket==ticket-1 &&
+        (g_fg_report_time<=0 || g_fg_report_time>=target);
+    int generated=it.fg_valid && !it.fg_shown && ticket==g_fg_last_real_ticket+1 &&
+        !source_failed && ticket==g_pq_in && cb-it.t_in<=it.period;
+    if (generated) { g_pq[(ticket-1)%PQ].fg_shown=1; g_pq_read=ticket-1; }
+    else { g_pq_read=ticket; g_pq[(ticket-1)%PQ].fg_valid=0; }
+    if (it.fg_valid || it.fg_cadence) g_link_presenting=ticket;
+    if (ticket > first) { g_link_dropped += ticket - first; for (uint64_t k = first; k < ticket; k++) present_drop_item(k); }   // Old frames merged and dropped are recorded as "not presented", so the present statistics honestly count them as dropped frames
     if (ticket > 1 && g_pq_done < ticket - 1) g_pq_done = ticket - 1;
     g_link_ring[ticket % PRING] = (link_ent){ticket, update.targetPresentationTimestamp, (update.targetPresentationTimestamp - cb) * 1e3, gap_max * 1e3, nticks}; nticks = 0; gap_max = 0;
     pthread_cond_broadcast(&g_pq_cv);
     pthread_mutex_unlock(&g_pq_mu);
     int submitted;
     ext_wait(it.ev_val); snap_commit_wait(it.snap_v);
-    @autoreleasepool { submitted = present_now(&it.t, it.period, it.frame, ticket, it.crop, update.drawable, update.targetPresentationTimestamp); }
-    g_link_hold_until = submitted && it.period > 0.025 ? update.targetPresentationTimestamp + it.period : 0;
-    if (!submitted) {
+    double display_period=it.fg_cadence ? it.period/2 : it.period;
+    @autoreleasepool { submitted = present_now(&it.t, display_period, it.frame, ticket, it.crop, update.drawable, update.targetPresentationTimestamp, generated ? it.fg_slot : -1, !generated && it.fg_valid ? it.fg_slot : -1,it.canvas_region); }
+    if (submitted && it.fg_cadence) {
+        // Keep the fractional refresh remainder. At 40/50 real frames on a
+        // 120 Hz screen, rounding each half-period from the last actual tick
+        // would lengthen every pair. Real and midpoint deadlines share one
+        // source phase, rather than accumulating two rounded half-periods.
+        int mode=dm_fg_mode();
+        if (!_framegenRealTarget || mode!=_framegenMode || fabs(it.period-_framegenPeriod)>1e-6 || target>_framegenRealTarget+2*it.period || target<_framegenRealTarget) {
+            _framegenRealTarget=generated?target-it.period/2:target;
+        } else if (!generated) {
+            // A skipped midpoint must not leave a deadline in the future:
+            // the real picture we actually chose becomes the new origin.
+            _framegenRealTarget=it.fg_shown?_framegenRealTarget+it.period:target;
+        }
+        _framegenMode=mode; _framegenPeriod=it.period;
+        g_link_hold_until=_framegenRealTarget+(generated?it.period:it.period/2);
+    } else {
+        _framegenRealTarget=0;
+        g_link_hold_until=submitted && display_period>.025 ? target+display_period:0;
+    }
+    if (it.fg_valid || dm_fg_enabled()) {
+        pthread_mutex_lock(&g_pq_mu);
+        if (submitted && !generated) g_fg_last_real_ticket=ticket;
+        g_link_presenting=0; pthread_cond_broadcast(&g_pq_cv);
+        pthread_mutex_unlock(&g_pq_mu);
+    }
+    if (!submitted && !generated) {
+        if (it.fg_valid) dm_fg_display_done(it.fg_slot);
         pthread_mutex_lock(&g_pq_mu);
         if (ticket > g_pq_done) g_pq_done = ticket;
         pthread_cond_broadcast(&g_pq_cv);
@@ -12378,17 +12749,32 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
 @end
 
 static CAMetalDisplayLink *g_link; static CFRunLoopRef g_link_rl; static int g_link_started;
+static _Atomic int g_link_paused;
 static int g_link_owns_layer, g_classic_busy;   // Under g_pq_mu: nextDrawable throws while the layer has the display link object attached, so the present thread that takes its own drawable and the display link object are mutually exclusive
 static int link_on(void) { return g_dm_present_link && !atomic_load(&g_rescue_mode) && g_link != nil; }
+static int framegen_present_active(void) {
+    pthread_mutex_lock(&g_pq_mu);
+    // Classic and rescue own their drawables after link invalidation. Their
+    // presenter consumes the same generated/real pair and lifetime protocol.
+    int active=front_metal_layer() && !g_classic && !atomic_load(&g_present_discard) && (!g_link_owns_layer || (g_dm_present_link && !g_rescue_mode && !g_stall_t0));
+    pthread_mutex_unlock(&g_pq_mu);
+    return active && !atomic_load(&g_link_paused);
+}
 // Screens whose refresh rate is not a multiple of the link's (144 or 165 Hz against 60 or 30): asked for 60 Hz, the system fires the link on every third refresh of a 165 Hz screen,
 // 55 Hz, and a game paced by the link runs at 55 fps (27.5 at 30). There the link runs at the screen's rate and only the refreshes nearest a steady clock of the wanted rate count as
 // ticks (g_link_vperiod, NvMetalDisplayLinkDelegate): 60 a second on average, each frame shown on the refreshes nearest its 1/60 s slot. DM_LINK_VTICK=0 keeps the system's choice.
 // In fullscreen the Mac front end switches such a screen to a rate that is a multiple where it has one (front_screen_match), and the range is set again for it (link_sync)
-__attribute__((weak)) int front_screen_max_fps(void) { return 0; }   // front_mac.m; graphics unit tests and iOS have none
+__attribute__((weak)) int front_screen_max_fps(void) { return 0; }   // front ends supply their screen; graphics unit tests have none
 __attribute__((weak)) void front_screen_match(int fps) { (void)fps; }   // front_mac.m; graphics unit tests and iOS have none
 static CAFrameRateRange link_range(int mode) {
     static int on = -1; if (on < 0) { const char *e = getenv("DM_LINK_VTICK"); on = !(e && !strcmp(e, "0")); }
     int rate = mode == 3 ? 30 : mode == 2 ? 120 : 60, hz = on ? front_screen_max_fps() : 0;
+    if (dm_fg_enabled() && mode==1) {
+        // Match MacNativeGames: automatic interpolation follows the physical
+        // screen; the source clock decides its own rate independently.
+        int native=front_screen_max_fps(); if (native<=0) native=60;
+        g_link_vperiod=0; return CAFrameRateRangeMake(native,native,native);
+    }
     if (mode != 2 && hz > rate && hz % rate) {
         if (g_link_vperiod != 1.0 / rate) MLOG("display link at the screen's %d Hz, counting a tick every 1/%d s (the screen's rate is not a multiple of it)", hz, rate);
         g_link_vhalf = 0.5 / hz; g_link_vperiod = 1.0 / rate;
@@ -12433,16 +12819,17 @@ static void link_sync(void) {   // Called every frame by the game's present thre
     if (want < 0 || want > 2) { g_dm_present_link = applied == 3 ? 1 : applied; pthread_mutex_unlock(&g_pq_mu); return; }
     if (g_rescue_mode && (want != g_rescue_mode || now_ns() >= g_rescue_back_at)) {
         g_rescue_mode = 0; g_stall_t0 = 0; __atomic_store_n(&g_link_tick_ns, now_ns(), __ATOMIC_RELAXED);
+        if (dm_fg_enabled()) dm_fg_request_reset();
         MLOG("display link: rescue ended, trying pacing mode %d (frame %llu)", want, (unsigned long long)atomic_load(&g_cur_frame));
     }
     if (g_rescue_mode) want = 0;
     pthread_mutex_unlock(&g_pq_mu);
-    if (want && mtl_fps_target() == 30) want = 3;   // Power-saving mode: display link at 30 Hz
-    if (want) front_screen_match(want == 3 ? 30 : want == 2 ? 120 : 60);
+    if (want && mtl_fps_target() == 30 && !dm_fg_enabled()) want = 3;   // Power-saving mode: display link at 30 Hz
+    if (want && !dm_fg_enabled()) front_screen_match(want == 3 ? 30 : want == 2 ? 120 : 60);
     // The screen's rate changed (switched by front_screen_match, or another screen): the range again, virtual ticks or none. Taken only once the link object exists, so a change
     // while its thread starts (after link_main read the rate) is not lost
-    static int hz_was; int hz = front_screen_max_fps(); CAMetalDisplayLink *lk = g_link;
-    if (lk && hz != hz_was) { hz_was = hz; if (want && want == applied) { lk.preferredFrameRateRange = link_range(want); MLOG("display link: the screen runs at %d Hz now, range set again (frame %llu)", hz, (unsigned long long)atomic_load(&g_cur_frame)); } }
+    static int hz_was,fg_was; int hz = front_screen_max_fps(),fg_now=dm_fg_enabled(); CAMetalDisplayLink *lk = g_link;
+    if (lk && (hz != hz_was || fg_now!=fg_was)) { hz_was = hz; fg_was=fg_now; if (want && want == applied) { lk.preferredFrameRateRange = link_range(want); MLOG("display link: the screen runs at %d Hz now, range set again (frame %llu)", hz, (unsigned long long)atomic_load(&g_cur_frame)); } }
     int lat = link_latency();   // fullscreen, screen or refresh mode changed: a link created since took the current policy
     if (lk && lk.preferredFrameLatency != lat) { lk.preferredFrameLatency = lat; MLOG("display link: frame latency %d (%s; frame %llu)", lat, link_latency_why(), (unsigned long long)atomic_load(&g_cur_frame)); }
     if (want == applied) return;
@@ -12454,6 +12841,7 @@ static void link_sync(void) {   // Called every frame by the game's present thre
         return;   // The display link object is created on a new thread; align again next frame
     }
     CAMetalDisplayLink *link = g_link; if (!link) return;
+    if (dm_fg_enabled()) dm_fg_request_reset();
     if (want) link.preferredFrameRateRange = link_range(want);
     else { CFRunLoopRef rl = g_link_rl; g_link = nil; CFRunLoopPerformBlock(rl, kCFRunLoopDefaultMode, ^{ [link invalidate]; pthread_mutex_lock(&g_pq_mu); g_link_owns_layer = 0; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu); CFRunLoopStop(rl); }); CFRunLoopWakeUp(rl); }
     MLOG("present pacing mode %d → %d (frame %llu)", applied, want, (unsigned long long)atomic_load(&g_cur_frame));
@@ -12464,10 +12852,13 @@ static void link_sync(void) {   // Called every frame by the game's present thre
 // waiting as-is for "the present queue to empty" would wait forever, the enter-background callback would not return, and the system would kill the process (the process disappears within 22 seconds after switching to another App).
 // These frames will not be seen anyway: discard them directly (accounted as dropped frames) and only wait for the one present already submitted to the GPU to finish.
 static void present_drop_for_suspend(void) {
+    if (dm_fg_enabled()) dm_fg_request_reset();
     pthread_mutex_lock(&g_pq_mu);
+    g_fg_last_real_ticket=0; g_fg_report_ticket=0; g_fg_report_time=0;
     if (g_link_owns_layer) {
+        while (g_link_presenting) pthread_cond_wait(&g_pq_cv,&g_pq_mu);
         uint64_t n = g_pq_in - g_pq_read;
-        for (uint64_t k = g_pq_read + 1; k <= g_pq_in; k++) g_pres[k % PRING] = (pres_ent){k, -1};
+        for (uint64_t k = g_pq_read + 1; k <= g_pq_in; k++) present_drop_item(k);
         g_link_dropped += n; g_pq_read = g_pq_in;
         while (g_pq_inflight) pthread_cond_wait(&g_pq_cv, &g_pq_mu);
         if (g_pq_done < g_pq_in) g_pq_done = g_pq_in;
@@ -12485,13 +12876,23 @@ static void *present_main(void *arg) {
         pthread_mutex_lock(&g_pq_mu);
         while (g_pq_read == g_pq_in || g_link_owns_layer) pthread_cond_wait(&g_pq_cv, &g_pq_mu);   // In display-link mode the display-link callback takes them; an empty queue is judged by "taken"; "done" has to wait for the feedback of the present submit and lags behind taken
         pq_item it = g_pq[g_pq_read % PQ];
-        uint64_t ticket = ++g_pq_read; g_classic_busy = 1;
+        uint64_t ticket=g_pq_read+1;
+        int failed=g_fg_report_ticket==ticket-1 && g_fg_report_time<=0;
+        int generated=it.fg_valid && !it.fg_shown && ticket==g_fg_last_real_ticket+1 && !failed && ticket==g_pq_in && CACurrentMediaTime()-it.t_in<=it.period;
+        g_classic_busy=1;
+        if (generated) g_pq[(ticket-1)%PQ].fg_shown=1;
+        else { g_pq_read=ticket; g_pq[(ticket-1)%PQ].fg_valid=0; }
+        if (it.fg_valid || it.fg_cadence) g_link_presenting=ticket;
         pthread_mutex_unlock(&g_pq_mu);
         int submitted;
         ext_wait(it.ev_val); snap_commit_wait(it.snap_v);
-        @autoreleasepool { submitted = present_now(&it.t, it.period, it.frame, ticket, it.crop, nil, 0); }
-        pthread_mutex_lock(&g_pq_mu); g_classic_busy = 0; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu);
-        if (!submitted) {
+        @autoreleasepool { submitted = present_now(&it.t,it.fg_cadence?it.period/2:it.period,it.frame,ticket,it.crop,nil,0,generated?it.fg_slot:-1,!generated && it.fg_valid?it.fg_slot:-1,it.canvas_region); }
+        if (!submitted && !generated && it.fg_valid) dm_fg_display_done(it.fg_slot);
+        pthread_mutex_lock(&g_pq_mu); g_classic_busy = 0;
+        if (submitted && !generated) g_fg_last_real_ticket=ticket;
+        g_link_presenting=0;
+        pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu);
+        if (!submitted && !generated) {
             pthread_mutex_lock(&g_pq_mu);
             if (ticket > g_pq_done) g_pq_done = ticket;
             pthread_cond_broadcast(&g_pq_cv);
@@ -12502,14 +12903,23 @@ static void *present_main(void *arg) {
 }
 uint32_t mtl_present_qos(void) { return atomic_load(&g_present_qos); }
 static void present_start(void) { pthread_t th; if (pthread_create(&th, NULL, present_main, NULL)) MDIE("cannot start the present thread"); pthread_detach(th); }
-static _Atomic int g_present_discard;
+
 void mtl_link_pause(int on);
 // The short period when the front end goes to the background and waits for the game to save: presents are dropped directly (the display link does not call back in the background, enqueueing would block the game thread; nobody sees the picture anyway).
 // When turned on, also clear the frames already queued: the system first stops the display-link callback and only afterwards notifies about going to the background, and in that gap the game has already filled the swapchain and is stuck at "before acquiring the next texture, wait for its previous present to be processed"
 // (hle_nvn.c nvnWindowAcquireTexture -> mtl_present_wait). Without clearing, the game cannot advance a single tick during those 2.5 seconds of waiting for the save, and the save is not written (the same pattern three times in player logs: 3 frames queued, 0 submits)
-void mtl_present_discard(int on) { atomic_store(&g_present_discard, on != 0); if (on) present_drop_for_suspend(); }
+void mtl_present_discard(int on) {
+    int changed=atomic_exchange(&g_present_discard,on!=0)!=(on!=0);
+    if (changed && dm_fg_enabled()) dm_fg_request_reset();
+    if (on) present_drop_for_suspend();
+}
 static uint64_t present_enqueue(const tex_t *t, double period, const int crop[4], uint64_t ev_val);
-uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) { return present_enqueue(t, period, crop, 0); }
+void dm_framegen_mode_will_change(void) { mtl_present_flush(); dm_fg_wait_idle(); }
+uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
+    uint64_t ticket=present_enqueue(t,period,crop,0);
+    dm_fg_latch();
+    return ticket;
+}
 void *mtl_device(void) { mtl_init(); return (__bridge void *)g_dev; }
 void *mtl_device_classic(void) { g_classic_ok = 1; return mtl_device(); }   // the GL and Vulkan layers: a device without Metal 4 is taken too, with presents dropped (mtl_init)
 // An external producer's texture (the Vulkan layer's swapchain images): a serial the present path resolves (serial_put), resident for the Metal 4 queue, never collected by the cross-submit ledger
@@ -12632,8 +13042,11 @@ static uint64_t snap_take(const tex_t *t) {
 }
 static uint64_t present_enqueue(const tex_t *t, double period, const int crop[4], uint64_t ev_val) {
     atomic_store(&dm_present_ns, now_ns());
-    if (g_classic || atomic_load(&g_present_discard)) return 0;   // Ticket number 0 = no pending present; the swapchain texture acquire does not wait (g_classic: no Metal 4 queue to present on)
-    if (t) { xv_check(t->serial, 0, 0, "present"); if (g_xv_npresent < 128) g_xv_present[g_xv_npresent++] = t->serial; }
+    if (g_classic || atomic_load(&g_present_discard)) {
+        if (*DM_GAME_FRAMEGEN_SCENE && dm_fg_enabled()) framegen_discard_inputs();
+        return 0;   // No pending present; the swapchain texture acquire does not wait.
+    }
+    if (t) { xv_check(t->serial, 0, 0, "present"); mtl_xv_window_tex(t->serial); }
     // A texture whose content comes from its storage is uploaded when it is first resolved (and again when its pages change), in an upload batch only the submit thread may open.
     // Bastion fills both window textures with WriteTexels at boot (main+0x9374) and presents one before drawing into it: resolved on the present thread, the upload aborted the host.
     // Resolve it here, where the game queues the present, and commit the batch, so the display command buffer comes after the upload on the queue and the present thread finds it uploaded
@@ -12647,6 +13060,20 @@ static uint64_t present_enqueue(const tex_t *t, double period, const int crop[4]
         else if (st == 2 && now - t0 >= at + dur) { st = 3; mtl_link_pause(0); MLOG("DM_TEST_LINK_STALL: resuming the display link (frame %llu)", (unsigned long long)atomic_load(&g_cur_frame)); }
     }
     if (ws_on()) { static uint64_t f0; uint64_t f = atomic_load(&g_cur_frame); if (!f0) f0 = f; else if (f >= f0 + 300) { ws_report(f, f - f0); f0 = f; } }
+    int fg_slot=-1,fg_cadence=0,canvas_region[4]={0};
+    if (*DM_GAME_FRAMEGEN_SCENE && dm_fg_enabled() && t && !ev_val && on_sub_thread()) {
+        pthread_mutex_lock(&g_pq_mu);
+        // The preceding real display command must already be committed: both
+        // use g_q4, so optional work queued earlier would delay that real frame.
+        // Being "taken" by the callback alone does not mean it was committed.
+        int interpolate=g_pq_in==g_pq_read && !g_link_presenting &&
+            !(g_pq_in && g_fg_report_ticket==g_pq_in && g_fg_report_time<=0);
+        pthread_mutex_unlock(&g_pq_mu);
+        if (*DM_GAME_ASPECT_CANVAS && g_framegen_capture_state.present_serial!=t->serial) interpolate=0;
+        if (g_framegen_capture_state.present_serial==t->serial) memcpy(canvas_region,g_framegen_capture_state.present_region,sizeof canvas_region);
+        fg_slot=framegen_generate(period,interpolate); fg_cadence=dm_fg_has_history();
+        if (fg_cadence && period<=0) period=dm_fg_frame_seconds();
+    }
     tex_t snap; uint64_t ss = 0; int slot = 0;
     if (t && !ev_val && mtl_snap_on()) {
         slot = (int)(atomic_load(&g_snap_next) % (uint64_t)g_snap_n);
@@ -12654,8 +13081,9 @@ static uint64_t present_enqueue(const tex_t *t, double period, const int crop[4]
     }
     pthread_mutex_lock(&g_pq_mu);
     while (g_pq_in - g_pq_done >= PQ) pthread_cond_wait(&g_pq_cv, &g_pq_mu);   // Wait only when the queue is full; normally AcquireTexture blocks first
-    pq_item *it = &g_pq[g_pq_in % PQ]; *it = (pq_item){*t, period, atomic_load(&g_cur_frame), {0}, CACurrentMediaTime(), ev_val, ss ? g_snap[slot].ev : 0};
+    pq_item *it = &g_pq[g_pq_in % PQ]; *it = (pq_item){*t, period, atomic_load(&g_cur_frame), {0}, CACurrentMediaTime(), ev_val, ss ? g_snap[slot].ev : 0, fg_slot, fg_slot>=0, 0, fg_cadence};
     if (crop) memcpy(it->crop, crop, sizeof it->crop);   // The current frame's state is enqueued with the ticket number, rather than reading the mutable window late on the present thread
+    memcpy(it->canvas_region,canvas_region,sizeof canvas_region);
     uint64_t tk = ++g_pq_in;
     if (ss) { g_snap[slot].ticket = tk; atomic_fetch_add(&g_snap_next, 1); }
     pthread_cond_broadcast(&g_pq_cv);
@@ -12675,8 +13103,9 @@ void mtl_present_wait(uint64_t tk) {
         uint64_t now = now_ns(), last = __atomic_load_n(&g_link_tick_ns, __ATOMIC_RELAXED);
         if (g_pq_read >= tk) continue;
         if (now - last < STALL_NS) { pthread_cond_timedwait(&g_pq_cv, &g_pq_mu, &ts); continue; }   // The display link is still running, it is just not this one's turn yet: keep waiting (bounded, no busy spinning)
+        if (g_link_presenting) { pthread_cond_wait(&g_pq_cv,&g_pq_mu); continue; }
         uint64_t n = tk - g_pq_read;
-        for (uint64_t k = g_pq_read + 1; k <= tk; k++) g_pres[k % PRING] = (pres_ent){k, -1};
+        for (uint64_t k = g_pq_read + 1; k <= tk; k++) present_drop_item(k);
         g_link_dropped += n; g_pq_read = tk;
         while (g_pq_inflight) pthread_cond_wait(&g_pq_cv, &g_pq_mu);
         if (g_pq_done < tk) g_pq_done = tk;
@@ -12689,6 +13118,7 @@ void mtl_present_wait(uint64_t tk) {
             MLOG("display link silent for %.0f ms (active): dropping %llu queued frames not yet displayed, the game continues (stall #%llu; back to normal when the link returns)", (now - from) / 1e6, (unsigned long long)n, (unsigned long long)g_stall_n); }
         if (active && !g_rescue_mode && g_dm_present_link && elapsed >= LINK_RESCUE_NS) {
             g_rescue_mode = g_dm_present_link; g_rescue_n++; g_rescue_back_at = now + g_rescue_back_ns;
+            if (dm_fg_enabled()) dm_fg_request_reset();
             MLOG("display link silent for %.0f ms while active: the present thread takes drawables itself (rescue #%llu), the link is tried again in %.0f s", (now - from) / 1e6, (unsigned long long)g_rescue_n, g_rescue_back_ns / 1e9);
             g_rescue_back_ns = g_rescue_back_ns < 30000000000ull ? g_rescue_back_ns * 2 : 60000000000ull;
         }
@@ -12711,7 +13141,10 @@ uint64_t mtl_udc_saved_bytes(void) { return g_udc_saved_bytes; }
 int mtl_has_window(void) { return front_metal_layer() != NULL; }
 int mtl_link_active(void) { return link_on(); }
 int mtl_link_stalled(void) { return __atomic_load_n(&g_stall_t0, __ATOMIC_RELAXED) != 0; }   // the display link has gone silent and mtl_present_wait drops frames (see STALL_NS) until it calls back
-void mtl_link_pause(int on) { CAMetalDisplayLink *l = g_link; if (l) l.paused = on != 0; }   // For testing (DM_TEST_BG): imitates the system stopping the display-link callback in the background
+void mtl_link_pause(int on) {
+    if (atomic_exchange(&g_link_paused,on!=0)!=(on!=0) && dm_fg_enabled()) dm_fg_request_reset();
+    CAMetalDisplayLink *l=g_link; if (l) l.paused=on!=0;
+}   // For testing (DM_TEST_BG): imitates the system stopping the display-link callback in the background
 int mtl_link_wait_tick(int vsyncs, uint64_t timeout_ns) {
     if (!mtl_link_active()) return 0;
     // Wait for the display link only when running faster than the display: if a display-link tick has already passed since the previous frame started work (this frame is already behind), start immediately instead of waiting in vain for the next display-link tick --
@@ -12722,8 +13155,11 @@ int mtl_link_wait_tick(int vsyncs, uint64_t timeout_ns) {
     if (vsyncs < 1) vsyncs = 1;
     return mtl_link_wait_ticks(g_link_mode == 3 ? (vsyncs + 1) / 2 : vsyncs * (g_link_mode == 2 ? 2 : 1), timeout_ns);
 }
-// The display link's rate: 120 Hz (DM_PRESENT_LINK=2), 60, or 30 in power-saving mode
-int mtl_link_rate(void) { return g_link_mode == 3 ? 30 : g_link_mode == 2 ? 120 : 60; }
+// Interpolation's automatic mode follows the screen; explicit modes retain 120 / 60 / 30 Hz.
+int mtl_link_rate(void) {
+    if (dm_fg_enabled() && g_link_mode==1) { int hz=front_screen_max_fps(); return hz>0?hz:60; }
+    return g_link_mode == 3 ? 30 : g_link_mode == 2 ? 120 : 60;
+}
 // The same wait counted in the display link's own ticks: one per frame for a frame rate as high as the link's (present_interval display at DM_PRESENT_HZ=120 on a 120 Hz link)
 int mtl_link_wait_ticks(int ticks, uint64_t timeout_ns) {
     if (!mtl_link_active()) return 0;
@@ -12741,15 +13177,27 @@ int mtl_link_wait_ticks(int ticks, uint64_t timeout_ns) {
 
 // The display's vsync for vi::GetDisplayVsyncEvent (hle_sdk16.c): returns 1 at the first display-link tick of the next 60 Hz vsync after *seen (the tick count it last returned, updated),
 // 0 when the link does not run, runs at 30 Hz (power saving: the 60 Hz event cannot come from it) or gives no tick within the timeout; the caller then keeps its own clock
+static uint64_t link_vsync_count(uint64_t ticks,int native_rate) {
+    // Count logical 60 Hz events, retaining fractional refreshes at 144/165 Hz.
+    // Zero preserves the ordinary presenter's existing tick/step convention.
+    return native_rate>0 ? ticks/(uint64_t)native_rate*60 + ticks%(uint64_t)native_rate*60/(uint64_t)native_rate : ticks;
+}
 int mtl_link_wait_vsync(uint64_t *seen, uint64_t timeout_ns) {
     if (!mtl_link_active() || g_link_mode == 3) return 0;
-    const uint64_t step = g_link_mode == 2 ? 2 : 1;
+    int framegen=dm_fg_enabled(),rate=framegen?mtl_link_rate():0;
+    if (framegen && rate<60) return 0;
+    const uint64_t step = framegen ? 1 : g_link_mode == 2 ? 2 : 1;
     pthread_mutex_lock(&g_link_mu);
-    if (*seen > g_link_tick_n || g_link_tick_n > *seen + 4 * step) *seen = g_link_tick_n;   // first call, or far behind (a stall): from the current tick on, no burst
+    uint64_t tick=link_vsync_count(g_link_tick_n,rate);
+    if (*seen > tick || tick > *seen + 4 * step) *seen = tick;   // first call, changed clock, or a stall: no burst
     struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec += timeout_ns / 1000000000ull; ts.tv_nsec += timeout_ns % 1000000000ull;
     if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
-    while (g_link_tick_n < *seen + step) if (pthread_cond_timedwait(&g_link_cv, &g_link_mu, &ts) == ETIMEDOUT) { pthread_mutex_unlock(&g_link_mu); return 0; }
+    while (link_vsync_count(g_link_tick_n,rate) < *seen + step) {
+        if (framegen!=dm_fg_enabled() || (framegen && rate!=mtl_link_rate()) || pthread_cond_timedwait(&g_link_cv,&g_link_mu,&ts)==ETIMEDOUT) {
+            pthread_mutex_unlock(&g_link_mu); return 0;
+        }
+    }
     *seen += step;
     pthread_mutex_unlock(&g_link_mu); return 1;
 }

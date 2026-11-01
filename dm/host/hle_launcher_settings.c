@@ -3,6 +3,7 @@
 #include "hle.h"
 #include "launcher_settings.h"
 #include "hle_haptics.h"
+#include "../gfx/nvn/framegen_policy.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,7 +36,7 @@ static int known_key(const char *key) {
         "DM_BOTW_PORTRAIT_PAD_DPAD_X", "DM_BOTW_PORTRAIT_PAD_DPAD_Y", "DM_BOTW_PORTRAIT_PAD_DPAD_SCALE",
         "DM_BOTW_PORTRAIT_PAD_BADGES", "DM_LOW_MEMORY", "DM_PRESENT_SNAP", "DM_PSO_MTL4",
         "DM_PSO_PREBUILD", "DM_NVN_ENC_THREAD", "DM_FPS_HOLD", "DM_METAL_HUD",
-        "DM_NVN_FB_SNAP", "DM_THERMAL_CAP"
+        "DM_NVN_FB_SNAP", "DM_THERMAL_CAP", "DM_FRAMEGEN", "DM_NVN_PASS_REUSE"
     };
     if (!key) return 0;
     for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) if (!strcmp(key, keys[i])) return 1;
@@ -56,6 +57,7 @@ static int parse_number(const char *s, float *out) {
 static int value_valid(const char *key, const char *value) {
     float v;
     if (!value || !*value) return 0;
+    if (!strcmp(key, "DM_FRAMEGEN")) return !strcmp(value, "0") || !strcmp(value, "30") || !strcmp(value, "60");
     if (!strcmp(key, "DM_FPS_TARGET")) return !strcmp(value, "30") || !strcmp(value, "60");
     if (!strcmp(key, "DM_OPMODE")) return !strcmp(value, "0") || !strcmp(value, "1");
     if (!strcmp(key, "DM_RUMBLE") || !strcmp(key, "DM_TOUCH_HAPTICS") || !strcmp(key, "DM_SHOW_FPS") ||
@@ -79,6 +81,7 @@ static int value_valid(const char *key, const char *value) {
 int dm_launcher_setting_is_live(const char *key) {
     if (!known_key(key)) return -1;
     if (!strcmp(key, "DM_OPMODE")) return 1;
+    if (!strcmp(key, "DM_FRAMEGEN")) return *DM_GAME_FRAMEGEN_SCENE ? dm_fps_state != NULL : 0;
     if ((!strcmp(key, "DM_FPS_TARGET") || !strcmp(key, "DM_RENDER_SCALE")) && dm_fps_state) return 1;
     if (botw_key(key) && !strcmp(DM_GAME_ID, "01007EF00011E000")) return 1;
 #if TARGET_OS_IPHONE
@@ -92,6 +95,10 @@ int dm_launcher_setting_apply(const char *key, const char *value) {
     int live = dm_launcher_setting_is_live(key);
     if (live < 0 || !value_valid(key, value)) return -1;
     if (!live) return 0;
+    if (!strcmp(key, "DM_FRAMEGEN")) {
+        if (!dm_fg_set_mode(atoi(value))) return -1;
+        return setenv(key, value, 1) ? -1 : 1;
+    }
     if (setenv(key, value, 1)) return -1;
     if (!strcmp(key, "DM_OPMODE")) dm_set_opmode(atoi(value));
     else if (!strcmp(key, "DM_FPS_TARGET")) {

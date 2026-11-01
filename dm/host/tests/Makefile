@@ -14,6 +14,12 @@ $(B)/t_fs $(B)/t_fs_case $(B)/t_fs_commit_list $(B)/t_fs_commit_list_tsan $(B)/t
 $(B)/t_fs $(B)/t_pctl: game_image_fixture.h
 $(B)/t_pctl: ../aoc_files.h
 GAME_H = ../gen/$(GAME)/game_profile.h
+$(B)/t_framegen_fps: t_framegen_fps.c ../loader.c ../dm.h ../../gfx/nvn/framegen_policy.h $(GAME_H) | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -Wno-deprecated-declarations -I.. $(GINC) -o $@ t_framegen_fps.c ../loader.c
+.PHONY: framegen-fps
+framegen-fps: $(B)/t_framegen_fps
+	$(B)/t_framegen_fps
+run: framegen-fps
 run: $(B)/t_launcher_settings $(B)/t_memory_mode $(B)/t_language $(B)/t_aspect $(B)/t_look $(B)/t_botw_touchhud $(B)/t_botw_touch_actions $(B)/t_botw_touch_menu $(B)/t_botw_touch_trackpad $(B)/t_gate_obs_result $(B)/t_device_motion $(B)/t_botw_portrait $(B)/t_motion $(B)/t_heap_size $(B)/t_touch $(B)/t_gesture $(B)/t_oe $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_audio_spsc $(B)/t_swkbd $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pctl $(B)/t_time $(B)/t_shared_font $(B)/t_vorbis $(B)/t_vorbis_divides $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple $(B)/t_pollwait $(B)/t_cheats $(B)/t_pad_hid
 	$(B)/t_launcher_settings
 	TMPDIR="$(abspath $(B))" $(B)/t_memory_mode
@@ -169,7 +175,7 @@ run: audio-device
 $(B)/t_audio_spsc_tsan: t_audio_spsc.c ../hle_audio.c ../hle_bigstack.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -O1 -fsanitize=thread -Wno-unused-function -I.. $(GINC) -o $@ t_audio_spsc.c ../hle_bigstack.c -framework AudioToolbox
 run: $(B)/t_fpslock
-$(B)/t_launcher_settings: t_launcher_settings.c ../hle_launcher_settings.c ../launcher_settings.h ../hle.h ../dm.h $(GAME_H) | $(B)
+$(B)/t_launcher_settings: t_launcher_settings.c ../hle_launcher_settings.c ../launcher_settings.h ../../gfx/nvn/framegen_policy.h ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_launcher_settings.c ../hle_launcher_settings.c
 $(B)/t_fpslock: t_fpslock.c ../hle_fpslock.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wno-unused-function $(GINC) -o $@ t_fpslock.c

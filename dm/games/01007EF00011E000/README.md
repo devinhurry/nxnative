@@ -737,7 +737,391 @@ remains pending.
 - **Shrines at 20–27 fps (GitHub issues #534 and #598; current, the fix not yet seen in a shrine).** The reporters' shrines (Oman Au on a MacBook Air M2; every shrine on an M3) run at 20–27 fps where the open world holds 60. In the #598 log the slow stretches have about 1,000 draws a frame, as the fast ones, but a GPU time of about 36 ms against 9–13 ms. They have about 240 `passes ended to land them for a read` a frame, all `refused … other GPU writes`, and 280–330 `load-all store-all passes` against about 100. The probe on the Shrine of Resurrection save found the one write behind that refusal there: the GPU particle dispatch `9f8116baffddaf81` binds its three outputs with size 0, which counted as a write anywhere ([A storage buffer bound with size 0 counted as a write anywhere](../../../docs/reference/rendering.md#a-storage-buffer-bound-with-size-0-counted-as-a-write-anywhere)). With the fix, that save's world-load burst (1,200 refusals) is gone. Opening Oman Au's final gate ends the slowdown even out of view (#534): an emitter that stops with the gate would fit, but no shrine save was here to show it.
 - **Present snapshots (Mac).** The game's two swapchain textures held its CPU work to display ticks and the GPU at 444 MHz on an M2 Max ([present snapshots](../../../docs/reference/frame-rate.md#present-snapshots-the-games-swapchain-texture-free-at-once)). Judged by cost, the frame step stepped to 30 at a GPU time of 0.75 vsyncs. Zora's Domain from a Cemu save (120 Hz), frames on screen longer than 1/60 s by a quarter: 64 of 8,684 with neither, 41 with the GPU filler alone, 4 of 10,800 with snapshots alone (no step to 30 in 3 minutes, at 444 MHz throughout).
 
+### Render-pass cost audit (2026-11-01)
+
+The Game Overlay exposes these local render-pass, store and snapshot-allocation
+policies as **Memory transfer optimization**, on by default. It is independent
+of the off-by-default **Skip feedback snapshots (experimental)** option; both
+choices are saved and applied at Play. See [settings](../../../docs/settings.md#memory-transfer-optimization).
+
+Overlay follow-up (2026-11-01): settings checks cover all four combinations of
+the two switches, persistence, Reset and explicit environment overrides on both
+platforms. The production iOS launcher compiles. After integrating main
+`c197cc6c`, the current `run_mac.py --test` path completes world, inventory,
+map and return-to-world checks with memory optimization on, automatic feedback
+snapshots and frame generation off. Screenshots render correctly and the log
+contains no `[RED]` lines or crash. Artifacts are in
+`01007EF00011E000-work/memory-transfer-toggle-20261101/`. No performance
+benchmark was run; physical-iPhone acceptance remains separate.
+
+Device baseline (`log2.txt`): iPhone Air, `eb3bc99ccd83`, frame generation and upscaling off,
+handheld with fixed scale 0.8. The actual feedback source is 1024x576. At
+about 54 s the frame step starts dropping from 60; at 60 s thermal state 2
+explicitly caps it at 30. The same 2,773 draws take GPU p50 8.87 ms before
+and 28.71 ms after the drop. Fixed scale takes precedence over the enabled
+dynamic-resolution setting. These device observations establish a thermal
+cap, not an optimization acceptance result.
+
+The current-checkout Mac test path was checked fresh, then used with matching
+chain `715bb867230c` and disposable save copies. Three captured frames were
+replayed through both policies in the same build, four times each, with the
+encode thread both off and on. All 24 corresponding image digests are
+identical; draw counts are unchanged. Warm render-pass counts and mean
+attachment-traffic savings over replays 2-4 agree in both encoding modes:
+
+| Frame | Draws | Passes before / after | Attachment traffic saved (MiB/frame) |
+|---|---:|---:|---:|
+| Forest, camera turning | 3,653 | 149 / 147 | 9.32 |
+| Ruins save, landscape | 4,423 | 137 / 134 | 16.06 |
+| Same save, portrait preview | 2,151 | 133 / 130 | 16.07 |
+
+These are attachment-size ledger estimates, not measured DRAM traffic. Cold
+pipeline/cache order affects replay timings, so these runs do not establish
+an FPS percentage. The frame captures already differ from their live image
+under the reference policy; the before/after policy comparison is exact,
+while capture/live equality remains open. The existing matching shader cache
+uses experimental Metal `32023.883`, as in the resolution experiment above.
+
+Validation: the complete graphics `make run` passes (88 test targets plus
+the pull/budget checks); feedback readback passes 105 checks in each of five
+configurations, unwritten stores pass 90 checks in each policy, and the
+exact-target tests retain colors, depth, stencil and occlusion counts with
+attachment-read and resource-registration fallbacks. The tools suite passes
+760 tests (7 skipped), the iOS tools pass 50, and the iOS compile check passes
+190 source files. The five-game `regress.py check` selection was BOTW, Tears
+of the Kingdom (same engine), Super Mario 3D World (masked G-buffer outputs),
+Age of Calamity (compute/draw interleaving) and Xenoblade Chronicles 2
+(ordering barriers); only BOTW has a local prepared Mac build. Its separate
+static check is blocked by Metal `32023.883` versus required `32023.921`.
+Cross-game runtime acceptance remains open.
+
+The final host also completes a portrait `run_mac.py --test --touch-preview`
+route from a disposable copy of the ruins save: world, inventory, world,
+map, world. All five screenshots render and the log has no `[RED]` lines.
+This is Mac preview coverage, not physical-iPhone acceptance.
+
+Open: the phone reached snapshot #100,000 around frame 2,235. The Mac samples
+retain 6-10 copies per frame, refreshed by barriers and submission boundaries.
+In the final portrait scene's 300-frame windows there are 1,800 copies
+(13.5 MiB per frame): 600 barrier refreshes and 1,200 submission refreshes,
+with no cache misses or shape refreshes once warm.
+The phone's high copy rate has not been reproduced, so it is not
+claimed fixed. The new per-window refresh-cause counters distinguish barrier,
+submission, shape and cache-miss causes without a full device pass dump.
+
+The general fixes and GPU proofs are described in
+[Render-pass reuse with local write proofs](../../../docs/reference/rendering.md#render-pass-reuse-with-local-write-proofs).
+Artifacts, source-save digests, iPhone logs, captures and policy comparisons
+stay in `01007EF00011E000-work/render-pass-audit-20261101/`. The source saves
+are unchanged; physical iPhone acceptance remains pending.
+
+Follow-up (`log3.txt`, 2026-11-01): the phone runs `1983d2d3cc44` with chain
+`715bb867230c`, handheld, native starting scale 1.0, dynamic resolution on,
+frame buffering and the encoding thread on. This differs from the baseline's
+fixed 0.8 scale, so the thermal onset times are not an A/B performance result.
+Thermal state becomes fair at 54 s and serious at 69 s; present 2,736 logs
+the explicit 60-to-30 cap. At frame 2,700, before that cap, GPU p50 is already
+13.72 ms, versus 9.02 ms at frame 1,800. Pipeline and library compilation
+are zero in these steady windows. Later snapshots include 1024x576 sources.
+
+The new counters isolate the high-copy path: the 300-frame window ending at
+frame 1,800 makes 27,637 snapshots (92.12/frame), representing 323.87 MiB/frame
+of texture-copy payload; 26,154 refresh because of barriers (94.63%), 1,483
+because of submission boundaries, and none because of cache misses, shape
+changes or forced-copy mode. These are logical texture bytes, not measured
+DRAM traffic. The first optimization has not resolved sustained phone FPS;
+increasing cache capacity would not address this window's cause.
+
+A current-source Mac portrait run at native starting scale with the same
+dynamic-resolution setting still has six copies in its captured frame,
+despite 135 barriers with bits 0x12. Thus barrier counts alone do not prove
+redundant copying: the writes and sampling between barriers must be traced
+on the phone. Collect one steady gameplay frame using
+`DM_NVN_PASSDUMP=1500` and `DM_NVN_PASSDUMP_ALL=1` in Documents/env.txt. Its
+attachment serials, channel masks, shader keys and cache epochs distinguish
+real feedback dependencies from invalidation caused by unrelated work.
+No further snapshot-invalidation change is accepted from the summary
+counters alone. The follow-up logs and capture stay in
+`01007EF00011E000-work/feedback-barrier-audit-20261101/`.
+
+Further device evidence (`log4.txt`, same build): before the cap, frames
+900-3,300 consistently make 11 snapshots/frame, falling from 38.67 to
+24.75 MiB/frame as source sizes decrease. Frame 3,300 still presents at
+60 fps with GPU p50 13.59 ms; thermal serious then caps present 3,402 to
+30 fps. High snapshot frequency is therefore not a necessary condition
+for this thermal slowdown, although the separate log3 cost remains open.
+This launch starts already serious, cools to nominal at 117 s, and logs
+frame 5 at 176.84 s; the cap at app age 247 s is about 70 s into frame-loop
+execution, not a 247 s cold-gameplay result. There are no pass-dump lines
+or environment-load confirmations in log4, so it is not the requested
+per-draw trace. Environment files are read once by `boot_env` before the
+launcher; a successful load prints `boot: env DM_NVN_PASSDUMP=1500 (env.txt)`
+and the corresponding `_ALL=1` line. A build with the optional
+`DM_PLAYER_BUILD=1` ignores these diagnostic keys. Confirm startup loading
+before another gameplay trace; summary counters alone cannot identify
+redundant barriers or attribute all heat to feedback copies.
+
+Device draw trace (`log5.txt`, same build): both environment settings load,
+and frame 1,500 contains 93 snapshot copies. Two 1280x720 attachments account
+for 44 copies each: serial 71,976, RGBA8 sRGB (color 1), and serial 71,978,
+RGBA8 (color 3). Passes 129,075-129,116 alone copy this pair 42 times (84
+copies); later terrain/VFX draws add four copies of the same pair. The
+draw groups write these attachments (channel mask `0xf0f0ff`, fragment
+outputs 0, 1 and 3) before barriers `0x12` and subsequent reads. These
+are real intervening writes, not evidence of unrelated-barrier invalidation.
+Ignoring these barriers or retaining the frame's initial snapshot would
+read an older version. The steady windows show 93 copies and 326.95 MiB of
+logical payload per frame; this is not measured physical memory traffic.
+The 102,466-line single-frame dump adds substantial diagnostic work, so its
+thermal onset is not an A/B benchmark. Remove both dump settings after use.
+
+The dominant pair uses its original formats, but every snapshot allocation
+formerly requested `MTLTextureUsagePixelFormatView`. The host now requests
+that capability only for actual format reinterpretation, preserving
+lossless-compression eligibility on supported Apple GPUs. A later required
+format view upgrades the cached snapshot by copying its retained version,
+not the newer source attachment. This is a general allocator change, not
+a shader exception, barrier relaxation or reduction in required copy count.
+See [Feedback snapshot usage preserves compression eligibility](../../../docs/reference/rendering.md#feedback-snapshot-usage-preserves-compression-eligibility).
+It does not establish a compression ratio or resolve device thermal limits.
+
+Current validation: the complete graphics `make run` passes all 88 targets
+and the pull/budget checks. Feedback readback passes 123 checks in each of five
+configurations, including integer-view upgrades after source writes;
+geometry feedback passes 110, geometry hazards 22 in each of three modes,
+and texture-view swizzles 379. The iOS source compile passes 190 files.
+A current-checkout `run_mac.py --test --touch-preview` route renders world,
+inventory, world, map and world with no `[RED]` lines; ordinary snapshots
+report usage `0x1` (shader read). Both source-save copies retain all 14 file
+digests. This is Mac coverage, not physical-iPhone acceptance.
+Three retained captures in both encoding modes, four replays each, match
+the archived `1983d2d3` candidate's 24 image digests, draw counts and warm
+pass counts. Capture/live mismatch still predates this change; paired
+replay equality does not resolve it. The five-game regression selection
+is BOTW, Odyssey, Wonder, Origami King and NieR, covering known feedback
+users; the latter four have no prepared local Mac builds, so the selection
+cannot execute. Device bandwidth, temperature and sustained FPS remain open.
+
+Device GPU profile (`log6.txt`, `80c9efc8c31e`): periodic sampling every 600
+frames works and ordinary snapshots report usage `0x1`, confirming the
+allocation change is active. Thermal state starts at 0 and reaches 1 at
+52 s; it never reaches 2, and the explicit FPS cap remains 60. The host's
+missed-deadline controller changes the hold to two vsyncs instead. Windows
+ending at frames 1,500/1,800 have GPU p50 9.30/12.82 ms and 91.87/92.09
+copies per frame; at 2,400/2,700 GPU p50 is 27.22/26.66 ms while copies
+fall to 79.44/31.15. Steady pipeline/library compilation is zero. Copy
+frequency alone therefore does not identify this run's bottleneck.
+
+Frame 2,400 measures 21.63 ms in render encoders, 0.39 ms in compute/copy
+encoders and 26.05 ms from first GPU start to last end. Its largest pass
+has four 1280x720 color attachments plus depth, 2,857 draws and 7.104 ms.
+The complete sampled frame has 4,618 draws, versus 2,842 in frame 1,800;
+these are changing workloads, not a controlled frequency measurement.
+Encoder gaps and render attachment transfers are not all attributable to
+the compute/copy category. GPU frequency is not logged, so platform DVFS
+remains possible despite the absence of the serious-thermal FPS cap.
+
+This run also sets `DM_DYNAMIC_RESOLUTION=0`, versus 1 in logs 4 and 5.
+With `DM_RENDER_SCALE=1.0`, BOTW retains its original resolution policy
+without the host's 60-fps budget normalization; the sampled main passes
+remain 1280x720. This is another reason not to treat these logs as an A/B
+measurement of the snapshot allocation change. Evidence and normalized
+window/profile tables stay in `01007EF00011E000-work/log6-gpu-audit-20261101/`.
+
+Pipeline-path experiment (same host `80c9efc8`, Mac Apple M2): replay the
+retained portrait scene in four fresh processes, `DM_PSO_MTL4=0/1/1/0`,
+12 replays each, excluding the first three of each process from timing.
+The full-state MTLDevice path measures warm GPU median 8.465 ms, versus
+8.560 ms for Metal 4 specialization (1.1% less). Same-path run medians
+vary by 0.84 and 0.40 ms respectively, exceeding that difference. The
+corresponding image digests match across all four runs (48 outputs).
+The replayer's captured-pipeline prewarm completes before frame timings;
+the Metal 4 run confirms 1,421 specializations and zero MTLDevice fallbacks.
+This does not support changing the default path; it is one Mac scene,
+not iPhone performance acceptance, and capture/live mismatch remains open.
+The other Mac preview was paused only during comparison and then resumed.
+Results stay under the audit folder's `pso-comparison/`.
+
+Presentation inspection: an empty display queue returns before `present_now`,
+so a 60 Hz display link does not redraw an unchanged game image each tick.
+The four log6 present windows report bilinear GPU p50 0.379-0.633 ms.
+Elapsed encoder gaps alone are not proof of removable synchronization.
+
+External IPA inspection (2026-11-01): `org.macnativegames.botw`, app
+`1.0v102811` / `20261028.11`, contains native 30/60/120 targets and separate
+MetalFX 30+30/60+60 modes. Its binary switches both 120-output modes to a
+120 Hz display link, but disables MetalFX in the native-120 mode. These
+are statically verified targets, not measured iPhone Air performance.
+The current public MacNativeGames iOS frontend differs from this binary;
+its source is architectural context, not an exact package-source match.
+The executable was not installed or run. Binary evidence and source
+references stay in `01007EF00011E000-work/ipa-120hz-audit-20261101/analysis.md`.
+
+Three-way static comparison against public MacNativeGames `92ec79bd` and this
+checkout `80c9efc8` found no confirmed additional same-picture rendering-work
+optimization absent from both sources. The extra iOS frame/quality interfaces
+call existing mechanisms. Two dedicated runtime implementations not found here
+are already public: driver metadata-bank caching (the IPA's no-override default
+is off for BOTW) and BC-to-ASTC/EAC texture transcoding (conditional on no native
+BC support, with lossy cases). Both embedded transcoding GPU source texts match
+the public files byte-for-byte. Our outer argument-buffer reuse and unread-bank
+elimination already avoid related metadata work. Active IPA settings, inlined
+differences and iPhone Air performance remain unverified; missing snapshot names
+do not prove that skipping required feedback copies is correct. The bounded
+comparison and exact evidence are in the same audit folder's `optimization-diff.md`.
+
+The inspected IPA's `20261028.11` build predates public MacNativeGames' iOS
+packaging-time pipeline archive feature (`e52a4aa`, 2026-10-29). Its binary has
+the earlier archive-fill path but lacks the later prebuilt-loader names/flag;
+this is consistent with device-side first-run compilation. Shader data can be
+imported separately, so the IPA's lack of bundled named pipeline archives alone
+is not decisive. Offline compilation primarily removes startup compilation and
+related gameplay hitches; compiling on the phone does not inherently improve
+steady-state GPU frame time. The same audit report records the source evidence.
+
+### MacNativeGames non-interpolation port (2026-11-01, current)
+
+Main's capability-selected BC decoder (`9cbe8984`) is merged into the experimental
+branch (`a124cc3a`). The additional public MacNativeGames `92ec79bd` mechanisms
+are adapted through the general renderer, without a BOTW-specific policy:
+
+- [Independent driver metadata reuse](../../../docs/reference/rendering.md#repeated-driver-metadata-bank-allocations)
+  preserves this checkout's extra image, pool-relative handle, base-instance and
+  indirect-dispatch semantics. It is opt-in (`DM_NVN_DRV_CACHE=1`): four paired
+  Mac replays gave identical corresponding digests, but no repeatable timing gain.
+  Off-run warm submit medians were 22.33 and 20.87 ms; the unchecked on run was
+  21.09 ms (a separate checked-on run was 22.13 ms). The capture has a pre-existing
+  live/replay mismatch, so this is paired-path evidence, not live-frame acceptance.
+- [BC fallback transcoding](../../../docs/reference/rendering.md#bc-textures-on-gpus-without-bc-support)
+  is selected only by low-memory mode on a GPU without native BC support, with
+  `DM_NVN_BC_TRANSCODE=0` available to retain decoded pixels. Re-compression can
+  lose detail. Ordinary mode, native BC, signed BC, BC6H, 3D and writable textures
+  retain the existing representation. Original block bytes remain available for
+  copies/readbacks. This is an old-device memory tradeoff, not an iPhone Air
+  optimization: the user's log6 identifies an A19 Pro GPU, which supports BC.
+
+Focused Metal-validation tests cover metadata immutability, all BC decode formats,
+low-memory selection, sampled ASTC/EAC mip/array contents, GPU-written partial
+updates and writable upgrades, including threaded encoding. The standard BOTW
+regression preparation currently fails before gameplay: after using the existing
+arm64 venv to avoid Rosetta/.NET architecture mixing, the compiler check rejects
+installed Metal 32023.883 against locked 32023.921. Only BOTW has a local Mac
+build in the configured games folder; the requested broader game checks and
+physical iPhone acceptance remain open. Evidence and logs are under
+`01007EF00011E000-work/macnativegames-port-20261101/`; no IPA is repackaged.
+
 ## Rendering
+
+### Experimental MetalFX frame generation
+
+**MacNativeGames parity audit (2026-11-01, initial source comparison).** The current `expriment` worktree was compared with upstream main `92ec79bd10c006e1cb7ca32d7ac1d8f66c758a15`, fetched into `01007EF00011E000-work/framegen-parity-20261101/` with a source manifest. This is implementation coverage, not a same-device performance comparison. The original adapted source remains credited at its original revision. This table records the initial gaps; current implementation and functional acceptance are tracked in the [completion checklist](../../../docs/framegen-parity.md):
+
+| Capability | MacNativeGames source | Experiment at the initial audit |
+|---|---|---|
+| Native interpolation | Metal 4 MetalFX, one inserted picture per real pair | Implemented with the same API |
+| Scene, depth and camera | BOTW scene boundary, D32 depth, vertex slot 0 / 2336 bytes | Implemented with the same BOTW boundary and camera layout |
+| Camera motion and history | Depth reprojection; missing input, first frame and camera cuts reset history | Implemented; lifecycle resets and local object-motion refinement are also present |
+| HUD integration | Separate premultiplied RGBA16F attachment; UI fragment variants copy color 0 to color 7; `uiTextureComposited=NO` | **Partial:** pre/post-UI canvases use `uiTextureComposited=YES`; transparent edges are not equivalent |
+| Held source rates | 30, 40, 50, 60 real frames/s, plus uncapped interpolation | **Missing:** only 30+30 is accepted; loader and frame-step policy currently support 0/30/60 targets |
+| Live selection | Requested mode latched at a game-frame boundary | **Missing:** launcher selection applies on Play |
+| Non-display-link presentation | Classic presenter can display both generated and real pictures | **Different:** classic/rescue paths deliberately preserve real pictures and suspend unused generation |
+| Render-mode scope | Handheld uses a native 1280x720 canvas; shared adapter tracks the canvas feeding the window | Implemented for Docked and Handheld; current-checkout Mac runs capture native 1080p and 720p output respectively; iPhone acceptance remains open |
+| Display refresh selection | Display-link mode 1 follows the native screen rate | **Different:** existing 60 Hz default and optional 120 Hz policy retained; device pacing requires separate acceptance |
+| Timing and lifetime | Real-frame delta, half-period presentation, three outputs, cached interpolators and retained frame resources | Implemented, with additional output ownership and late-generation rejection; physical cadence acceptance remains separate |
+| Moving actors | Camera/depth estimator suppresses camera motion on detected moving pixels; no engine skinning/object vectors | Local image-flow refinement is implemented, but neither implementation supplies full engine motion |
+
+The source evidence is the pinned upstream [adapter](https://github.com/ly05010419/MacNativeGames/blob/92ec79bd10c006e1cb7ca32d7ac1d8f66c758a15/games/totk/third_party/d2r_gfx/gfx/nvn/totk_mfx.m), [mode policy](https://github.com/ly05010419/MacNativeGames/blob/92ec79bd10c006e1cb7ca32d7ac1d8f66c758a15/games/totk/third_party/d2r_gfx/gfx/nvn/totk_mfx_mode.h), and [capture/presentation integration](https://github.com/ly05010419/MacNativeGames/blob/92ec79bd10c006e1cb7ca32d7ac1d8f66c758a15/games/totk/third_party/d2r_gfx/gfx/nvn/nvn_mtl.m). Their source has no separate generation queue or engine-provided actor vectors to import as an already solved mechanism. The initial audit prioritized a separate HUD attachment with offline shader-output variants, native blend/mask behavior and native-resolution UI. The implementation follow-up below also changes real-frame pacing and simulation together for multiple rates, and adds lifetime coverage for classic presentation. Feature-off behavior and real-frame priority remain constraints.
+
+Parity acceptance must independently cover transparent HUD pixels, moving actors/occlusion, source game speed, actual real/generated presentation timestamps and enqueue age at each supported refresh/rate combination, plus pause/resume and fallback recovery. Source coverage alone cannot close the reported iPhone Air stutter. Automatic thermal suspension is not implemented here, nor established by the inspected upstream frame-generator code.
+
+**Parity implementation follow-up (2026-11-01, current).** All five remaining implementation gaps have code paths in this worktree: separate premultiplied HUD output, 30/40/50/60 plus uncapped source modes, live frame-boundary changes, generated pictures in classic/rescue presentation, and native-screen refresh selection. The [completion checklist](../../../docs/framegen-parity.md) separates implementation, functional evidence and physical-device acceptance. This follow-up performs no performance benchmarks at the user's request.
+
+The [separate HUD path](../../../docs/reference/frame-rate.md#frame-generation-distorts-translucent-hud-edges) uses offline fragment variants, with the original draw and query executed once. Existing render-pass optimizations continue outside the captured UI canvas. BOTW's verified 1.9.0 VFR/fade/UI/physics instructions consume one latched real-frame ratio at fractional source rates; zero preserves the original instructions when interpolation is off. Source-rate changes drain old owners, reset history and keep display allocator fences monotonic. Display deadlines retain fractional refresh remainders and reseed from a real picture when an optional midpoint is skipped.
+
+Functional controls cover native UI pixels/coverage, query counts, 30/40/50/60 modeled source deadlines, unsupported GPUs, live on/rate/off/on changes, pause and display recovery. The iPhone source compile passes 191 files. Full Mac/iOS shader preparation and current-source Mac gameplay now pass: a copied Lab save reaches the world and all live modes apply without red log lines. Exact evidence and compiler identity are in the completion checklist; physical-iPhone acceptance and performance parity remain open.
+
+**Handheld and resource-reuse follow-up (earlier 2026-11-01).** The [capture mechanism](../../../docs/reference/frame-rate.md#frame-generation-captures-offscreen-copies-and-maps-the-wrong-region) now supports the native Handheld canvas. Its completion shader is `f7ee6fe10b925543`; Docked retains `bd7ffdd435c6c3bc`. The existing final canvas-copy key `ecb4242efaf4042b` identifies the source actually copied into a registered window texture, excluding intermediate copies. Its viewport travels with the present ticket: Handheld copies 1280x720 into the top-left of a 1920x1080 allocation, so normalizing the window crop against the allocation would incorrectly crop generated pictures. No game shader or chain change is needed.
+
+The [motion/input reuse change](../../../docs/reference/frame-rate.md#frame-generation-repeats-motion-classification-and-duplicates-inputs) classifies each flow tile once, removes a second full-size motion texture and borrows the completed UI canvas until GPU feedback. Three alternating synthetic production-encoder comparisons reduced median motion time from 1.474 to 1.166 ms (about 21%); this is not a whole-game speedup. At 1080p output with a 720p motion grid, owned texture allocation falls from 66,617,344 to 54,198,272 bytes, excluding MetalFX-internal allocation and process memory. Native-format probes found no material GPU advantage between separate and composited UI inputs on this M2; clean HUD extraction remains a quality gap.
+
+Current-checkout `run_mac.py --test` runs reached the copied laboratory save in both modes with matching cached libraries. Handheld at scene scale 0.75 captured 960x540 depth/camera and generated native 1280x720 output; Docked at scale 0.5 captured 800x450 inputs and generated 1920x1080 output. Both profiled runs had one configuration and no resize drain. Their median interpolation command-buffer spans were 6.74 and 9.42 ms respectively. These are different rendering configurations, not a causal before/after speedup. Display records still contain long gaps; another native-30 run without interpolation also contains gaps. The cause is not isolated, and remote screen transport and diagnostic captures prevent a stable-cadence acceptance claim from these samples. Performance acceptance is paused at the user's request for device testing; no iPhone smoothness improvement or full MacNativeGames parity is claimed.
+
+Validation: 221 MetalFX/image/display checks, nine unsupported-device checks, twelve isolated motion processes, 29 ordinary pacing checks, seven snapshot checks, twelve missed-callback checks and 21 texture-ledger checks pass. All 191 iPhone source files compile unsigned; launcher/settings/report checks pass. Full shader regression remains blocked by installed Metal 32023.883 versus locked 32023.921. The external `framegen-parity-20261101/performance/` folder holds source hashes, commands, measurements and exclusions. Physical iPhone Air acceptance remains open.
+
+**Earlier pacing validation (2026-11-01, before the Handheld/resource-reuse follow-up).** The [missed-notification correction](../../../docs/reference/frame-rate.md#frame-generation-waits-again-for-skipped-display-callbacks) passes all 12 controlled delegate/acquire checks after seven failed before it. The 36 existing pacing checks, 200 MetalFX queue/image checks, six unsupported-device checks and 13 documentation checks pass. The renderer compiles for iPhone. Physical iPhone Air smoothness remains unverified; the user reports similar 30-60 displayed FPS but worse motion with interpolation.
+
+A clean Mac laboratory route uses current-checkout `scripts/run_mac.py --test`, copied saves, matching cached `b-715bb867230c` libraries, Docked mode, 16:9, a 0.5 scene scale and a 1920x1080 interpolation output. After native gameplay visibility and 30 seconds of warmup, its final 30-second window contains a scripted camera turn. Screenshots confirm the same laboratory and visible HUD without a loading spinner. Distinct positive native presentation timestamps, not submission counts, give:
+
+| Mode | Real pictures/s | Generated pictures/s | Distinct presentation timestamps/s | Interval p95 | Real enqueue-to-display p50 |
+|---|---:|---:|---:|---:|---:|
+| Native 30 cap | 29.10 | 0 | 29.10 | 33.33 ms | 122.28 ms |
+| Native 60 cap | 49.70 | 0 | 49.70 | 33.33 ms | 74.50 ms |
+| Frame generation before missed-notification correction | 29.03 | 28.27 | 57.30 | 16.67 ms | 89.04 ms |
+| Frame generation after missed-notification correction | 28.87 | 28.30 | 57.17 | 16.67 ms | 89.32 ms |
+
+These individual runs establish no ordinary-load FPS improvement from the clock correction. The generated-frame path already includes the earlier nonblocking allocator fix; there is no clean before/after measurement of that fix. Frame enqueue age is not input-to-photon latency. The corrected run's interpolation submission spans p50 14.90 ms, including p50 12.01 ms in the MetalFX interval and 0.51 ms in motion. Extra presentation-queue waiting after both source interpolation and CPU submission are ready is p95 0.34 ms, which does not justify a second GPU queue in this scene. The 50 ms interval p99 and physical-device quality/performance keep general acceptance open.
+
+A separate opt-in screenshot run captures a generated/current-real pair during a scripted camera turn, with generation history warm at frame 1382/ticket 1383. Three background patches align after horizontal shifts of 20-28 pixels (normalized correlation 0.969-0.990 rather than 0.565-0.712 without a shift), demonstrating that this generated picture is not a copy of the current frame. A previous/current/generated triplet was not captured, so this is not an exact midpoint oracle or full actor/UI acceptance; translucent heart reconstruction remains visibly imperfect. Its explicit screenshot waits exclude that run from performance comparisons.
+
+Artifacts, source hashes, routes and analysis are in `01007EF00011E000-work/framegen-clean-20261101/`. The narrow BOTW regression command was attempted with no game smoke (native runs use `run_mac.py --test`): shader preparation is blocked by installed Metal 32023.883 versus the chain's locked 32023.921. The toolchain lock and shader chain were not changed; this is not a full shader-regression pass. Other games and feature-off timing are outside the enabled frame-generation branch.
+
+The default-off prototype is merged into main. In the shared **Settings → Game**, select a 30/60 base **Frame rate** and use the independent **Frame generation** switch for 30, 30+30, 60 or 60+60. The same settings page handles live changes on Mac and iOS; the standalone interpolation menu and floating button are removed. Both Docked and Handheld paths are enabled, with a smaller native canvas in Handheld. Supported GPUs may insert one picture between real frames. Unsupported GPUs keep the base frame rate. Environment modes `40`, `50` and `max` remain backend diagnostics outside this UI. This operates independently of touch/controller mode. Profiles without configured inputs cannot enable this BOTW path.
+
+The [presentation and ownership mechanism](../../../docs/reference/frame-rate.md#experimental-metalfx-interpolation-keeps-real-frame-ownership) derives camera motion from the validated 2336-byte vertex camera block, identifies the scene using the profile's per-mode completion keys, and supplies a separate native-resolution premultiplied UI layer. Camera movement is reconstructed and non-rigid regions receive local image-motion refinement. Object animation has no engine-supplied motion vectors, so disocclusions, fast animation and moving actors can still show artifacts. The UI layer preserves native shader colour and accumulated coverage; unsupported capture states display the real picture. The source and license are recorded in [MacNativeGames attribution](../../third_party/macnativegames/README.md).
+
+The adapter snapshots the scene once and captures the UI through offline `<key>_bui` fragment entries into RGBA16F attachment 7, using `uiTextureComposited=NO`. Its RGB follows the original blend and mask; coverage accumulates separately for over-blends and stays unchanged for additive colour. Original draws, depth/stencil tests and occlusion queries execute once. This needs rebuilt libraries of the current chain; the host loads no old graphics snapshot or runtime-translated game shader.
+
+Validation (2026-10-31): Apple M2 supports the real Metal 4 MetalFX interpolator. The GPU/display fixture passed 55 checks, and all 189 iPhone source files compile without signing or installation. Queue allocator, rescue, tick conversion, snapshot and pacing fixtures passed with the feature off. Current full branch sources and matching `b-715bb867230c` / `6498200c0506` cached libraries reached the title, loading screen and the supplied `After-dialogue-map-not-clickable` save's laboratory scene. Native `presentedTime` callbacks confirm generated pictures reach the display, and the generated/real PNG pair was inspected. Native scene artifacts reproduced with the feature off as well. The captured generated HUD has edge differences around empty hearts; automatic UI decomposition is not exact. Original saves are copied before launch.
+
+Performance observation, not a controlled benchmark: the M2 Docked 1080p scene ran roughly 22–27 real frames/s with interpolation, versus about 30 with it off. Generation GPU work was around 14–15 ms at the median. A 70% scene-scale trial retained 1080p interpolation output and still did not sustain 30+30. Confirmed displayed counts lagged generation submissions substantially, so queue submissions must not be reported as delivered frames. Cadence, UI quality and overhead need further work; this prototype is not recommended as a default. The earlier resize-contaminated run is excluded from these observations.
+
+Review corrections (2026-10-31): generated pictures now use the real window's crop, mapped by normalized edges to the captured canvas size. Both suspend and resume publish an atomic history-reset request, consumed on the submit thread even when no guest frames occurred during the pause. FIFO merging suppresses interpolation if its preceding real ticket was skipped, then resumes after a real picture. A generated display submission holds its own output reference through GPU completion, independently of the queued real picture. The frame-rate cap and renderer share the same effective device capability decision; requesting the feature on an unsupported GPU no longer forces 30 fps. These paths pass 133 MetalFX/image/queue checks (including a GPU-blocked display whose queued real picture is dropped), 6 forced-unsupported checks and the loader's actual five-case FPS-state fixture. The Wonder-profile FPS fixture preserves its original target in all five cases. Normal-mode allocator and rescue fixtures pass 13 and 53 checks respectively; the changed graphics and loader sources compile for iPhone (no device delivery).
+
+Structured image characterization uses 256x256 tiled backgrounds and a translating foreground rectangle with known depth. The earlier shared-interpolator fixture produced exact current-frame fallbacks for moving objects and pan/occlusion. That result is superseded for cause analysis: a later positive camera-only control also failed after a reset in the same process. Fresh-process controls show that analytic object motion can produce the correct midpoint. The earlier camera-only estimate was inaccurate for foreground movement; the later local refinement and isolated/shared-instance controls are recorded below. Engine-supplied object/animation velocity is still absent.
+
+Actual presentation measurement from a 70-second M2 window run, including a scripted camera turn: in the final 20 seconds, 437 real and 406 generated display callbacks reported 429 real and 212 generated nonzero `presentedTime` values. There were 640 distinct reported refresh timestamps (about 32/s), with picture intervals p50 33.33 ms and p95 50.00 ms. Median generation GPU work was 14.75–15.22 ms. This is neither stable 30 real frames nor 60 displayed pictures per second. Even a nonzero presentation callback does not prove a distinct interpolated pose; the controlled tests distinguish correct camera interpolation from inaccurate foreground motion and shared-instance reset fallbacks. Timing and source hashes are retained in `mfx-experiment-20261031/review-presented.tsv`, `review-cadence.json`, `review-game.log` and `review-host-source.json`. Uniform cadence, dynamic-object motion and translucent/empty-heart UI quality remain open.
+
+The local `regress.py check --games 01007EF00011E000` stops while preparing its baseline: installed Metal `32023.883` differs from required `32023.921`. No chain guard was weakened. This machine has only BOTW prepared locally, so there is no five-title gameplay result. Normal-mode profile gating is checked with Wonder/TOTK settings and a Wonder-profile fixture. At that initial stage the unmatched Handheld scene was excluded; the later native-canvas follow-up above supersedes this restriction. The local Metal validation layer raises `globalTraceObjectID` inside MetalFX; use `MTL_DEBUG_LAYER=0` for this experimental path on the tested system. Physical iPhone testing, long-session memory, rapid camera motion, widescreen combinations and power remain unverified.
+
+Diagnostic: `DM_FRAMEGEN_SHOT=<prefix>` writes one generated/real PNG pair after 600 generated display submissions, with a CPU/GPU wait only for that requested capture. `DM_FRAMEGEN_TIMING=<file.tsv>` records submission serial, real ticket, picture kind, target time and the drawable's actual `presentedTime` (zero means unconfirmed), allowing refresh/cadence analysis without counting submissions as delivered pictures. Periodic `[framegen]` log lines distinguish real input frames, generated pictures, missing inputs and generated display submissions and native confirmed presentations. The focused checks also passed 13 shader-chain tests, 2 launcher-settings tests and 12 documentation checks. Run artifacts are under the game's work folder `mfx-experiment-20261031/`.
+
+Second review (2026-10-31): [real-only presenter gating](../../../docs/reference/frame-rate.md#frame-generation-runs-without-an-interpolation-presenter) fixes wasted scene capture/interpolation with `DM_PRESENT_LINK=0`, a paused/stalled callback or rescue. Returning reseeds history. Optional GPU work is admitted only after the preceding real display command has been committed, so it cannot get ahead of that real picture on the shared queue. A queued newer real frame, an interpolation aged by a game interval, or a predecessor already reported as failed selects the real picture. Submitted and actually presented states remain distinct. A valid seed real picture reserves half a game interval before the next interpolated slot, including on 120 Hz callbacks. These changes provide a real-priority policy; they do not establish stable 30+30 delivery.
+
+Rejected policies and motion controls: requiring a predecessor's actual presentation report before preparing/displaying the pair suppressed all generated output in a visible Mac window. A second candidate combined a nominal midpoint deadline with a requirement that generation finish before callback entry; it also suppressed output. Callbacks prepare future presentation slots, so completion at callback entry is not a valid general deadline. These policies were removed rather than counted as successful cadence fixes. The earlier shared-instance controls with independent UI or analytic foreground motion also returned the current frame. Those results cannot isolate a UI or motion-vector cause because the later shared-instance camera-only positive control fails too. Preserve them as reproduction logs, not as evidence that MetalFX cannot interpolate objects. Fresh-instance motion controls and the remaining reset/reuse problem are recorded below.
+
+Reference comparison is against MacNativeGames commit `933b6a0d1438de160208a0a13eb5e8d7a2cb8094`: its [classic presenter](https://github.com/ly05010419/MacNativeGames/blob/933b6a0d1438de160208a0a13eb5e8d7a2cb8094/games/totk/third_party/d2r_gfx/gfx/nvn/nvn_mtl.m#L15474-L15485) can display interpolation without the display link and skips it if a newer real picture is queued. Its display-link path schedules pairs by refresh intervals and records actual cadence; it does not wait for actual predecessor confirmation. Its [motion implementation](https://github.com/ly05010419/MacNativeGames/blob/933b6a0d1438de160208a0a13eb5e8d7a2cb8094/games/totk/third_party/d2r_gfx/gfx/nvn/totk_mfx.m#L6-L18) uses separate premultiplied UI, camera/depth reprojection and zero screen motion for suspected moving pixels. It supplies no engine-derived actor/weapon animation velocity, so source inspection is not evidence that these quality cases pass there.
+
+Final-source visible-window stress observation (70 seconds; GPU fixture work may overlap, so this is not a controlled performance benchmark): the last 20 seconds recorded 475 real and 393 generated presentation callbacks, with 473 real and 169 generated nonzero presentation times. There were 642 distinct refresh timestamps (32.1/s), intervals p50 33.33 ms and p95 50.00 ms. None of those 169 confirmed generated pictures had a missing or non-earlier preceding real presentation in the log. This single sample is not a universal ordering guarantee and does not pass stable 30+30 acceptance. Use `kept-game.log`, `kept-presented.tsv`, `kept-cadence.json` and `kept-source.json` for the retained source; other candidate prefixes record rejected experiments.
+
+The follow-up fixture passes 187 GPU/image/queue checks plus 6 forced-unsupported checks. Offscreen confirmation times are explicitly modeled for selection tests; they are not evidence of native display cadence. Artifacts and source hashes are retained separately for each candidate under `01007EF00011E000-work/mfx-review2-20261031/`; rejected candidate logs are not final-source evidence. Original saves remain untouched.
+
+
+**Exclusive-GPU diagnosis (2026-10-31).** [Opt-in stage tracing](../../../docs/reference/frame-rate.md#frame-generation-diagnostics-separate-queue-waits-and-resize-costs) records CPU configuration/waits, Metal 4 command-buffer timestamps and the exact selected draw/camera signatures. Other agent GPU tests were paused; native runs and fixtures ran sequentially. Artifacts, source hashes and reports are under `01007EF00011E000-work/framegen-diagnosis-20261031/`. Failed title/DLC-menu launches (`base-before`, `profile-fixed`, `base-after`, `clean-dynamic`) have no valid scene samples and are excluded. `clean-base` reached the laboratory with profiling disabled; its early `scene.png` still shows loading, so it is not a gameplay screenshot. `fixed-control/world.png` confirms the loaded laboratory.
+
+- **Dimensions:** dynamic mode selected 1280x720, 1360x765, 1440x810, 1520x855 and 1600x900, all at VS `362679b14007e5cc_b` / FS `48c7debdf038c71c_b`, with a 2336-byte camera block and no depth/camera aspect mismatches. The scene-completion canvas stayed 1920x1080. A fixed `DM_RENDER_SCALE=.9` control selected only 1440x810 with the same shaders/camera and had no steady-state resize or reconfiguration events. Together with the build-gated DRS code documented in `patches.py`, this identifies game dynamic resolution, rather than alternating selected render stages, in these samples.
+- **Resize costs:** after an eight-second scene warmup, dynamic mode recorded 78 resize drains and 79 configurations (62 cache hits, 17 new interpolators). Display drain p50/p95 was 8.29/23.87 ms, totaling 696.9 ms; the subsequent generation drain totaled 0.012 ms because the prior wait had already completed that work. Cache-hit motion/depth allocation was 0.47/0.67 ms, totaling 32.1 ms. A new interpolator cost 1.70/3.45 ms to create. Host history-flag clearing is measured separately; it does not measure MetalFX's internal reset cost. This does not support allocation/cache capacity as the dominant measured resize cost.
+- **GPU intervals:** all 596 dynamic and 736 fixed counter samples were ordered; their bracket durations did not exceed command-buffer feedback spans. Dynamic p50/p95: submit-to-GPU start 21.37/31.33 ms; composited-UI copy/dependency interval 0.11/0.23 ms; motion 0.30/0.66 ms; previous-depth copy 0.11/0.35 ms; MetalFX interval 15.46/24.54 ms. The whole command-buffer span was 25.29/33.75 ms, with a median 8.06 ms outside the timestamp bracket. Command boundaries include scheduling/dependency waits, not pure execution time; the scene snapshot in the game's command buffer is not covered by these GPU copy counters. Counter tracing splits encoders, so these numbers require an uninstrumented control and cannot be advertised as unchanged production costs.
+- **Display:** in each run's final 20 target seconds, the uninstrumented dynamic run reported 29.85 distinct refresh timestamps/s, instrumented dynamic 29.40/s, and instrumented fixed .9 24.60/s. Median/p95 intervals were 33.33/50.00 ms for both dynamic runs and 50.00/50.00 ms for fixed .9. No confirmed generated picture in those windows had a missing or non-earlier preceding real presentation. These single runs with different DRS mixes do not isolate instrumentation overhead or prove universal ordering. Fixing the scene scale did not provide stable 30+30.
+
+The new `make -C dm/gfx/tests GAME=01007EF00011E000 check_t_framegen_motion` launches six isolated camera/object/pan-occlusion controls, reads back the actual motion texture, and reports error against known midpoint/current images. With fresh instances, camera-only midpoint error is 0.000/255; analytic object vectors give 0.000 for a moving foreground and 0.230 for pan plus occlusion (foreground-region error 0.940). The current camera/depth estimator instead writes 0 where the foreground needs -8 pixels, or +8 during the combined pan; its foreground-region midpoint errors are 6.060 and 7.922. This establishes a motion-input limitation on these controlled inputs, not a general inability of MetalFX to interpolate actors.
+
+**Resolved diagnosis: short reset-recovery observation.** The four-frame `t_framegen_motion - -1 -1` control returns the current image after a reset; fresh instances hide that behavior. Extending each continuous sequence to 16 or 64 frames recovers correct camera/analytic-motion interpolation on the same reused instance. Empty independent UI still reproduces the short-window fallback, so composited UI alone does not explain it. This establishes bounded recovery in these controls, not a permanently unusable cached instance. Native recovery duration remains an implementation detail. The adapter sends real history boundaries to MetalFX and keeps feeding continuous real frames; it does not recreate the interpolator to hide the recovery period. The follow-up avoids artificial boundaries caused only by game DRS.
+
+Validation of the diagnostic source: 187 GPU/image/queue checks, 6 unsupported-device checks, six isolated motion processes (127 setup/input checks) and 4 report-tool tests pass. The deliberate shared-instance reproduction fails one positive control; the fresh-instance variant passes. Both changed graphics translation units compile for iPhone without signing or device execution. No resource-cache expansion, lower-resolution interpolation, or separate GPU queue was introduced. Frame generation remains experimental and off by default.
+
+
+**Stable input grid and object-motion follow-up (2026-10-31 experiment).** The [shared mechanism](../../../docs/reference/frame-rate.md#dynamic-resolution-repeatedly-resets-frame-generation) now normalizes game DRS depth into one persistent grid. The first grid is bounded by 921,600 samples (1280x720 in the tested 16:9 Docked path). Scene, composited UI and generated output remain 1920x1080. No historical per-size depth images are revived, and no Vision/VideoToolbox dependency, interpolation-color downsampling or second GPU queue was added. At this stage auxiliary texture allocation at the cap was 16,089,088 bytes; full color images and native interpolator allocations are separate.
+
+Production-path controls alternate 256, 192 and 128 square source depths every frame. They check that the interpolator and all auxiliary textures retain identity, every continuous frame produces output, and actual generated pixels retain the camera midpoint. Twelve isolated cases cover horizontal and vertical camera/object/pan-occlusion motion plus analytic vectors. For horizontal moving objects, foreground-region midpoint error falls from the old camera-only 6.060/255 to 0.973; combined pan/occlusion falls from 7.922 to 3.664. Vertical equivalents are 0.978 and 3.669. Camera-only errors remain 0.000. The sampled foreground vectors now have the correct motion axis and sign, but combined motion is still underestimated (about -4.58 rather than analytic -8 pixels). This is a quality improvement on the controls, not exact engine motion or general combat-animation acceptance.
+
+The retained native source is under `framegen-fix-20261031/`: `kept-profiled` and `kept-plain` are sequential visible laboratory runs with a scripted five-second camera turn, copied saves and the current cached shader chain. All five game DRS sizes occur while MetalFX stays at a 1280x720 motion/depth grid. After an eight-second scene warmup, the profiled run has 636 ordered GPU samples, zero counter-envelope mismatches, zero resize drains and zero reconfiguration events. The motion interval including local refinement is p50/p95 1.21/4.83 ms; the MetalFX interval is 17.65/44.08 ms. These command-boundary times include dependencies. A rejected version that refined lighting changes on rigid geometry used 2.14/7.58 ms in its motion interval; rigid depth-reprojection selection reduced that cost.
+
+**Resolved action-speed regression (2026-11-01).** [Real-frame acquire pacing](../../../docs/reference/frame-rate.md#frame-generation-speeds-up-game-simulation) now retains the game's vsync budget when interpolation is enabled. Before the fix, four controlled 60/120 Hz snapshot-acquire checks failed because no real-frame ticks were waited for; all seven checks pass after it. The existing 29 link-tick checks, 187 MetalFX queue/image checks, six unsupported-device checks and 13 documentation tests pass. The Mac host builds and the changed NVN translation unit compiles for iPhone. A copied laboratory save with `DM_FRAMEGEN=30`, `DM_RENDER_SCALE=0.5` and the existing matching shader cache advanced 71.27 seconds of game time in 71.25 real seconds (1.000 rate); the native process exited cleanly. The output screenshot was inspected. Artifacts are in `01007EF00011E000-work/framegen-speed-20261101/`. This verifies game speed on the Mac, not stable generated-frame delivery or physical iPhone behavior.
+
+**Performance acceptance remains open.** In the last 20 target seconds, `kept-plain` reports 420 confirmed real and 54 generated presentations, 23.70 distinct refresh timestamps/s, with intervals p50/p95 50.00/50.00 ms. `kept-profiled` reports 361 real and 36 generated, 19.85 distinct timestamps/s, with intervals 50.00/100.00 ms. Neither window has an unconfirmed or non-earlier preceding real presentation among confirmed generated pictures. Earlier camera-only samples delivered about 27.65-29.85 distinct timestamps/s. These single runs and different DRS mixes do not isolate causal overhead, but the retained implementation does not pass a performance-improvement or stable 30+30 claim on this M2. Reducing resize stalls and adding object motion have not solved interpolation cost or delivered-picture cadence. Keep the experiment off by default; native UI decomposition and physical iPhone quality remain unaccepted.
+
+Current checks: twelve isolated motion processes pass 558 setup/input/pixel/resource checks; the 16-frame-per-condition reused-instance sequence passes 249; the queue/image fixture passes 187 plus 6 unsupported-device checks. The feature-off allocator and rescue fixtures passed 13 and 49 checks before the final rigid-selection refinement (which only runs with frame generation active). Both changed graphics translation units compile for iPhone, without signing or device execution. Report/document checks are separate from GPU acceptance. Native source hashes, exact control logs, excluded startup/candidate runs, platform optical-flow probes and `display-comparison.json` are retained in the work-folder report. Original saves remain untouched. Full shader/regress validation remains blocked by installed Metal 32023.883 versus the chain's locked 32023.921; this is not a five-game regression pass.
+
 
 **Feedback snapshot bypass (experimental, current, 2026-11-01).** Performance settings now offer **Skip feedback snapshots (experimental)**, off by default. Turning it on uses the existing `DM_NVN_FB_SNAP=0` path; turning it off restores automatic snapshots (`1`). This is an explicit correctness tradeoff, with no replacement protection. The setting and its saved choice apply on iPhone and Mac; iPhone rendering, sustained frame rate and thermal effects remain unverified. See [same-pass feedback](../../../docs/reference/rendering.md#same-pass-feedback-read-through-a-snapshot) for the mechanism and [the setting](../../../docs/settings.md#skip-feedback-snapshots-experimental) for comparison and reset instructions.
 
@@ -1254,7 +1638,11 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 
 - **Implemented; physical iPhone acceptance pending:** [In-game launcher settings](../../../docs/reference/services.md#in-game-launcher-settings-use-the-runtime-state-owners). The startup dashboard shows resource readiness and available memory; Settings uses fixed side-by-side sections. Three-finger double tap reveals Settings during touch gameplay and retains the temporary menu gamepad. Supported runtime values apply through their owning subsystems; the remaining values are saved for the next start.
   Direct Mac runs use the shared iOS `LauncherDashboard` before module loading; status rows, the first-touch notice, settings and touch editor come from the same SwiftUI views. Mac code supplies resources and native window/input handling. Command-comma opens settings in-game; Command-Shift-comma reveals the touch-preview Settings entry and temporary menu controls. Native Mac sidebar selection supports keyboard and accessibility navigation.
-  Validation: unsigned iOS compile/link, full Mac compile/link and native settings/storage/DLC/haptics checks pass. The shared dashboard, first-touch notice acknowledgement and touch-editor navigation pass in the iOS simulator with synthetic resources. The Mac fixture passes dashboard, section navigation, Play, same-process settings presentation and dismissal; native model bindings verify immediate updates and persistence. Real checkbox mouse input and in-game shortcuts remain gameplay acceptance items. New UIKit gesture, input-release and live stick-refresh checks pass; three existing portrait-layout assertions fail identically at the unchanged baseline. BOTW is the only prepared local title; its full regression stops before boot on the existing Metal compiler/lock mismatch.
+  Validation: unsigned iOS compile/link, full Mac compile/link and native settings/storage/DLC/haptics checks pass. The shared dashboard, first-touch notice acknowledgement and touch-editor navigation pass in the iOS simulator with synthetic resources. The Mac fixture passes dashboard, 30/60 segments, the separate interpolation switch, section navigation, Play, same-process settings presentation and dismissal; native model and backend checks cover the four rate/interpolation combinations, immediate updates and persistence. Real checkbox mouse input and in-game shortcuts remain gameplay acceptance items. The initial UIKit gesture, input-release and live stick-refresh checks passed; that initial run retained three portrait-layout assertions that also failed at its baseline. BOTW is the only prepared local title; its full regression stops before boot on the existing Metal compiler/lock mismatch.
+- [Repeated driver metadata bank allocations](../../../docs/reference/rendering.md#repeated-driver-metadata-bank-allocations): independent c0/c2 reuse is implemented as an opt-in experiment; paired replay output matches, with no repeatable timing gain yet.
+
+- **Implemented; physical iPhone acceptance pending:** [Feedback snapshot usage preserves compression eligibility](../../../docs/reference/rendering.md#feedback-snapshot-usage-preserves-compression-eligibility). Same-format snapshots no longer request arbitrary format reinterpretation; required reinterpretations preserve the cached version when upgrading their allocation.
+
 - **Resolved in code; physical iPhone acceptance pending:** [Touch artwork with external graphics](../../../docs/reference/packing.md#touch-button-icons-disappear-with-an-imported-graphics-package). UI artwork stays bundled with the IPA and no longer follows the imported shader-table directory.
 
 - **Current, 2026-11-01:** [Separate graphics packages](../../../docs/reference/packing.md#ipa-updates-repeatedly-include-large-graphics-resources) move runtime shaders and optional offline archives outside the IPA. The launcher imports ROM and graphics on one page and checks series/minimum version. Native import/packaging, production iOS compile/link and simulator picker checks use synthetic fixtures; full game graphics on a physical iPhone remain pending. No shader-chain or graphics execution code changed.
@@ -1263,9 +1651,15 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
   Current-checkout Mac M2 tests (2026-11-01, `scripts/run_mac.py --test`, matching shader chain `715bb867230c`, independent copies of the field save) reached the Great Plateau with native BC and forced fallback. Two fallback runs with `DM_LOW_MEMORY=1` passed frames 3,176 and 3,633 with no crash or red line and about 2,524-2,578 MiB peak footprint, after moving upload retirement off Metal's completion callback; the second run's screenshot was inspected. Native BC passed frame 2,466 with no red line. The full regression harness was attempted for BOTW, the only local prepared game; shader comparison was blocked by installed Metal `32023.883` versus lock `32023.921.6`. These Mac checks do not establish physical A16 memory or speed. Evidence: `01007EF00011E000-work/a16-bc-20261101/` in the NSP folder.
 - **Resolved in packaging; iPhone acceptance pending:** [Language selection after combining game images](../../../docs/reference/packing.md#language-selection-disappears-after-combining-game-images). Separate IPA and Xcode builds keep the original control metadata path, preserving all 15 language choices independently of the combined image's location.
 
+- **Resolved redundant work in the optional frame generator:** [reuse motion classification and borrow the UI canvas](../../../docs/reference/frame-rate.md#frame-generation-repeats-motion-classification-and-duplicates-inputs). Controlled motion/image/resource checks retain their expected results; native gameplay and physical-device performance are separate acceptance.
+- **Implemented native Handheld frame generation; device acceptance pending:** [capture the displayed canvas and preserve its window region](../../../docs/reference/frame-rate.md#frame-generation-captures-offscreen-copies-and-maps-the-wrong-region). Both render modes reach the copied laboratory save with current code and matching shaders; stable cadence remains open.
 - **Implemented; physical iPhone acceptance pending:** [Separate game images include installed DLC](../../../docs/reference/packing.md#separate-game-images-include-installed-dlc). `--romfs separate` now keeps both installed DLCs in the same directly readable image as the base/update, outside the IPA and Xcode app. Unchanged data reuses that image.
   Existing `Documents/game-data` imports remain usable without an image. Missing data leaves Play disabled and offers Import ROM on the launcher; see the same packing entry for directory selection and failure-preserving import behavior.
   The real combined image is 16,521,938,617 bytes. A headless current-source `scripts/run_mac.py --test` run with a save copy mounted the base and DLC 1 from that image, reported owned indices `{1,2}`, and passed frame 3,300 without a `[RED]` line or crash. Evidence is in `combined-image-20261031/` in the game's work folder. The independent chain-regression command was blocked by the existing local Metal compiler/lock mismatch before shader comparison; this is not an iPhone delivery check.
+- **Experimental: separate generated pictures from real-frame ownership:** [MetalFX interpolation and real-frame ownership](../../../docs/reference/frame-rate.md#experimental-metalfx-interpolation-keeps-real-frame-ownership).
+- **Resolved: interpolation could double character action speed:** [real-frame pacing remains independent of generated pictures](../../../docs/reference/frame-rate.md#frame-generation-speeds-up-game-simulation).
+- **Resolved pacing error when interpolation callbacks are skipped:** [count elapsed refresh intervals instead of callback notifications](../../../docs/reference/frame-rate.md#frame-generation-waits-again-for-skipped-display-callbacks). The controlled delegate/acquire fixture passes all 12 new checks after failing seven before the fix; the existing 36 pacing and 206 MetalFX/support checks still pass. iPhone Air symptom attribution and smoothness acceptance remain open.
+- **Resolved blocking path; smoothness acceptance remains open:** [busy interpolation display allocators no longer stall display-link callbacks](../../../docs/reference/frame-rate.md#frame-generation-blocks-display-callbacks-on-busy-allocators). The 2026-11-01 fixture passes 200 checks plus six unsupported-device checks and 36 link-tick checks; the changed renderer compiles for iPhone. Synthetic Metal 3/4 and UI-mode controls did not establish a reliable faster backend. Native comparison runs containing loading/fade frames and concurrent browser GPU activity are retained but excluded from performance claims. User-reported iPhone Air smoothness remains unresolved. Artifacts: `01007EF00011E000-work/framegen-pacing-20261101/`.
 
 - **Experimental, switch-controlled:** [File-backed guest heap](../../../docs/reference/memory.md#experimental-file-backed-guest-heap), on `experiment/file-backed-memory`. The launcher defaults the preset from available memory; a saved manual On/Off takes priority. Mac probes check actual page residency separately from memory-limit accounting, including real GPU reads/writes. The experiment note records the retained-graphics game comparison and the current-graphics/iPhone validation boundary.
 
