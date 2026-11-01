@@ -159,8 +159,8 @@ static void game_settings_done(void) { dm_gamepad_settings_done(); }
     if (self.game) return;
     if (!front_ios_prepare_game()) { [self showLauncher]; return; }
     dm_cloud_saves_env();   // DM_SAVE_SYNC from the launcher's Cloud saves pick, before the game's first save mount reads it (CloudSaves.m, save_sync.h)
-    front_hud_env();   // before the process's first Metal device, which reads MTL_HUD_ENABLED (an env file's DM_METAL_HUD sets it in main.m already; GitHub issue #840)
-    const char *dev = front_ios_device_check();   // first device: the launcher's HUD setting is already applied
+    front_hud_env();   // Apply the launcher's choice before the game device check; Info.plist loads HUD support before SwiftUI can initialize Metal.
+    const char *dev = front_ios_device_check();   // Check the game GPU after applying the launcher's HUD setting.
     if (dev) { [self showHint:[NSString stringWithFormat:@"This device is not supported.\n%s", dev]]; return; }   // the host does not start
     self.surface = [[UIView alloc] initWithFrame:self.view.bounds];
     self.surface.clipsToBounds = YES;
@@ -169,7 +169,11 @@ static void game_settings_done(void) { dm_gamepad_settings_done(); }
     [self setNeedsUpdateOfSupportedInterfaceOrientations];
     [self.surface addSubview:self.game];
     g_layer = (CAMetalLayer *)self.game.layer;
-    if (getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"))) { g_layer.developerHUDProperties = @{@"mode": @"default"}; LOG("front end: Metal performance HUD on (DM_METAL_HUD)"); }   // Apple's HUD over the game: frame rate, frame and GPU time, memory
+    // SwiftUI may have created an earlier Metal layer. Make the game the HUD's
+    // primary layer, and explicitly hide it when the launcher's switch is off.
+    BOOL showHUD=getenv("DM_METAL_HUD") && atoi(getenv("DM_METAL_HUD"));
+    g_layer.developerHUDProperties = @{@"mode": showHUD ? @"main" : @"disabled"};
+    if (showHUD) LOG("front end: Metal performance HUD on (DM_METAL_HUD)");
     dm_haptics_apple_init();
     self.pad = dm_gamepad_view(self.view.bounds);
     self.pad.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;

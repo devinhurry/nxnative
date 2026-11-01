@@ -1825,14 +1825,17 @@ static void test_botw_manual_menu_pad(DmGamepad *view) {
     [view revealBotwMenuPad:[RecognizedMenuTap new]]; [view setNeedsLayout]; [view layoutIfNeeded];
     CHECK([view dm_testManualMenuPad] && [view dm_testIsFull] && ![view dm_testControlsHidden] && [view dm_testSwapHidden],
           "escape gesture works without the native HUD adapter and never exposes the layout switcher");
-    [view reset];
-    CHECK(![view dm_testManualMenuPad] && [view dm_testControlsHidden],"an input reset ends the temporary override");
+    [view reset]; [view layoutIfNeeded];
+    CHECK([view dm_testManualMenuPad] && ![view dm_testSettingsButton].hidden,"input cancellation keeps the temporary handpad and Settings together");
+    [view revealBotwMenuPad:[RecognizedMenuTap new]]; [view layoutIfNeeded];
+    CHECK(![view dm_testManualMenuPad] && [view dm_testControlsHidden] && [view dm_testSettingsButton].hidden,
+          "a second three-finger double tap hides the temporary handpad and Settings together");
     g_force_controls_hidden=NO;
     g_botw_touchhud_available=NO; g_botw_gameplay_ready=YES;
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
     [view revealBotwMenuPad:[RecognizedMenuTap new]];
-    CHECK(![view dm_testManualMenuPad],"ordinary-mode input does not enable the menu backup");
-    [view reset];
+    CHECK([view dm_testManualMenuPad],"the manual handpad can be opened even without a native touch adapter");
+    [view revealBotwMenuPad:[RecognizedMenuTap new]]; [view reset];
 }
 
 static void test_botw_gameplay_settings(DmGamepad *view) {
@@ -1846,8 +1849,21 @@ static void test_botw_gameplay_settings(DmGamepad *view) {
     CHECK([gesture.delegate gestureRecognizer:gesture shouldReceiveTouch:touch(300,100)],
           "the existing three-finger double tap is eligible during BOTW gameplay");
     [view revealBotwMenuPad:[RecognizedMenuTap new]]; [view layoutIfNeeded];
-    CHECK(!button.hidden && [view dm_testSettingsRevealed] && ![view dm_testManualMenuPad],
-          "gameplay gesture reveals only the settings button and keeps the menu gamepad fallback separate");
+    CHECK(!button.hidden && [view dm_testSettingsRevealed] && [view dm_testManualMenuPad] &&
+          ![view dm_testL3ArtworkHidden] && ![view dm_testR3ArtworkHidden],
+          "gameplay gesture opens the full handpad and Settings together over custom touch controls");
+    CGRect originalBounds=view.bounds;
+    for (NSValue *size in @[[NSValue valueWithCGSize:CGSizeMake(844,390)], [NSValue valueWithCGSize:CGSizeMake(393,852)],
+                           [NSValue valueWithCGSize:CGSizeMake(568,320)], [NSValue valueWithCGSize:CGSizeMake(1024,768)]]) {
+        view.bounds=(CGRect){CGPointZero,size.CGSizeValue}; [view setNeedsLayout]; [view layoutIfNeeded];
+        CHECK(!button.hidden && button.frame.size.width>0,"temporary Settings has a visible position in landscape, portrait and tablet bounds");
+        for (int b=0;b<16;b++) {
+            CAShapeLayer *key=[view dm_testButtonLayer:b];
+            if (!key.hidden && key.path) CHECK(!CGRectIntersectsRect(button.frame,CGPathGetPathBoundingBox(key.path)),
+                "temporary Settings never overlaps a visible virtual button");
+        }
+    }
+    view.bounds=originalBounds; [view setNeedsLayout]; [view layoutIfNeeded];
     CGPoint face=[view facePos:0],stick=[view dm_testStickHome];
     FakeTouch *heldButton=touch(face.x,face.y), *heldStick=touch(stick.x,stick.y);
     began(view,heldButton); began(view,heldStick); moved(view,heldStick,stick.x+70,stick.y);
@@ -1857,8 +1873,19 @@ static void test_botw_gameplay_settings(DmGamepad *view) {
     CHECK(g_settings_presentations==presentations+1 && button.hidden && !g_buttons && !g_lx && !g_ly && !g_rx && !g_ry && !g_touch_count,
           "opening settings hides the button and releases all held virtual input");
     dm_gamepad_settings_done(); [view layoutIfNeeded];
-    CHECK(!button.hidden && [view dm_testSettingsRevealed],
-          "dismissing settings restores the revealed button during gameplay");
+    CHECK(!button.hidden && [view dm_testSettingsRevealed] && [view dm_testManualMenuPad],
+          "dismissing settings restores the temporary handpad and its Settings entry");
+    [view revealBotwMenuPad:[RecognizedMenuTap new]]; [view layoutIfNeeded];
+    CHECK(button.hidden && ![view dm_testManualMenuPad] && [view dm_testL3ArtworkHidden],
+          "three-finger close restores the custom gameplay layout without a floating Settings button");
+    g_botw_gameplay_ready=NO; g_botw_touch_menu_active=g_botw_touch_menu_presented=YES;
+    [view refreshBotwTouchMenuMode];
+    [view revealBotwMenuPad:[RecognizedMenuTap new]]; [view layoutIfNeeded];
+    CHECK(!button.hidden && [view dm_testManualMenuPad],"menus with direct touch targets still allow the full manual handpad");
+    g_botw_gameplay_ready=YES; g_botw_touch_menu_active=g_botw_touch_menu_presented=NO;
+    [view refreshBotwTouchMenuMode]; [view layoutIfNeeded];
+    CHECK(button.hidden && ![view dm_testManualMenuPad],"leaving a menu clears both the temporary handpad and Settings entry");
+    [view revealBotwMenuPad:[RecognizedMenuTap new]]; [view layoutIfNeeded];
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES]; [view layoutIfNeeded];
     CHECK(button.hidden && ![view dm_testSettingsRevealed],
           "controller connection hides and clears the settings button");

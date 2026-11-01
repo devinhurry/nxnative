@@ -248,6 +248,7 @@ struct LauncherSettingsPage: View {
     @ObservedObject var m: LauncherModel
     let close: () -> Void
     @State private var selection: String = "Game"
+    @State private var touchPage: BotwTouchPage?
     #if os(macOS)
     @AppStorage("window.show") private var showLauncherAtLaunch = true
     #endif
@@ -293,45 +294,59 @@ struct LauncherSettingsPage: View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
                 HStack {
-                    Text("Settings").font(.headline)
+                    if touchPage != nil {
+                        Button { touchPage = nil } label: { Label("Back", systemImage: "chevron.left") }
+                            .accessibilityIdentifier("settings.back")
+                    }
+                    Text(LocalizedStringKey(touchPage?.rawValue ?? "Settings")).font(.headline)
                     Spacer()
                     Button("Done", action: close).accessibilityIdentifier("settings.done")
                 }.padding(.horizontal, 16).padding(.vertical, 10)
                 Divider()
-                HStack(spacing: 0) {
-                    sectionList
-                    .listStyle(.sidebar)
-                    .frame(width: min(220, max(140, geometry.size.width * 0.24)))
-                    .accessibilityIdentifier("settings.sections")
-                    Divider()
+                if let touchPage {
                     Group {
-                        if selection == "Touch" {
-                            BotwTouchSettingsView(m: m, viewport: geometry.size, safeInsets: geometry.safeAreaInsets, embedded: true)
-                        } else {
-                            Form {
-                                if selection == "Cloud saves" {
-                                    CloudSavesSection().disabled(m.isRunning)
-                                    if m.isRunning { Text("Applies next time you start the game.").font(.footnote).foregroundStyle(.secondary) }
-                                } else {
-                                    Section(LocalizedStringKey(selection)) {
-                                        ForEach(m.rows(in: selection)) { SettingRow(s: $0, m: m) }
-                                        #if os(macOS)
-                                        if selection == "Game" &&
-                                            ProcessInfo.processInfo.environment["DM_TOUCH_PREVIEW"] != "1" {
-                                            Toggle("Show this window at launch", isOn: $showLauncherAtLaunch)
-                                                .toggleStyle(.checkbox)
-                                        }
-                                        #endif
-                                    }
-                                }
-                                Section {
-                                    Button("Reset to tested defaults") { m.reset() }.disabled(!m.changed)
-                                }
-                            }.formStyle(.grouped)
+                        switch touchPage {
+                        case .normal, .compact:
+                            BotwTouchSettingsView(m: m, viewport: geometry.size, safeInsets: geometry.safeAreaInsets, portrait: touchPage == .compact)
+                        case .stick:
+                            BotwStickSettingsView(m: m)
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .accessibilityIdentifier("settings.options")
+                    .accessibilityIdentifier("settings.touch.page." + touchPage.identifier)
+                } else {
+                    HStack(spacing: 0) {
+                        sectionList
+                            .listStyle(.sidebar)
+                            .frame(width: min(220, max(140, geometry.size.width * 0.24)))
+                            .accessibilityIdentifier("settings.sections")
+                        Divider()
+                        Form {
+                            if selection == "Touch" {
+                                BotwTouchSettingsMenu(m: m) { touchPage = $0 }
+                            } else if selection == "Cloud saves" {
+                                CloudSavesSection().disabled(m.isRunning)
+                                if m.isRunning { Text("Applies next time you start the game.").font(.footnote).foregroundStyle(.secondary) }
+                            } else {
+                                Section(LocalizedStringKey(selection)) {
+                                    ForEach(m.rows(in: selection)) { SettingRow(s: $0, m: m) }
+                                    #if os(macOS)
+                                    if selection == "Game" && ProcessInfo.processInfo.environment["DM_TOUCH_PREVIEW"] != "1" {
+                                        Toggle("Show this window at launch", isOn: $showLauncherAtLaunch).toggleStyle(.checkbox)
+                                    }
+                                    #endif
+                                }
+                            }
+                            if selection != "Touch" {
+                                Section {
+                                    Button("Reset to tested defaults") { m.reset() }.disabled(!m.changed)
+                                }
+                            }
+                        }
+                        .formStyle(.grouped)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .accessibilityIdentifier("settings.options")
+                    }
                 }
             }
         }

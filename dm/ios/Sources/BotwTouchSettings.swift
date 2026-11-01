@@ -8,15 +8,75 @@ import UIKit
 import AppKit
 #endif
 
+enum BotwTouchPage: String, CaseIterable {
+    case normal = "Normal layout"
+    case compact = "Compact layout"
+    case stick = "Left-stick parameters"
+    var identifier: String {
+        switch self { case .normal: return "normal"; case .compact: return "compact"; case .stick: return "stick" }
+    }
+}
+
+struct BotwTouchSettingsMenu: View {
+    @ObservedObject var m: LauncherModel
+    let open: (BotwTouchPage) -> Void
+    var body: some View {
+        Section("BOTW touch settings") {
+            ForEach(BotwTouchPage.allCases, id: \.self) { page in
+                Button { open(page) } label: {
+                    HStack {
+                        Text(LocalizedStringKey(page.rawValue))
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.caption)
+                    }.contentShape(Rectangle())
+                }
+                .accessibilityIdentifier("settings.touch." + page.identifier)
+            }
+        }
+        if let row = m.settings.first(where: { $0.env == "DM_BOTW_PORTRAIT" }) {
+            Section { SettingRow(s: row, m: m) }
+        }
+        Section {
+            Button("Restore all touch defaults") { m.reset(keys: m.touchSettingsKeys) }
+        }
+    }
+}
+
+struct BotwStickSettingsView: View {
+    @ObservedObject var m: LauncherModel
+    @State private var portrait = false
+    var body: some View {
+        Form {
+            Section {
+                Picker("Layout", selection: $portrait) {
+                    Text("Normal layout").tag(false)
+                    Text("Compact layout").tag(true)
+                }.pickerStyle(.segmented).accessibilityIdentifier("botw.touch.profile")
+            }
+            if let response = m.touchStickResponse(portrait: portrait) {
+                Section("Left-stick response") { TouchStickPreview(response: response) }
+                Section {
+                    ForEach(m.rows(in: TouchStickResponse.section).filter { m.touchSettingsKeys(portrait: portrait).contains($0.env) }) {
+                        SettingRow(s: $0, m: m)
+                    }
+                }
+                Section {
+                    Button("Restore left-stick defaults") {
+                        m.reset(keys: Set(TouchStickResponse.keys.map { botwTouchKey($0, portrait: portrait) }))
+                    }
+                }
+            }
+        }.formStyle(.grouped)
+    }
+}
+
 struct BotwTouchSettingsView: View {
     @ObservedObject var m: LauncherModel
-    @Environment(\.dismiss) private var dismiss
     var viewport = CGSize(width: 932, height: 430)
     var safeInsets = EdgeInsets()
-    var embedded = false
     @State private var selected = BotwTouchControl.all[1]
     @State private var copied = false
-    @State private var portrait = false
+    var portrait = false
     private var controls: [BotwTouchControl] { portrait ? BotwTouchControl.compact : BotwTouchControl.all }
 
     private var previewViewport: CGSize {
@@ -70,19 +130,6 @@ struct BotwTouchSettingsView: View {
             let panels = stacked ? AnyLayout(VStackLayout(spacing: 16)) : AnyLayout(HStackLayout(spacing: 16))
             panels {
             VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    #if os(iOS)
-                    if !embedded {
-                        Button(action: { dismiss() }) { Image(systemName: "chevron.left") }
-                            .accessibilityLabel(Text("Back"))
-                    }
-                    #endif
-                    Text("Touch layout").font(.headline)
-                }
-                Picker("Layout", selection: $portrait) {
-                    Text("Normal layout").tag(false)
-                    Text("Compact layout").tag(true)
-                }.pickerStyle(.segmented).accessibilityIdentifier("botw.touch.profile")
                 GeometryReader { geometry in
                     let scale = min(geometry.size.width / previewViewport.width, geometry.size.height / previewViewport.height)
                     ZStack(alignment: .topLeading) {
@@ -106,7 +153,6 @@ struct BotwTouchSettingsView: View {
             .frame(height: stacked ? max(200, geometry.size.height * 0.42) : nil)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    if let row = m.settings.first(where: { $0.env == "DM_BOTW_PORTRAIT" }) { SettingRow(s: row, m: m) }
                     Picker("Control", selection: $selected) {
                         ForEach(controls) { Text(LocalizedStringKey($0.label)).tag($0) }
                     }.pickerStyle(.menu).accessibilityIdentifier("botw.touch.control")
@@ -122,11 +168,6 @@ struct BotwTouchSettingsView: View {
                     Divider()
                     if let row = m.settings.first(where: { $0.env == key("DM_BOTW_PAD_BADGES") }) { SettingRow(s: row, m: m) }
                     Divider()
-                    if let response = m.touchStickResponse(portrait: portrait) {
-                        Text("Left-stick response").font(.headline)
-                        TouchStickPreview(response: response)
-                        ForEach(m.rows(in: TouchStickResponse.section).filter { m.touchSettingsKeys(portrait: portrait).contains($0.env) && $0.env != key("DM_BOTW_MOVE_SIZE") }) { SettingRow(s: $0, m: m) }
-                    }
                     Button("Restore all touch defaults") { m.reset(keys: m.touchSettingsKeys(portrait: portrait)) }
                     Divider()
                     Button(action: {
@@ -152,9 +193,6 @@ struct BotwTouchSettingsView: View {
         }
         .onChange(of: m.values) { _, _ in copied = false }
         .onChange(of: portrait) { _, _ in copied = false; selected = BotwTouchControl.all[1] }
-        #if os(iOS)
-        .toolbar(.hidden, for: .navigationBar)
-        #endif
     }
 }
 
@@ -265,14 +303,8 @@ private struct BotwControlPreview: View {
 
 struct TouchStickPreview: View {
     let response: TouchStickResponse
-    @State private var travel = 0.2
-
-    private var readout: String {
-        String(format: NSLocalizedString("Drag %d%% → Stick %d%%", comment: "Touch response preview"), Int((travel * 100).rounded()), Int((response.strength(at: travel) * 100).rounded()))
-    }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(readout).monospacedDigit().font(.callout)
             Chart {
                 RuleMark(x: .value("Deadzone", response.deadzone * 100))
                     .foregroundStyle(.secondary).lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
@@ -282,32 +314,18 @@ struct TouchStickPreview: View {
                     LineMark(x: .value("Finger travel", Double(i)), y: .value("Stick strength", response.strength(at: Double(i) / 100) * 100))
                         .foregroundStyle(Color.accentColor)
                 }
-                PointMark(x: .value("Finger travel", travel * 100), y: .value("Stick strength", response.strength(at: travel) * 100))
-                    .foregroundStyle(Color.primary).symbolSize(45)
             }
             .chartXScale(domain: 0...100).chartYScale(domain: 0...100)
             .chartXAxis { AxisMarks(values: [0, 25, 50, 75, 100]) }
             .chartYAxis { AxisMarks(values: [0, 50, 100]) }
             .chartXAxisLabel("Finger travel (%)")
             .chartYAxisLabel("Stick strength (%)")
-            .chartOverlay { proxy in
-                GeometryReader { geometry in
-                    Rectangle().fill(.clear).contentShape(Rectangle())
-                        .simultaneousGesture(DragGesture(minimumDistance: 0).onChanged { event in
-                            guard let frame = proxy.plotFrame,
-                                  let x: Double = proxy.value(atX: event.location.x - geometry[frame].minX) else { return }
-                            travel = min(max(x / 100, 0), 1)
-                        })
-                }
-            }
             .frame(height: 150)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Left-stick response preview")
-            .accessibilityValue(readout)
-            .accessibilityAdjustableAction { direction in
-                travel = min(max(travel + (direction == .increment ? 0.05 : -0.05), 0), 1)
-            }
-            Text("Drag across the chart to preview. Applies to BOTW touch movement. Saved when you tap Play.")
+            .accessibilityIdentifier("botw.touch.curve")
+            .allowsHitTesting(false)
+            Text("Applies to BOTW touch movement.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
     }

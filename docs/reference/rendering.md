@@ -513,6 +513,14 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Found on:** [The Legend of Zelda: Breath of the Wild — upscaling and measurements](../../dm/games/01007EF00011E000/README.md#upscaling-current).
 - **Limit:** the scaler takes the presented frame, including any filtering and HUD drawing the game already performed. Feeding it an earlier scene target would mean replacing a draw of the game's own, and nothing general identifies which draw is a plain upscale. Scaler support is checked at runtime; unsupported devices, sizes and formats use standard scaling.
 
+### iPhone performance HUD is enabled in settings but absent in the game
+
+- **Symptom:** the iPhone launcher's Performance HUD is already on before Play, but the game sometimes has no HUD.
+- **Cause:** the startup path only sets the HUD environment at Play; this does not guarantee it precedes every Metal initialization, since SwiftUI can initialize Metal during the launcher. The default main layer is also the first Metal layer, which need not be the game. These initialization gaps are visible in code; the user's intermittent device case has not been captured with a trace.
+- **Fix:** the iOS app's `MetalHudEnabled` property loads HUD support at process startup. After Play, the game layer explicitly uses `developerHUDProperties` mode `main` when the setting is on, or `disabled` when it is off. The Mac bootstrap reapplies HUD environment choices after its shared launcher; its native HUD menu remains in control. Apple documents [startup activation](https://developer.apple.com/documentation/xcode/monitoring-your-metal-apps-graphics-performance) and [per-layer control](https://developer.apple.com/documentation/xcode/customizing-metal-performance-hud).
+- **Check:** production iOS compile/link and the generated app's Info.plist. The user's intermittent physical-device case has not been captured with a device trace; visual iPhone acceptance remains open.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game).
+
 ### Scene upscaling before the HUD
 
 - **Symptom:** reduced-resolution 3D looks soft, and final-picture sharpening processes the HUD after the game has already enlarged the scene.

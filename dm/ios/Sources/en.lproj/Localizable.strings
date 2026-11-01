@@ -219,3 +219,7 @@
 
 "Frame generation" = "Frame generation";
 "Inserts one picture between real game frames at the selected frame rate. Requires a supported GPU." = "Inserts one picture between real game frames at the selected frame rate. Requires a supported GPU.";
+
+"Left-stick parameters" = "Left-stick parameters";
+"Restore left-stick defaults" = "Restore left-stick defaults";
+"Applies to BOTW touch movement." = "Applies to BOTW touch movement.";
