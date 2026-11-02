@@ -615,18 +615,14 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     [self layoutSettingsButton];
     [self setNeedsDisplay:YES];
 }
-- (float)layoutScale:(int)control { return _active ? _touchLayout.control[control].scale : 1; }
-- (float)faceGap { return DM_TP_FACE_GAP*self.u*(_active ? _touchLayout.face_gap*_touchLayout.control[0].scale : 1); }
+- (float)layoutScale:(int)control { return _active ? dm_botw_layout_scale(&_touchLayout,control) : 1; }
+- (float)faceGap { return DM_TP_FACE_GAP*self.u; }
 - (float)faceRadius { return DM_TP_FACE_R*self.u*[self layoutScale:0]; }
-- (float)faceRadiusForButton:(int)b { return _active && _touchLayout.portrait ? [self layoutRect:b].width*.5f : self.faceRadius; }
-- (float)dpadRadius { return _active && _touchLayout.portrait ? [self layoutRect:12].width*.5f : DM_TP_DPAD_R*self.u*[self layoutScale:12]; }
+- (float)faceRadiusForButton:(int)b { return _active ? [self layoutRect:b].width*.5f : self.faceRadius; }
+- (float)dpadRadius { return _active ? [self layoutRect:12].width*.5f : DM_TP_DPAD_R*self.u*[self layoutScale:12]; }
 - (dm_touchpad_point)facePosition:(int)button {
-    if (_active && _touchLayout.portrait) return [self layoutCenter:button];
+    if (_active) return [self layoutCenter:button];
     dm_touchpad_point p=self.faceCenter; float gap=self.faceGap;
-    if (_active) {
-        dm_touchpad_point d=dm_botw_layout_face_offset(&_touchLayout,button,self.u);
-        return (dm_touchpad_point){p.x+d.x,p.y+d.y};
-    }
     if (button==0) p.x+=gap; else if(button==1) p.y+=gap; else if(button==2) p.y-=gap; else p.x-=gap;
     return p;
 }
@@ -645,8 +641,8 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
 - (dm_touchpad_point)faceCenter { if (_active) return [self layoutCenter:0]; return dm_touchpad_face_center(self.bounds.size.width, self.bounds.size.height, 0, 0, 0, 0); }
 - (dm_touchpad_point)dpadCenter { if (_active) return [self layoutCenter:12]; return dm_touchpad_dpad_center(self.bounds.size.width, self.bounds.size.height, 0, 0, 0, 0); }
 - (float)u { dm_touchpad_rect a=[self controlArea]; return _active ? dm_botw_layout_unit(&_touchLayout,a.width,a.height) : dm_touchpad_u((float)self.bounds.size.height); }
-- (float)stickRadius { dm_touchpad_rect a=[self controlArea]; return _active ? dm_botw_layout_stick_radius(&_touchLayout,a.width,a.height)*_moveResponse.size : DM_TP_STICK_R*self.u; }
-- (float)shieldRadius { dm_touchpad_rect a=[self controlArea]; return dm_botw_layout_stick_radius(&_touchLayout,a.width,a.height)*[self layoutScale:8]; }
+- (float)stickRadius { return _active ? [self layoutRect:4].width*.5f : DM_TP_STICK_R*self.u; }
+- (float)shieldRadius { return [self layoutRect:8].width*.5f; }
 - (BOOL)mapOwnsTop:(dm_touchpad_point)p {
     if (!_mapValid) return NO;
     float content[4]; dm_aspect_hud_rect((float)self.bounds.size.width, (float)self.bounds.size.height, content);
@@ -731,7 +727,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         dm_touchpad_point button = [self facePosition:b];
         if (_touchLayout.badges && dm_botw_button_badge_contains(CGPointMake(p.x,p.y),CGPointMake(button.x,button.y),[self faceRadiusForButton:b])) return 1ull << b;
     }
-    if (_active && _touchLayout.portrait) {
+    if (_active) {
         uint64_t bits = 0;
         for (int b=0;b<4;b++) {
             dm_touchpad_point button = [self facePosition:b];
@@ -739,7 +735,6 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         }
         return bits;
     }
-    if (_active) return dm_botw_layout_face_buttons(&_touchLayout,p.x,p.y,c.x,c.y,self.u);
     return dm_touchpad_face_buttons(p.x, p.y, c.x, c.y, self.faceGap, self.faceRadius * 1.25f);
 }
 - (uint64_t)dpadAtTop:(dm_touchpad_point)p {
@@ -1248,7 +1243,8 @@ static void preview_refresh(void) {
     if (dm_aspect_hud_y_scale()<1) dm_aspect_hud_rect(g_preview_view.bounds.size.width,g_preview_view.bounds.size.height,rect);
     dm_touchpad_point d = [g_preview_view dpadCenter];
     if (active && rect[2] > 0 && rect[3] > 0)
-        dm_botw_touch_hud_publish(1, (d.x-rect[0])/rect[2], (d.y-rect[1])/rect[3], [g_preview_view layoutScale:12]);
+        dm_botw_touch_hud_publish(1, (d.x-rect[0])/rect[2], (d.y-rect[1])/rect[3],
+            dm_botw_layout_hud_scale([g_preview_view layoutScale:12],rect[3],dm_aspect_hud_y_scale()*dm_aspect_hud_gain()));
     else dm_botw_touch_hud_publish(0,0,0,1);
 }
 

@@ -207,10 +207,60 @@ host builds; native gameplay uses the retained matching graphics base, and the
 full regression remains blocked by the existing translator/lock mismatch.
 Physical iPhone acceptance remains separate.
 
-The 2026-10-29 touch defaults use the supplied layout offsets and scales in
-`settings.tsv` and `botw_touch_layout.h`; runtime, preview and Restore defaults
-agree. Existing saved customization is retained. The current minimap/environment
-cluster and fixed +/- anchor use the symmetric heart/Plus padding described above.
+**Fixed-point touch layouts (2026-11-02, current).** Normal and compact
+controls now use fixed frontend-point diameters and independent X/Y point offsets.
+Their rectangles anchor to the control area's left or right edge and bottom,
+before applying each offset. Side and bottom safe insets no longer enter this
+geometry; changing them also no longer changes the normal/compact selection.
+Compact selection uses the actual upright control-area width below 600pt.
+Duo Seated uses the lower control pane. Plus/Minus retain their HUD/safe-area
+geometry. A/B/X/Y each have independent drawing, hit targets, drag/resize,
+restore and exported parameters in both layouts.
+
+The default anchors preserve the former 932x430 normal phone layout with
+62pt side and 34pt bottom insets, and 390x844 compact with 34pt bottom inset,
+rounded to 0.1pt. Normal A keeps a 28.6pt right margin and 59.4pt diameter;
+compact A keeps 22.1pt and 43.9pt. Resizing keeps each control's side and bottom
+edge margins. Saved fraction/scale customizations project onto those reference
+layouts once; new `_X_PT`, `_Y_PT` and `_SIZE_PT` choices take precedence.
+Resetting point defaults does not reimport the retired fraction values.
+The [touch settings guide](../../../docs/settings.md#touch-left-stick) describes
+the keys and units. The 2026-10-29 group/percentage defaults described earlier
+are superseded by this layout; response deadzone/curve/full-travel fractions
+retain their meanings.
+
+Validation and captures are under `touch-points-20261102/` in the external
+game work folder. Native geometry/HUD/aspect/live-settings fixtures pass,
+including viewport compensation for native equipment artwork. UIKit passes
+630 drawing/input/lifecycle checks and 40 look sessions, covering phone, iPad,
+whole Duo and lower-pane sizes, insets, independent edits and resizing.
+The 39 focused launcher/documentation checks, all 53 iOS support tests, and
+194 iPhone SDK source compile checks pass. The current-source
+`run_mac.py --test --touch-preview` reaches gameplay in the Duo Seated layout
+with matching shaders and a copied save; its native HUD capture is retained.
+Physical iPhone/iPad/Duo comfort acceptance remains for the user.
+
+Regression scope is BOTW only: other games do not enter these control paths
+or expose these settings, and ordinary/controller geometry is covered by the
+UIKit fixture. The initial full point-layout regression is `CHANGED`: both
+110-second routes reach gameplay, 19,592 shaders and their interfaces are
+unchanged, and no new RED appears. FPS p50 is 59.2 to 59.1; frame p99 is 19.81
+to 19.92ms. The screenshots retain the scene/camera with different foliage
+animation and game time. After the native equipment size correction, the final
+quick regression with touch preview and Seated enabled is `PASS`: frames 3628
+to 3768, FPS 59.5 to 59.4, and no new shader/interface/RED failures. Reports
+are `regress-report/report.md` and `regress-final/report.md` in that work folder.
+
+The broad Python run's remaining seven failures and three errors reproduce
+on unchanged `c671dd0b`: missing Mac UI files in host-MSL fixtures, undefined
+`ui_finish` in shader-cache fixtures and obsolete frame-generation options.
+The environment catalogue mismatch introduced by the new keys is fixed and
+its check passes. Graphics motion controls also fail on unchanged `c671dd0b`.
+Installed LLVM 19 reports the same two Mac findings before and after this
+change; the repository's LLVM 23 lint baseline is not available locally.
+
+The minimap/environment cluster and fixed +/- anchor retain the symmetric
+heart/Plus padding described above.
 R/ZR cancellation still happens only on an outside release. Crossing either way
 over the cancel circle emits a haptic pulse; the release itself adds no pulse.
 Continuous movement on the same side adds no pulse. Cancel rings follow live finger ownership,

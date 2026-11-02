@@ -17,64 +17,72 @@ DM_BOTW_MENU_TRACE	diagnostic	Log BOTW native menu ownership, targets and direct
 DM_BOTW_MOVE_CURVE	player	BOTW touch movement response exponent; default 0.30, launcher range 0.30 to 2.00.
 DM_BOTW_MOVE_DEADZONE	player	BOTW touch movement deadzone as a radius fraction; default 0.07.
 DM_BOTW_MOVE_FULL	player	BOTW touch finger travel for full stick strength, as a radius fraction; default 0.71.
-DM_BOTW_MOVE_SIZE	player	BOTW touch movement stick size multiplier, including its drag range; default 0.80.
+DM_BOTW_PAD_A_SIZE_PT	player	BOTW normal A outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_A_X_PT	player	BOTW normal A horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_A_Y_PT	player	BOTW normal A vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
 DM_BOTW_PAD_BADGES	player	BOTW touch action-button corner labels; 0 hides them (default), 1 shows them.
-DM_BOTW_PAD_DPAD_SCALE	player	BOTW touch D-pad group size multiplier.
-DM_BOTW_PAD_DPAD_X	player	BOTW touch D-pad group horizontal offset as a fraction of layout canvas width.
-DM_BOTW_PAD_DPAD_Y	player	BOTW touch D-pad group vertical offset as a fraction of layout canvas height.
-DM_BOTW_PAD_FACE_GAP	player	BOTW touch XYAB spacing multiplier; default 1.060.
-DM_BOTW_PAD_FACE_SCALE	player	BOTW touch XYAB group size multiplier.
-DM_BOTW_PAD_FACE_X	player	BOTW touch XYAB group horizontal offset as a fraction of layout canvas width.
-DM_BOTW_PAD_FACE_Y	player	BOTW touch XYAB group vertical offset as a fraction of layout canvas height.
-DM_BOTW_PAD_L_SCALE	player	BOTW touch L button size multiplier.
-DM_BOTW_PAD_L_X	player	BOTW touch L button horizontal offset as a fraction of layout canvas width.
-DM_BOTW_PAD_L_Y	player	BOTW touch L button vertical offset as a fraction of layout canvas height.
-DM_BOTW_PAD_R_SCALE	player	BOTW touch R button size multiplier.
-DM_BOTW_PAD_R_X	player	BOTW touch R button horizontal offset as a fraction of layout canvas width.
-DM_BOTW_PAD_R_Y	player	BOTW touch R button vertical offset as a fraction of layout canvas height.
-DM_BOTW_PAD_STICK_X	player	BOTW touch movement stick horizontal offset as a fraction of layout canvas width.
-DM_BOTW_PAD_STICK_Y	player	BOTW touch movement stick vertical offset as a fraction of layout canvas height.
-DM_BOTW_PAD_ZL_SCALE	player	BOTW touch shield stick size multiplier.
-DM_BOTW_PAD_ZL_X	player	BOTW touch shield stick horizontal offset as a fraction of layout canvas width.
-DM_BOTW_PAD_ZL_Y	player	BOTW touch shield stick vertical offset as a fraction of layout canvas height.
-DM_BOTW_PAD_ZR_SCALE	player	BOTW touch ZR button size multiplier.
-DM_BOTW_PAD_ZR_X	player	BOTW touch ZR button horizontal offset as a fraction of layout canvas width.
-DM_BOTW_PAD_ZR_Y	player	BOTW touch ZR button vertical offset as a fraction of layout canvas height.
-DM_BOTW_PORTRAIT	player	Allow compact BOTW portrait rotation below 600pt usable width. Wide portrait windows always allow rotation and keep normal controls. Off by default.
+DM_BOTW_PAD_B_SIZE_PT	player	BOTW normal B outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_B_X_PT	player	BOTW normal B horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_B_Y_PT	player	BOTW normal B vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_DPAD_SIZE_PT	player	BOTW normal DPAD outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_DPAD_X_PT	player	BOTW normal DPAD horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_DPAD_Y_PT	player	BOTW normal DPAD vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_L_SIZE_PT	player	BOTW normal L outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_L_X_PT	player	BOTW normal L horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_L_Y_PT	player	BOTW normal L vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_R_SIZE_PT	player	BOTW normal R outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_R_X_PT	player	BOTW normal R horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_R_Y_PT	player	BOTW normal R vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_STICK_SIZE_PT	player	BOTW normal STICK outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_STICK_X_PT	player	BOTW normal STICK horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_STICK_Y_PT	player	BOTW normal STICK vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_X_SIZE_PT	player	BOTW normal X outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_X_X_PT	player	BOTW normal X horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_X_Y_PT	player	BOTW normal X vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_Y_SIZE_PT	player	BOTW normal Y outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_Y_X_PT	player	BOTW normal Y horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_Y_Y_PT	player	BOTW normal Y vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_ZL_SIZE_PT	player	BOTW normal ZL outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_ZL_X_PT	player	BOTW normal ZL horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_ZL_Y_PT	player	BOTW normal ZL vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_ZR_SIZE_PT	player	BOTW normal ZR outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_ZR_X_PT	player	BOTW normal ZR horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PAD_ZR_Y_PT	player	BOTW normal ZR vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT	player	Allows compact upright windows below 600pt of actual control-area width to rotate to portrait; wider upright windows are always allowed. Safe-area insets do not change the profile.
 DM_BOTW_PORTRAIT_MOVE_CURVE	player	BOTW compact touch movement response exponent; default 0.30, launcher range 0.30 to 2.00.
 DM_BOTW_PORTRAIT_MOVE_DEADZONE	player	BOTW compact touch movement deadzone as a radius fraction; default 0.07.
 DM_BOTW_PORTRAIT_MOVE_FULL	player	BOTW compact touch finger travel for full stick strength, as a radius fraction; default 0.71.
-DM_BOTW_PORTRAIT_MOVE_SIZE	player	BOTW compact touch movement stick size multiplier, including its drag range; default 0.80.
-DM_BOTW_PORTRAIT_PAD_A_SCALE	player	BOTW compact A size multiplier; default 1.100.
-DM_BOTW_PORTRAIT_PAD_A_X	player	BOTW compact A horizontal offset as a fraction of screen width.
-DM_BOTW_PORTRAIT_PAD_A_Y	player	BOTW compact A vertical offset as a fraction of screen height.
+DM_BOTW_PORTRAIT_PAD_A_SIZE_PT	player	BOTW compact A outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_A_X_PT	player	BOTW compact A horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_A_Y_PT	player	BOTW compact A vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
 DM_BOTW_PORTRAIT_PAD_BADGES	player	BOTW compact touch action-button corner labels; 0 hides them (default), 1 shows them.
-DM_BOTW_PORTRAIT_PAD_B_SCALE	player	BOTW compact B size multiplier; default 1.100.
-DM_BOTW_PORTRAIT_PAD_B_X	player	BOTW compact B horizontal offset as a fraction of screen width.
-DM_BOTW_PORTRAIT_PAD_B_Y	player	BOTW compact B vertical offset as a fraction of screen height.
-DM_BOTW_PORTRAIT_PAD_DPAD_SCALE	player	BOTW compact touch D-pad group size multiplier.
-DM_BOTW_PORTRAIT_PAD_DPAD_X	player	BOTW compact touch D-pad group horizontal offset as a fraction of control pane width.
-DM_BOTW_PORTRAIT_PAD_DPAD_Y	player	BOTW compact touch D-pad group vertical offset as a fraction of control pane height.
-DM_BOTW_PORTRAIT_PAD_L_SCALE	player	BOTW compact touch L button size multiplier.
-DM_BOTW_PORTRAIT_PAD_L_X	player	BOTW compact touch L button horizontal offset as a fraction of control pane width.
-DM_BOTW_PORTRAIT_PAD_L_Y	player	BOTW compact touch L button vertical offset as a fraction of control pane height.
-DM_BOTW_PORTRAIT_PAD_R_SCALE	player	BOTW compact touch R button size multiplier.
-DM_BOTW_PORTRAIT_PAD_R_X	player	BOTW compact touch R button horizontal offset as a fraction of control pane width.
-DM_BOTW_PORTRAIT_PAD_R_Y	player	BOTW compact touch R button vertical offset as a fraction of control pane height.
-DM_BOTW_PORTRAIT_PAD_STICK_X	player	BOTW compact touch movement stick horizontal offset as a fraction of control pane width.
-DM_BOTW_PORTRAIT_PAD_STICK_Y	player	BOTW compact touch movement stick vertical offset as a fraction of control pane height.
-DM_BOTW_PORTRAIT_PAD_X_SCALE	player	BOTW compact X size multiplier; default 1.100.
-DM_BOTW_PORTRAIT_PAD_X_X	player	BOTW compact X horizontal offset as a fraction of screen width.
-DM_BOTW_PORTRAIT_PAD_X_Y	player	BOTW compact X vertical offset as a fraction of screen height.
-DM_BOTW_PORTRAIT_PAD_Y_SCALE	player	BOTW compact Y size multiplier; default 1.100, with a default diameter 10pt larger than X (A/B are 10pt smaller than X).
-DM_BOTW_PORTRAIT_PAD_Y_X	player	BOTW compact Y horizontal offset as a fraction of screen width.
-DM_BOTW_PORTRAIT_PAD_Y_Y	player	BOTW compact Y vertical offset as a fraction of screen height.
-DM_BOTW_PORTRAIT_PAD_ZL_SCALE	player	BOTW compact touch shield stick size multiplier.
-DM_BOTW_PORTRAIT_PAD_ZL_X	player	BOTW compact touch shield stick horizontal offset as a fraction of control pane width.
-DM_BOTW_PORTRAIT_PAD_ZL_Y	player	BOTW compact touch shield stick vertical offset as a fraction of control pane height.
-DM_BOTW_PORTRAIT_PAD_ZR_SCALE	player	BOTW compact touch ZR button size multiplier.
-DM_BOTW_PORTRAIT_PAD_ZR_X	player	BOTW compact touch ZR button horizontal offset as a fraction of control pane width.
-DM_BOTW_PORTRAIT_PAD_ZR_Y	player	BOTW compact touch ZR button vertical offset as a fraction of control pane height.
+DM_BOTW_PORTRAIT_PAD_B_SIZE_PT	player	BOTW compact B outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_B_X_PT	player	BOTW compact B horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_B_Y_PT	player	BOTW compact B vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_DPAD_SIZE_PT	player	BOTW compact DPAD outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_DPAD_X_PT	player	BOTW compact DPAD horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_DPAD_Y_PT	player	BOTW compact DPAD vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_L_SIZE_PT	player	BOTW compact L outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_L_X_PT	player	BOTW compact L horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_L_Y_PT	player	BOTW compact L vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_R_SIZE_PT	player	BOTW compact R outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_R_X_PT	player	BOTW compact R horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_R_Y_PT	player	BOTW compact R vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_STICK_SIZE_PT	player	BOTW compact STICK outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_STICK_X_PT	player	BOTW compact STICK horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_STICK_Y_PT	player	BOTW compact STICK vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_X_SIZE_PT	player	BOTW compact X outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_X_X_PT	player	BOTW compact X horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_X_Y_PT	player	BOTW compact X vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_Y_SIZE_PT	player	BOTW compact Y outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_Y_X_PT	player	BOTW compact Y horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_Y_Y_PT	player	BOTW compact Y vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_ZL_SIZE_PT	player	BOTW compact ZL outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_ZL_X_PT	player	BOTW compact ZL horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_ZL_Y_PT	player	BOTW compact ZL vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_ZR_SIZE_PT	player	BOTW compact ZR outer diameter in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_ZR_X_PT	player	BOTW compact ZR horizontal offset (positive moves right) in frontend points; side and bottom anchors ignore safe-area insets.
+DM_BOTW_PORTRAIT_PAD_ZR_Y_PT	player	BOTW compact ZR vertical offset (positive moves down) in frontend points; side and bottom anchors ignore safe-area insets.
 DM_BOTW_UI_AUDIT	diagnostic	Append passive BOTW native screen and touch-target evidence as JSONL to this file (exact supported build, touch mode only).
 DM_BUNDLE_ID	switch	Overrides the iOS app's bundle ID in `build_ipa.sh` (default `org.nxnative.<title ID in lowercase>`)
 DM_CHEATS	path	Folder of Atmosphère cheat files: `<folder>/<build ID>.txt` or an SD-card layout (`atmosphere/contents/<title ID>/cheats/`) under it (default `<DM_ROOT>/cheats`); the Mac menu lists and toggles them

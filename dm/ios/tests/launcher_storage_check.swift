@@ -55,18 +55,19 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
         expect(m.values["DM_FPS_TARGET"] == "30" && m.values["DM_PSO_MTL4"] == "0" && m.values["DM_FPS_HOLD"] == "on" && m.values["DM_METAL_HUD"] == "1", "stored choices and the env file are read")
         expect(m.changed, "Reset is offered with changed settings")
         let stick = m.touchStickResponse!
-        expect(stick.deadzone == 0.07 && stick.curve == 0.3 && stick.full == 0.71 && stick.size == 0.8, "touch stick starts at the current movement defaults")
+        expect(stick.deadzone == 0.07 && stick.curve == 0.3 && stick.full == 0.71 && stick.size == 123.2, "touch stick starts at its point diameter and current movement defaults")
         expect(stick.strength(at: 0.07) == 0 && abs(stick.strength(at: 0.2) - pow(0.13/0.64,0.3)) < 0.001 && stick.strength(at: 0.71) == 1, "curve preview has the real deadzone, short-drag strength and endpoint")
         let curve = file.settings.first { $0.env == "DM_BOTW_MOVE_CURVE" }!
-        expect(curve.formattedValue("0.7") == "0.70" && scale.formattedValue("0.5") == "50 %", "curve values are numbers and existing ranges remain percentages")
+        let pointSize = file.settings.first { $0.env == "DM_BOTW_PAD_STICK_SIZE_PT" }!
+        expect(curve.formattedValue("0.7") == "0.70" && scale.formattedValue("0.5") == "50 %" && pointSize.formattedValue("123.2") == "123.2 pt", "layout dimensions show points while response and render-scale units remain unchanged")
         m.values["DM_BOTW_MOVE_DEADZONE"] = "0.15"; m.values["DM_BOTW_MOVE_CURVE"] = "1.00"
-        m.values["DM_BOTW_MOVE_FULL"] = "0.60"; m.values["DM_BOTW_MOVE_SIZE"] = "1.25"
-        expect(abs(m.touchStickResponse!.strength(at: 0.375) - 0.5) < 1e-6, "adjusted curve preview responds to all movement parameters")
-        m.values["DM_BOTW_PAD_FACE_X"] = "-0.100"; m.values["DM_BOTW_PAD_FACE_GAP"] = "1.200"
-        m.values["DM_RENDER_SCALE"] = "1.00"   // the slider's format of the default
+        m.values["DM_BOTW_MOVE_FULL"] = "0.60"; m.values["DM_BOTW_PAD_STICK_SIZE_PT"] = "160.000"
+        expect(abs(m.touchStickResponse!.strength(at: 0.375) - 0.5) < 1e-6, "adjusted curve preview responds to movement parameters")
+        m.values["DM_BOTW_PAD_A_X_PT"] = "-20.000"; m.values["DM_BOTW_PAD_B_SIZE_PT"] = "72.000"
+        m.values["DM_RENDER_SCALE"] = "1.00"
         m.values["DM_BOTW_PAD_BADGES"] = "0"
         let exported = m.touchSettingsExport
-        expect(exported.contains("DM_BOTW_PAD_FACE_X=-0.100") && exported.contains("DM_BOTW_PAD_FACE_GAP=1.200") && exported.contains("DM_BOTW_PAD_BADGES=0") && exported.contains("DM_BOTW_MOVE_CURVE=1.000") && !exported.contains("DM_FPS_TARGET"), "touch export contains exact adjusted runtime values without unrelated settings")
+        expect(exported.contains("DM_BOTW_PAD_A_X_PT=-20.000") && exported.contains("DM_BOTW_PAD_B_SIZE_PT=72.000") && exported.contains("DM_BOTW_PAD_BADGES=0") && exported.contains("DM_BOTW_MOVE_CURVE=1.000") && !exported.contains("DM_FPS_TARGET") && !exported.contains("PAD_FACE_"), "touch export contains independent button point values without obsolete group settings")
         m.apply()
         expect(d.string(forKey: "launcher.DM_PRESENT_SNAP") == nil, "a value equal to the default is not stored (and an old one is dropped)")
         expect(d.string(forKey: "launcher.DM_RENDER_SCALE") == nil && d.string(forKey: "launcher.DM_OPMODE") == nil && d.string(forKey: "launcher.DM_FPS_HOLD") == nil, "defaults are not stored")
@@ -76,51 +77,52 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
         expect(String(cString: getenv("DM_PSO_MTL4")) == "0" && String(cString: getenv("DM_PRESENT_SNAP")) == "1" && String(cString: getenv("DM_FPS_HOLD")) == "on", "the environment gets every value")
         let reopened = LauncherModel(file.settings, defaults: d)
         expect(reopened.values["DM_THERMAL_CAP"] == "1", "reopening restores an enabled thermal cap")
-        expect(reopened.values["DM_BOTW_MOVE_DEADZONE"] == "0.15" && reopened.values["DM_BOTW_MOVE_SIZE"] == "1.25" && String(cString: getenv("DM_BOTW_MOVE_CURVE")) == "1.00", "Play persists stick settings, reopening restores them, and runtime receives them")
-        expect(reopened.values["DM_BOTW_PAD_FACE_X"] == "-0.100" && reopened.values["DM_BOTW_PAD_FACE_GAP"] == "1.200", "layout group offset and spacing persist alongside response settings")
-        expect(reopened.values["DM_BOTW_PAD_BADGES"] == "0", "corner badge switch persists")
+        expect(reopened.values["DM_BOTW_MOVE_DEADZONE"] == "0.15" && reopened.values["DM_BOTW_PAD_STICK_SIZE_PT"] == "160.000" && String(cString: getenv("DM_BOTW_MOVE_CURVE")) == "1.00", "Play persists and restores movement settings and point diameter")
+        expect(reopened.values["DM_BOTW_PAD_A_X_PT"] == "-20.000" && reopened.values["DM_BOTW_PAD_B_SIZE_PT"] == "72.000", "independent face positions and sizes persist")
         expect(!file.settings.contains { $0.env.hasPrefix("DM_BOTW_PAD_PLUS") || $0.env.hasPrefix("DM_BOTW_PAD_MINUS") }, "plus and minus remain fixed")
         reopened.reset(keys: TouchStickResponse.keys)
-        expect(!reopened.touchStickChanged && reopened.values["DM_BOTW_MOVE_DEADZONE"] == "0.070" && reopened.values["DM_BOTW_MOVE_SIZE"] == "0.800", "left-stick reset restores the entire group")
+        expect(!reopened.touchStickChanged && reopened.values["DM_BOTW_MOVE_DEADZONE"] == "0.070" && reopened.values["DM_BOTW_PAD_STICK_SIZE_PT"] == "123.200", "left-stick reset restores its response and point diameter")
         expect(reopened.values["DM_FPS_TARGET"] == "30" && d.string(forKey: "launcher.DM_PSO_MTL4") == "0", "left-stick reset preserves unrelated game and performance choices")
-        reopened.values["DM_BOTW_PAD_R_Y"] = "0.100"
-        reopened.reset(keys: BotwTouchControl.all[0].keys.union(["DM_BOTW_PAD_FACE_GAP"]))
-        expect(reopened.values["DM_BOTW_PAD_FACE_X"] == "-0.006" && reopened.values["DM_BOTW_PAD_FACE_GAP"] == "1.060" && reopened.values["DM_BOTW_PAD_R_Y"] == "0.100", "per-control restore resets XYAB spacing and position without changing R")
+        reopened.values["DM_BOTW_PAD_R_Y_PT"] = "40.000"
+        reopened.reset(keys: BotwTouchControl.all[0].keys)
+        expect(reopened.values["DM_BOTW_PAD_A_X_PT"] == "0.000" && reopened.values["DM_BOTW_PAD_B_SIZE_PT"] == "72.000" && reopened.values["DM_BOTW_PAD_R_Y_PT"] == "40.000", "restoring A leaves B and R unchanged")
         reopened.reset(keys: reopened.touchSettingsKeys)
-        expect(reopened.values["DM_BOTW_PAD_R_Y"] == "-0.097" && reopened.values["DM_FPS_TARGET"] == "30", "restore all touch defaults leaves frame rate alone")
+        expect(reopened.values["DM_BOTW_PAD_R_Y_PT"] == "0.000" && reopened.values["DM_FPS_TARGET"] == "30", "restore all touch defaults leaves frame rate alone")
         let portraitSuite = suite + ".portrait"
         let portraitDefaults = UserDefaults(suiteName: portraitSuite)!
         defer { portraitDefaults.removePersistentDomain(forName: portraitSuite) }
         let portraitModel = LauncherModel(file.settings, defaults: portraitDefaults)
-        expect(portraitModel.values["DM_BOTW_PORTRAIT"] == "0", "portrait mode starts disabled")
-        portraitModel.values["DM_BOTW_PORTRAIT"] = "1"
-        portraitModel.values["DM_BOTW_PAD_FACE_X"] = "0.123"
-        portraitModel.values["DM_BOTW_PORTRAIT_PAD_A_X"] = "-0.200"
-        portraitModel.values["DM_BOTW_PORTRAIT_PAD_B_Y"] = "0.100"
-        portraitModel.values["DM_BOTW_PORTRAIT_PAD_X_SCALE"] = "1.250"
-        portraitModel.values["DM_BOTW_PORTRAIT_PAD_Y_X"] = "0.050"
+        expect(portraitModel.values["DM_BOTW_PORTRAIT"] == "0", "compact portrait rotation defaults off")
+        portraitModel.values["DM_BOTW_PAD_A_X_PT"] = "12.000"
+        portraitModel.values["DM_BOTW_PORTRAIT_PAD_A_X_PT"] = "-20.000"
+        portraitModel.values["DM_BOTW_PORTRAIT_PAD_B_Y_PT"] = "10.000"
+        portraitModel.values["DM_BOTW_PORTRAIT_PAD_X_SIZE_PT"] = "65.000"
+        portraitModel.values["DM_BOTW_PORTRAIT_PAD_Y_X_PT"] = "5.000"
         portraitModel.values["DM_BOTW_PORTRAIT_MOVE_CURVE"] = "0.750"
-        portraitModel.apply()
+        portraitModel.values["DM_BOTW_PORTRAIT"] = "1"; portraitModel.apply()
         let portraitRestored = LauncherModel(file.settings, defaults: portraitDefaults)
-        expect(portraitRestored.values["DM_BOTW_PAD_FACE_X"] == "0.123" && portraitRestored.values["DM_BOTW_PORTRAIT_PAD_A_X"] == "-0.200" &&
-               portraitRestored.values["DM_BOTW_PORTRAIT_PAD_B_Y"] == "0.100" && portraitRestored.values["DM_BOTW_PORTRAIT_PAD_X_SCALE"] == "1.250" &&
-               portraitRestored.values["DM_BOTW_PORTRAIT_PAD_Y_X"] == "0.050" &&
-               portraitRestored.touchStickResponse(portrait: true)?.curve == 0.75 && portraitRestored.touchStickResponse?.curve == 0.3,
-               "portrait and landscape positions and movement responses persist independently")
+        expect(portraitRestored.values["DM_BOTW_PAD_A_X_PT"] == "12.000" && portraitRestored.values["DM_BOTW_PORTRAIT_PAD_A_X_PT"] == "-20.000" && portraitRestored.values["DM_BOTW_PORTRAIT_PAD_B_Y_PT"] == "10.000" && portraitRestored.touchStickResponse(portrait: true)?.curve == 0.75 && portraitRestored.touchStickResponse?.curve == 0.3, "normal and compact adjustments persist independently")
         let portraitExport = portraitRestored.touchSettingsExport(portrait: true)
-        expect(portraitExport.contains("DM_BOTW_PORTRAIT_PAD_A_X=-0.200") && portraitExport.contains("DM_BOTW_PORTRAIT_PAD_B_Y=0.100") &&
-               portraitExport.contains("DM_BOTW_PORTRAIT_PAD_X_SCALE=1.250") && portraitExport.contains("DM_BOTW_PORTRAIT_PAD_Y_X=0.050") &&
-               !portraitExport.contains("DM_BOTW_PAD_FACE_X=") && !portraitExport.contains("DM_BOTW_PORTRAIT_PAD_FACE_"),
-               "portrait parameter export contains independent buttons and only the portrait profile")
+        expect(portraitExport.contains("DM_BOTW_PORTRAIT_PAD_X_SIZE_PT=65.000") && portraitExport.contains("DM_BOTW_PORTRAIT_PAD_Y_X_PT=5.000") && !portraitExport.contains("DM_BOTW_PAD_A_X_PT="), "compact export uses independent point dimensions")
         portraitRestored.reset(keys: BotwTouchControl.compact[0].keys(portrait: true))
-        expect(portraitRestored.values["DM_BOTW_PORTRAIT_PAD_A_X"] == "0.000" && portraitRestored.values["DM_BOTW_PORTRAIT_PAD_B_Y"] == "0.100",
-               "restoring compact A preserves the other compact button adjustments")
+        expect(portraitRestored.values["DM_BOTW_PORTRAIT_PAD_A_X_PT"] == "0.000" && portraitRestored.values["DM_BOTW_PORTRAIT_PAD_B_Y_PT"] == "10.000", "restoring compact A preserves other buttons")
         portraitRestored.reset(keys: portraitRestored.touchSettingsKeys(portrait: true))
-        expect(portraitRestored.values["DM_BOTW_PORTRAIT_PAD_B_Y"] == "0.000" && portraitRestored.values["DM_BOTW_PORTRAIT_PAD_X_SCALE"] == "1.100" &&
-               portraitRestored.values["DM_BOTW_PORTRAIT_PAD_Y_X"] == "0.000" && portraitRestored.values["DM_BOTW_PAD_FACE_X"] == "0.123" && portraitRestored.values["DM_BOTW_PORTRAIT"] == "1",
-               "restoring portrait defaults preserves landscape settings and the portrait toggle")
-        d.set("nan", forKey: "launcher.DM_BOTW_MOVE_CURVE"); d.set("2.00", forKey: "launcher.DM_BOTW_MOVE_SIZE")
-        expect(LauncherModel(file.settings, defaults: d).touchStickResponse!.curve == 0.3 && LauncherModel(file.settings, defaults: d).touchStickResponse!.size == 0.8, "invalid saved tuning values load defaults")
+        expect(portraitRestored.values["DM_BOTW_PORTRAIT_PAD_X_SIZE_PT"] == "53.900" && portraitRestored.values["DM_BOTW_PAD_A_X_PT"] == "12.000" && portraitRestored.values["DM_BOTW_PORTRAIT"] == "1", "compact restore preserves normal settings and rotation permission")
+        let legacySuite = suite + ".legacy"
+        let legacyDefaults = UserDefaults(suiteName: legacySuite)!
+        defer { legacyDefaults.removePersistentDomain(forName: legacySuite) }
+        legacyDefaults.set("-0.100", forKey: "launcher.DM_BOTW_PAD_FACE_X")
+        legacyDefaults.set("1.200", forKey: "launcher.DM_BOTW_PAD_FACE_GAP")
+        legacyDefaults.set("0.100", forKey: "launcher.DM_BOTW_PORTRAIT_PAD_B_Y")
+        let pointMigrated = LauncherModel(file.settings, defaults: legacyDefaults)
+        expect(abs((Double(pointMigrated.values["DM_BOTW_PAD_A_X_PT"]!) ?? 0) + 64.158) < 0.001 && abs((Double(pointMigrated.values["DM_BOTW_PAD_B_X_PT"]!) ?? 0) + 71.858) < 0.001 && pointMigrated.values["DM_BOTW_PORTRAIT_PAD_B_Y_PT"] == "84.400", "old group offsets, spacing and compact fractions migrate to reference-phone point values")
+        pointMigrated.apply()
+        pointMigrated.reset(keys: pointMigrated.touchSettingsKeys); pointMigrated.apply()
+        expect(LauncherModel(file.settings, defaults: legacyDefaults).values["DM_BOTW_PAD_A_X_PT"] == "0.000", "reset point defaults do not resurrect old fraction settings")
+        legacyDefaults.set("25.000", forKey: "launcher.DM_BOTW_PAD_A_X_PT")
+        expect(LauncherModel(file.settings, defaults: legacyDefaults).values["DM_BOTW_PAD_A_X_PT"] == "25.000", "explicit point choices take precedence over legacy migration")
+        d.set("nan", forKey: "launcher.DM_BOTW_MOVE_CURVE"); d.set("241", forKey: "launcher.DM_BOTW_PAD_STICK_SIZE_PT")
+        expect(LauncherModel(file.settings, defaults: d).touchStickResponse!.curve == 0.3 && LauncherModel(file.settings, defaults: d).touchStickResponse!.size == 123.2, "invalid saved response and point dimensions load defaults")
         setenv("DM_ENV_FILE_KEYS", "DM_BOTW_MOVE_DEADZONE", 1); setenv("DM_BOTW_MOVE_DEADZONE", "0.12", 1)
         let locked = LauncherModel(file.settings, defaults: d)
         locked.reset(keys: TouchStickResponse.keys); locked.apply()

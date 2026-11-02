@@ -31,11 +31,10 @@ class LauncherSettingsTests(unittest.TestCase):
         for platform in ('mac', 'ios'):
             rows = build(BOTW, 'nvn', platform)
             self.assertEqual(rows['DM_BOTW_PORTRAIT']['default'], '0')
-            for button in 'ABXY':
-                for field, default in [('X', '0.000'), ('Y', '0.000'), ('SCALE', '1.100')]:
+            for button, diameter in zip('ABXY', ['43.900', '43.900', '53.900', '63.900']):
+                for field, default in [('X_PT', '0.000'), ('Y_PT', '0.000'), ('SIZE_PT', diameter)]:
                     self.assertEqual(rows[f'DM_BOTW_PORTRAIT_PAD_{button}_{field}']['default'], default)
             self.assertEqual(rows['DM_BOTW_PORTRAIT_MOVE_CURVE']['default'], '0.300')
-            self.assertNotEqual(rows['DM_BOTW_PAD_FACE_X']['default'], rows['DM_BOTW_PORTRAIT_PAD_A_X']['default'])
             self.assertFalse(any(k.startswith('DM_BOTW_PORTRAIT_PAD_FACE_') for k in rows))
         for gid, api in [(WONDER, 'nvn'), ('0100535012974000', 'vulkan'), ('010014E00DB56000', 'gl')]:
             self.assertFalse(any(k.startswith('DM_BOTW_PORTRAIT') for k in build(gid, api)))
@@ -103,7 +102,7 @@ class LauncherSettingsTests(unittest.TestCase):
         botw = build(BOTW, 'nvn')
         expected = {
             'DM_BOTW_MOVE_DEADZONE': ('0.070', 0, .3, .01), 'DM_BOTW_MOVE_CURVE': ('0.300', .3, 2, .05),
-            'DM_BOTW_MOVE_FULL': ('0.710', .35, 1, .01), 'DM_BOTW_MOVE_SIZE': ('0.800', .6, 1.5, .05),
+            'DM_BOTW_MOVE_FULL': ('0.710', .35, 1, .01), 'DM_BOTW_PAD_STICK_SIZE_PT': ('123.200', 20, 240, .5),
         }
         for key, bounds in expected.items():
             self.assertEqual(tuple(botw[key][k] for k in ('default', 'min', 'max', 'step')), bounds)
@@ -133,20 +132,18 @@ class LauncherSettingsTests(unittest.TestCase):
                 self.assertEqual(rows['DM_FPS_HOLD']['default'], 'on')
 
     def test_touch_layout_defaults_and_game_scope(self):
-        expected = {
-            'FACE_X': '-0.006', 'FACE_Y': '-0.068', 'FACE_SCALE': '1.100',
-            'STICK_X': '0.000', 'STICK_Y': '0.023',
-            'ZL_X': '0.000', 'ZL_Y': '0.000', 'ZL_SCALE': '1.000',
-            'L_X': '0.021', 'L_Y': '0.000', 'L_SCALE': '1.200',
-            'R_X': '0.025', 'R_Y': '-0.097', 'R_SCALE': '1.100',
-            'ZR_X': '-0.022', 'ZR_Y': '-0.098', 'ZR_SCALE': '1.100',
-            'DPAD_X': '0.042', 'DPAD_Y': '0.000', 'DPAD_SCALE': '1.000',
-            'FACE_GAP': '1.060', 'BADGES': '0',
-        }
-        expected = {'DM_BOTW_PAD_' + key: value for key, value in expected.items()}
+        diameters = dict(zip(['A', 'B', 'X', 'Y', 'STICK', 'ZL', 'L', 'R', 'ZR', 'DPAD'],
+                             ['59.400', '59.400', '59.400', '59.400', '123.200', '154.000', '57.600', '57.200', '57.200', '96.000']))
+        expected = {'DM_BOTW_PAD_BADGES': '0'}
+        for control, diameter in diameters.items():
+            for field, value in [('X_PT', '0.000'), ('Y_PT', '0.000'), ('SIZE_PT', diameter)]:
+                expected[f'DM_BOTW_PAD_{control}_{field}'] = value
         for platform in ('mac', 'ios'):
             botw = build(BOTW, 'nvn', platform)
             self.assertEqual({key: row['default'] for key, row in botw.items() if key.startswith('DM_BOTW_PAD_')}, expected)
+            for key in expected:
+                if key.endswith('_PT'):
+                    self.assertEqual(botw[key]['format'], 'number')
         self.assertTrue(set(expected).isdisjoint(build(WONDER, 'nvn')))
 
     def test_iphone_switches_only_on_the_iphone(self):   # the frame-rate counter and touch feedback are the iOS front end's (front_ios.m, DmGamepad.m)

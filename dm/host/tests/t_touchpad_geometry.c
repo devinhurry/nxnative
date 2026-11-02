@@ -187,14 +187,14 @@ static void test_botw_new_touch_geometry(void) {
 }
 
 static void test_configurable_stick(void) {
-    const char *keys[] = {"DM_BOTW_MOVE_DEADZONE", "DM_BOTW_MOVE_CURVE", "DM_BOTW_MOVE_FULL", "DM_BOTW_MOVE_SIZE"};
+    const char *keys[] = {"DM_BOTW_MOVE_DEADZONE", "DM_BOTW_MOVE_CURVE", "DM_BOTW_MOVE_FULL", "DM_BOTW_PAD_STICK_SIZE_PT"};
     for (int i=0;i<4;i++) unsetenv(keys[i]);
     dm_touchpad_stick_response response;
     assert(!dm_botw_stick_settings_read(&response));
     nearf(response.deadzone,.07f,1e-6f); nearf(response.curve,.3f,1e-6f);
     nearf(response.full,.71f,1e-6f); nearf(response.size,.8f,1e-6f);
     setenv(keys[0],"0.15",1); setenv(keys[1],"1.00",1);
-    setenv(keys[2],"0.60",1); setenv(keys[3],"1.25",1);
+    setenv(keys[2],"0.60",1); setenv(keys[3],"192.5",1);
     assert(!dm_botw_stick_settings_read(&response));
     float radius=70*response.size;
     int32_t x,y;
@@ -213,7 +213,7 @@ static void test_configurable_stick(void) {
         assert(!strcmp(dm_botw_stick_settings_read(&response),keys[i]));
         unsetenv(keys[i]);
     }
-    const char *low[] = {"-0.01","0.29","0.34","0.59"}, *high[] = {"0.31","2.01","1.01","1.51"};
+    const char *low[] = {"-0.01","0.29","0.34","19.9"}, *high[] = {"0.31","2.01","1.01","240.1"};
     for (int i=0;i<4;i++) {
         setenv(keys[i],low[i],1); assert(!strcmp(dm_botw_stick_settings_read(&response),keys[i]));
         setenv(keys[i],high[i],1); assert(!strcmp(dm_botw_stick_settings_read(&response),keys[i]));
@@ -233,84 +233,72 @@ static void test_configurable_stick(void) {
 static void test_custom_layout(void) {
     dm_botw_touch_layout layout; assert(dm_botw_layout_read(&layout));
     assert(!layout.badges);
-    nearf(layout.face_gap,1.06f,.0001f);
-    nearf(layout.control[0].x,-.006f,.0001f); nearf(layout.control[0].y,-.068f,.0001f); nearf(layout.control[0].scale,1.1f,.0001f);
-    nearf(layout.control[4].x,0,.0001f); nearf(layout.control[4].y,.023f,.0001f);
-    nearf(layout.control[6].x,.021f,.0001f); nearf(layout.control[6].y,0,.0001f); nearf(layout.control[6].scale,1.2f,.0001f);
-    nearf(layout.control[7].x,.025f,.0001f); nearf(layout.control[7].y,-.097f,.0001f); nearf(layout.control[7].scale,1.1f,.0001f);
-    nearf(layout.control[9].x,-.022f,.0001f); nearf(layout.control[9].y,-.098f,.0001f); nearf(layout.control[9].scale,1.1f,.0001f);
-    nearf(layout.control[12].x,.042f,.0001f); nearf(layout.control[12].y,0,.0001f); nearf(layout.control[12].scale,1,.0001f);
-    nearf(layout.control[8].x,0,.0001f); nearf(layout.control[8].y,0,.0001f); nearf(layout.control[8].scale,1,.0001f);
     setenv("DM_BOTW_PAD_BADGES","1",1); assert(dm_botw_layout_read(&layout) && layout.badges);
     setenv("DM_BOTW_PAD_BADGES","0.5",1); assert(!dm_botw_layout_read(&layout));
-    unsetenv("DM_BOTW_PAD_BADGES"); assert(dm_botw_layout_read(&layout) && !layout.badges);
+    unsetenv("DM_BOTW_PAD_BADGES"); assert(dm_botw_layout_read(&layout));
     dm_touchpad_rect canvas=dm_botw_layout_canvas(932,430);
-    dm_touchpad_rect r=dm_botw_layout_control(&layout,7,932,430,0,0,0,0,canvas);
-    dm_touchpad_rect zr=dm_botw_layout_control(&layout,9,932,430,0,0,0,0,canvas);
-    nearf(r.width,zr.width,.001f);
-    assert(zr.x < r.x); // the frequently used bow trigger occupies the inward position
-
-    dm_touchpad_rect before=dm_botw_layout_control(&layout,0,932,430,0,0,0,0,canvas);
-    setenv("DM_BOTW_PAD_FACE_X","-0.1",1); setenv("DM_BOTW_PAD_FACE_SCALE","0.8",1);
-    setenv("DM_BOTW_PAD_FACE_GAP","1.2",1); setenv("DM_BOTW_PAD_R_Y","0.1",1);
+    dm_touchpad_rect a=dm_botw_layout_control(&layout,0,932,430,62,0,62,34,canvas);
+    dm_touchpad_rect b=dm_botw_layout_control(&layout,1,932,430,62,0,62,34,canvas);
+    nearf(932-a.x-a.width,28.6f,.001f); nearf(a.width,59.4f,.001f);
+    setenv("DM_BOTW_PAD_A_X_PT","-20",1); setenv("DM_BOTW_PAD_A_Y_PT","15",1);
+    setenv("DM_BOTW_PAD_A_SIZE_PT","80",1);
     assert(dm_botw_layout_read(&layout));
     dm_touchpad_rect after=dm_botw_layout_control(&layout,0,932,430,0,0,0,0,canvas);
-    nearf(after.x+after.width/2,before.x+before.width/2-canvas.width*.094f,.001f);
-    nearf(after.width,2*(27+50*1.2f)*.8f,.001f);
-    dm_touchpad_rect shoulder=dm_botw_layout_control(&layout,7,932,430,0,0,0,0,canvas);
-    dm_touchpad_point native=dm_touchpad_right_shoulder(932,430,0,0,0,0,0);
-    nearf(shoulder.x+shoulder.width/2,native.x+canvas.width*.025f,.001f);
-    nearf(shoulder.y+shoulder.height/2,native.y+43,.001f);
-    setenv("DM_BOTW_PAD_FACE_SCALE","nan",1); assert(!dm_botw_layout_read(&layout));
-    const char *keys[]={"DM_BOTW_PAD_FACE_X","DM_BOTW_PAD_FACE_SCALE","DM_BOTW_PAD_FACE_GAP","DM_BOTW_PAD_R_Y"};
-    for(unsigned i=0;i<sizeof keys/sizeof *keys;i++) unsetenv(keys[i]);
-    assert(dm_botw_layout_read(&layout));
+    nearf(932-after.x-after.width,48.6f,.001f); nearf(430-after.y-after.height,100.5f,.001f);
+    nearf(after.width,80,.001f);
+    dm_touchpad_rect other=dm_botw_layout_control(&layout,1,932,430,0,0,0,0,canvas);
+    nearf(other.x,b.x,.001f); nearf(other.y,b.y,.001f); nearf(other.width,b.width,.001f);
+    const char *bad[]={"nan","inf","-inf","invalid","","1junk","501","-501"};
+    for (unsigned i=0;i<sizeof bad/sizeof *bad;i++) {
+        setenv("DM_BOTW_PAD_A_X_PT",bad[i],1); assert(!dm_botw_layout_read(&layout));
+    }
+    unsetenv("DM_BOTW_PAD_A_X_PT"); unsetenv("DM_BOTW_PAD_A_Y_PT");
+    setenv("DM_BOTW_PAD_A_SIZE_PT","19.9",1); assert(!dm_botw_layout_read(&layout));
+    setenv("DM_BOTW_PAD_A_SIZE_PT","240.1",1); assert(!dm_botw_layout_read(&layout));
+    unsetenv("DM_BOTW_PAD_A_SIZE_PT");
 }
 
 static void test_portrait_layout(void) {
-    dm_botw_touch_layout layout=dm_botw_layout_defaults_for(1), landscape=dm_botw_layout_defaults();
-    const float sizes[][2]={{320,568},{390,844},{430,932},{768,1024}};
-    const int controls[]={0,4,6,7,8,9,12};
-    for (unsigned s=0;s<sizeof sizes/sizeof *sizes;s++) {
-        float w=sizes[s][0], h=sizes[s][1];
-        dm_touchpad_rect canvas=dm_botw_layout_canvas(w,h), r[16]={{0}};
-        for (unsigned i=0;i<sizeof controls/sizeof *controls;i++) {
-            int b=controls[i]; r[b]=dm_botw_layout_control(&layout,b,w,h,0,59,0,34,canvas);
-            assert(r[b].x>=0 && r[b].y>=59 && r[b].x+r[b].width<=w && r[b].y+r[b].height<=h-34);
+    const float sizes[][2]={{320,568},{390,844},{430,932},{599,1133},{600,1133},
+        {626,890},{768,1024},{1024,1366},{932,430},{795,540.25f},{795,1100}};
+    const float insets[][4]={{0,0,0,0},{62,0,62,34},{0,59,0,34},{20,24,21,20}};
+    const int controls[]={0,1,2,3,4,6,7,8,9,12};
+    for (int compact=0;compact<2;compact++) {
+        dm_botw_touch_layout layout=dm_botw_layout_defaults_for(compact);
+        for (unsigned c=0;c<sizeof controls/sizeof *controls;c++) {
+            int id=controls[c],right=id<4 || id==7 || id==9;
+            dm_touchpad_rect reference=dm_botw_layout_control(&layout,id,932,430,0,0,0,0,dm_botw_layout_canvas(932,430));
+            float side=right ? 932-reference.x-reference.width : reference.x;
+            float bottom=430-reference.y-reference.height;
+            for (unsigned i=0;i<sizeof sizes/sizeof *sizes;i++) for (unsigned j=0;j<sizeof insets/sizeof *insets;j++) {
+                float w=sizes[i][0],h=sizes[i][1]; const float *safe=insets[j];
+                dm_touchpad_rect r=dm_botw_layout_control(&layout,id,w,h,safe[0],safe[1],safe[2],safe[3],dm_botw_layout_canvas(w,h));
+                nearf(right ? w-r.x-r.width : r.x,side,.001f);
+                nearf(h-r.y-r.height,bottom,.001f); nearf(r.width,reference.width,.001f);
+            }
+            // Resizing changes the center, not the anchored side/bottom edge.
+            layout.control[id].size+=10;
+            dm_touchpad_rect grown=dm_botw_layout_control(&layout,id,932,430,62,59,62,34,dm_botw_layout_canvas(932,430));
+            nearf(right ? 932-grown.x-grown.width : grown.x,side,.001f);
+            nearf(430-grown.y-grown.height,bottom,.001f);
+            layout.control[id].size-=10;
         }
-        nearf(r[12].x+r[12].width*.5f,r[6].x+r[6].width*.5f,.001f);
-        nearf(r[6].x+r[6].width*.5f,r[8].x+r[8].width*.5f,.001f);
-        assert(r[12].y<r[6].y && r[6].y<r[8].y && r[8].y<r[4].y);
-        float dx=r[4].x+r[4].width*.5f-r[8].x-r[8].width*.5f;
-        float dy=r[4].y+r[4].height*.5f-r[8].y-r[8].height*.5f;
-        assert(hypotf(dx,dy) >= dm_botw_layout_stick_radius(&layout,w,h)*DM_TP_STICK_GRAB*1.8f);
-        float u=dm_botw_layout_unit(&layout,w,h), cx=r[0].x+r[0].width*.5f, cy=r[0].y+r[0].height*.5f;
-        dm_touchpad_point p[4];
-        for (int b=0;b<4;b++) {
-            p[b]=dm_botw_layout_face_offset(&layout,b,u);
-            assert(dm_botw_layout_face_buttons(&layout,cx+p[b].x,cy+p[b].y,cx,cy,u)==(1ull<<b));
-        }
-        assert(p[1].x<p[0].x && p[1].y>p[0].y && p[3].x<p[2].x && p[3].y>p[2].y);
-        assert(p[2].y<p[0].y && p[3].y<p[1].y);
-        assert(r[9].x<r[7].x && r[9].y>r[7].y && r[9].y+r[9].height<cy+p[3].y);
     }
-    // Orientation permission does not stop a system-resized narrow window
-    // from selecting the compact control bank.
-    setenv("DM_BOTW_PORTRAIT","0",1); assert(dm_botw_compact_mode(390,844,0,0));
-    setenv("DM_BOTW_PORTRAIT","1",1);
+    // Insets still affect +/- and compact-profile selection, not control positions.
+    dm_botw_touch_layout layout=dm_botw_layout_defaults();
+    dm_touchpad_rect canvas={0,0,932,430};
+    dm_touchpad_rect plus=dm_botw_layout_control(&layout,10,932,430,0,0,0,0,canvas);
+    dm_touchpad_rect safe_plus=dm_botw_layout_control(&layout,10,932,430,62,0,62,34,canvas);
+    nearf(932-safe_plus.x-safe_plus.width,62,.001f); assert(plus.x!=safe_plus.x);
     const float modes[][5]={{390,844,0,0,1},{599.9f,1000,0,0,1},{600,1000,0,0,0},
         {600.1f,1000,0,0,0},{626,890,0,0,0},{744,1133,0,0,0},
-        {620,1000,10,10,0},{620,1000,10,11,1},{600,599,20,20,0},{590,590,0,0,0}};
+        {620,1000,10,10,0},{620,1000,10,11,0},{600,599,20,20,0},{590,590,0,0,0}};
     for (unsigned i=0;i<sizeof modes/sizeof *modes;i++)
         assert(dm_botw_compact_mode(modes[i][0],modes[i][1],modes[i][2],modes[i][3])==(int)modes[i][4]);
-    setenv("DM_BOTW_PORTRAIT_PAD_FACE_X","0.15",1);
-    assert(dm_botw_layout_read_for(&layout,1) && dm_botw_layout_read(&landscape));
-    nearf(layout.control[0].x,.15f,.0001f); nearf(landscape.control[0].x,-.006f,.0001f);
-    setenv("DM_BOTW_PORTRAIT_MOVE_DEADZONE","0.2",1);
-    dm_touchpad_stick_response a,b;
-    assert(!dm_botw_stick_settings_read_for(&a,1) && !dm_botw_stick_settings_read(&b));
-    nearf(a.deadzone,.2f,.0001f); nearf(b.deadzone,.07f,.0001f);
-    unsetenv("DM_BOTW_PORTRAIT_MOVE_DEADZONE"); unsetenv("DM_BOTW_PORTRAIT_PAD_FACE_X"); unsetenv("DM_BOTW_PORTRAIT");
+    setenv("DM_BOTW_PORTRAIT_PAD_B_X_PT","25",1);
+    assert(dm_botw_layout_read_for(&layout,1)); nearf(layout.control[1].x,25,.001f);
+    assert(dm_botw_layout_read(&layout)); nearf(layout.control[1].x,0,.001f);
+    unsetenv("DM_BOTW_PORTRAIT_PAD_B_X_PT");
 }
 
 static void test_fold_regions(void) {

@@ -74,7 +74,7 @@ struct BotwTouchSettingsView: View {
     @ObservedObject var m: LauncherModel
     var viewport = CGSize(width: 932, height: 430)
     var safeInsets = EdgeInsets()
-    @State private var selected = BotwTouchControl.all[1]
+    @State private var selected = BotwTouchControl.all[4]
     @State private var copied = false
     var portrait = false
     private var controls: [BotwTouchControl] { portrait ? BotwTouchControl.compact : BotwTouchControl.all }
@@ -89,11 +89,6 @@ struct BotwTouchSettingsView: View {
             bottom: safeInsets.bottom, trailing: 0) : safeInsets
     }
     private func key(_ base: String) -> String { botwTouchKey(base, portrait: portrait) }
-    private var previewUnit: CGFloat {
-        var config = layout
-        return CGFloat(dm_botw_layout_unit(&config, Float(previewViewport.width), Float(previewViewport.height)))
-    }
-
     private func value(_ key: String, fallback: Double = 0) -> Double {
         guard let row = m.settings.first(where: { $0.env == key }) else { return fallback }
         let text = m.values[key] ?? row.def
@@ -107,10 +102,9 @@ struct BotwTouchSettingsView: View {
                 let base = controls[control.id]
                 controls[control.id] = .init(x: Float(value(control.env("X", portrait: portrait), fallback: Double(base.x))),
                     y: Float(value(control.env("Y", portrait: portrait), fallback: Double(base.y))),
-                    scale: control.id == 4 ? 1 : Float(value(control.env("SCALE", portrait: portrait), fallback: Double(base.scale))))
+                    size: Float(value(control.env("SIZE", portrait: portrait), fallback: Double(base.size))))
             }
         }
-        if !portrait { result.face_gap = Float(value(key("DM_BOTW_PAD_FACE_GAP"), fallback: Double(result.face_gap))) }
         result.badges = value(key("DM_BOTW_PAD_BADGES"), fallback: Double(result.badges)) == 0 ? 0 : 1
         return result
     }
@@ -120,9 +114,7 @@ struct BotwTouchSettingsView: View {
         var config = layout
         let r = dm_botw_layout_control(&config, Int32(control.id), Float(previewViewport.width), Float(previewViewport.height),
             Float(previewInsets.leading), Float(previewInsets.top), Float(previewInsets.trailing), Float(previewInsets.bottom), canvas)
-        let size = control.id == 4 ? value(key("DM_BOTW_MOVE_SIZE"), fallback: 0.8) : 1
-        return CGRect(x: Double(r.x) + Double(r.width) * (1-size) / 2,
-            y: Double(r.y) + Double(r.height) * (1-size) / 2, width: Double(r.width)*size, height: Double(r.height)*size)
+        return CGRect(x: Double(r.x), y: Double(r.y), width: Double(r.width), height: Double(r.height))
     }
     var body: some View {
         GeometryReader { geometry in
@@ -136,9 +128,8 @@ struct BotwTouchSettingsView: View {
                         RoundedRectangle(cornerRadius: 16).fill(Color(white: 0.10))
                         ForEach(controls) { control in
                             let r = rect(control)
-                            BotwControlPreview(control: control, m: m, selected: $selected, canvas: canvas,
-                                previewScale: scale, rect: r, layout: layout,
-                                unit: previewUnit, portrait: portrait)
+                            BotwControlPreview(control: control, m: m, selected: $selected,
+                                previewScale: scale, rect: r, layout: layout, portrait: portrait)
                                 .frame(width: r.width*scale, height: r.height*scale)
                                 .position(x: r.midX*scale, y: r.midY*scale)
                         }
@@ -156,16 +147,12 @@ struct BotwTouchSettingsView: View {
                     Picker("Control", selection: $selected) {
                         ForEach(controls) { Text(LocalizedStringKey($0.label)).tag($0) }
                     }.pickerStyle(.menu).accessibilityIdentifier("botw.touch.control")
-                    ForEach(["X", "Y", "SCALE"], id: \.self) { field in
+                    ForEach(["X", "Y", "SIZE"], id: \.self) { field in
                         if let row = m.settings.first(where: { $0.env == selected.env(field, portrait: portrait) }) {
                             BotwLayoutSlider(row: row, title: field == "X" ? "Horizontal offset" : field == "Y" ? "Vertical offset" : "Size", m: m)
                         }
                     }
-                    if !portrait, selected.id == 0, let row = m.settings.first(where: { $0.env == key("DM_BOTW_PAD_FACE_GAP") }) {
-                        BotwLayoutSlider(row: row, title: "Button spacing", m: m)
-                    }
-                    Button("Restore this control") { m.reset(keys: selected.keys(portrait: portrait).union(!portrait && selected.id == 0 ? [key("DM_BOTW_PAD_FACE_GAP")] : [])) }
-                    Divider()
+                    Button("Restore this control") { m.reset(keys: selected.keys(portrait: portrait)) }
                     if let row = m.settings.first(where: { $0.env == key("DM_BOTW_PAD_BADGES") }) { SettingRow(s: row, m: m) }
                     Divider()
                     Button("Restore all touch defaults") { m.reset(keys: m.touchSettingsKeys(portrait: portrait)) }
@@ -184,7 +171,7 @@ struct BotwTouchSettingsView: View {
                         Text(m.touchSettingsExport(portrait: portrait)).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                             .accessibilityIdentifier("botw.touch.parameters")
                     }
-                    Text(LocalizedStringKey(portrait ? "Send these compact layout values to use as defaults. Offsets are fractions of the full screen; positive X moves right and positive Y moves down. Normal layout settings are saved separately." : "Send these values to use this layout as the default. Offsets are fractions of the game UI area; positive X moves right and positive Y moves down."))
+                    Text("Offsets and diameters are in pt. Positive X moves right and positive Y moves down. Buttons adjust independently; normal and compact layouts are saved separately.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }.padding(.vertical, 8)
             }.frame(width: stacked ? nil : 285)
@@ -192,7 +179,7 @@ struct BotwTouchSettingsView: View {
             .padding(16)
         }
         .onChange(of: m.values) { _, _ in copied = false }
-        .onChange(of: portrait) { _, _ in copied = false; selected = BotwTouchControl.all[1] }
+        .onChange(of: portrait) { _, _ in copied = false; selected = BotwTouchControl.all[4] }
     }
 }
 
@@ -205,7 +192,7 @@ private struct BotwLayoutSlider: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack { Text(LocalizedStringKey(title)); Spacer(); Text(String(format: "%.3f (%.1f%%)", binding.wrappedValue, binding.wrappedValue*100)).monospacedDigit().foregroundStyle(.secondary) }
+            HStack { Text(LocalizedStringKey(title)); Spacer(); Text(String(format: "%.1f pt", binding.wrappedValue)).monospacedDigit().foregroundStyle(.secondary) }
             Slider(value: binding, in: (row.min ?? 0)...(row.max ?? 1), step: row.step ?? 0.01)
                 .accessibilityLabel(Text(LocalizedStringKey(title))).accessibilityIdentifier(row.env)
         }.disabled(m.fixed.contains(row.env))
@@ -216,11 +203,9 @@ private struct BotwControlPreview: View {
     let control: BotwTouchControl
     @ObservedObject var m: LauncherModel
     @Binding var selected: BotwTouchControl
-    let canvas: dm_touchpad_rect
     let previewScale: CGFloat
     let rect: CGRect
     let layout: dm_botw_touch_layout
-    let unit: CGFloat
     let portrait: Bool
     @State private var dragOrigin: CGPoint?
     @State private var scaleOrigin: Double?
@@ -253,23 +238,9 @@ private struct BotwControlPreview: View {
         guard !m.fixed.contains(key), let row = m.settings.first(where: { $0.env == key }) else { return }
         m.values[key] = String(format: "%.3f", min(max(value, row.min ?? 0), row.max ?? 1))
     }
-    private func faceButton(_ index: Int) -> some View {
-        let radius = CGFloat(DM_TP_FACE_R) * unit * CGFloat(layout.control.0.scale)
-        let diameter: CGFloat = radius * 2 * previewScale
-        var config = layout
-        let offset = dm_botw_layout_face_offset(&config, Int32(index), Float(unit))
-        let position = CGPoint(x: CGFloat(offset.x)*previewScale, y: CGFloat(offset.y)*previewScale)
-        return button(["A","B","X","Y"][index], diameter: diameter)
-            .frame(width: diameter, height: diameter)
-            .offset(x: position.x, y: position.y)
-    }
     var body: some View {
         ZStack {
-            if portrait && control.id < 4 {
-                button(control.key, diameter: rect.width*previewScale)
-            } else if control.id == 0 {
-                ForEach(0..<4) { i in faceButton(i) }
-            } else if control.id == 6 || control.id == 7 || control.id == 9 {
+            if control.id < 4 || control.id == 6 || control.id == 7 || control.id == 9 {
                 button(control.key, diameter: rect.width*previewScale)
             } else {
                 Circle().fill(Color(white: 0.35).opacity(0.2)).overlay(Circle().stroke(Color(white: 0.52).opacity(0.4), lineWidth: 1))
@@ -286,13 +257,13 @@ private struct BotwControlPreview: View {
         .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .named("touch-preview")).onChanged { event in
             selected = control
             if dragOrigin == nil { dragOrigin = CGPoint(x: Double(m.values[control.env("X", portrait: portrait)] ?? "0") ?? 0, y: Double(m.values[control.env("Y", portrait: portrait)] ?? "0") ?? 0) }
-            set("X", dragOrigin!.x + event.translation.width / (Double(canvas.width)*previewScale))
-            set("Y", dragOrigin!.y + event.translation.height / (Double(canvas.height)*previewScale))
+            set("X", dragOrigin!.x + event.translation.width / previewScale)
+            set("Y", dragOrigin!.y + event.translation.height / previewScale)
         }.onEnded { _ in dragOrigin = nil })
         .simultaneousGesture(MagnifyGesture().onChanged { event in
             selected = control
-            if scaleOrigin == nil { scaleOrigin = Double(m.values[control.env("SCALE", portrait: portrait)] ?? "1") ?? 1 }
-            set("SCALE", scaleOrigin! * event.magnification)
+            if scaleOrigin == nil { scaleOrigin = Double(m.values[control.env("SIZE", portrait: portrait)] ?? "1") ?? 1 }
+            set("SIZE", scaleOrigin! * event.magnification)
         }.onEnded { _ in scaleOrigin = nil })
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(LocalizedStringKey(control.label))).accessibilityAddTraits(.isButton)

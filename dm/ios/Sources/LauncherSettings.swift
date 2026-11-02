@@ -22,6 +22,7 @@ struct Setting: Decodable, Identifiable {
     func formattedValue(_ value: String) -> String {
         let n = Double(value) ?? Double(def) ?? 0
         guard n.isFinite else { return "Invalid" }
+        if env.hasSuffix("_PT") { return String(format: "%.1f pt", n) }
         return format == "number" ? String(format: "%.2f", n) : "\(Int((n * 100).rounded())) %"
     }
     func isDefault(_ v: String) -> Bool {   // a range compares as numbers (a slider writes 1.00 for 1.0)
@@ -43,7 +44,7 @@ struct SettingsFile: Decodable { let settings: [Setting] }
 
 struct TouchStickResponse {
     static let section = "Touch left stick"
-    static let keys: Set<String> = ["DM_BOTW_MOVE_DEADZONE", "DM_BOTW_MOVE_CURVE", "DM_BOTW_MOVE_FULL", "DM_BOTW_MOVE_SIZE"]
+    static let keys: Set<String> = ["DM_BOTW_MOVE_DEADZONE", "DM_BOTW_MOVE_CURVE", "DM_BOTW_MOVE_FULL", "DM_BOTW_PAD_STICK_SIZE_PT"]
     let deadzone, curve, full, size: Double
 
     func strength(at travel: Double) -> Double {
@@ -60,20 +61,71 @@ struct BotwTouchControl: Identifiable, Hashable {
     let id: Int
     let key, label: String
     static let all: [Self] = [
-        .init(id: 0, key: "FACE", label: "XYAB"), .init(id: 4, key: "STICK", label: "Left stick"),
-        .init(id: 8, key: "ZL", label: "Shield stick"), .init(id: 6, key: "L", label: "Rune (L)"),
-        .init(id: 7, key: "R", label: "R"), .init(id: 9, key: "ZR", label: "ZR"),
-        .init(id: 12, key: "DPAD", label: "D-pad")
-    ]
-    static let compact: [Self] = [
         .init(id: 0, key: "A", label: "A"), .init(id: 1, key: "B", label: "B"),
-        .init(id: 2, key: "X", label: "X"), .init(id: 3, key: "Y", label: "Y")
-    ] + all.filter { $0.id != 0 }
+        .init(id: 2, key: "X", label: "X"), .init(id: 3, key: "Y", label: "Y"),
+        .init(id: 4, key: "STICK", label: "Left stick"), .init(id: 8, key: "ZL", label: "Shield stick"),
+        .init(id: 6, key: "L", label: "Rune (L)"), .init(id: 7, key: "R", label: "R"),
+        .init(id: 9, key: "ZR", label: "ZR"), .init(id: 12, key: "DPAD", label: "D-pad")
+    ]
+    static let compact = all
     func env(_ field: String, portrait: Bool = false) -> String {
-        botwTouchKey(id == 4 && field == "SCALE" ? "DM_BOTW_MOVE_SIZE" : "DM_BOTW_PAD_\(key)_\(field)", portrait: portrait)
+        botwTouchKey("DM_BOTW_PAD_\(key)_\(field)_PT", portrait: portrait)
     }
-    var keys: Set<String> { Set([env("X"), env("Y"), env("SCALE")]) }
-    func keys(portrait: Bool) -> Set<String> { Set([env("X", portrait: portrait), env("Y", portrait: portrait), env("SCALE", portrait: portrait)]) }
+    var keys: Set<String> { keys(portrait: false) }
+    func keys(portrait: Bool) -> Set<String> { Set([env("X", portrait: portrait), env("Y", portrait: portrait), env("SIZE", portrait: portrait)]) }
+
+    // Old offsets were fractions of a reference phone canvas. Project saved
+    // customizations once into the new point keys; never reinterpret a fraction
+    // as points, and never replace an explicit choice under a new key.
+    func legacyPointValues(portrait: Bool, read: (String) -> String?) -> [String: String] {
+        let prefix = portrait ? "DM_BOTW_PORTRAIT_" : "DM_BOTW_"
+        let name = !portrait && id < 4 ? "FACE" : key
+        func number(_ key: String, _ fallback: Double, _ low: Double, _ high: Double) -> Double {
+            guard let text = read(key), let n = Double(text), n.isFinite, n >= low, n <= high else { return fallback }
+            return n
+        }
+        let oldX = prefix + "PAD_\(name)_X", oldY = prefix + "PAD_\(name)_Y"
+        let oldSize = prefix + (id == 4 ? "MOVE_SIZE" : "PAD_\(name)_SCALE")
+        let oldGap = prefix + "PAD_FACE_GAP"
+        var sourceKeys = [oldX, oldY, oldSize]
+        if !portrait && id < 4 { sourceKeys.append(oldGap) }
+        if portrait && id == 12 { sourceKeys.append(prefix + "PAD_L_SCALE") }
+        guard sourceKeys.contains(where: { read($0) != nil }) else { return [:] }
+        let u = portrait ? 390.0 / 430 : 1
+        let oldDefaultX: Double = portrait ? 0 : id < 4 ? -0.006 : id == 6 ? 0.021 : id == 7 ? 0.025 : id == 9 ? -0.022 : id == 12 ? 0.042 : 0
+        let oldDefaultY: Double = portrait ? 0 : id < 4 ? -0.068 : id == 4 ? 0.023 : id == 7 ? -0.097 : id == 9 ? -0.098 : 0
+        let oldDefaultScale: Double = id < 4 || id == 7 || id == 9 ? 1.1 : id == 6 ? 1.2 : id == 4 ? 0.8 : 1
+        var baseSize: Double = id < 4 ? 54 : id == 4 || id == 8 ? 154 : id == 6 ? 48 : id == 12 ? 96 : 52
+        baseSize *= u
+        if portrait {
+            if id < 2 { baseSize -= 10 / 1.1 }
+            if id == 3 { baseSize += 10 / 1.1 }
+            if id == 6 { baseSize -= 6 / 1.2 }
+            if id == 12 { baseSize -= 6 }
+        }
+        let scale = number(oldSize, oldDefaultScale, id == 4 ? 0.6 : 0.5, 1.5)
+        let diameter = baseSize * scale
+        let deltaSize = diameter - baseSize * oldDefaultScale
+        var x = (number(oldX, oldDefaultX, -0.5, 0.5) - oldDefaultX) * (portrait ? 390 : 430 * 16 / 9)
+        var y = (number(oldY, oldDefaultY, -0.5, 0.5) - oldDefaultY) * (portrait ? 844 : 430)
+        if !portrait && id < 4 {
+            let deltaGap = 50 * number(oldGap, 1.06, 0.5, 1.5) * scale - 58.3
+            x += id == 0 ? deltaGap : id == 3 ? -deltaGap : 0
+            y += id == 1 ? deltaGap : id == 2 ? -deltaGap : 0
+        }
+        if portrait && id == 12 {
+            let runeDelta = (48 * u - 6 / 1.2) * (number(prefix + "PAD_L_SCALE", 1.2, 0.5, 1.5) - 1.2)
+            x += runeDelta
+            y += (deltaSize - runeDelta) / 2
+        } else if !portrait || id != 6 {
+            // The old compact rune already anchored its left/bottom edges.
+            x += (id < 4 || id == 7 || id == 9 ? 1 : -1) * deltaSize / 2
+            y += deltaSize / 2
+        }
+        return [env("X", portrait: portrait): String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), x),
+                env("Y", portrait: portrait): String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), y),
+                env("SIZE", portrait: portrait): String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), diameter)]
+    }
 }
 
 final class LauncherModel: ObservableObject {
@@ -110,9 +162,17 @@ final class LauncherModel: ObservableObject {
                 lowMemoryOverride = saved
             }
         }
+        var legacyPoints: [String: String] = [:]
+        if !ignoreSaved && defaults.integer(forKey: "launcher.botwPointLayoutVersion") == 0 {
+            for portrait in [false, true] {
+                for control in BotwTouchControl.all {
+                    legacyPoints.merge(control.legacyPointValues(portrait: portrait) { defaults.object(forKey: "launcher." + $0) as? String }) { current, _ in current }
+                }
+            }
+        }
         for s in settings {
             if fixed.contains(s.env), let v = env[s.env] { values[s.env] = v; continue }
-            let saved = ignoreSaved ? nil : defaults.object(forKey: "launcher." + s.env) as? String   // a string, as launcher.c reads it: not string(forKey:), which turns a number into one
+            let saved = ignoreSaved ? nil : (defaults.object(forKey: "launcher." + s.env) as? String ?? legacyPoints[s.env])   // accept only strings, as launcher.c does
             values[s.env] = saved.flatMap { s.accepts($0) ? $0 : nil } ?? defaultValue(s)
         }
         alignFrameGeneration()
@@ -225,6 +285,7 @@ final class LauncherModel: ObservableObject {
     func rows(in section: String, basic: Bool) -> [Setting] { rows(in: section).filter { $0.basic == basic } }
     // A range's label: its percentage, with the size in pixels for the chosen console mode when the list has the base size (the render scale)
     func rangeLabel(_ s: Setting, _ v: Double) -> String {
+        if s.env.hasSuffix("_PT") { return String(format: "%.1f pt", v) }
         if s.format == "number" { return String(format: "%.2f", v) }
         let p = "\(Int((v * 100).rounded())) %"
         guard let b = s.base else { return p }
@@ -253,7 +314,7 @@ final class LauncherModel: ObservableObject {
             return Double(s.accepts(v) ? v : s.def)
         }
         guard let deadzone = number("DM_BOTW_MOVE_DEADZONE"), let curve = number("DM_BOTW_MOVE_CURVE"),
-              let full = number("DM_BOTW_MOVE_FULL"), let size = number("DM_BOTW_MOVE_SIZE") else { return nil }
+              let full = number("DM_BOTW_MOVE_FULL"), let size = number("DM_BOTW_PAD_STICK_SIZE_PT") else { return nil }
         return TouchStickResponse(deadzone: deadzone, curve: curve, full: full, size: size)
     }
     static func isTouchSection(_ section: String) -> Bool {
@@ -315,6 +376,9 @@ final class LauncherModel: ObservableObject {
             storeChoice(s, v)
             let origin = s.env == Self.lowMemoryKey ? (lowMemoryOverride == nil ? " (automatic)" : " (manual)") : (s.isDefault(v) ? "" : " (changed)")
             setenv(s.env, v, 1); fputs("launcher: \(s.env)=\(v)\(origin)\n", stderr)
+        }
+        if !ignoreSaved && settings.contains(where: { $0.env == "DM_BOTW_PAD_A_X_PT" }) {
+            defaults.set(1, forKey: "launcher.botwPointLayoutVersion")
         }
     }
 
