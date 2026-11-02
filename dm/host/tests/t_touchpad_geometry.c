@@ -259,8 +259,11 @@ static void test_custom_layout(void) {
 }
 
 static void test_portrait_layout(void) {
-    const float sizes[][2]={{320,568},{390,844},{430,932},{599,1133},{600,1133},
-        {626,890},{768,1024},{1024,1366},{932,430},{795,540.25f},{795,1100}};
+    // Width, height and the expected normal-left margin factor.
+    const float sizes[][3]={{320,568,.9f},{390,844,.9f},{430,932,.9f},{599,1133,.9f},{600,1133,.9f},
+        {626,890,.9f},{669,951,.9f},{669,455.5f,.9f},{691.2f,1000,.9f},
+        {720,1000,.9375f},{744,1133,.96875f},{768,1024,1},{1024,1366,1},
+        {932,430,1},{795,540.25f,1},{795,1100,1}};
     const float insets[][4]={{0,0,0,0},{62,0,62,34},{0,59,0,34},{20,24,21,20}};
     const int controls[]={0,1,2,3,4,6,7,8,9,12};
     for (int compact=0;compact<2;compact++) {
@@ -273,8 +276,14 @@ static void test_portrait_layout(void) {
             for (unsigned i=0;i<sizeof sizes/sizeof *sizes;i++) for (unsigned j=0;j<sizeof insets/sizeof *insets;j++) {
                 float w=sizes[i][0],h=sizes[i][1]; const float *safe=insets[j];
                 dm_touchpad_rect r=dm_botw_layout_control(&layout,id,w,h,safe[0],safe[1],safe[2],safe[3],dm_botw_layout_canvas(w,h));
-                nearf(right ? w-r.x-r.width : r.x,side,.001f);
+                float expected_side=side*(!compact && !right ? sizes[i][2] : 1);
+                nearf(right ? w-r.x-r.width : r.x,expected_side,.001f);
                 nearf(h-r.y-r.height,bottom,.001f); nearf(r.width,reference.width,.001f);
+                layout.control[id].x=13; layout.control[id].y=-7; layout.control[id].size+=10;
+                dm_touchpad_rect adjusted=dm_botw_layout_control(&layout,id,w,h,safe[0],safe[1],safe[2],safe[3],dm_botw_layout_canvas(w,h));
+                nearf(right ? w-adjusted.x-adjusted.width : adjusted.x,expected_side+(right ? -13 : 13),.001f);
+                nearf(h-adjusted.y-adjusted.height,bottom+7,.001f); nearf(adjusted.width,reference.width+10,.001f);
+                layout.control[id].x=layout.control[id].y=0; layout.control[id].size-=10;
             }
             // Resizing changes the center, not the anchored side/bottom edge.
             layout.control[id].size+=10;
@@ -286,6 +295,16 @@ static void test_portrait_layout(void) {
     }
     // Insets still affect +/- and compact-profile selection, not control positions.
     dm_botw_touch_layout layout=dm_botw_layout_defaults();
+    dm_touchpad_rect duo=dm_botw_layout_canvas(669,951);
+    dm_touchpad_rect stick=dm_botw_layout_control(&layout,4,669,951,0,0,0,0,duo);
+    dm_touchpad_rect shield=dm_botw_layout_control(&layout,8,669,951,0,0,0,0,duo);
+    dm_touchpad_rect dpad=dm_botw_layout_control(&layout,12,669,951,0,0,0,0,duo);
+    dm_touchpad_rect y=dm_botw_layout_control(&layout,3,669,951,0,0,0,0,duo);
+    nearf(stick.x,54.36f,.001f); nearf(shield.x,31.5f,.001f); nearf(dpad.x,221.49f,.001f);
+    nearf(y.x-dpad.x-dpad.width,146.91f,.001f);
+    float dx=dpad.x+dpad.width*.5f-stick.x-stick.width*.5f;
+    float dy=dpad.y+dpad.height*.5f-stick.y-stick.height*.5f;
+    assert(hypotf(dx,dy)-stick.width*.5f*DM_TP_STICK_GRAB-dpad.width*.5f*DM_TP_DPAD_GRAB>5.5f);
     dm_touchpad_rect canvas={0,0,932,430};
     dm_touchpad_rect plus=dm_botw_layout_control(&layout,10,932,430,0,0,0,0,canvas);
     dm_touchpad_rect safe_plus=dm_botw_layout_control(&layout,10,932,430,62,0,62,34,canvas);

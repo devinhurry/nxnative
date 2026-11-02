@@ -1992,7 +1992,9 @@ static void test_botw_custom_layout(DmGamepad *original) {
 static void test_botw_point_edges(DmGamepad *original) {
     g_botw_touchhud_available=g_botw_gameplay_ready=YES;
     g_botw_touch_menu_active=g_botw_touch_menu_presented=NO;
-    const CGSize sizes[]={{932,430},{768,1024},{795,1100},{795,540},{390,844},{430,932}};
+    const CGSize sizes[]={{932,430},{768,1024},{795,1100},{795,540},{390,844},{430,932},
+        {669,951},{669,455.5},{720,1000}};
+    const CGFloat stickMargins[]={60.4,60.4,60.4,60.4,27.6,27.6,54.36,54.36,56.625};
     const UIEdgeInsets insets[]={{0,0,0,0},{24,62,34,62}};
     for (unsigned i=0;i<sizeof sizes/sizeof *sizes;i++) {
         BOOL compact=sizes[i].width<600;
@@ -2007,9 +2009,16 @@ static void test_botw_point_edges(DmGamepad *original) {
                   fabs(a.size.width-(compact ? 43.9 : 59.4))<.01,
                   "A drawing keeps fixed point size, right and bottom margins on phone, iPad and Duo with either safe area");
             CGRect stick=CGPathGetPathBoundingBox([view dm_testStickRingLayer].path);
-            CHECK(fabs(stick.origin.x-(compact ? 27.6 : 60.4))<.01 &&
+            CHECK(fabs(stick.origin.x-stickMargins[i])<.01 &&
                   fabs(sizes[i].height-CGRectGetMaxY(stick)-(compact ? 102.5 : 54.5))<.01,
-                  "movement drawing keeps fixed left and bottom margins with either safe area");
+                  "movement drawing uses bounded normal-left margins and fixed bottom margins with either safe area");
+            CGPoint home=[view dm_testStickHome];
+            FakeTouch *move=touch(home.x,home.y); began(view,move); moved(view,move,home.x+30,home.y);
+            CHECK(g_lx>0 && !g_buttons,"resized left-stick home starts movement without pressing nearby buttons");
+            ended(view,move,home.x+30,home.y);
+            CGPoint dpad=[view dpadCenter]; FakeTouch *direction=touch(dpad.x+30,dpad.y); began(view,direction);
+            CHECK((g_buttons&DM_BTN_RIGHT) && !g_lx && !g_ly,"resized D-pad remains separate from the movement stick");
+            ended(view,direction,dpad.x+30,dpad.y);
             for (int b=0;b<4;b++) {
                 CGPoint center=[view facePos:b]; FakeTouch *t=touch(center.x,center.y); began(view,t);
                 CHECK(g_buttons==(1ull<<b),"independent face centers hit only their matching button at every window size");
@@ -2018,6 +2027,8 @@ static void test_botw_point_edges(DmGamepad *original) {
         }
         if (i==1) save_pad_preview(view,@"botw-points-ipad.png");
         if (i==3) save_pad_preview(view,@"botw-points-duo.png");
+        if (i==6) save_pad_preview(view,@"botw-margins-duo-portrait.png");
+        if (i==7) save_pad_preview(view,@"botw-margins-duo-seated.png");
         [view reset]; [view removeFromSuperview];
     }
     g_botw_touchhud_available=NO;
