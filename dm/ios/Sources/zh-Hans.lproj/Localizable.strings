@@ -224,3 +224,6 @@
 "Left-stick parameters" = "左摇杆参数";
 "Restore left-stick defaults" = "恢复左摇杆默认参数";
 "Applies to BOTW touch movement." = "仅用于旷野之息的触控移动。";
+"Offsets and diameters are in pt; edge margins do not depend on safe areas." = "偏移和直径以 pt 为单位；边距不随安全区变化。";
+"Offsets and diameters are in pt. Positive X moves right and positive Y moves down. Buttons adjust independently; normal and compact layouts are saved separately." = "偏移和直径以 pt 为单位。X 为正向右移动，Y 为正向下移动。按钮可独立调整，普通和紧凑布局分别保存。";
+"Allows portrait rotation below 600pt of window width. Wider portrait windows are always supported and keep the normal layout." = "允许在窗口宽度小于 600 pt 时竖屏。更宽的窗口始终支持竖屏，并保留普通布局。";

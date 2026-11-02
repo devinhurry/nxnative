@@ -1,4 +1,4 @@
-// Rotation permission shares the control layout's 600pt usable-width boundary.
+// Rotation permission shares the control layout's 600pt window-width boundary.
 #include "../botw_touch_layout.h"
 #include <assert.h>
 
@@ -6,7 +6,7 @@ int main(void) {
     const float cases[][5]={
         {390,844,0,0,0}, {844,390,59,34,0}, {599.9f,1000,0,0,0},
         {600,1000,0,0,1}, {1000,600,20,20,1}, {620,1000,10,10,1},
-        {620,1000,10,11,0}, {744,1133,0,0,1}, {1133,744,0,0,1},
+        {620,1000,10,11,1}, {744,1133,0,0,1}, {1133,744,0,0,1},
         {768,1024,0,0,1}, {1024,768,0,0,1}, {590,590,0,0,1}
     };
     for (int enabled=0;enabled<2;enabled++) {

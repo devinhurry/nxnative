@@ -63,6 +63,13 @@ int main(void) {
         assert(dm_launcher_setting_is_live("DM_BOTW_MOVE_CURVE") == 1);
         assert(dm_launcher_setting_apply("DM_BOTW_MOVE_CURVE", "0.5") == 1 && touch_refresh_count == 1);
         assert(dm_launcher_setting_apply("DM_BOTW_MOVE_DEADZONE", "0.7") == -1 && touch_refresh_count == 1);
+        assert(dm_launcher_setting_apply("DM_BOTW_PAD_A_X_PT", "-35.5") == 1 && touch_refresh_count == 2);
+        assert(dm_launcher_setting_apply("DM_BOTW_PAD_B_SIZE_PT", "75") == 1 && touch_refresh_count == 3);
+        assert(dm_launcher_setting_apply("DM_BOTW_PORTRAIT_PAD_Y_Y_PT", "120") == 1 && touch_refresh_count == 4);
+        assert(dm_launcher_setting_apply("DM_BOTW_PAD_A_X_PT", "501") == -1 && touch_refresh_count == 4);
+        assert(dm_launcher_setting_apply("DM_BOTW_PAD_B_SIZE_PT", "19") == -1 && touch_refresh_count == 4);
+        assert(dm_launcher_setting_apply("DM_BOTW_PAD_B_SIZE_PT", "nan") == -1 && touch_refresh_count == 4);
+        assert(dm_launcher_setting_is_live("DM_BOTW_PAD_FACE_X") == -1);
     }
     return 0;
 }

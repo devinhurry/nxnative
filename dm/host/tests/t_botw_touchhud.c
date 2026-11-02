@@ -6,6 +6,7 @@
 #include <string.h>
 #include "../botw_touch_actions.h"
 #include "../botw_touch_menu.h"
+#include "../botw_touch_layout.h"
 #include "../hle.h"
 // This native HUD fixture is BOTW even when CI builds other host profiles.
 #undef DM_GAME_ID
@@ -127,6 +128,20 @@ int main(void) {
     memcpy(&basis, target + BOTW_TOUCH_MATRIX, sizeof basis);
     assert(basis == 1);
 
+    // Native equipment must keep the same point size as the frontend D-pad
+    // after the game's tall/narrow HUD basis and viewport conversion.
+    const float point_cases[][3]={{430,1,1},{1024,.421875f,16.f/9},{1100,795.f/1100/(16.f/9),16.f/9},{540,795.f/540/(16.f/9),540.f/(795.f*9/16)}};
+    for (unsigned i=0;i<sizeof point_cases/sizeof *point_cases;i++) {
+        float height=point_cases[i][0]; hud_y_scale=point_cases[i][1]; hud_gain=point_cases[i][2];
+        float point_scale=dm_botw_layout_hud_scale(1,height,hud_y_scale*hud_gain);
+        dm_botw_touch_hud_publish(1,.25f,.75f,point_scale);
+        matrix_translation(target,-509,210);
+        float ybasis=hud_y_scale*hud_gain;
+        memcpy(target+BOTW_TOUCH_MATRIX,&hud_gain,4); memcpy(target+BOTW_TOUCH_MATRIX+0x14,&ybasis,4);
+        calculate_entry(target); calculated_matrix(target);
+        memcpy(&basis,target+BOTW_TOUCH_MATRIX+0x14,4);
+        assert(fabsf(basis*height/720-430.f/720)<.001f);
+    }
     // The narrow shortcut keeps its cross-guide centered after native Y
     // scaling, using the D-pad size published by the active frontend profile.
     setenv("DM_BOTW_PORTRAIT","1",1); hud_y_scale=.3f; hud_gain=16.f/9;

@@ -224,3 +224,6 @@
 "Left-stick parameters" = "Left-stick parameters";
 "Restore left-stick defaults" = "Restore left-stick defaults";
 "Applies to BOTW touch movement." = "Applies to BOTW touch movement.";
+"Offsets and diameters are in pt; edge margins do not depend on safe areas." = "Offsets and diameters are in pt; edge margins do not depend on safe areas.";
+"Offsets and diameters are in pt. Positive X moves right and positive Y moves down. Buttons adjust independently; normal and compact layouts are saved separately." = "Offsets and diameters are in pt. Positive X moves right and positive Y moves down. Buttons adjust independently; normal and compact layouts are saved separately.";
+"Allows portrait rotation below 600pt of window width. Wider portrait windows are always supported and keep the normal layout." = "Allows portrait rotation below 600pt of window width. Wider portrait windows are always supported and keep the normal layout.";
