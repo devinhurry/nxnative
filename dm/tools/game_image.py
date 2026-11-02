@@ -4,6 +4,7 @@
 The ordinary image index exposes romfs/ and aoc/<index>/ directly. Image data is
 copied once, in bounded chunks; only directory tables are rebuilt in memory.
 Usage: game_image.py [--reuse] <RomFS image-or-folder> <DLC dir-or-> <out image>
+       game_image.py --source-identities <RomFS> <DLC dir> <output directory> <title> <version> <build>
 """
 import argparse
 import hashlib
@@ -69,19 +70,28 @@ class _Source:
         a, b, _ = self.entry(k)
         return [(self.image.name(j) if self.image is not None else self.ents[j][0], self, j) for j in range(a, a + b)]
 
-    def copy(self, out):
+    def layout(self, offset):
+        """Place this source's file ranges without reading or copying their data."""
         if self.image is not None:
-            self.shift = out.tell() - rfi.HEAD.size
+            self.shift = offset - rfi.HEAD.size
             size = self.image.stat.st_size - len(self.image.index) - rfi.HEAD.size
+            return offset + size
+        for e in self.ents:
+            if e[2]: continue
+            e[3], e[4] = offset, os.path.getsize(e[1])
+            offset += e[4]
+        return offset
+
+    def copy(self, out):
+        end = self.layout(out.tell())
+        if self.image is not None:
             with open(self.path, 'rb') as src:
-                src.seek(rfi.HEAD.size); _copy(src, out, size)
+                src.seek(rfi.HEAD.size); _copy(src, out, end - out.tell())
         else:
             for e in self.ents:
                 if e[2]: continue
                 with open(e[1], 'rb') as src:
-                    size = os.fstat(src.fileno()).st_size
-                    e[3], e[4] = out.tell(), size
-                    _copy(src, out, size)
+                    _copy(src, out, e[4])
 
 
 def _inputs(romfs_path, aoc):
@@ -133,6 +143,15 @@ def _entries(sources):
     return ents
 
 
+def _index(sources, offset):
+    ents = _entries(sources)
+    pool, idx = bytearray(), bytearray()
+    for name, src, k, a, b in ents:
+        t = src.entry(k)[2] if src is not None else 0
+        idx += rfi.ENT.pack(a, b, len(pool), len(name), t, 0); pool += name
+    return rfi.HEAD.pack(rfi.MAGIC, offset, len(idx) + len(pool), len(ents)), idx + pool
+
+
 def pack(romfs, aoc, dst, reuse=False):
     """Write one image with romfs/ and aoc/ roots; return its entry count.
 
@@ -154,14 +173,9 @@ def pack(romfs, aoc, dst, reuse=False):
         with open(part, 'wb') as out:
             out.write(b'\0' * rfi.HEAD.size)
             for src in sources: src.copy(out)
-            index_offset = out.tell()
-            ents = _entries(sources)
-            pool, idx = bytearray(), bytearray()
-            for name, src, k, a, b in ents:
-                t = src.entry(k)[2] if src is not None else 0
-                idx += rfi.ENT.pack(a, b, len(pool), len(name), t, 0); pool += name
-            out.write(idx); out.write(pool)
-            out.seek(0); out.write(rfi.HEAD.pack(rfi.MAGIC, index_offset, len(idx) + len(pool), len(ents)))
+            head, index = _index(sources, out.tell())
+            out.write(index)
+            out.seek(0); out.write(head)
         # Validate the rebuilt tree, including guest names from legacy folders.
         rfs.Image(part)
         if _inputs(romfs, aoc)[1] != digest:
@@ -173,19 +187,28 @@ def pack(romfs, aoc, dst, reuse=False):
         for path in (part, stamp + '.part'):
             try: os.unlink(path)
             except FileNotFoundError: pass
-    return len(ents)
+    return rfi.HEAD.unpack(head)[3]
 
 
-def write_identities(image, directory, title='', version='', build=''):
-    """Name the combined image and, when recorded by its packer, its original base-only image."""
-    text = rfi.identity(image, title, version, build) + '\n'
+def write_identities(image, directory, title='', version='', build='', *, aoc=None):
+    """Name a physical image, or calculate the combined identity from sources when aoc is given."""
     base = None
-    try:
-        stamp = json.loads(Path(os.fspath(image) + '.inputs.json').read_text())
-        if stamp.get('image') == rfi.file_identity(image) and stamp.get('base_identity'):
-            rfi.parse_identity(stamp['base_identity'])
-            base = stamp['base_identity'] + '\n'
-    except (OSError, ValueError, TypeError, AttributeError): pass   # no trusted packer stamp: only the physical image is accepted
+    if aoc is not None:
+        sources, digest = _inputs(image, aoc)
+        offset = rfi.HEAD.size
+        for src in sources: offset = src.layout(offset)
+        head, index = _index(sources, offset)
+        text = rfi.index_identity(head, [index], title, version, build) + '\n'
+        if sources[0].image is not None: base = rfi.identity(image, title, version, build) + '\n'
+        if _inputs(image, aoc)[1] != digest: raise RuntimeError('game data changed while computing its identity')
+    else:
+        text = rfi.identity(image, title, version, build) + '\n'
+        try:
+            stamp = json.loads(Path(os.fspath(image) + '.inputs.json').read_text())
+            if stamp.get('image') == rfi.file_identity(image) and stamp.get('base_identity'):
+                rfi.parse_identity(stamp['base_identity'])
+                base = stamp['base_identity'] + '\n'
+        except (OSError, ValueError, TypeError, AttributeError): pass   # no trusted packer stamp: only the physical image is accepted
     directory = Path(directory); directory.mkdir(parents=True, exist_ok=True)
     (directory / 'romfs.base.id').unlink(missing_ok=True)
     for name, content in (('romfs.id', text), ('romfs.base.id', base)):
@@ -194,6 +217,11 @@ def write_identities(image, directory, title='', version='', build=''):
 
 
 def main():
+    if sys.argv[1:2] == ['--source-identities']:
+        if len(sys.argv) != 8: sys.exit('usage: game_image.py --source-identities <RomFS> <DLC dir> <output directory> <title> <version> <build>')
+        try: write_identities(sys.argv[2], *sys.argv[4:], aoc=sys.argv[3])
+        except (OSError, ValueError, RuntimeError, struct.error) as e: sys.exit(f'[RED] {e}')
+        return
     if len(sys.argv) > 1 and sys.argv[1] == '--identities':
         if len(sys.argv) != 7: sys.exit('usage: game_image.py --identities <image> <output directory> <title> <version> <build>')
         try: write_identities(*sys.argv[2:])

@@ -73,6 +73,13 @@
 - **Unified launcher:** when no usable image or folder remains, the launch page keeps Play disabled and offers Import ROM below it. Import graphics selects the separate `.graphics` or legacy `.zip` package on that same page; returning to the app rechecks manually copied ROM files. The picked image is read through `NSFileCoordinator` with its security scope held, copied by `NSFileManager` on a background queue, and validated before replacing `Documents/romfs.img` by rename. Failures remove only the incomplete staging copy and preserve old data; success refreshes readiness on the same launcher without restarting. No source files are unpacked or removed.
 - **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game), with both installed DLCs; synthetic image, filesystem, ownership, startup and packaging tests also exercise empty add-ons and unchanged rebuilds. Physical iPhone acceptance remains pending.
 
+### App updates duplicate the external game image
+
+- **Symptom:** rebuilding only the iOS app keeps a second large `game-data/RomFS.img` beside the original extraction and DLC images, even though the device already has the combined image.
+- **Cause:** separate packaging materializes the combined payload before generating the app's size/index identity. Skipping only that copy would instead name the base image and reject the device's existing combined image.
+- **Fix:** `build_ipa_from_nsp.py --skip-romfs` excludes game files and DLC and computes the combined layout and identity from source indexes, without reading or copying payload data. IPA packing and prepared Xcode staging use the same calculation and retain the original base-image identity. Default packaging and `--romfs separate` still create a transferable image. Existing images are never deleted by this option.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game); synthetic packing, staging and identity checks cover the omitted payload and unchanged combined-image identity. Physical iPhone acceptance remains pending.
+
 ### Mac test shader preparation looks stalled without progress
 
 - **Symptom:** `run_mac.py --test` stays on `[2/0] Mac shaders ...` for minutes with no counts, elapsed time or updated status.

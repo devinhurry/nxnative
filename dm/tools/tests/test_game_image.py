@@ -109,6 +109,25 @@ class GameImages(unittest.TestCase):
         game_image.write_identities(plain, ids)
         self.assertFalse((ids / 'romfs.base.id').exists())
 
+    def test_source_identities_match_the_combined_image_without_copying_payloads(self):
+        self.dlc(1); self.dlc(10, folder=True)
+        game_image.pack(self.base_image, self.aoc, self.dst)
+        expected = romfs_image.identity(self.dst, 'T', '1.0', 'v0')
+        self.dst.unlink()
+        ids = self.root / 'identities'
+        with patch.object(game_image._Source, 'copy', side_effect=AssertionError('must not copy game data')):
+            game_image.write_identities(self.base_image, ids, 'T', '1.0', 'v0', aoc=self.aoc)
+        self.assertEqual((ids / 'romfs.id').read_text().strip(), expected)
+        self.assertTrue(romfs_image.same_identity((ids / 'romfs.base.id').read_text(), romfs_image.identity(self.base_image)))
+        self.assertFalse(self.dst.exists())
+        self.dlc(2)
+        result = subprocess.run([sys.executable, '-I', str(REPO / 'dm/tools/game_image.py'), '--source-identities',
+                                 str(self.base_image), str(self.aoc), str(ids), 'T', '1.0', 'v0'], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(romfs_image.same_identity((ids / 'romfs.id').read_text(), expected))
+        game_image.pack(self.base_image, self.aoc, self.dst)
+        self.assertTrue(romfs_image.same_identity((ids / 'romfs.id').read_text(), romfs_image.identity(self.dst)))
+
     def test_reuse_detects_same_size_base_and_dlc_writes_with_restored_mtime(self):
         dlc = self.dlc(1)
         game_image.pack(self.base_image, self.aoc, self.dst, reuse=True)

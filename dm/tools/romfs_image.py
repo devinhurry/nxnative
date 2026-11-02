@@ -128,6 +128,24 @@ def _clean(text):   # one token of the identity line: no spaces, no newlines
     return ''.join(c if c.isalnum() or c in '._-+' else '_' for c in str(text)) or '-'
 
 
+def index_identity(head, chunks, title='', version='', build=''):
+    """Compute the image identity from its header and index, without payload bytes."""
+    _, offset, size, _ = HEAD.unpack(head)
+    h, rest, read = _FNV_OFFSET, b'', 0
+    def mix(data):
+        nonlocal h
+        for w in struct.unpack(f'<{len(data) // 8}Q', data): h = ((h ^ w) * _FNV_PRIME) & _MASK
+    mix(head)
+    for chunk in chunks:
+        read += len(chunk)
+        chunk = rest + chunk
+        end = len(chunk) - len(chunk) % 8
+        mix(chunk[:end]); rest = chunk[end:]
+    if read != size: raise ValueError('incomplete RomFS image index')
+    if rest: mix(rest + b'\0' * (8 - len(rest)))
+    return f'{ID_MAGIC} title={_clean(title)} version={_clean(version)} build={_clean(build)} size={offset + size} index={h:016x}'
+
+
 def identity(img, title='', version='', build=''):
     """The identity line of a complete image (dm/host/romfs_identity.h defines the format and the C reader): its size and an FNV-1a 64 hash of its header and index
     (the file data is not read, so a 14 GB image takes a moment). Raises ValueError for a cut off or invalid image."""
@@ -137,23 +155,8 @@ def identity(img, title='', version='', build=''):
         if len(head) != HEAD.size: raise ValueError(f'not a RomFS image: {img}')
         magic, ioff, isz, _ = HEAD.unpack(head)
         if magic != MAGIC or ioff < HEAD.size or ioff > size or isz != size - ioff: raise ValueError(f'incomplete or invalid RomFS image: {img}')
-        h, rest = _FNV_OFFSET, b''
         f.seek(ioff)
-        def mix(h, data):
-            for w in struct.unpack(f'<{len(data) // 8}Q', data): h = ((h ^ w) * _FNV_PRIME) & _MASK
-            return h
-        h = mix(h, head)
-        left = isz
-        while left:
-            chunk = f.read(min(left, 8 << 20))
-            if not chunk: raise ValueError(f'incomplete RomFS image: {img}')
-            left -= len(chunk)
-            chunk = rest + chunk
-            keep = len(chunk) % 8 if left else 0
-            rest = chunk[len(chunk) - keep:]; chunk = chunk[:len(chunk) - keep]
-            if not left and len(chunk) % 8: chunk += b'\0' * (8 - len(chunk) % 8)
-            h = mix(h, chunk)
-    return f'{ID_MAGIC} title={_clean(title)} version={_clean(version)} build={_clean(build)} size={size} index={h:016x}'
+        return index_identity(head, iter(lambda: f.read(8 << 20), b''), title, version, build)
 
 
 def parse_identity(text):   # {field: value} of an identity line; size is an int

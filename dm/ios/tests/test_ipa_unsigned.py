@@ -99,6 +99,23 @@ class UnsignedIpaTests(unittest.TestCase):
                 self.assertTrue(romfs_image.same_identity(archive.read('Payload/DmIOS.app/romfs.base.id').decode(), romfs_image.identity(base)))
                 self.assertFalse([n for n in archive.namelist() if n.endswith('.img') or '/aoc/' in n])
 
+    def test_skip_romfs_keeps_combined_and_base_identities_without_the_combined_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); self.stand_in(root); (root / 'DmIOS.app/executable').write_text('app')
+            base = root / 'base.img'; romfs_image.pack(root / 'romfs', base)
+            combined = root / 'combined.img'
+            subprocess.run([sys.executable, '-I', str(REPO / 'dm/tools/game_image.py'), str(base), str(root / 'aoc'), str(combined)], check=True, capture_output=True)
+            expected = romfs_image.identity(combined); combined.unlink()
+            result = run_step(PACKING, root, APP=str(root / 'DmIOS.app'), MSL_IOS=str(root / 'shaders'), MSLDIR='b-fixture',
+                              ROMFS=str(base), AOC=str(root / 'aoc'), OUT_IPA=str(root / 'out.ipa'), O=str(root / 'pkg'), DM_APP_VERSION='2.0.0',
+                              GAME_VERSION='1.2.1', PKG='v327680', DM_COPY_ROMFS='NO', DM_SKIP_ROMFS='YES')
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            with zipfile.ZipFile(root / 'out.ipa') as archive:
+                self.assertTrue(romfs_image.same_identity(archive.read('Payload/DmIOS.app/romfs.id').decode(), expected))
+                self.assertTrue(romfs_image.same_identity(archive.read('Payload/DmIOS.app/romfs.base.id').decode(), romfs_image.identity(base)))
+                self.assertFalse([n for n in archive.namelist() if n.endswith('.img') or '/aoc/' in n or '/romfs/' in n])
+            self.assertFalse(combined.exists()); self.assertFalse((root / 'game-data').exists())
+
     @unittest.skipUnless(CAN_SIGN, 'needs macOS codesign and a C compiler')
     def test_executable_carries_the_entitlements(self):
         cases = [({}, True), ({'DM_ENTITLEMENTS': ''}, False)]

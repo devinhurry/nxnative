@@ -58,6 +58,17 @@ class Identity(unittest.TestCase):
             c = subprocess.run([str(self.check), 'of', str(img)], capture_output=True, text=True, check=True).stdout.strip()
             self.assertTrue(image.same_identity(c, image.identity(img)), c)
 
+    def test_index_identity_is_independent_of_chunk_boundaries(self):
+        with self.wanted.open('rb') as f:
+            head = f.read(image.HEAD.size)
+            _, offset, _, _ = image.HEAD.unpack(head)
+            f.seek(offset); index = f.read()
+        for size in (1, 7, 8, 9, 32):
+            chunks = [index[i:i + size] for i in range(0, len(index), size)]
+            self.assertEqual(image.index_identity(head, chunks), image.identity(self.wanted))
+        with self.assertRaisesRegex(ValueError, 'incomplete'):
+            image.index_identity(head, [index[:-1]])
+
     def test_identity_file_is_written_and_read_back(self):
         with tempfile.TemporaryDirectory() as t:
             f = Path(t) / 'romfs.id'

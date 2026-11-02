@@ -35,7 +35,10 @@ class XcodePipelineTests(unittest.TestCase):
     def test_prepare_separates_romfs_and_dlc(self):
         self.prepare_fixture('gl', False, external_romfs=True)
 
-    def prepare_fixture(self, graphics, derived, external_romfs=False):
+    def test_prepare_skips_combined_romfs_for_app_updates(self):
+        self.prepare_fixture('gl', False, external_romfs=True, skip_romfs=True)
+
+    def prepare_fixture(self, graphics, derived, external_romfs=False, skip_romfs=False):
         with tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
             root = Path(temporary).resolve()
             (root / 'prod.keys').touch()
@@ -90,7 +93,7 @@ class XcodePipelineTests(unittest.TestCase):
             try:
                 with redirect_stdout(output):
                     code = build.cli(['--version', '1.0.0', str(root), '-k', str(root / 'prod.keys'), '--prepare-xcode',
-                                      '--language', 'ja', '--no-show-fps', '--no-motion', '--progress', 'json'] + (['--romfs', 'separate'] if external_romfs else []))
+                                      '--language', 'ja', '--no-show-fps', '--no-motion', '--progress', 'json'] + (['--skip-romfs'] if skip_romfs else ['--romfs', 'separate'] if external_romfs else []))
             finally:
                 progress.close()
             self.assertEqual(code, 0, output.getvalue())
@@ -107,7 +110,15 @@ class XcodePipelineTests(unittest.TestCase):
             self.assertTrue(environment['DM_GRAPHICS_OUT'].endswith('.graphics'))
             self.assertNotIn('-touch-the-wild-', environment['DM_GRAPHICS_OUT'])
             self.assertEqual(environment['DM_APP_VERSION'], '1.0.0')
-            if external_romfs:
+            if skip_romfs:
+                self.assertEqual(environment['DM_COPY_ROMFS'], 'NO')
+                self.assertEqual(environment['DM_SKIP_ROMFS'], 'YES')
+                self.assertEqual(environment['ROMFS'], str(extraction / 'RomFS'))
+                self.assertEqual(environment['AOC'], str(aoc))
+                mocks['separate_game_image'].assert_not_called()
+                self.assertFalse(any('push_romfs.sh' in event.get('msg', '') for event in events))
+                self.assertTrue(any('ROM: skipped' in event.get('msg', '') for event in events))
+            elif external_romfs:
                 self.assertEqual(environment['DM_COPY_ROMFS'], 'NO')
                 self.assertEqual(environment['ROMFS'], str(combined))
                 self.assertEqual(environment['AOC'], '')
@@ -197,9 +208,10 @@ for directory in ('romfs', 'aoc', 'dm'):
                                GAME='010015100B514000', W=str(root / 'work'), PATCHED=str(patched), ROMFS=str(romfs),
                                MSL_IOS=str(shaders), AOC=str(aoc), GFXAPI='gl', DM_DISPLAY_NAME='Fixture', DM_APP_VERSION='1.2.1',
                                VNACP=str(control), DM_LANG='ja')
-            for excluded, graphics in (('1', 'YES'), ('0', 'YES'), ('1', 'NO'), ('0', 'NO')):
-                with self.subTest(excluded=excluded, graphics=graphics):
+            for excluded, graphics, skip in (('1', 'YES', True), ('1', 'YES', False), ('0', 'YES', False), ('1', 'NO', False), ('0', 'NO', False)):
+                with self.subTest(excluded=excluded, graphics=graphics, skip=skip):
                     environment['DM_COPY_ROMFS'] = 'NO' if excluded == '1' else 'YES'
+                    environment['DM_SKIP_ROMFS'] = 'YES' if skip else 'NO'
                     environment['DM_COPY_GRAPHICS'] = graphics
                     out = root / 'Fixture.ipa'
                     result = subprocess.run(['bash', str(ios / 'tools/build_ipa.sh'), str(out)], env=environment, capture_output=True, text=True)
@@ -233,7 +245,10 @@ for directory in ('romfs', 'aoc', 'dm'):
                                 self.assertTrue(all(i.compress_type == zipfile.ZIP_STORED for i in package.infolist()))
                         self.assertEqual('Payload/DmIOS.app/romfs/System/Resource/file' in names, excluded == '0')
                         self.assertEqual('Payload/DmIOS.app/aoc/1/file' in names, excluded == '0')
-                        if excluded == '1':
+                        if skip:
+                            self.assertFalse((root / 'work/game-data/RomFS.img').exists())
+                            self.assertIn('Payload/DmIOS.app/romfs.id', names)
+                        elif excluded == '1':
                             import romfs as rfs
                             image = root / 'work/game-data/RomFS.img'
                             self.assertEqual((rfs.Path(image) / 'romfs/System/Resource/file').read_bytes(), b'game')
@@ -273,11 +288,20 @@ for directory in ('romfs', 'aoc', 'dm'):
                     self.assertEqual((app / 'aoc/1/content').read_text(), 'dlc')
             # Quick reinstalls omit only RomFS, including removing an old bundled copy; restoring the default stages it again.
             environment['DM_COPY_ROMFS'] = 'NO'
+            environment['DM_SKIP_ROMFS'] = 'YES'
+            result = subprocess.run(['bash', str(REPO / 'dm/ios/tools/stage_resources.sh')], env=environment, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            expected_identity = (app / 'romfs.id').read_text()
+            self.assertFalse((ios / 'Gen/game-data/RomFS.img').exists())
+            self.assertFalse((app / 'romfs').exists()); self.assertFalse((app / 'aoc').exists())
+            environment.pop('DM_SKIP_ROMFS')
             result = subprocess.run(['bash', str(REPO / 'dm/ios/tools/stage_resources.sh')], env=environment, capture_output=True)
             self.assertEqual(result.returncode, 0); self.assertFalse((app / 'romfs').exists())
             self.assertTrue((app / 'msl/gl/fixture.metallib').is_file()); self.assertFalse((app / 'aoc').exists())
             import romfs as rfs
             combined = ios / 'Gen/game-data/RomFS.img'
+            import romfs_image
+            self.assertTrue(romfs_image.same_identity(expected_identity, romfs_image.identity(combined)))
             self.assertEqual((rfs.Path(combined) / 'romfs/marker').read_text(), 'game')
             self.assertEqual((rfs.Path(combined) / 'aoc/1/content').read_text(), 'dlc')
             environment.pop('DM_COPY_ROMFS')
