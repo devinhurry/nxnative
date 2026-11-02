@@ -1994,7 +1994,7 @@ static void test_botw_point_edges(DmGamepad *original) {
     g_botw_touch_menu_active=g_botw_touch_menu_presented=NO;
     const CGSize sizes[]={{932,430},{768,1024},{795,1100},{795,540},{390,844},{430,932},
         {669,951},{669,455.5},{720,1000}};
-    const CGFloat stickMargins[]={60.4,60.4,60.4,60.4,27.6,27.6,54.36,54.36,56.625};
+    const CGFloat stickMargins[]={60.4,57.984,60.0225,60.0225,27.6,27.6,50.5095,50.5095,54.36};
     const UIEdgeInsets insets[]={{0,0,0,0},{24,62,34,62}};
     for (unsigned i=0;i<sizeof sizes/sizeof *sizes;i++) {
         BOOL compact=sizes[i].width<600;

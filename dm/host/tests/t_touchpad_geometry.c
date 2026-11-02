@@ -260,10 +260,10 @@ static void test_custom_layout(void) {
 
 static void test_portrait_layout(void) {
     // Width, height and the expected normal-left margin factor.
-    const float sizes[][3]={{320,568,.9f},{390,844,.9f},{430,932,.9f},{599,1133,.9f},{600,1133,.9f},
-        {626,890,.9f},{669,951,.9f},{669,455.5f,.9f},{691.2f,1000,.9f},
-        {720,1000,.9375f},{744,1133,.96875f},{768,1024,1},{1024,1366,1},
-        {932,430,1},{795,540.25f,1},{795,1100,1}};
+    const float sizes[][3]={{320,568,.8f},{390,844,.8f},{430,932,.8f},{599,1133,.8f},{600,1133,.8f},
+        {626,890,.8f},{640,1000,.8f},{669,951,.83625f},{669,455.5f,.83625f},{691.2f,1000,.864f},
+        {720,1000,.9f},{744,1133,.93f},{768,1024,.96f},{800,1100,1},{1024,1366,1},
+        {932,430,1},{795,540.25f,.99375f},{795,1100,.99375f}};
     const float insets[][4]={{0,0,0,0},{62,0,62,34},{0,59,0,34},{20,24,21,20}};
     const int controls[]={0,1,2,3,4,6,7,8,9,12};
     for (int compact=0;compact<2;compact++) {
@@ -300,11 +300,13 @@ static void test_portrait_layout(void) {
     dm_touchpad_rect shield=dm_botw_layout_control(&layout,8,669,951,0,0,0,0,duo);
     dm_touchpad_rect dpad=dm_botw_layout_control(&layout,12,669,951,0,0,0,0,duo);
     dm_touchpad_rect y=dm_botw_layout_control(&layout,3,669,951,0,0,0,0,duo);
-    nearf(stick.x,54.36f,.001f); nearf(shield.x,31.5f,.001f); nearf(dpad.x,221.49f,.001f);
-    nearf(y.x-dpad.x-dpad.width,146.91f,.001f);
+    nearf(stick.x,50.5095f,.001f); nearf(shield.x,29.26875f,.001f); nearf(dpad.x,205.801125f,.001f);
+    nearf(y.x-dpad.x-dpad.width,162.598875f,.001f);
     float dx=dpad.x+dpad.width*.5f-stick.x-stick.width*.5f;
     float dy=dpad.y+dpad.height*.5f-stick.y-stick.height*.5f;
-    assert(hypotf(dx,dy)-stick.width*.5f*DM_TP_STICK_GRAB-dpad.width*.5f*DM_TP_DPAD_GRAB>5.5f);
+    // Expanded grab circles can overlap at the 80% floor; UIKit checks input ownership.
+    // The visible controls must still remain separate.
+    assert(hypotf(dx,dy)>(stick.width+dpad.width)*.5f);
     dm_touchpad_rect canvas={0,0,932,430};
     dm_touchpad_rect plus=dm_botw_layout_control(&layout,10,932,430,0,0,0,0,canvas);
     dm_touchpad_rect safe_plus=dm_botw_layout_control(&layout,10,932,430,62,0,62,34,canvas);

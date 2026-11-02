@@ -116,10 +116,10 @@ static inline dm_touchpad_rect dm_botw_layout_control(const dm_botw_touch_layout
     if (!a.size) return (dm_touchpad_rect){0};
     dm_botw_control_transform t=layout->control[id];
     int at_right=id<4 || id==7 || id==9;
-    // Normal left margins contract below 768pt, retaining at least 90%.
+    // Normal left margins contract below 800pt, retaining at least 80%.
     // Only the base margin responds to width; user offsets stay in points.
     float side=a.side;
-    if (!at_right && !layout->portrait) side*=fminf(1,fmaxf(.9f,width/768.f));
+    if (!at_right && !layout->portrait) side*=fminf(1,fmaxf(.8f,width/800.f));
     // Anchor the outside edge first. Resizing keeps side/bottom margins;
     // independent point offsets translate drawing and input together.
     return (dm_touchpad_rect){(at_right ? width-side-t.size : side)+t.x,
