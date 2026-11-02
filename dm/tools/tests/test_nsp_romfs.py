@@ -65,6 +65,8 @@ class RomfsOption(unittest.TestCase):
         self.assertEqual(nsp.ROMFS, 'bundle')   # the default build is the one that always was
         self.assertIsNone(nsp.parse_args(['--version', '1.0.0']).romfs)
         self.assertEqual(nsp.parse_args(['--version', '1.0.0', '--romfs', 'separate']).romfs, 'separate')
+        self.assertFalse(nsp.parse_args(['--version', '1.0.0']).skip_romfs)
+        self.assertTrue(nsp.parse_args(['--version', '1.0.0', '--skip-romfs']).skip_romfs)
         with self.assertRaises(SystemExit), mock.patch('sys.stderr'): nsp.parse_args(['--version', '1.0.0', '--romfs', 'maybe'])
 
     def test_removed_separate_rom_option_is_rejected(self):
@@ -76,6 +78,12 @@ class RomfsOption(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t, mock.patch.object(nsp, 'apple_silicon', return_value=True):
             with self.assertRaises(nsp.BuildError) as e: nsp.main(nsp.parse_args(['--version', '1.0.0', '--platform', 'mac', '--romfs', 'separate', '-k', t, t]))
             self.assertIn('--romfs separate', str(e.exception))
+
+    def test_skip_romfs_rejects_bundling_and_mac_builds(self):
+        for options in (['--romfs', 'bundle'], ['--platform', 'mac'], ['--platform', 'mac-app']):
+            with self.subTest(options=options), mock.patch.object(nsp, 'apple_silicon', return_value=True):
+                with self.assertRaisesRegex(nsp.BuildError, '--skip-romfs'):
+                    nsp.main(nsp.parse_args(['--version', '1.0.0', '--skip-romfs', *options]))
 
     def test_separate_requires_keeping_the_image_for_deployment(self):
         for options, settings in ((['--romfs', 'separate', '--no-keep-extracted'], {'ROMFS': 'bundle', 'KEEP_EXTRACTED': True}),

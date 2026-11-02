@@ -48,6 +48,7 @@ APP_NAME = ''                           # app name on the home screen (empty = t
 BUNDLE_ID = ''                          # the app's bundle ID (empty = saved per-game Xcode ID, else org.nxnative.<base game title ID in lowercase>)
 ROMFS = 'bundle'                        # 'bundle' = game files and DLC go into the app; 'separate' = both stay out (DM_COPY_ROMFS=NO), in one external image reused while its inputs are unchanged.
                                         #   Copy it to the phone once per game version with the scripts/push_romfs.sh command printed at the end (the app checks that the image is the one it was built for)
+SKIP_ROMFS = False                      # iOS app updates: leave game files and DLC out, compute their identities without creating the combined image; reuse the phone's installed resources.
 GRAPHICS = 'separate'                   # iOS: 'separate' = a .graphics package imported in the launcher; 'bundle' keeps graphics inside the app.
 PREPARE_XCODE = False                   # prepare a per-game Xcode project and add it to the workspace instead of packing an IPA; requires KEEP_EXTRACTED
 PLATFORM = 'ios'                        # 'ios' = the IPA (or the Xcode project); 'mac-app' = a double-clickable Mac app; 'mac' = development: build only what running the game on this Mac needs (Mac shaders, the Mac host), no iOS shaders,
@@ -291,7 +292,7 @@ def progress_mode(want):   # auto: redraw in a terminal or in Spyder (IPython ha
     return 'bar' if in_ipython() or (sys.stdout and sys.stdout.isatty()) else 'lines'
 
 
-def report_ios_outputs(primary_label, primary, romfs_image, graphics_result):
+def report_ios_outputs(primary_label, primary, romfs_image, graphics_result, skip_romfs=False):
     """Keep the three deployable outputs together at the end of a successful build."""
     color = PROG.mode != 'json' and not os.environ.get('NO_COLOR') and (in_ipython() or bool(sys.stdout and sys.stdout.isatty()))
     graphics = 'Graphics: included in the app'
@@ -301,9 +302,11 @@ def report_ios_outputs(primary_label, primary, romfs_image, graphics_result):
         if status not in ('reused', 'generated'): raise BuildError(f'invalid graphics output status: {status}')
         graphics = f'Graphics [{status.upper()} v{graphics_result["version"]}]: {graphics_result["path"]}'
         graphics_color = '1;32' if status == 'reused' else '1;35'
+    rom = str(romfs_image) if romfs_image is not None else 'included in the app'
+    if skip_romfs: rom = 'skipped (--skip-romfs); reuse the game files and DLC already on the device'
     rows = [('Build outputs', '1;32'),
             (f'{primary_label}: {primary}', '1;36'),
-            (f'ROM: {romfs_image if romfs_image is not None else "included in the app"}', '1;33'),
+            (f'ROM: {rom}', '1;33'),
             (graphics, graphics_color)]
     PROG.say('\n' + '\n'.join(f'\033[{style}m{text}\033[0m' if color else text for text, style in rows))
 
@@ -2493,6 +2496,7 @@ def parse_args(argv):
     ap.add_argument('--bundle-id', help='the app\'s bundle ID (default: saved Xcode ID when preparing again, else org.nxnative.<base game title ID in lowercase>)')
     ap.add_argument('--romfs', choices=('bundle', 'separate'), help='bundle = game files and DLC go into the IPA (default: the ROMFS setting, bundle); separate = both stay outside the IPA and Xcode app in one image, which '
                     'is copied to the phone once per game version with the scripts/push_romfs.sh command printed at the end (the app refuses an image of another version)')
+    ap.add_argument('--skip-romfs', action='store_true', help='iOS app updates: omit game files and DLC and skip creating the combined image; reuse resources already on the device (implies --romfs separate, keeps version checks)')
     ap.add_argument('--graphics', choices=('bundle', 'separate'), help='iOS graphics: separate = a .graphics package imported from the launcher (default, legacy ZIPs supported); bundle = include graphics in the app')
     ap.add_argument('--prepare-xcode', action='store_true', help='prepare a per-game Xcode project and add it to the shared workspace instead of packing an IPA (requires keeping extracted files)')
     ap.add_argument('--platform', choices=('ios', 'mac', 'mac-app'), help='ios = the IPA (or the Xcode project); mac = for development: build only what running the game on this Mac needs (the Mac shaders and the Mac host, '
@@ -2616,7 +2620,10 @@ def main(args=None):
     if mac and not keep: say('keeping the extracted game files all the same: the game runs from them on the Mac' + (' and the app is made of clones of them' if mac_pack else '')); keep = True
     if prepare_xcode and not keep: raise BuildError('--prepare-xcode requires --keep-extracted: Xcode builds from the extracted files')
     if args.xcode_workspace and not prepare_xcode: raise BuildError('--xcode-workspace requires --prepare-xcode')
-    romfs_mode = args.romfs or ROMFS
+    skip_romfs = args.skip_romfs or SKIP_ROMFS
+    if skip_romfs and mac: raise BuildError('--skip-romfs is an iOS app update option; it cannot be combined with --platform ' + platform)
+    if skip_romfs and args.romfs == 'bundle': raise BuildError('--skip-romfs cannot be combined with --romfs bundle')
+    romfs_mode = 'separate' if skip_romfs else args.romfs or ROMFS
     graphics_mode = args.graphics or GRAPHICS
     if graphics_mode not in ('bundle', 'separate'): raise BuildError('GRAPHICS / --graphics must be bundle or separate')
     if mac and args.graphics: raise BuildError('--graphics is an iOS packaging option')
@@ -2848,14 +2855,17 @@ def main(args=None):
     if not prepare_xcode and free_gb(out_ipa.parent) < 5: raise BuildError(f'less than 5 GB free on the volume of {out_ipa.parent}')
     say('preparing the Xcode project' if prepare_xcode else f'building the IPA → {out_ipa}')
     separate = romfs_mode == 'separate'
-    game_image = separate_game_image(py, repo, work, rfs.source(game), aoc, env, logs) if separate else rfs.source(game)
+    game_image = separate_game_image(py, repo, work, rfs.source(game), aoc, env, logs) if separate and not skip_romfs else rfs.source(game)
     control = game / 'control.nacp'
     if not control.is_file(): control = base / 'control.nacp'
-    ipa_env = dict(env, GAME=g.id, W=str(work / 'ipa'), PATCHED=str(patched), ROMFS=str(game_image), VNACP=str(control), MSL_IOS=str(ios), GFXAPI=gfx, FONT_PY=py, DM_DISPLAY_NAME=app_name, DM_BUNDLE_ID=bundle_id, AOC='' if separate else str(aoc or ''), DM_XCODE_DERIVED_DATA=str(work / 'xcode-derived-data'), DM_TEAM_ID=team_id, DM_LANG=lang)
+    ipa_env = dict(env, GAME=g.id, W=str(work / 'ipa'), PATCHED=str(patched), ROMFS=str(game_image), VNACP=str(control), MSL_IOS=str(ios), GFXAPI=gfx, FONT_PY=py, DM_DISPLAY_NAME=app_name, DM_BUNDLE_ID=bundle_id, AOC='' if separate and not skip_romfs else str(aoc or ''), DM_XCODE_DERIVED_DATA=str(work / 'xcode-derived-data'), DM_TEAM_ID=team_id, DM_LANG=lang, DM_SKIP_ROMFS='YES' if skip_romfs else 'NO')
     ipa_env['DM_COPY_GRAPHICS'] = 'NO' if graphics_mode == 'separate' else 'YES'
     ipa_env['DM_GRAPHICS_OUT'] = str(graphics_out)
     if prepare_xcode: ipa_env['DM_XCODE_PROJECT_DIR'] = str(project.parent)
-    if separate: ipa_env['DM_COPY_ROMFS'] = 'NO'; say('game files and DLC: separate (DM_COPY_ROMFS=NO), left out of the app; the image stays at ' + str(game_image))
+    if separate:
+        ipa_env['DM_COPY_ROMFS'] = 'NO'
+        say('game files and DLC: skipped (--skip-romfs); no combined image created, reuse the resources already on the device' if skip_romfs else
+            'game files and DLC: separate (DM_COPY_ROMFS=NO), left out of the app; the image stays at ' + str(game_image))
     ipa_env['DM_APP_VERSION'] = app_version
     if icon: ipa_env['DM_ICON'] = str(icon); say(f'app icon: {icon}')   # app icon (found above)
     else: say('[RED] no game icon in the extraction (an older extraction did not save it: delete extract/ and run again); the home-screen icon will be blank')
@@ -2880,12 +2890,12 @@ def main(args=None):
         say(f'ready: {workspace}')
         say(f'game project: {project}')
         say(f'Xcode derived data: {work / "xcode-derived-data"}')
-        if separate: say_push_romfs(game_image, bundle_id)
+        if separate and not skip_romfs: say_push_romfs(game_image, bundle_id)
         if graphics_mode == 'separate': say('graphics package: ' + json.loads((work / 'ipa/graphics-result.json').read_text())['path'] + ' (Import graphics in the launcher; do not unzip)')
         say('choose the game scheme in Xcode, select your Team and iPhone or iPad, then Run (Release)')
         report_profile_status(g, reg, pkg_ver, derived, provisional, 'Xcode project', patched)
         graphics_result = json.loads((work / 'ipa/graphics-result.json').read_text()) if graphics_mode == 'separate' else None
-        report_ios_outputs('Xcode project', project, game_image if separate else None, graphics_result)
+        report_ios_outputs('Xcode project', project, game_image if separate else None, graphics_result, skip_romfs)
         return
     watch = IpaWatch(repo, work / 'ipa', out_ipa)
     PROG.stage('app build', poll=watch.poll, step='starting')   # build_ipa.sh's "pack IPA" line starts the stage "IPA pack"
@@ -2898,11 +2908,11 @@ def main(args=None):
     if not keep:
         say(f'deleting the extracted game files: {ex}'); rmtree(ex)
     say(f'done: {out_ipa} ({out_ipa.stat().st_size / 2**30:.1f} GB)')
-    if separate: say_push_romfs(game_image, bundle_id)
+    if separate and not skip_romfs: say_push_romfs(game_image, bundle_id)
     if graphics_mode == 'separate': say('graphics package: ' + json.loads((work / 'ipa/graphics-result.json').read_text())['path'] + ' (Import graphics in the launcher; do not unzip)')
     report_profile_status(g, reg, pkg_ver, derived, provisional, patched=patched)
     graphics_result = json.loads((work / 'ipa/graphics-result.json').read_text()) if graphics_mode == 'separate' else None
-    report_ios_outputs('IPA', out_ipa, game_image if separate else None, graphics_result)
+    report_ios_outputs('IPA', out_ipa, game_image if separate else None, graphics_result, skip_romfs)
 
 
 def cli(argv):   # returns the exit code: 0 done, 1 error, 130 interrupted

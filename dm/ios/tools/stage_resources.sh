@@ -23,6 +23,7 @@ python3 "$resource_dm/tools/romfs.py" "$DM_RESOURCE_ROMFS" "$DM_RESOURCE_MARKER"
 [ -d "$SRCROOT/Gen/dm" ] || die 'Missing generated game tables; prepare the game again.'
 DM_RESOURCE_PSO=${DM_RESOURCE_PSO:-}   # (a project prepared before the pipeline archive has none)
 DM_COPY_GRAPHICS=${DM_COPY_GRAPHICS:-${DM_RESOURCE_COPY_GRAPHICS:-YES}}
+if [ "${DM_SKIP_ROMFS:-NO}" = YES ] && [ "${DM_COPY_ROMFS:-YES}" != NO ]; then die 'DM_SKIP_ROMFS=YES requires DM_COPY_ROMFS=NO'; fi
 if [ "$DM_COPY_GRAPHICS" != NO ]; then
     [ -d "$DM_RESOURCE_SHADERS" ] || die "Shader libraries unavailable: $DM_RESOURCE_SHADERS"
     [ -z "$DM_RESOURCE_PSO" ] || [ -f "$DM_RESOURCE_PSO/prebuilt.tsv" ] || die "Pipeline archive unavailable: $DM_RESOURCE_PSO"
@@ -33,7 +34,7 @@ case "$DM_RESOURCE_MSLDIR" in b-*)
     V=$(sed -n 's/^#define DMSH_CHAIN "\(.*\)"/\1/p' "$DM_RESOURCE_CHAIN_H")
     [ "$DM_RESOURCE_MSLDIR" = "b-$V" ] || die "The prepared shaders are chain $DM_RESOURCE_MSLDIR, the sources are now at b-$V: prepare the game again (build_ipa_from_nsp.py --prepare-xcode)";;
 esac
-if [ "${DM_COPY_ROMFS:-YES}" = NO ] && [ -n "$DM_RESOURCE_AOC" ]; then
+if [ "${DM_COPY_ROMFS:-YES}" = NO ] && [ "${DM_SKIP_ROMFS:-NO}" != YES ] && [ -n "$DM_RESOURCE_AOC" ]; then
     mkdir -p "$SRCROOT/Gen/game-data"
     python3 "$resource_dm/tools/game_image.py" --reuse "$DM_RESOURCE_ROMFS" "$DM_RESOURCE_AOC" "$SRCROOT/Gen/game-data/RomFS.img" || die 'Combine game files and DLC'
     DM_RESOURCE_ROMFS=$SRCROOT/Gen/game-data/RomFS.img; DM_RESOURCE_AOC=
@@ -47,8 +48,11 @@ mkdir -p "$APP/dm"
 if [ "${DM_COPY_ROMFS:-YES}" = NO ]; then
     rm -rf "$APP/romfs" "$APP/romfs.img" "$APP/romfs.id" "$APP/romfs.base.id"
     # the image's identity (dm/host/romfs_identity.h): main.m uses only a Documents/romfs.img that matches it; a RomFS folder has none yet (push_romfs.sh packs it), so no identity is written for it
-    if [ -f "$DM_RESOURCE_ROMFS" ]; then
+    if [ "${DM_SKIP_ROMFS:-NO}" = YES ] && [ -n "$DM_RESOURCE_AOC" ]; then
+        python3 -I "$resource_dm/tools/game_image.py" --source-identities "$DM_RESOURCE_ROMFS" "$DM_RESOURCE_AOC" "$APP" "${DM_RESOURCE_TITLE:-}" "${DM_RESOURCE_VERSION:-}" "${DM_RESOURCE_BUILD:-}" || die 'Identity of game files and DLC'
+    elif [ -f "$DM_RESOURCE_ROMFS" ]; then
         python3 -I "$resource_dm/tools/game_image.py" --identities "$DM_RESOURCE_ROMFS" "$APP" "${DM_RESOURCE_TITLE:-}" "${DM_RESOURCE_VERSION:-}" "${DM_RESOURCE_BUILD:-}" || die "identity of $DM_RESOURCE_ROMFS"
+    elif [ "${DM_SKIP_ROMFS:-NO}" = YES ]; then die 'DM_SKIP_ROMFS=YES requires a RomFS image for version checks'
     fi
 elif [ -f "$DM_RESOURCE_ROMFS" ]; then
     /usr/bin/rsync -a -- "$DM_RESOURCE_ROMFS" "$APP/romfs.img"

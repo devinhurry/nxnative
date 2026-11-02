@@ -6,6 +6,7 @@
 # Usage: dm/ios/tools/build_ipa.sh [output.ipa | --prepare-xcode]; --prepare-xcode generates the project without building, signing or packing.
 #   Environment: GAME=game profile (dm/games/<base game title ID>, or one in DM_GAMES_DIR; required), W=the game's work folder (required: <NSP folder>/<title ID>-work, never the home folder), PATCHED / ROMFS / MSL_IOS can each be overridden
 #   DM_COPY_ROMFS=NO leaves the game files and DLC out of the IPA and Xcode app, combined in one image read from Documents/romfs.img (scripts/push_romfs.sh); default: they are packed
+#   DM_SKIP_ROMFS=YES with DM_COPY_ROMFS=NO computes identities from the source indexes without creating a combined image, for app updates using game files already on the device
 #   DM_ENTITLEMENTS=<plist> is the unsigned IPA's entitlements, signed ad-hoc into the executable (default: Increased Memory Limit; an empty string = none)
 #   AOC=add-on content directory (default $W/data/aoc; bundled under aoc/ or combined with RomFS when DM_COPY_ROMFS=NO; empty = none), GFXAPI=nvn / vulkan (default: by the shader libraries in MSL_IOS)
 #   The app name is the game name in the base NSP's control data ($W/data/v0/control.nacp, else the one next to the RomFS), the app release version is required in DM_APP_VERSION
@@ -44,7 +45,8 @@ if [ "${DM_SHOW_FPS:-0}" = 1 ]; then export DM_SHOW_FPS=YES; else export DM_SHOW
 export DM_LANG=${DM_LANG:-en-US}
 DM_COPY_GRAPHICS=${DM_COPY_GRAPHICS:-NO}
 GRAPHICS_OUT=${DM_GRAPHICS_OUT:-$W/graphics.graphics}
-if [ "${DM_COPY_ROMFS:-YES}" = NO ] && [ -n "$AOC" ] && [ -d "$AOC" ]; then
+if [ "${DM_SKIP_ROMFS:-NO}" = YES ] && [ "${DM_COPY_ROMFS:-YES}" != NO ]; then die "DM_SKIP_ROMFS=YES requires DM_COPY_ROMFS=NO"; fi
+if [ "${DM_COPY_ROMFS:-YES}" = NO ] && [ "${DM_SKIP_ROMFS:-NO}" != YES ] && [ -n "$AOC" ] && [ -d "$AOC" ]; then
   mkdir -p "$W/game-data" || die "mkdir $W/game-data"
   python3 "$DM/tools/game_image.py" --reuse "$ROMFS" "$AOC" "$W/game-data/RomFS.img" || die "combine game files and DLC"
   ROMFS=$W/game-data/RomFS.img; AOC=
@@ -168,6 +170,7 @@ if [ "$PREPARE_XCODE" = YES ] && [ -n "${DM_ENTITLEMENTS-default}" ]; then
 fi
 # DM_COPY_ROMFS=NO also for the prepared project: its Copy game resources phase (stage_resources.sh) then leaves the game files out and writes the image's identity; Gen/dm.xcconfig is made again by every run
 [ "${DM_COPY_ROMFS:-YES}" != NO ] || [ "$PREPARE_XCODE" != YES ] || echo "DM_COPY_ROMFS = NO" >> Gen/dm.xcconfig
+[ "${DM_SKIP_ROMFS:-NO}" != YES ] || [ "$PREPARE_XCODE" != YES ] || echo "DM_SKIP_ROMFS = YES" >> Gen/dm.xcconfig
 [ "$DM_COPY_GRAPHICS" != NO ] || [ "$PREPARE_XCODE" != YES ] || echo "DM_COPY_GRAPHICS = NO" >> Gen/dm.xcconfig
 xcodegen generate -q > /dev/null || die "xcodegen"
 # DMCommit / DMRepository / DMBuildTime are stamped by the Xcode build phase, so a prepared project records every subsequent build too.
@@ -216,11 +219,17 @@ fi
 P=Payload/DmIOS.app
 MAPS=()
 if [ "${DM_COPY_ROMFS:-YES}" = NO ]; then
-  t "no game files in the IPA (DM_COPY_ROMFS=NO): the app takes Documents/romfs.img (scripts/push_romfs.sh)"
+  if [ "${DM_SKIP_ROMFS:-NO}" = YES ]; then t "game files skipped: reuse Documents/romfs.img already on the device"
+  else t "no game files in the IPA (DM_COPY_ROMFS=NO): the app takes Documents/romfs.img (scripts/push_romfs.sh)"; fi
   # The image's identity (dm/host/romfs_identity.h) goes into the app as romfs.id: main.m then uses only a Documents/romfs.img with the same size and index hash, and says so when it is another version or missing.
   # A RomFS folder has no image to name yet (push_romfs.sh packs it on the Mac), so such a build carries no identity and accepts any complete image
-  if [ -f "$ROMFS" ]; then
+  if [ "${DM_SKIP_ROMFS:-NO}" = YES ] && [ -n "$AOC" ]; then
+    python3 -I "$DM/tools/game_image.py" --source-identities "$ROMFS" "$AOC" "$O" "$GAME" "$GAME_VERSION" "${PKG:-}" || die "identity of game files and DLC"
+  elif [ -f "$ROMFS" ]; then
     python3 -I "$DM/tools/game_image.py" --identities "$ROMFS" "$O" "$GAME" "$GAME_VERSION" "${PKG:-}" || die "identity of $ROMFS"
+  elif [ "${DM_SKIP_ROMFS:-NO}" = YES ]; then die "DM_SKIP_ROMFS=YES requires a RomFS image for version checks"
+  fi
+  if [ -f "$ROMFS" ] || { [ "${DM_SKIP_ROMFS:-NO}" = YES ] && [ -n "$AOC" ]; }; then
     MAPS=("$P/romfs.id=$O/romfs.id"); t "game files identity: $(cat "$O/romfs.id")"
     if [ -f "$O/romfs.base.id" ]; then MAPS+=("$P/romfs.base.id=$O/romfs.base.id"); fi
   fi
