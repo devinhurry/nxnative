@@ -282,7 +282,7 @@ class DeriveProfile(Base):
         nsp.set_keys(game.Game(self.pdir), {'mem_alias': ('0x80000000', '')}, 'Heap check')
         keys = self.tmp / 'prod.keys'; keys.write_text('test')
         fam = {'base': self.tmp / 'base.nsp', 'updates': [], 'dlc': []}
-        args = nsp.parse_args([str(self.tmp), '-k', str(keys), '--platform', 'mac', '--provisional', '--profile-out', str(self.pdir.parent)])
+        args = nsp.parse_args(['--version', '1.0.0', str(self.tmp), '-k', str(keys), '--platform', 'mac', '--provisional', '--profile-out', str(self.pdir.parent)])
         with mock.patch.object(nsp, 'find_repo', return_value=REPO), mock.patch.object(nsp, 'apple_silicon', return_value=True), \
              mock.patch.object(nsp, '_importable', return_value=True), mock.patch.object(nsp.shutil, 'which', return_value='/dotnet'), \
              mock.patch.object(nsp, 'scan_nsps', return_value=(TID, fam)), mock.patch.object(nsp, 'decompress_nsz', return_value=fam), \

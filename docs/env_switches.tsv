@@ -140,9 +140,9 @@ DM_GL_STUBS	diagnostic	`=1` gives every GL function the layer lacks a stub that 
 DM_GPU_CAPTURE	diagnostic	`=<frame>[:<frames>]` or `gpu:<ms>[:<after frame>]` writes a Metal GPU trace of those frames for Xcode's Metal debugger; can be set while running through `DM_CTL`
 DM_GPU_CAPTURE_DIR	path	Folder for `DM_GPU_CAPTURE`'s traces (default `gpu_captures/` in the working directory)
 DM_GPU_CAPTURE_KEEP	diagnostic	Before each GPU capture, prunes the capture folder's `dm_*.gputrace` entries so that the newest `KEEP - 1` stay (default 2)
-DM_GRAPHICS_OUT	path	Destination of the separate graphics ZIP.
+DM_GRAPHICS_OUT	path	Base path of the separate .graphics package; legacy .zip names remain supported.
 DM_GRAPHICS_PSO	path	Offline pipeline archive restored from a compatible graphics package.
-DM_GRAPHICS_REUSE	path	Compatible graphics ZIP reused by the iOS packer.
+DM_GRAPHICS_REUSE	path	Compatible .graphics or legacy .zip package reused by the iOS packer.
 DM_GUEST_SPAWN_TEST	diagnostic	`=1` runs a self-test before `nnMain`: a host-started guest thread does SDK malloc / free and locks an `nn::os` mutex, and the result is logged; `=2` also keeps a resident thread
 DM_HID_LOG	diagnostic	`1` logs the HID button usage number of each button pressed on a raw HID gamepad (`pad_hid_mac.h`), to write a `DM_HID_MAP`
 DM_HID_MAP	switch	`=<map>` such as `A=1,B=2,X=4,Y=5`: which HID button usage presses each Switch button on a raw HID gamepad (names A B X Y LS RS L R ZL ZR PLUS MINUS LEFT UP RIGHT DOWN; default 8BitDo's D-input numbering by position, `pad_hid.h`); Mac only

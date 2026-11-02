@@ -21,7 +21,8 @@ TID = 0x010015100B514000   # a game with a profile in dm/games
 def profile_ipa():
     profile = game.by_title(TID)
     assert profile, 'no profile for the test game'
-    return profile.get('ipa')
+    base = Path(profile.get('ipa'))
+    return f'{base.stem}-touch-the-wild-{nsp.time.strftime("%Y%m%d")}-1.0.0.ipa'
 
 
 class Stop(Exception): pass
@@ -38,7 +39,7 @@ class WorkDir(unittest.TestCase):
         """What main decides before it extracts anything: DM_ROOT (the build folder) and the IPA path the console reports; self.nsz_work is the build folder
         the NSZ conversions were given (None: the default)"""
         fam = {'base': self.nsps / 'base.nsp', 'updates': [], 'dlc': []}
-        args = nsp.parse_args([str(self.nsps), '-k', str(self.tmp / 'prod.keys'), *opts])
+        args = nsp.parse_args(['--version', '1.0.0', str(self.nsps), '-k', str(self.tmp / 'prod.keys'), *opts])
         said, seen = [], {}
         def stop(env, *a): seen.update(env); raise Stop()
         with mock.patch.object(nsp, 'find_repo', return_value=REPO), mock.patch.object(nsp, 'scan_nsps', return_value=(TID, fam)), \
@@ -69,10 +70,10 @@ class WorkDir(unittest.TestCase):
 
     def test_out_names_the_ipa_whatever_the_build_folder(self):
         out, ipa = self.plan('--work-dir', str(self.tmp / 'w'), '-o', str(self.tmp / 'x.ipa'))
-        self.assertEqual((out, ipa), (self.tmp / 'w', self.tmp / 'x.ipa'))
+        self.assertEqual((out, ipa), (self.tmp / 'w', self.tmp / f'x-touch-the-wild-{nsp.time.strftime("%Y%m%d")}-1.0.0.ipa'))
 
     def test_profile_folder(self):
-        args = lambda *o: nsp.parse_args([str(self.nsps), *o])
+        args = lambda *o: nsp.parse_args(['--version', '1.0.0', str(self.nsps), *o])
         default = self.nsps / f'{TID:016X}_build' / 'profile'
         with mock.patch.object(nsp, 'WORK_DIR', ''), mock.patch.object(nsp, 'PROFILE_OUT', ''), mock.patch.object(nsp, 'say'):
             self.assertEqual(nsp.profile_folder(args(), self.nsps, TID), default)
@@ -90,15 +91,15 @@ class WorkDir(unittest.TestCase):
         (old / 'game.tsv').write_text('old')
         work = self.tmp / 'w'
         with mock.patch.object(nsp, 'WORK_DIR', ''), mock.patch.object(nsp, 'PROFILE_OUT', ''), mock.patch.object(nsp, 'say'):
-            got = nsp.profile_folder(nsp.parse_args([str(self.nsps), '--work-dir', str(work)]), self.nsps, TID)
+            got = nsp.profile_folder(nsp.parse_args(['--version', '1.0.0', str(self.nsps), '--work-dir', str(work)]), self.nsps, TID)
             self.assertEqual(got, work / 'profile')
             self.assertEqual((got / f'{TID:016X}' / 'game.tsv').read_text(), 'old')
             self.assertEqual((old / 'game.tsv').read_text(), 'old')   # the original stays
             (got / f'{TID:016X}' / 'game.tsv').write_text('edited'); (old / 'game.tsv').write_text('newer old')
-            nsp.profile_folder(nsp.parse_args([str(self.nsps), '--work-dir', str(work)]), self.nsps, TID)
+            nsp.profile_folder(nsp.parse_args(['--version', '1.0.0', str(self.nsps), '--work-dir', str(work)]), self.nsps, TID)
             self.assertEqual((got / f'{TID:016X}' / 'game.tsv').read_text(), 'edited')   # a profile there is not overwritten
             other = self.tmp / 'x'; (other / 'profile').mkdir(parents=True)
-            nsp.profile_folder(nsp.parse_args([str(self.nsps), '--work-dir', str(other)]), self.nsps, TID)
+            nsp.profile_folder(nsp.parse_args(['--version', '1.0.0', str(self.nsps), '--work-dir', str(other)]), self.nsps, TID)
             self.assertEqual(list((other / 'profile').iterdir()), [])   # a folder that already has a profile is left alone
 
 

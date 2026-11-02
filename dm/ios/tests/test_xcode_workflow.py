@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import plistlib
 import struct
 import subprocess
 import sys
@@ -71,7 +72,7 @@ class XcodePipelineTests(unittest.TestCase):
             def prepared_result(*_args, **kwargs):
                 result = Path(kwargs['env']['W']) / 'graphics-result.json'
                 result.parent.mkdir(parents=True, exist_ok=True)
-                result.write_text(json.dumps(dict(path=str(root / 'Fixture.graphics.v3.zip'))))
+                result.write_text(json.dumps(dict(path=str(root / 'Fixture.v3.graphics'), version=3, status='generated')))
             mocks['run'].side_effect = prepared_result
             stack.enter_context(patch.dict(os.environ))  # derived profiles change the tool search environment
             stack.enter_context(patch.object(game, 'by_title', return_value=registered))
@@ -88,7 +89,7 @@ class XcodePipelineTests(unittest.TestCase):
             output = io.StringIO()
             try:
                 with redirect_stdout(output):
-                    code = build.cli([str(root), '-k', str(root / 'prod.keys'), '--prepare-xcode',
+                    code = build.cli(['--version', '1.0.0', str(root), '-k', str(root / 'prod.keys'), '--prepare-xcode',
                                       '--language', 'ja', '--no-show-fps', '--no-motion', '--progress', 'json'] + (['--romfs', 'separate'] if external_romfs else []))
             finally:
                 progress.close()
@@ -103,7 +104,9 @@ class XcodePipelineTests(unittest.TestCase):
             self.assertEqual(environment['DM_LANG'], 'ja')
             self.assertEqual(environment['DM_SHOW_FPS'], '0')
             self.assertEqual(environment['DM_COPY_GRAPHICS'], 'NO')
-            self.assertTrue(environment['DM_GRAPHICS_OUT'].endswith('.graphics.zip'))
+            self.assertTrue(environment['DM_GRAPHICS_OUT'].endswith('.graphics'))
+            self.assertNotIn('-touch-the-wild-', environment['DM_GRAPHICS_OUT'])
+            self.assertEqual(environment['DM_APP_VERSION'], '1.0.0')
             if external_romfs:
                 self.assertEqual(environment['DM_COPY_ROMFS'], 'NO')
                 self.assertEqual(environment['ROMFS'], str(combined))
@@ -174,6 +177,7 @@ class ResourceStagingTests(unittest.TestCase):
             control = root / 'metadata/control.nacp'; control.parent.mkdir()
             data = bytearray(0x4000)
             struct.pack_into('<I', data, 0x302C, (1 << 0) | (1 << 2) | (1 << 14))
+            # Leave the game's display version empty; the app release is explicit.
             control.write_bytes(data)
             xcode = root / 'bin/xcodebuild'
             xcode.write_text('''#!/usr/bin/env python3
@@ -200,6 +204,11 @@ for directory in ('romfs', 'aoc', 'dm'):
                     out = root / 'Fixture.ipa'
                     result = subprocess.run(['bash', str(ios / 'tools/build_ipa.sh'), str(out)], env=environment, capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    info = plistlib.loads((ios / 'Gen/Info.plist').read_bytes())
+                    file_type, = info['UTExportedTypeDeclarations']
+                    self.assertEqual(file_type['UTTypeIdentifier'], 'org.nxnative.graphics')
+                    self.assertEqual(file_type['UTTypeConformsTo'], ['public.data'])
+                    self.assertEqual(file_type['UTTypeTagSpecification']['public.filename-extension'], ['graphics'])
                     with zipfile.ZipFile(out) as archive:
                         names = archive.namelist()
                         settings = json.loads(archive.read('Payload/DmIOS.app/dm/launcher.json'))['settings']
@@ -214,8 +223,9 @@ for directory in ('romfs', 'aoc', 'dm'):
                         if graphics == 'NO':
                             self.assertNotIn('Payload/DmIOS.app/dm/shader_map.tsv', names)
                             result_info = json.loads((root / 'work/graphics-result.json').read_text())
+                            self.assertEqual(result_info['status'], 'generated' if excluded == '1' else 'reused')
                             package_path = Path(result_info['path'])
-                            self.assertEqual(package_path.name, f'graphics.v{result_info["version"]}.zip')
+                            self.assertEqual(package_path.name, f'graphics.v{result_info["version"]}.graphics')
                             with zipfile.ZipFile(package_path) as package:
                                 manifest = json.loads(package.read('manifest.json'))
                                 self.assertEqual(manifest['version'], result_info['version'])

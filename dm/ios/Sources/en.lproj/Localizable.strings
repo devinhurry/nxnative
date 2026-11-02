@@ -172,15 +172,15 @@
 "Off" = "Off";
 
 "Import ROM" = "Import ROM";
-"Import shaders" = "Import shaders";
+"Import graphics" = "Import graphics";
 "ROM imported" = "ROM imported";
-"Shaders imported" = "Shaders imported";
+"Graphics imported" = "Graphics imported";
 "Refresh" = "Refresh";
-"More than one valid graphics ZIP was found. Use Import shaders to choose a package." = "More than one valid graphics ZIP was found. Use Import shaders to choose a package.";
+"More than one valid graphics package was found. Use Import graphics to choose a package." = "More than one valid graphics package was found. Use Import graphics to choose a package.";
 "Import failed" = "Import failed";
 "OK" = "OK";
 "Import RomFS.img to start." = "Import RomFS.img to start.";
-"Import a compatible graphics ZIP to start." = "Import a compatible graphics ZIP to start.";
+"Import a compatible graphics package to start. Do not unzip it." = "Import a compatible graphics package to start. Do not unzip it.";
 "This is not a supported graphics package." = "This is not a supported graphics package.";
 "This app has no graphics package requirements." = "This app has no graphics package requirements.";
 "The graphics compatibility series does not match this app." = "The graphics compatibility series does not match this app.";
@@ -190,9 +190,9 @@
 "The graphics package is too large." = "The graphics package is too large.";
 "The graphics package is incomplete. Import it again." = "The graphics package is incomplete. Import it again.";
 "Not enough free space to import graphics." = "Not enough free space to import graphics.";
-"The graphics ZIP contains an unexpected file." = "The graphics ZIP contains an unexpected file.";
+"The graphics package contains an unexpected file." = "The graphics package contains an unexpected file.";
 "A graphics file failed its integrity check." = "A graphics file failed its integrity check.";
-"The graphics ZIP is incomplete." = "The graphics ZIP is incomplete.";
+"The graphics package is incomplete." = "The graphics package is incomplete.";
 "Graphics package" = "Graphics package";
 "Metal compiler" = "Metal compiler";
 "This app is missing graphics requirements. Rebuild or reinstall it." = "This app is missing graphics requirements. Rebuild or reinstall it.";
@@ -227,3 +227,4 @@
 "Offsets and diameters are in pt; edge margins do not depend on safe areas." = "Offsets and diameters are in pt; edge margins do not depend on safe areas.";
 "Offsets and diameters are in pt. Positive X moves right and positive Y moves down. Buttons adjust independently; normal and compact layouts are saved separately." = "Offsets and diameters are in pt. Positive X moves right and positive Y moves down. Buttons adjust independently; normal and compact layouts are saved separately.";
 "Allows portrait rotation below 600pt of window width. Wider portrait windows are always supported and keep the normal layout." = "Allows portrait rotation below 600pt of window width. Wider portrait windows are always supported and keep the normal layout.";
+"Graphics were imported, but old packages could not be removed: %@" = "Graphics were imported, but old packages could not be removed: %@";

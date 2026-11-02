@@ -27,11 +27,11 @@ extern const char *archive_entry_hardlink(struct archive_entry *);
 
 static const uint64_t graphics_max_bytes = UINT64_C(64) << 30;
 static BOOL graphics_read_package(NSURL *source, NSURL *documents, NSDictionary *required,
-                                  void (^progress)(long long,long long), BOOL validateOnly, NSError **error);
+                                  void (^progress)(long long,long long), BOOL validateOnly, NSString **packageID, NSError **error);
 static NSError *graphics_error(NSString *message) {
     return [NSError errorWithDomain:@"nxnative.graphics" code:1 userInfo:@{NSLocalizedDescriptionKey:message}];
 }
-static NSString *graphics_text(const char *value) { return value ? @(value) : @"Invalid graphics ZIP."; }
+static NSString *graphics_text(const char *value) { return value ? @(value) : @"Invalid graphics package."; }
 static int graphics_integer(id n) {
     return [n isKindOfClass:NSNumber.class] && CFGetTypeID((__bridge CFTypeRef)n) != CFBooleanGetTypeID() &&
            [n doubleValue] >= 0 && [n doubleValue] <= graphics_max_bytes && [n doubleValue] == (double)[n longLongValue];
@@ -64,6 +64,11 @@ NSDictionary *dm_graphics_requirements(NSURL *bundle) {
     NSDictionary *r=graphics_json([bundle URLByAppendingPathComponent:@"dm/graphics-required.json"]);
     if (![r[@"schema"] isEqual:@1] || ![r[@"series"] isKindOfClass:NSString.class] || ![r[@"series"] length] ||
         ![r[@"compatibility"] isKindOfClass:NSDictionary.class] || !graphics_integer(r[@"minimum_version"]) || ![r[@"minimum_version"] longLongValue]) return nil;
+    id equivalent=r[@"equivalent_package_ids"];
+    if (equivalent) {
+        if (![equivalent isKindOfClass:NSArray.class]) return nil;
+        for (id packageID in equivalent) if (!graphics_match(packageID,@"^[0-9a-f]{64}$")) return nil;
+    }
     return r;
 }
 
@@ -72,8 +77,18 @@ static NSString *graphics_compatibility_error(NSDictionary *manifest, NSDictiona
         return NSLocalizedString(@"This is not a supported graphics package.",nil);
     if (![required isKindOfClass:NSDictionary.class] || ![required[@"schema"] isEqual:@1])
         return NSLocalizedString(@"This app has no graphics package requirements.",nil);
-    if (![manifest[@"series"] isEqual:required[@"series"]] || ![manifest[@"compatibility"] isEqual:required[@"compatibility"]])
-        return NSLocalizedString(@"The graphics compatibility series does not match this app.",nil);
+    if (![manifest[@"series"] isEqual:required[@"series"]] || ![manifest[@"compatibility"] isEqual:required[@"compatibility"]]) {
+        id equivalent=required[@"equivalent_package_ids"];
+        if (![equivalent isKindOfClass:NSArray.class] || !graphics_match(manifest[@"id"],@"^[0-9a-f]{64}$") || ![equivalent containsObject:manifest[@"id"]] ||
+            ![manifest[@"compatibility"] isKindOfClass:NSDictionary.class] || ![required[@"compatibility"] isKindOfClass:NSDictionary.class])
+            return NSLocalizedString(@"The graphics compatibility series does not match this app.",nil);
+        // The build verified this exact package against its current payloads.
+        // Keep game, build, platform, API and shader-chain checks strict.
+        NSMutableDictionary *actual=[manifest[@"compatibility"] mutableCopy];
+        NSMutableDictionary *expected=[required[@"compatibility"] mutableCopy];
+        [actual removeObjectForKey:@"contract"]; [expected removeObjectForKey:@"contract"];
+        if (![actual isEqual:expected]) return NSLocalizedString(@"The graphics compatibility series does not match this app.",nil);
+    }
     if (!graphics_integer(required[@"minimum_version"]) || ![required[@"minimum_version"] longLongValue] ||
         !graphics_integer(manifest[@"version"]) || [manifest[@"version"] compare:required[@"minimum_version"]] == NSOrderedAscending)
         return [NSString stringWithFormat:NSLocalizedString(@"This app requires graphics package version %@ or later.",nil),required[@"minimum_version"] ?: @"?"];
@@ -179,7 +194,7 @@ static NSURL *graphics_selected(NSURL *documents, NSURL *bundle, NSDictionary **
     }
     if (best) { if (info) *info=bestInfo; return best; }
     if (![required[@"external"] boolValue]) return bundle;
-    if (error) *error=graphics_error(why ?: NSLocalizedString(@"Import a compatible graphics ZIP to start.",nil));
+    if (error) *error=graphics_error(why ?: NSLocalizedString(@"Import a compatible graphics package to start. Do not unzip it.",nil));
     return nil;
 }
 NSString *dm_graphics_status(NSURL *documents, NSURL *bundle) {
@@ -197,23 +212,31 @@ NSURL *dm_graphics_pending_package(NSURL *documents, NSURL *bundle, NSError **er
         return nil;
     }
     NSURL *package=nil;
+    NSString *selectedID=nil;
     NSError *firstError=nil;
     for (NSURL *file in files) {
-        if (![file.pathExtension.lowercaseString isEqual:@"zip"]) continue;
+        NSString *extension=file.pathExtension.lowercaseString;
+        if (![extension isEqual:@"graphics"] && ![extension isEqual:@"zip"]) continue;
         NSDictionary *attributes=[fm attributesOfItemAtPath:file.path error:error];
         if (!attributes) return nil;
         if (![attributes[NSFileType] isEqual:NSFileTypeRegular]) continue;
         NSError *invalid=nil;
-        if (!graphics_read_package(file,documents,required,nil,YES,&invalid)) {
-            fprintf(stderr,"launcher: skipping ZIP %s: %s\n",file.lastPathComponent.UTF8String,invalid.localizedDescription.UTF8String);
+        NSString *packageID=nil;
+        if (!graphics_read_package(file,documents,required,nil,YES,&packageID,&invalid)) {
+            fprintf(stderr,"launcher: skipping graphics package %s: %s\n",file.lastPathComponent.UTF8String,invalid.localizedDescription.UTF8String);
             if (!firstError) firstError=invalid;
             continue;
         }
+        if (package && [selectedID isEqual:packageID]) {
+            if ([extension isEqual:@"graphics"]) package=file;
+            continue;
+        }
         if (package) {
-            if (error) *error=graphics_error(NSLocalizedString(@"More than one valid graphics ZIP was found. Use Import shaders to choose a package.",nil));
+            if (error) *error=graphics_error(NSLocalizedString(@"More than one valid graphics package was found. Use Import graphics to choose a package.",nil));
             return nil;
         }
         package=file;
+        selectedID=packageID;
     }
     if (!package && error) *error=firstError;
     return package;
@@ -236,16 +259,34 @@ BOOL dm_graphics_configure(NSURL *documents, NSURL *bundle, NSError **error) {
 
 BOOL dm_import_graphics_package(NSURL *source, NSURL *documents, NSDictionary *required,
                                 void (^progress)(long long,long long), NSError **error) {
-    return graphics_read_package(source,documents,required,progress,NO,error);
+    @synchronized (NSFileManager.defaultManager) {
+        return graphics_read_package(source,documents,required,progress,NO,nil,error);
+    }
+}
+
+static BOOL graphics_remove_old_packages(NSURL *root, NSString *selected, NSError **error) {
+    NSFileManager *fm=NSFileManager.defaultManager;
+    NSArray<NSURL *> *children=[fm contentsOfDirectoryAtURL:root includingPropertiesForKeys:nil
+                                                 options:NSDirectoryEnumerationSkipsHiddenFiles error:error];
+    if (!children) return NO;
+    for (NSURL *child in children) {
+        if ([child.lastPathComponent isEqual:selected] || !graphics_match(child.lastPathComponent,@"^v[0-9]+-[0-9a-f]{64}$")) continue;
+        NSDictionary *attributes=[fm attributesOfItemAtPath:child.path error:error];
+        if (!attributes) return NO;
+        if (![attributes[NSFileType] isEqual:NSFileTypeDirectory]) continue;
+        if (![fm removeItemAtURL:child error:error]) return NO;
+        fprintf(stderr,"launcher: removed old graphics package %s\n",child.lastPathComponent.UTF8String);
+    }
+    return YES;
 }
 
 // Discovery checks the same manifest, inventory and payload hashes without writing files.
 static BOOL graphics_read_package(NSURL *source, NSURL *documents, NSDictionary *required,
-                                  void (^progress)(long long,long long), BOOL validateOnly, NSError **error) {
+                                  void (^progress)(long long,long long), BOOL validateOnly, NSString **packageID, NSError **error) {
     NSFileManager *fm=NSFileManager.defaultManager;
     NSURL *root=[documents URLByAppendingPathComponent:@"graphics" isDirectory:YES];
     NSURL *stage=[root URLByAppendingPathComponent:[@".import-" stringByAppendingString:NSUUID.UUID.UUIDString] isDirectory:YES];
-    NSError *failure=nil; __block BOOL imported=NO;
+    NSError *failure=nil; __block BOOL imported=NO; __block NSString *validatedID=nil;
     if (!validateOnly) {
         NSDictionary *rootAttributes=[fm attributesOfItemAtPath:root.path error:nil];
         if (rootAttributes && ![rootAttributes[NSFileType] isEqual:NSFileTypeDirectory]) {
@@ -259,7 +300,7 @@ static BOOL graphics_read_package(NSURL *source, NSURL *documents, NSDictionary 
     __block NSError *readError=nil;
     [coordinator coordinateReadingItemAtURL:source options:NSFileCoordinatorReadingWithoutChanges error:&failure byAccessor:^(NSURL *readable) {
         struct archive *archive=archive_read_new(); struct archive_entry *entry=NULL;
-        if (!archive) { readError=graphics_error(@"Cannot open graphics ZIP."); return; }
+        if (!archive) { readError=graphics_error(@"Cannot open graphics package."); return; }
         archive_read_support_filter_none(archive); archive_read_support_format_zip(archive);
         @try {
             if (archive_read_open_filename(archive,readable.fileSystemRepresentation,256*1024)!=0 ||
@@ -291,7 +332,7 @@ static BOOL graphics_read_package(NSURL *source, NSURL *documents, NSDictionary 
                 NSDictionary *item=path ? remaining[path] : nil;
                 if (!item || archive_entry_filetype(entry)!=0100000 || archive_entry_symlink(entry) || archive_entry_hardlink(entry) ||
                     archive_entry_size(entry)!=[item[@"size"] longLongValue]) {
-                    readError=graphics_error(NSLocalizedString(@"The graphics ZIP contains an unexpected file.",nil)); return;
+                    readError=graphics_error(NSLocalizedString(@"The graphics package contains an unexpected file.",nil)); return;
                 }
                 int fd=-1;
                 if (!validateOnly) {
@@ -321,8 +362,8 @@ static BOOL graphics_read_package(NSURL *source, NSURL *documents, NSDictionary 
                 [remaining removeObjectForKey:path];
                 }
             }
-            if (status!=1 || remaining.count) { readError=graphics_error(NSLocalizedString(@"The graphics ZIP is incomplete.",nil)); return; }
-            if (validateOnly) { imported=YES; return; }
+            if (status!=1 || remaining.count) { readError=graphics_error(NSLocalizedString(@"The graphics package is incomplete.",nil)); return; }
+            if (validateOnly) { validatedID=m[@"id"]; imported=YES; return; }
             if (![manifestData writeToURL:[stage URLByAppendingPathComponent:@"manifest.json"] options:NSDataWritingAtomic error:&readError]) return;
             [stage setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:nil];
             NSString *directory=[NSString stringWithFormat:@"v%@-%@",m[@"version"],m[@"id"]];
@@ -334,11 +375,19 @@ static BOOL graphics_read_package(NSURL *source, NSURL *documents, NSDictionary 
             } else if (![fm moveItemAtURL:stage toURL:destination error:&readError]) return;
             NSData *active=[NSJSONSerialization dataWithJSONObject:@{@"directory":directory} options:0 error:&readError];
             if (!active || ![active writeToURL:[root URLByAppendingPathComponent:@"current.json"] options:NSDataWritingAtomic error:&readError]) return;
+            // Publish first. A failed import never removes the previous selection,
+            // and a failed cleanup leaves the newly selected package usable.
+            NSError *cleanupError=nil;
+            if (!graphics_remove_old_packages(root,directory,&cleanupError)) {
+                readError=graphics_error([NSString stringWithFormat:NSLocalizedString(@"Graphics were imported, but old packages could not be removed: %@",nil),cleanupError.localizedDescription]);
+                return;
+            }
             imported=YES;
         } @finally { archive_read_free(archive); }
     }];
     if (scope) [source stopAccessingSecurityScopedResource];
     if (!validateOnly) [fm removeItemAtURL:stage error:nil];
+    if (packageID) *packageID=imported ? validatedID : nil;
     if (error) *error=readError ?: failure;
     return imported;
 }

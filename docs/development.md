@@ -313,55 +313,55 @@ the same release).
 
 ## The packing script in detail
 
-`scripts/build_ipa_from_nsp.py` (`-h` lists every option):
+`scripts/build_ipa_from_nsp.py` (`-h` lists every option) requires `--version` for every invocation, including Spyder Run configurations. Supply the app release version explicitly, for example `--version 2` or `--version 1.2.3`. It sets the app metadata and the `-touch-the-wild-YYYYMMDD-<release>.ipa` filename suffix. `--out` supplies the base name before that suffix. Game content versions remain independent. Existing commands must add this argument. The graphics base name stays stable across dated app releases so published packages can be reused, including legacy ZIPs.
 
 ```
 # written to the Desktop with your own home-screen name
-python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys -o ~/Desktop/Mario.ipa --app-name "Mario Wonder"
+python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys -o ~/Desktop/Mario.ipa --app-name "Mario Wonder" --version 1.0.0
 
 # pack Mario 1.0.0 instead of 1.2.1 (the folder still needs both NSPs: the shader tables cover both versions)
-python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys -p v0
+python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys -p v0 --version 1.0.0
 
 # delete the extracted game files after the IPA is built (they are kept by default, to skip extraction next time and to run the game on the Mac)
-python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys --no-keep-extracted
+python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys --no-keep-extracted --version 1.0.0
 
 # keep this game's build folder elsewhere (used as given, not extended with the title ID; WORK_DIR in Spyder); the IPA then defaults to the folder holding it
-python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys --work-dir /Volumes/Builds/MarioWonder
+python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys --work-dir /Volumes/Builds/MarioWonder --version 1.0.0
 
 # play the game in Japanese (a code or a name: ja, fr, de, es, zh-Hans, zh-Hant, ko, en-GB, ..., Japanese; English by default)
-python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys -l ja
+python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys -l ja --version 1.0.0
 
 # show the game's frame rate on the iPhone (frames on screen per second, top left)
-python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys --show-fps
+python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys --show-fps --version 1.0.0
 
 # no motion controls, for when they misbehave: DM_MOTION=0 is built in (with --env-file's switches; also for --platform mac and mac-app); on the iPhone, DM_MOTION=1 in Documents/env.txt turns it back on
-python3 scripts/build_ipa_from_nsp.py ~/Games/BreathOfTheWild -k ~/keys/prod.keys --no-motion
+python3 scripts/build_ipa_from_nsp.py ~/Games/BreathOfTheWild -k ~/keys/prod.keys --no-motion --version 1.0.0
 
 # a diagnostic build with environment switches baked in (one KEY=VALUE per line)
-python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys --env-file diag_env.txt
+python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys --env-file diag_env.txt --version 1.0.0
 
 # a damaged NSP (files failing the NCA's hash check) stops the build after listing them; this packs those files as read
-python3 scripts/build_ipa_from_nsp.py ~/Games/MarioGalaxy -k ~/keys/prod.keys --allow-damaged
+python3 scripts/build_ipa_from_nsp.py ~/Games/MarioGalaxy -k ~/keys/prod.keys --allow-damaged --version 1.0.0
 
 # a game without a profile: survey, provisional profile (a heap check on the Mac when the game needs one), best-effort IPA
-python3 scripts/build_ipa_from_nsp.py ~/Games/NewGame -k ~/keys/prod.keys
+python3 scripts/build_ipa_from_nsp.py ~/Games/NewGame -k ~/keys/prod.keys --version 1.0.0
 
 # test the guesses on a game that has a profile: build from a provisional one (the IPA is named <ipa>-provisional.ipa)
-python3 scripts/build_ipa_from_nsp.py ~/Games/MarioGalaxy -k ~/keys/prod.keys --provisional --allow-damaged
+python3 scripts/build_ipa_from_nsp.py ~/Games/MarioGalaxy -k ~/keys/prod.keys --provisional --allow-damaged --version 1.0.0
 
 # the pipeline archive for another GPU too, beside what the profile names for the app (pso_gpu, else the A19 / A19 Pro applegpu_g18p for a game with pso_mtl4 on); --gpu none leaves it out
-python3 scripts/build_ipa_from_nsp.py ~/Games/BreathOfTheWild -k ~/keys/prod.keys --gpu g18p,g17p
+python3 scripts/build_ipa_from_nsp.py ~/Games/BreathOfTheWild -k ~/keys/prod.keys --gpu g18p,g17p --version 1.0.0
 
 # development: build only what running the game on this Mac needs (no iOS shaders, Xcode project or IPA) and print the command that runs it
-python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys --platform mac
+python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys --platform mac --version 1.0.0
 
 # the same, then a double-clickable Mac app of the game in the NSP folder (<game name>.app), signed with your Developer ID instead of ad-hoc
-python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys --platform mac-app --mac-sign "Developer ID Application: <name> (<team ID>)"
+python3 scripts/build_ipa_from_nsp.py ~/Games/MarioWonder -k ~/keys/prod.keys --platform mac-app --mac-sign "Developer ID Application: <name> (<team ID>)" --version 1.0.0
 ```
 
 `--platform` takes `ios` (the default: the IPA, or the Xcode project with `--prepare-xcode`), `mac` ([A Mac-only build for development](#a-mac-only-build-for-development)) and `mac-app` ([A Mac app](#a-mac-app)).
 
-In Spyder, open the script, fill in the settings at the top (`NSP_DIR`, `PROD_KEYS`, and optionally `PACKAGE`, `OUT_IPA`, `APP_NAME`, `BUNDLE_ID`, `LANGUAGE`, `KEEP_EXTRACTED`, `SHOW_FPS`, `MOTION`, `PSO_GPUS`, `PLATFORM`; for a game without a profile `HEAP_CHECK`, `HEAP_CHECK_SECS`, `PROVISIONAL`), and press F5. Empty paths are asked for at run time.
+In Spyder, open the script, fill in the settings at the top (`NSP_DIR`, `PROD_KEYS`, and optionally `PACKAGE`, `OUT_IPA`, `APP_NAME`, `BUNDLE_ID`, `LANGUAGE`, `KEEP_EXTRACTED`, `SHOW_FPS`, `MOTION`, `PSO_GPUS`, `PLATFORM`; for a game without a profile `HEAP_CHECK`, `HEAP_CHECK_SECS`, `PROVISIONAL`), add `--version <release>` to its Run configuration, and press F5. Empty paths are asked for at run time.
 
 What the script does:
 0. Before it extracts anything it checks the environment (`check_prereqs`, `check_native_python`): the Python modules and tools (glslang too, which an OpenGL game needs), the iOS SDK for an iPhone build (a separate download in Xcode's Components), the Metal compiler, and the shader translator, which it starts once with `--source-sha`, so a translator that finds no .NET 10 runtime of its architecture (an Intel .NET on Apple silicon, a `DOTNET_ROOT` that names one) stops it here, not as an empty `xlate_source` at the shader step. A Python under Rosetta (an Intel Homebrew's) stops it too: the universal translator it starts runs as Intel code and finds no Intel .NET.
@@ -396,7 +396,7 @@ When the output goes to a file or a pipe, the script prints a plain line instead
 
 `--progress json` is for a program that shows the build (a GUI): stdout carries one JSON object per line, each with `ev` and the time `t`. The events are `stage` (`k`, `n`, `name`, `step`), `step`, `progress` (`done`, `total`, `unit`, `est`, `note`, `frac`, `eta`, `elapsed`; `null` while unknown), `stage_end` (`ok`, `summary`, `elapsed`) and `say` (`msg`: every message, errors and a failed step's log tail included). A count change goes out at most every 0.5 s, any other change at once. This mode never asks for the NSP folder or the keys; argument errors and an unexpected error's traceback still go to stderr. `dm/tools/tests/test_nsp_progress.py` tests it without game files, keys or Xcode (`python3 -m unittest discover -s dm/tools/tests`).
 
-A file in the NSP folder counts only when its header is an NSP's or an XCI's (whatever its name says); others are skipped with a line. The NSP folder may be on an exFAT or FAT drive: the AppleDouble `._<name>` files macOS writes there are skipped quietly, and removing a folder tolerates entries that vanish meanwhile ([exFAT drives](reference/packing.md#a-game-folder-on-an-exfat-drive-reads-one-update-as-two-or-fails-to-remove-a-folder)). Everything it writes stays in the NSP folder: intermediate files and logs in `<id>_build/`, the IPA next to the NSPs; `--work-dir <folder>` puts the build folder at that path instead, and the IPA (or Mac app) then defaults to the folder holding it (`-o` names it either way). The survey of a game without a profile still goes to the NSP folder (`<title ID>_survey/`); the NSZ conversions go to the build folder's `nsp/`. NSZ and XCZ files are converted with `nsz -D` (from the `nsz` package in the Python running the script, else an nsz 5.0 or later executable on PATH, `nsz` or the release binary `nsz-cli-macos-arm64`, given the keys with `--keys`) into the build folder's `nsp/` (`<title ID>_build/nsp/`, or under `--work-dir`), through a temporary folder so that only a conversion nsz finished is used, and reused while the source keeps its name, size and modification time; `nsz -D` reports an NCA hash mismatch but goes on, so a damaged file is caught by nx_extract's own hash check (`--allow-damaged`). The keys selected by `-k` are linked temporarily as `keys.txt` for nsz's import-time lookup ([NSZ keys](reference/packing.md#nsz-decompression-rejects---keys)). The extracted game files stay in `<id>_build/extract/` for the next build; `--no-keep-extracted` (`KEEP_EXTRACTED = False` in Spyder) deletes them at the end. It exits with 0 when done and 1 on an error. The app's bundle ID is `org.nxnative.<base game title ID>` (for example `org.nxnative.0100a6301214e000`), and its version is the game's display version: the update's when an update is packed, else the base game's (Engage 2.0.0); `--app-name` / `--bundle-id` (or `APP_NAME` / `BUNDLE_ID` in Spyder) override the name and ID.
+A file in the NSP folder counts only when its header is an NSP's or an XCI's (whatever its name says); others are skipped with a line. The NSP folder may be on an exFAT or FAT drive: the AppleDouble `._<name>` files macOS writes there are skipped quietly, and removing a folder tolerates entries that vanish meanwhile ([exFAT drives](reference/packing.md#a-game-folder-on-an-exfat-drive-reads-one-update-as-two-or-fails-to-remove-a-folder)). Everything it writes stays in the NSP folder: intermediate files and logs in `<id>_build/`, the IPA next to the NSPs; `--work-dir <folder>` puts the build folder at that path instead, and the IPA (or Mac app) then defaults to the folder holding it (`-o` names it either way). The survey of a game without a profile still goes to the NSP folder (`<title ID>_survey/`); the NSZ conversions go to the build folder's `nsp/`. NSZ and XCZ files are converted with `nsz -D` (from the `nsz` package in the Python running the script, else an nsz 5.0 or later executable on PATH, `nsz` or the release binary `nsz-cli-macos-arm64`, given the keys with `--keys`) into the build folder's `nsp/` (`<title ID>_build/nsp/`, or under `--work-dir`), through a temporary folder so that only a conversion nsz finished is used, and reused while the source keeps its name, size and modification time; `nsz -D` reports an NCA hash mismatch but goes on, so a damaged file is caught by nx_extract's own hash check (`--allow-damaged`). The keys selected by `-k` are linked temporarily as `keys.txt` for nsz's import-time lookup ([NSZ keys](reference/packing.md#nsz-decompression-rejects---keys)). The extracted game files stay in `<id>_build/extract/` for the next build; `--no-keep-extracted` (`KEEP_EXTRACTED = False` in Spyder) deletes them at the end. It exits with 0 when done and 1 on an error. The app's bundle ID is `org.nxnative.<base game title ID>` (for example `org.nxnative.0100a6301214e000`), and its app release version comes from the required `--version` argument; `--app-name` / `--bundle-id` (or `APP_NAME` / `BUNDLE_ID` in Spyder) override the name and ID.
 The game language (`--language`, `LANGUAGE`; English by default) is what `nn::oe::GetDesiredLanguage` returns. As on the console, it must be one the game's control data lists (`SupportedLanguageFlag`, `nacp.py --languages`); the packed version's control data counts, since an update may add languages. The same language for another region stands in (`en-GB` for `en-US`, `es` for `es-419`, `fr` for `fr-CA`, `pt` for `pt-BR`, and back). A language the game lacks stops the build with the game's list; English, the default, falls back to the game's first language.
 
 On the device, environment switches go in `Documents/env.txt` (one `KEY=VALUE` per line). Game files are selected from a usable `Documents/romfs.img` (base-only or combined), then a previously imported `Documents/game-data/romfs`. Older `Documents/romfs` and bundled resources remain fallbacks. DLC is selected from the combined image's `aoc` view, then `Documents/game-data/aoc`, then bundled `aoc`. No image conversion, reimport or directory migration is required. An explicit `DM_AOC_DIR` overrides automatic DLC selection.
@@ -540,7 +540,7 @@ What step 1 does not cover yet (GitHub issue #402): a replay that equals the liv
 
 ### A Mac app
 
-`--platform mac-app` (`PLATFORM = 'mac-app'` in Spyder) builds everything `--platform mac` builds, then packs a Mac app of the game with `dm/mac/pack_app.py`. The app is `<NSP folder>/<game name>.app` (a `:` or `/` in the name becomes ` - `); `-o` names another path ending in `.app`. Open it from Finder, from any folder: it does not need the build folder or the drive it is on. Like the Mac host, it needs a Mac with Apple silicon. Its name, version and bundle ID are the IPA's: the game name and display version from the control data, and `org.nxnative.<title ID>`. Its icon is the game's icon as `AppIcon.icns` (`sips`, `iconutil`).
+`--platform mac-app` (`PLATFORM = 'mac-app'` in Spyder) builds everything `--platform mac` builds, then packs a Mac app of the game with `dm/mac/pack_app.py`. The app is `<NSP folder>/<game name>.app` (a `:` or `/` in the name becomes ` - `); `-o` names another path ending in `.app`. Open it from Finder, from any folder: it does not need the build folder or the drive it is on. Like the Mac host, it needs a Mac with Apple silicon. Its name, version and bundle ID follow the IPA's rules: the game name from control data, the explicit `--version` release, and `org.nxnative.<title ID>`. Its icon is the game's icon as `AppIcon.icns` (`sips`, `iconutil`).
 
 The bundle holds what the IPA holds, with the Mac's shader libraries:
 
@@ -578,7 +578,7 @@ Signing: `pack_app.py` signs the inner host first, then the bundle (`codesign --
 With an Apple developer account, Xcode can sign and install the app itself:
 
 ```
-python3 scripts/build_ipa_from_nsp.py "<NSP folder>" -k "<prod.keys>" --prepare-xcode
+python3 scripts/build_ipa_from_nsp.py "<NSP folder>" -k "<prod.keys>" --prepare-xcode --version 1.0.0
 open "<NSP parent folder>/NxNative.xcworkspace"
 ```
 
@@ -612,9 +612,9 @@ PR #368 reports Animal Crossing's app shrinking from 11 GB to 1.2 GB, with reins
 
 `--separate-rom` and its `.nxrom` packer/importer have been removed. Use `--romfs separate` for one directly readable image containing the base/update and installed DLC, outside the IPA. Existing `.nxrom` files are not converted or deleted. Transfer the image named by the current build's printed command.
 
-The launch page has **Import ROM** and **Import shaders** below **Play**, with no separate resource-import screen. The ROM picker copies the image in the background, validating it and its build identity before copying and before an atomic replacement. A failed import preserves existing data. Nothing is unpacked. Alternatively, copy `RomFS.img` into the app's folder under Files > On My iPhone/iPad, or keep an existing `Documents/game-data/romfs` and adjacent `aoc`; returning to the app rechecks them. Existing imports need no conversion, moves or reimport.
+The launch page has **Import ROM** and **Import graphics** below **Play**, with no separate resource-import screen. The ROM picker copies the image in the background, validating it and its build identity before copying and before an atomic replacement. A failed import preserves existing data. Nothing is unpacked. Alternatively, copy `RomFS.img` into the app's folder under Files > On My iPhone/iPad, or keep an existing `Documents/game-data/romfs` and adjacent `aoc`; returning to the app rechecks them. Existing imports need no conversion, moves or reimport.
 
-iOS graphics default to a separate, uncompressed ZIP beside the IPA. **Import shaders** checks compatibility series, minimum version and file integrity before selecting it. Compatible IPA updates keep imported resources, and a compatible published ZIP can rebuild an IPA without local shader caches or Metal compilation. Use `--graphics bundle` to embed graphics. See [graphics packages](graphics-pack.md) for the format and automatic compatibility rules.
+iOS graphics default to a separate `<game>.vN.graphics` package beside the IPA, internally an uncompressed ZIP. Import it directly without unzipping it. **Import graphics** checks compatibility series, minimum version and file integrity before selecting it. Legacy `.zip` packages remain importable and automatically discoverable. Compatible IPA updates keep installed resources; compatible published packages, including legacy ZIPs, can rebuild an IPA without local shader caches or Metal compilation. Reused legacy ZIPs receive the new filename without changing their bytes, ID or version, and the original download is kept. Use `--graphics bundle` to embed graphics. See [graphics packages](graphics-pack.md) for the format and automatic compatibility rules.
 
 A combined build also records the original base-only image as `romfs.base.id`, using its size and index from the packer's current output stamp. This permits the old base image with existing `game-data/aoc` or bundled DLC; it does not accept arbitrary images of other versions. Both unsigned IPA and prepared Xcode staging carry this optional identity. A plain image without that packer metadata has only its own `romfs.id`.
 

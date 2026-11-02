@@ -172,16 +172,16 @@
 "Off" = "关闭";
 
 "Import ROM" = "导入 ROM";
-"Import shaders" = "导入着色器";
+"Import graphics" = "导入图形包";
 "ROM imported" = "ROM 已导入";
-"Shaders imported" = "着色器已导入";
+"Graphics imported" = "图形包已导入";
 "Refresh" = "刷新";
-"More than one valid graphics ZIP was found. Use Import shaders to choose a package." = "找到多个有效的着色器 ZIP，请点按“导入着色器”选择资源包。";
+"More than one valid graphics package was found. Use Import graphics to choose a package." = "找到多个有效的图形资源包，请点按“导入图形包”选择。";
 "Import failed" = "导入失败";
 "OK" = "好";
 "Import RomFS.img to start." = "请导入 RomFS.img 后开始游戏。";
-"Import a compatible graphics ZIP to start." = "请导入适用于此应用的着色器 ZIP。";
-"This is not a supported graphics package." = "请选择有效的着色器资源 ZIP。";
+"Import a compatible graphics package to start. Do not unzip it." = "请直接导入适用于此应用的图形资源包，无需解压。";
+"This is not a supported graphics package." = "请选择有效的图形资源包。";
 "This app has no graphics package requirements." = "此应用未提供图形资源兼容信息。";
 "The graphics compatibility series does not match this app." = "此着色器资源包与当前应用版本不兼容。";
 "This app requires graphics package version %@ or later." = "此应用需要版本 %@ 或更新版本的着色器资源包。";
@@ -190,9 +190,9 @@
 "The graphics package is too large." = "着色器资源包过大。";
 "The graphics package is incomplete. Import it again." = "着色器资源包不完整，请重新导入。";
 "Not enough free space to import graphics." = "可用空间不足，无法导入着色器资源包。";
-"The graphics ZIP contains an unexpected file." = "着色器 ZIP 中存在不符合清单的文件。";
+"The graphics package contains an unexpected file." = "图形资源包中存在不符合清单的文件。";
 "A graphics file failed its integrity check." = "着色器文件校验失败。";
-"The graphics ZIP is incomplete." = "着色器 ZIP 文件不完整。";
+"The graphics package is incomplete." = "图形资源包文件不完整。";
 "Graphics package" = "图形资源包";
 "Metal compiler" = "Metal 编译器";
 "This app is missing graphics requirements. Rebuild or reinstall it." = "此应用缺少图形资源信息，请重新构建或安装。";
@@ -227,3 +227,4 @@
 "Offsets and diameters are in pt; edge margins do not depend on safe areas." = "偏移和直径以 pt 为单位；边距不随安全区变化。";
 "Offsets and diameters are in pt. Positive X moves right and positive Y moves down. Buttons adjust independently; normal and compact layouts are saved separately." = "偏移和直径以 pt 为单位。X 为正向右移动，Y 为正向下移动。按钮可独立调整，普通和紧凑布局分别保存。";
 "Allows portrait rotation below 600pt of window width. Wider portrait windows are always supported and keep the normal layout." = "允许在窗口宽度小于 600 pt 时竖屏。更宽的窗口始终支持竖屏，并保留普通布局。";
+"Graphics were imported, but old packages could not be removed: %@" = "图形资源已导入，但未能清理旧版本：%@";

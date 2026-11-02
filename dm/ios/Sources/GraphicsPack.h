@@ -5,7 +5,7 @@ NSString *dm_graphics_manifest_error(NSDictionary *manifest, NSDictionary *requi
 BOOL dm_import_graphics_package(NSURL *source, NSURL *documents, NSDictionary *required,
                                 void (^progress)(long long, long long), NSError **error);
 NSString *dm_graphics_status(NSURL *documents, NSURL *bundle);
-// When graphics are missing, find the sole valid, compatible graphics ZIP in Documents.
+// When graphics are missing, find the sole valid, compatible .graphics or legacy .zip package in Documents.
 NSURL *dm_graphics_pending_package(NSURL *documents, NSURL *bundle, NSError **error);
 BOOL dm_graphics_configure(NSURL *documents, NSURL *bundle, NSError **error);
 NSDictionary *dm_graphics_requirements(NSURL *bundle);

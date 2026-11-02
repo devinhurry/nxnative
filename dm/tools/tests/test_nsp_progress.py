@@ -81,6 +81,23 @@ class Json(unittest.TestCase):
         self.assertFalse(es[2]['ok'])
         self.assertTrue('out' in es[3]['msg'] and 'err' in es[3]['msg'])
 
+    def test_final_outputs_are_readable_and_json_has_no_ansi(self):
+        with mock.patch.object(nsp, 'in_ipython', return_value=True):
+            nsp.report_ios_outputs('IPA', '/build/Game.ipa', '/build/RomFS.img', dict(path='/build/Game.v4.graphics', version=4, status='reused'))
+        message = self.events('say')[-1]['msg']
+        self.assertEqual(message.splitlines()[-3:], ['IPA: /build/Game.ipa', 'ROM: /build/RomFS.img', 'Graphics [REUSED v4]: /build/Game.v4.graphics'])
+        self.assertNotIn('\033[', message)
+        self.out.seek(0); self.out.truncate()
+        self.prog.mode = 'off'
+        with mock.patch.object(nsp, 'in_ipython', return_value=True), mock.patch.dict(nsp.os.environ, NO_COLOR=''):
+            nsp.report_ios_outputs('IPA', '/build/Game.ipa', None, None)
+        self.assertIn('\033[1;36mIPA: /build/Game.ipa\033[0m', self.out.getvalue())
+        self.assertIn('ROM: included in the app', self.out.getvalue())
+        self.out.seek(0); self.out.truncate()
+        with mock.patch.object(nsp, 'in_ipython', return_value=True), mock.patch.dict(nsp.os.environ, NO_COLOR='1'):
+            nsp.report_ios_outputs('IPA', '/build/Game.ipa', None, None)
+        self.assertNotIn('\033[', self.out.getvalue())
+
 class ShadersStale(unittest.TestCase):
     """build_shaders tells a front end (event shaders_stale, json mode) that cached libraries cannot be reused, once, before it rebuilds them"""
     class Stop(Exception): pass
@@ -183,7 +200,7 @@ class ShadersStale(unittest.TestCase):
 
 class Cli(unittest.TestCase):
     def test_argument_error_precedes_json_mode(self):
-        r = subprocess.run([sys.executable, '-B', str(SCRIPT), '--progress', 'json', '--invalid-option'],
+        r = subprocess.run([sys.executable, '-B', str(SCRIPT), '--version', '1.0.0', '--progress', 'json', '--invalid-option'],
                            capture_output=True, text=True, timeout=30)
         self.assertEqual((r.returncode, r.stdout), (2, ''))
         self.assertIn('usage:', r.stderr)
@@ -191,12 +208,21 @@ class Cli(unittest.TestCase):
 
     def test_json_error(self):
         with tempfile.TemporaryDirectory() as tmp:
-            r = subprocess.run([sys.executable, '-B', str(SCRIPT), '--progress', 'json', str(Path(tmp) / 'missing'), '-k', str(Path(tmp) / 'keys')],
+            r = subprocess.run([sys.executable, '-B', str(SCRIPT), '--version', '1.0.0', '--progress', 'json', str(Path(tmp) / 'missing'), '-k', str(Path(tmp) / 'keys')],
                                capture_output=True, text=True, timeout=30)
         self.assertEqual((r.returncode, r.stderr), (1, ''))
         es = [json.loads(l) for l in r.stdout.splitlines()]
         self.assertTrue(es and all(e['ev'] == 'say' for e in es))
         self.assertIn('[RED] not a folder:', es[-1]['msg'])
+
+    def test_release_version_is_required_and_validated(self):
+        with self.assertRaises(SystemExit), mock.patch('sys.stderr'):
+            nsp.parse_args([])
+        for version in ('', 'v1', '1.2.3.4', '../output', '1.0-beta'):
+            with self.subTest(version=version), self.assertRaises(SystemExit), mock.patch('sys.stderr'):
+                nsp.parse_args(['--version', version])
+        self.assertEqual(nsp.parse_args(['--version', '2']).version, '2')
+        self.assertEqual(nsp.parse_args(['--version', '3.4.5']).version, '3.4.5')
 
 class HumanModes(unittest.TestCase):
     def test_lines(self):

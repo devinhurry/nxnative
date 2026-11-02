@@ -1686,6 +1686,10 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 
 ## Found on this game
 
+- Resolved retained graphics directories after a successful import. Publication precedes old-version cleanup, and cleanup failures leave the new package selected and usable. See [graphics version cleanup](../../../docs/reference/packing.md#imported-graphics-versions-accumulate-in-documents) for the mechanism and Foundation fixtures. Physical iPhone acceptance remains pending.
+
+- Resolved duplicate graphics releases after renderer-only source changes. The v4 and v6 inventories contain the same 78,018 runtime files and compiler records. Packaging now verifies equal outputs and authorizes the exact reused package ID in the new IPA. Mechanism and validation are in [source-only changes publishing duplicate graphics ZIPs](../../../docs/reference/packing.md#source-only-changes-publish-duplicate-graphics-zips). Physical iPhone acceptance remains pending.
+
 - **Resolved in code; physical iPhone acceptance pending:** [Temporary gamepad visibility feedback](../../../docs/reference/services.md#temporary-botw-gamepad-disappears-immediately-in-gameplay) keeps touch HUD observation active while the full pad is open, so its own publication cannot look like a menu transition.
 - **Implemented; physical iPhone acceptance pending:** [Startup HUD initialization](../../../docs/reference/rendering.md#iphone-performance-hud-is-enabled-in-settings-but-absent-in-the-game) loads the HUD before launcher rendering and marks the game layer as primary.
 - **Implemented; physical iPhone acceptance pending:** [In-game launcher settings](../../../docs/reference/services.md#in-game-launcher-settings-use-the-runtime-state-owners). The startup dashboard shows resource readiness and available memory; Settings uses side-by-side sections, with full-width secondary pages for touch layout and stick parameters. Three-finger double tap toggles Settings and the temporary full gamepad together, including screens with direct touch handlers. Supported runtime values apply through their owning subsystems; the remaining values are saved for the next start.

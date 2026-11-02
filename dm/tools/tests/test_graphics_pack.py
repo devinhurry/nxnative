@@ -3,6 +3,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import stat
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import types
+from typing import Any
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -69,9 +71,9 @@ int main(int argc,char **argv) { @autoreleasepool {
         (self.shaders / 'a_b.json').write_text(json.dumps({'chain': 'fixture', 'chain_compiler': 'a' * 64, 'chain_metal': 'fixture compiler flags'}))
         (self.shaders / 'inputs.tsv').write_text('game\tfixture\ninputs\tfixture\n')
         (self.tables / 'shader_map.tsv').write_text('fixture map\n')
-        self.required = dict(schema=1, series='1-fixture', minimum_version=2, external=True,
+        self.required: dict[str, Any] = dict(schema=1, series='1-fixture', minimum_version=2, external=True,
                              compatibility=dict(game='01007EF00011E000', build='v1114112', platform='ios', api='nvn', chain='fixture', library='b-fixture', contract='fixture'))
-        self.output = self.root / 'graphics.zip'
+        self.output = self.root / 'graphics.graphics'
         self.save_required()
         with contextlib.redirect_stdout(io.StringIO()):
             self.manifest = gp.build(self.output, self.required, self.shaders, self.tables, version=3)
@@ -129,22 +131,22 @@ int main(int argc,char **argv) { @autoreleasepool {
         self.assertNotEqual(updated['id'], self.manifest['id'])
         self.assertEqual(self.zip.read_bytes(), before)
         self.zip = gp.archive_path(self.output, updated)
-        self.assertTrue(self.zip.name.endswith('.v4.zip'))
+        self.assertTrue(self.zip.name.endswith('.v4.graphics'))
         self.native()
 
     def test_versioned_filenames_preserve_releases_and_select_numeric_latest(self):
-        self.assertEqual(self.zip.name, 'graphics.v3.zip')
+        self.assertEqual(self.zip.name, 'graphics.v3.graphics')
         self.assertFalse(self.output.exists())
         with contextlib.redirect_stdout(io.StringIO()):
             ninth = gp.build(self.output, self.required, self.shaders, self.tables, version=9)
             (self.shaders / 'a_b.metallib').write_bytes(b'MTLBtenth release')
             tenth = gp.build(self.output, self.required, self.shaders, self.tables)
-            other = gp.build(self.output, dict(self.required, series='1-another'), self.shaders, self.tables)
+            other = gp.build(self.output, dict(self.required, series='1-another', compatibility=dict(self.required['compatibility'], build='v2')), self.shaders, self.tables)
         self.assertEqual(ninth['version'], 9)
         self.assertEqual(tenth['version'], 10)
         self.assertEqual(other['version'], 11)
         packages = gp.published_packages(self.output, self.required['series'])
-        self.assertEqual([p.name for p in packages], ['graphics.v10.zip', 'graphics.v9.zip', 'graphics.v3.zip'])
+        self.assertEqual([p.name for p in packages], ['graphics.v10.graphics', 'graphics.v9.graphics', 'graphics.v3.graphics'])
         self.assertTrue(gp.archive_path(self.output, other).is_file())
         self.assertTrue(gp.archive_path(self.output, tenth).is_file())
 
@@ -155,9 +157,47 @@ int main(int argc,char **argv) { @autoreleasepool {
                 '--requirements', str(self.bundle / 'dm/graphics-required.json'), '--result', str(result)]
         with patch.object(gp, 'requirements', return_value=self.required), contextlib.redirect_stdout(io.StringIO()):
             gp.main(args)
-            self.assertEqual(json.loads(result.read_text()), dict(path=str(self.zip.resolve()), series='1-fixture', version=3))
+            self.assertEqual(json.loads(result.read_text()), dict(path=str(self.zip.resolve()), series='1-fixture', version=3, status='reused'))
             gp.main(args + ['--reuse', str(self.zip)])
             self.assertEqual(json.loads(result.read_text())['path'], str(self.zip.resolve()))
+            self.assertEqual(json.loads(result.read_text())['status'], 'reused')
+            (self.shaders / 'a_b.metallib').write_bytes(b'MTLBnew release')
+            gp.main(args)
+            self.assertEqual(json.loads(result.read_text())['status'], 'generated')
+            self.assertEqual(json.loads(result.read_text())['version'], 4)
+
+    def test_legacy_zip_names_reuse_bytes_and_version_under_the_graphics_extension(self):
+        for explicit_reuse, legacy_name in ((False, 'Game.graphics.v3.zip'), (True, 'Game.v3.zip')):
+            with self.subTest(legacy_name=legacy_name):
+                folder = self.root / str(explicit_reuse); folder.mkdir()
+                legacy = folder / legacy_name; shutil.copy2(self.zip, legacy)
+                before = legacy.stat()
+                output = folder / 'Game.graphics'
+                result = folder / 'result.json'
+                required = self.required if explicit_reuse else dict(self.required, series='1-new-source', compatibility=dict(self.required['compatibility'], contract='new-source'))
+                args = ['--game', 'fixture', '--build', 'v0', '--api', 'nvn', '--library', 'b-fixture',
+                        '--shaders', str(self.shaders), '--tables', str(self.tables), '--out', str(output),
+                        '--requirements', str(folder / 'required.json'), '--result', str(result)]
+                if explicit_reuse: args += ['--reuse', str(legacy)]
+                with patch.object(gp, 'requirements', return_value=required), contextlib.redirect_stdout(io.StringIO()):
+                    gp.main(args)
+                published = folder / 'Game.v3.graphics'
+                self.assertEqual(json.loads(result.read_text()), dict(path=str(published.resolve()), series=self.manifest['series'], version=3, status='reused'))
+                self.assertTrue(published.samefile(legacy))
+                self.assertEqual(legacy.stat().st_mtime_ns, before.st_mtime_ns)
+                self.assertEqual(published.read_bytes(), self.zip.read_bytes())
+                self.assertEqual(gp.published_packages(output)[0], published)
+                self.assertIn(published, gp.published_packages(folder / 'Game.zip'))
+                self.assertIn(published, gp.published_packages(folder / 'Game.graphics.zip'))
+                if not explicit_reuse:
+                    self.assertEqual(gp.reuse_requirements(published, required)[1]['equivalent_package_ids'], [self.manifest['id']])
+                    self.assertEqual(json.loads((folder / 'required.json').read_text())['equivalent_package_ids'], [self.manifest['id']])
+                self.native(archive=published)
+        (self.shaders / 'a_b.metallib').write_bytes(b'MTLBchanged after migration')
+        with contextlib.redirect_stdout(io.StringIO()):
+            updated = gp.build(output, self.required, self.shaders, self.tables)
+        self.assertEqual(updated['version'], 4)
+        self.assertTrue((folder / 'Game.v4.graphics').is_file())
 
     def test_nsp_reuses_latest_release_in_the_matching_series(self):
         script_spec = importlib.util.spec_from_file_location('nsp_graphics_test', REPO / 'scripts/build_ipa_from_nsp.py')
@@ -187,6 +227,104 @@ int main(int argc,char **argv) { @autoreleasepool {
         with self.assertRaisesRegex(ValueError, 'integrity'): gp.restore(corrupt, self.required, cache)
         self.assertEqual((directory / 'msl/b-fixture/a_b.metallib').read_bytes(), b'MTLBfixture shader')
         self.assertFalse(list(cache.glob('.graphics-*')))
+
+    def test_changed_source_reuses_identical_zip_and_approves_only_its_id(self):
+        self.native()
+        original = self.zip.read_bytes()
+        before = self.zip.stat().st_mtime_ns
+        self.required = dict(self.required, series='1-new-source', compatibility=dict(self.required['compatibility'], contract='new source'))
+        result = self.root / 'graphics-result.json'
+        args = ['--game', 'fixture', '--build', 'v0', '--api', 'nvn', '--library', 'b-fixture',
+                '--shaders', str(self.shaders), '--tables', str(self.tables), '--out', str(self.output),
+                '--requirements', str(self.bundle / 'dm/graphics-required.json'), '--result', str(result)]
+        self.assertIn('series changed', gp.compatible(self.manifest, self.required))
+        with patch.object(gp, 'requirements', side_effect=lambda *a, **kw: dict(self.required)), contextlib.redirect_stdout(io.StringIO()) as output:
+            gp.main(args)
+        self.assertIn('identical contents', output.getvalue())
+        self.assertEqual(json.loads(result.read_text())['path'], str(self.zip.resolve()))
+        self.assertEqual(self.zip.read_bytes(), original)
+        self.assertEqual(self.zip.stat().st_mtime_ns, before)
+        self.assertEqual(list(self.root.glob('graphics.v*.graphics')), [self.zip])
+        self.required = json.loads((self.bundle / 'dm/graphics-required.json').read_text())
+        self.assertEqual(self.required['series'], '1-new-source')
+        self.assertEqual(self.required['equivalent_package_ids'], [self.manifest['id']])
+        self.assertIsNone(gp.compatible(self.manifest, self.required))
+        self.native('status')
+        self.native('configure')
+        self.native()
+        newer = dict(self.manifest, version=4)
+        newer['id'] = gp.package_id(newer)
+        self.native(archive=self.rewrite('unapproved.zip', manifest=newer), success=False)
+        corrupt = self.rewrite('corrupt-equivalent.zip', replacement=('msl/b-fixture/a_b.metallib', b'MTLBcorrupt shader'))
+        self.native(archive=corrupt, success=False)
+        self.native('status')
+
+    def test_equivalent_id_preserves_hard_requirements_and_minimum(self):
+        for key in ('game', 'build', 'platform', 'api', 'chain', 'library'):
+            with self.subTest(key=key):
+                self.required = dict(self.required, series='1-new-source', equivalent_package_ids=[self.manifest['id']],
+                                     compatibility=dict(self.manifest['compatibility'], **{key: 'different'}))
+                self.assertIsNotNone(gp.compatible(self.manifest, self.required))
+                self.save_required()
+                self.native(success=False)
+        self.required = dict(self.required, compatibility=self.manifest['compatibility'], minimum_version=4)
+        self.save_required()
+        self.native(success=False)
+        self.assertIn('below required', gp.compatible(self.manifest, self.required))
+
+    def test_changed_source_and_payload_publish_new_release(self):
+        required = dict(self.required, series='1-new-source', compatibility=dict(self.required['compatibility'], contract='new source'))
+        (self.shaders / 'a_b.metallib').write_bytes(b'MTLBnew payload')
+        with contextlib.redirect_stdout(io.StringIO()):
+            updated = gp.build(self.output, required, self.shaders, self.tables)
+        self.assertEqual(updated['version'], 4)
+        self.assertEqual(updated['series'], required['series'])
+        self.assertNotEqual(updated['id'], self.manifest['id'])
+
+    def test_content_reuse_rejects_a_corrupted_published_zip(self):
+        corrupt = self.rewrite('corrupt.zip', replacement=('msl/b-fixture/a_b.metallib', b'MTLBcorrupt shader'))
+        corrupt.replace(self.zip)
+        required = dict(self.required, series='1-new-source', compatibility=dict(self.required['compatibility'], contract='new source'))
+        with self.assertRaisesRegex(ValueError, 'integrity'):
+            gp.build(self.output, required, self.shaders, self.tables)
+
+    def test_proven_reuse_is_invalidated_by_changed_source_or_outputs(self):
+        required = dict(self.required, series='1-new-source', compatibility=dict(self.required['compatibility'], contract='new source'))
+        self.assertIsNotNone(gp.compatible(*gp.reuse_requirements(self.zip, required)))
+        with contextlib.redirect_stdout(io.StringIO()):
+            same = gp.build(self.output, required, self.shaders, self.tables)
+        self.assertEqual(same, self.manifest)
+        manifest, approved = gp.reuse_requirements(self.zip, required)
+        self.assertIsNone(gp.compatible(manifest, approved))
+        gp.restore(self.zip, approved, self.root / 'restored')
+        changed = dict(required, compatibility=dict(required['compatibility'], contract='another source'))
+        self.assertIsNotNone(gp.compatible(*gp.reuse_requirements(self.zip, changed)))
+        (self.shaders / 'a_b.metallib').write_bytes(b'MTLBchanged after verification')
+        self.assertIsNotNone(gp.compatible(*gp.reuse_requirements(self.zip, required)))
+        shutil.rmtree(self.shaders)
+        self.assertIsNone(gp.compatible(*gp.reuse_requirements(self.zip, required)))
+
+    def test_nsp_preserves_equivalence_proof_when_restoring_tables(self):
+        table = self.tables / 'c1_full.tsv'
+        table.write_text('current table\n')
+        with contextlib.redirect_stdout(io.StringIO()):
+            manifest = gp.build(self.output, self.required, self.shaders, self.tables)
+        archive = gp.archive_path(self.output, manifest)
+        required = dict(self.required, series='1-new-source', compatibility=dict(self.required['compatibility'], contract='new source'))
+        script_spec = importlib.util.spec_from_file_location('nsp_proof_test', REPO / 'scripts/build_ipa_from_nsp.py')
+        assert script_spec is not None and script_spec.loader is not None
+        nsp = importlib.util.module_from_spec(script_spec); script_spec.loader.exec_module(nsp)
+        profile = types.SimpleNamespace(id='fixture', dir=self.tables)
+        before = table.stat().st_mtime_ns
+        with contextlib.redirect_stdout(io.StringIO()):
+            gp.build(self.output, required, self.shaders, self.tables)
+            with patch.dict(sys.modules, graphics_pack=gp), patch.object(gp, 'requirements', return_value=required), \
+                    patch.object(nsp, 'chain_of', return_value='fixture'), patch.object(nsp, 'PROG'):
+                environment = {}
+                nsp.reuse_graphics_package(REPO, self.output, self.root / 'work', profile, 'v0', environment)
+        self.assertEqual(environment['DM_GRAPHICS_REUSE'], str(archive))
+        self.assertEqual(table.stat().st_mtime_ns, before)
+        self.assertIsNone(gp.compatible(*gp.reuse_requirements(archive, required)))
 
     def test_zip64_archive_import(self):
         # Force ZIP64 headers even for the small fixture; no game data needed.
@@ -245,13 +383,13 @@ int main(int argc,char **argv) { @autoreleasepool {
         (installed / 'tables/shader_map.tsv').unlink()
         self.assertIn('incomplete', self.native('status', success=False).stderr)
 
-    def test_auto_import_discovers_copied_zip_and_skips_installed_graphics(self):
-        (self.documents / 'not-a-package.zip').mkdir()
-        (self.documents / 'linked.zip').symlink_to(self.zip)
+    def test_auto_import_discovers_copied_graphics_and_skips_installed_graphics(self):
+        (self.documents / 'not-a-package.graphics').mkdir()
+        (self.documents / 'linked.graphics').symlink_to(self.zip)
         self.assertNotIn('auto=', self.native('auto').stdout)
         self.native('status', success=False)
-        copied = self.documents / 'Game.graphics.ZIP'; shutil.copy(self.zip, copied)
-        self.assertIn('auto=Game.graphics.ZIP', self.native('auto').stdout)
+        copied = self.documents / 'Game.v3.GRAPHICS'; shutil.copy(self.zip, copied)
+        self.assertIn('auto=Game.v3.GRAPHICS', self.native('auto').stdout)
         self.native('status')
         self.assertTrue(copied.is_file())
         self.assertNotIn('auto=', self.native('auto').stdout)
@@ -274,16 +412,27 @@ int main(int argc,char **argv) { @autoreleasepool {
         copied = self.documents / 'valid.zip'; shutil.copy(self.zip, copied)
         result = self.native('find')
         self.assertIn('auto=valid.zip', result.stdout)
-        self.assertIn('skipping ZIP corrupt.zip', result.stderr)
+        self.assertIn('skipping graphics package corrupt.zip', result.stderr)
         self.assertFalse((self.documents / 'graphics').exists())   # discovery never publishes candidates
         self.assertIn('auto=valid.zip', self.native('auto').stdout)
         self.native('status')
         self.assertTrue(copied.is_file())
 
     def test_auto_import_requires_choice_for_multiple_valid_packages(self):
-        for name in ('one.zip', 'two.zip'): shutil.copy(self.zip, self.documents / name)
-        self.assertIn('More than one valid graphics ZIP', self.native('auto', success=False).stderr)
+        shutil.copy(self.zip, self.documents / 'one.zip')
+        (self.shaders / 'a_b.metallib').write_bytes(b'MTLBanother valid release')
+        with contextlib.redirect_stdout(io.StringIO()):
+            updated = gp.build(self.output, self.required, self.shaders, self.tables)
+        shutil.copy(gp.archive_path(self.output, updated), self.documents / 'two.graphics')
+        self.assertIn('More than one valid graphics package', self.native('auto', success=False).stderr)
         self.assertFalse((self.documents / 'graphics').exists())
+
+    def test_auto_import_treats_graphics_and_legacy_zip_with_the_same_id_as_one_package(self):
+        for name in ('legacy.ZIP', 'renamed.graphics'): shutil.copy(self.zip, self.documents / name)
+        self.assertIn('auto=renamed.graphics', self.native('find').stdout)
+        self.assertFalse((self.documents / 'graphics').exists())
+        self.assertIn('auto=renamed.graphics', self.native('auto').stdout)
+        self.native('status')
 
     def test_wrong_series_and_corrupt_payload_preserve_previous_import(self):
         self.native(); active = (self.documents / 'graphics/current.json').read_bytes()
@@ -314,6 +463,50 @@ int main(int argc,char **argv) { @autoreleasepool {
         self.native(); self.assertEqual(file.read_bytes(), b'MTLBfixture shader')
         truncated = self.root / 'truncated.zip'; truncated.write_bytes(self.zip.read_bytes()[:100])
         self.native(archive=truncated, success=False)
+        self.native('status')
+
+    def test_successful_import_removes_only_old_managed_directories(self):
+        self.native()
+        root = self.documents / 'graphics'
+        previous = root / json.loads((root / 'current.json').read_text())['directory']
+        stale = root / ('v1-' + '1' * 64); stale.mkdir(); (stale / 'old').touch()
+        notes = root / 'notes'; notes.mkdir(); (notes / 'keep').touch()
+        outside = self.root / 'outside'; outside.mkdir(); (outside / 'keep').touch()
+        linked = root / ('v1-' + '2' * 64); linked.symlink_to(outside, target_is_directory=True)
+        regular = root / ('v1-' + '3' * 64); regular.touch()
+        (root / 'current.json').unlink()  # Cleanup follows the newly committed selection.
+        (self.shaders / 'a_b.metallib').write_bytes(b'MTLBnew version')
+        with contextlib.redirect_stdout(io.StringIO()):
+            updated = gp.build(self.output, self.required, self.shaders, self.tables)
+        archive = gp.archive_path(self.output, updated)
+        self.native(archive=archive)
+        selected = root / json.loads((root / 'current.json').read_text())['directory']
+        self.assertEqual(selected.name, f'v{updated["version"]}-{updated["id"]}')
+        self.assertTrue(selected.is_dir())
+        self.assertFalse(previous.exists()); self.assertFalse(stale.exists())
+        self.assertTrue((notes / 'keep').is_file()); self.assertTrue((outside / 'keep').is_file())
+        self.assertTrue(linked.is_symlink()); self.assertTrue(regular.is_file())
+        self.assertTrue(self.zip.is_file()); self.assertTrue(archive.is_file())
+        self.native('status')
+
+    def test_cleanup_failure_keeps_new_selection_usable_and_retry_finishes(self):
+        self.native()
+        root = self.documents / 'graphics'
+        previous = root / json.loads((root / 'current.json').read_text())['directory']
+        (self.shaders / 'a_b.metallib').write_bytes(b'MTLBnew version')
+        with contextlib.redirect_stdout(io.StringIO()):
+            updated = gp.build(self.output, self.required, self.shaders, self.tables)
+        archive = gp.archive_path(self.output, updated)
+        os.chflags(previous, stat.UF_IMMUTABLE)
+        try:
+            result = self.native(archive=archive, success=False)
+            self.assertIn('Graphics were imported, but old packages could not be removed', result.stderr)
+            self.assertEqual(json.loads((root / 'current.json').read_text())['directory'], f'v{updated["version"]}-{updated["id"]}')
+            self.native('status')
+        finally:
+            os.chflags(previous, 0)
+        self.native(archive=archive)
+        self.assertFalse(previous.exists())
         self.native('status')
 
 

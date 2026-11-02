@@ -700,7 +700,7 @@ class App(unittest.TestCase):
 
 class Script(unittest.TestCase):
     def test_options(self):
-        a = nsp.parse_args(['--platform', 'mac-app', '--mac-sign', 'Developer ID Application: X (T)', '-o', '/tmp/x.app'])
+        a = nsp.parse_args(['--version', '1.0.0', '--platform', 'mac-app', '--mac-sign', 'Developer ID Application: X (T)', '-o', '/tmp/x.app'])
         self.assertEqual((a.platform, a.mac_sign, a.out), ('mac-app', 'Developer ID Application: X (T)', '/tmp/x.app'))
 
     def test_app_name(self):
