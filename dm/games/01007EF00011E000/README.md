@@ -997,38 +997,6 @@ so a 60 Hz display link does not redraw an unchanged game image each tick.
 The four log6 present windows report bilinear GPU p50 0.379-0.633 ms.
 Elapsed encoder gaps alone are not proof of removable synchronization.
 
-External IPA inspection (2026-11-01): `org.macnativegames.botw`, app
-`1.0v102811` / `20261028.11`, contains native 30/60/120 targets and separate
-MetalFX 30+30/60+60 modes. Its binary switches both 120-output modes to a
-120 Hz display link, but disables MetalFX in the native-120 mode. These
-are statically verified targets, not measured iPhone Air performance.
-The current public MacNativeGames iOS frontend differs from this binary;
-its source is architectural context, not an exact package-source match.
-The executable was not installed or run. Binary evidence and source
-references stay in `01007EF00011E000-work/ipa-120hz-audit-20261101/analysis.md`.
-
-Three-way static comparison against public MacNativeGames `92ec79bd` and this
-checkout `80c9efc8` found no confirmed additional same-picture rendering-work
-optimization absent from both sources. The extra iOS frame/quality interfaces
-call existing mechanisms. Two dedicated runtime implementations not found here
-are already public: driver metadata-bank caching (the IPA's no-override default
-is off for BOTW) and BC-to-ASTC/EAC texture transcoding (conditional on no native
-BC support, with lossy cases). Both embedded transcoding GPU source texts match
-the public files byte-for-byte. Our outer argument-buffer reuse and unread-bank
-elimination already avoid related metadata work. Active IPA settings, inlined
-differences and iPhone Air performance remain unverified; missing snapshot names
-do not prove that skipping required feedback copies is correct. The bounded
-comparison and exact evidence are in the same audit folder's `optimization-diff.md`.
-
-The inspected IPA's `20261028.11` build predates public MacNativeGames' iOS
-packaging-time pipeline archive feature (`e52a4aa`, 2026-10-29). Its binary has
-the earlier archive-fill path but lacks the later prebuilt-loader names/flag;
-this is consistent with device-side first-run compilation. Shader data can be
-imported separately, so the IPA's lack of bundled named pipeline archives alone
-is not decisive. Offline compilation primarily removes startup compilation and
-related gameplay hitches; compiling on the phone does not inherently improve
-steady-state GPU frame time. The same audit report records the source evidence.
-
 ### MacNativeGames non-interpolation port (2026-11-01, current)
 
 Main's capability-selected BC decoder (`9cbe8984`) is merged into the experimental
