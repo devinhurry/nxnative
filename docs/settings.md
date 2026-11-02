@@ -6,12 +6,12 @@ The screen before the game starts shows resource readiness, available memory and
 
 Opening **Settings** during a game pauses gameplay and silences game audio until the page closes. Returning from another app keeps the game paused while Settings remains open.
 
-On iOS, **Import ROM** and **Import shaders** sit below **Play** on this same page.
+On iOS, **Import ROM** and **Import graphics** sit below **Play** on this same page.
 Each button is replaced by an imported status with a checkmark once its resource is ready.
 Use **Refresh** to recheck files copied into the app manually.
-When shaders are missing, the sole valid, compatible graphics ZIP in the app's folder is automatically imported
+When graphics are missing, the sole valid, compatible `.graphics` or legacy `.zip` package in the app's folder is automatically imported
 on launch, on returning to the app or on refresh.
-Choose the game image and separate graphics ZIP in Files. Play is enabled when
+Choose the game image and separate graphics package in Files; import the original file without unzipping it. Play is enabled when
 both are ready; incompatible graphics report the reason. Imports survive app
 updates. About also shows the imported graphics version and recorded Metal
 version when available. See [graphics packages](graphics-pack.md).

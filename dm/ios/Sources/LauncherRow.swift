@@ -147,11 +147,11 @@ struct LauncherDashboard: View {
                             }
                             if let onImportShaders {
                                 if shadersReady {
-                                    Label("Shaders imported", systemImage: "checkmark.circle.fill")
+                                    Label("Graphics imported", systemImage: "checkmark.circle.fill")
                                         .foregroundStyle(.green)
                                         .accessibilityIdentifier("startup.import.shaders.ready")
                                 } else {
-                                    Button("Import shaders", action: onImportShaders)
+                                    Button("Import graphics", action: onImportShaders)
                                         .accessibilityIdentifier("startup.import.shaders")
                                         .buttonStyle(.bordered).disabled(importBusy || checkingResources)
                                 }

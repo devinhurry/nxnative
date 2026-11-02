@@ -46,6 +46,12 @@ targets:
         UILaunchStoryboardName: ""
         UIFileSharingEnabled: true          # Documents (log.txt, saves) visible in the Files app
         LSSupportsOpeningDocumentsInPlace: true
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: org.nxnative.graphics
+            UTTypeDescription: Graphics package
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [graphics]
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationLandscapeRight
           - UIInterfaceOrientationLandscapeLeft
@@ -76,7 +82,7 @@ targets:
       INFOPLIST_FILE: $(DERIVED_FILE_DIR)/StampedInfo.plist   # The phase's output, processed and signed by Xcode; the Gen/ template stays untouched
       PRODUCT_BUNDLE_IDENTIFIER: ${DM_BUNDLE_ID}
       PRODUCT_NAME: DmIOS
-      MARKETING_VERSION: ${DM_APP_VERSION}         # the game's display version: the packed update's, else the base game's (set by build_ipa.sh)
+      MARKETING_VERSION: ${DM_APP_VERSION}         # explicit app release version from build_ipa_from_nsp.py --version
       CURRENT_PROJECT_VERSION: ${DM_APP_VERSION}
       DEVELOPMENT_TEAM: ${DM_TEAM_ID}
       CODE_SIGN_STYLE: Automatic

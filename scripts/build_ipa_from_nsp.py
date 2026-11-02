@@ -12,8 +12,8 @@
 # PLATFORM = 'mac-app' / --platform mac-app: everything 'mac' builds, then a self-contained, double-clickable Mac app of the game (dm/mac/pack_app.py) in the NSP folder, <game name>.app (OUT_IPA / -o
 #   names another path): the launcher dm/mac/launcher.c, the Mac host, the RomFS (APFS clones on the build's volume), the Mac shader libraries, the DLC and the rewritten modules inside it; the save
 #   in ~/Library/Application Support/nxnative/<title ID>/, the log in ~/Library/Logs/nxnative/<title ID>.log. Signed ad-hoc, or with MAC_SIGN / --mac-sign; no hardened runtime, no notarization.
-# Two ways to run it: open this file in Spyder and press F5 (it uses the values under "Settings" below; an empty NSP folder or prod.keys is asked for at run time);
-#   or in a terminal: python3 scripts/build_ipa_from_nsp.py <NSP folder> -k <prod.keys> [options] (values given on the command line override "Settings", -h lists every option;
+# Two ways to run it: open this file in Spyder, set --version in its Run configuration and press F5 (it uses the values under "Settings" below; an empty NSP folder or prod.keys is asked for at run time);
+#   or in a terminal: python3 scripts/build_ipa_from_nsp.py <NSP folder> -k <prod.keys> --version <release> [options] (values given on the command line override "Settings", -h lists every option;
 #   without keyboard input a missing value is not asked for but reported as an error; exit code 0 on success, 1 on error, 130 when interrupted). Command-line options entered in Spyder's run configuration work the same way.
 # Uses only three things: this repository, a folder holding one game's NSPs (the base game, with or without an update; DLC NSPs, when present, are packed too and unlock the add-on content already in the game), and prod.keys.
 #   The newest version in the folder is packed. A version the profile registers (with every version in its shader_versions in the folder) is built from the profile as it is; any other
@@ -43,12 +43,12 @@ PROD_KEYS = ''                          # path of prod.keys (empty = ask at run 
 PACKAGE = ''                            # version packed into the IPA (empty = the newest in the folder; Mario 'v327680' i.e. 1.2.1, or 'v0')
 TITLE_ID = ''                           # the game to pack when the folder holds several, e.g. a cartridge dump with two games: '0100FD8022DAA000' (empty = the folder's one game)
 WORK_DIR = ''                           # the game's build folder (empty = <title ID>_build in the NSP folder); the extracted files, shader cache and temporary files live there, and the IPA (or app) goes beside it unless OUT_IPA names it
-OUT_IPA = ''                            # output IPA (empty = <the profile's ipa> in the NSP folder); with PLATFORM 'mac-app' the output app (empty = <game name>.app in the NSP folder)
+OUT_IPA = ''                            # base IPA path (the dated release suffix is added; empty = the profile's IPA name in the NSP folder); with PLATFORM 'mac-app', the .app output path
 APP_NAME = ''                           # app name on the home screen (empty = the game name in the base NSP)
 BUNDLE_ID = ''                          # the app's bundle ID (empty = saved per-game Xcode ID, else org.nxnative.<base game title ID in lowercase>)
 ROMFS = 'bundle'                        # 'bundle' = game files and DLC go into the app; 'separate' = both stay out (DM_COPY_ROMFS=NO), in one external image reused while its inputs are unchanged.
                                         #   Copy it to the phone once per game version with the scripts/push_romfs.sh command printed at the end (the app checks that the image is the one it was built for)
-GRAPHICS = 'separate'                   # iOS: 'separate' = a stored graphics ZIP imported in the launcher; 'bundle' keeps graphics inside the app.
+GRAPHICS = 'separate'                   # iOS: 'separate' = a .graphics package imported in the launcher; 'bundle' keeps graphics inside the app.
 PREPARE_XCODE = False                   # prepare a per-game Xcode project and add it to the workspace instead of packing an IPA; requires KEEP_EXTRACTED
 PLATFORM = 'ios'                        # 'ios' = the IPA (or the Xcode project); 'mac-app' = a double-clickable Mac app; 'mac' = development: build only what running the game on this Mac needs (Mac shaders, the Mac host), no iOS shaders,
                                         #   Xcode project or IPA; keeps the extracted files and prints the command that runs the game (needs Apple silicon)
@@ -289,6 +289,23 @@ def progress_mode(want):   # auto: redraw in a terminal or in Spyder (IPython ha
     if want in ('bar', 'lines', 'off', 'json'): return want
     if want != 'auto': raise BuildError(f'PROGRESS / --progress must be auto, bar, lines, json or off: {want}')
     return 'bar' if in_ipython() or (sys.stdout and sys.stdout.isatty()) else 'lines'
+
+
+def report_ios_outputs(primary_label, primary, romfs_image, graphics_result):
+    """Keep the three deployable outputs together at the end of a successful build."""
+    color = PROG.mode != 'json' and not os.environ.get('NO_COLOR') and (in_ipython() or bool(sys.stdout and sys.stdout.isatty()))
+    graphics = 'Graphics: included in the app'
+    graphics_color = '1;35'
+    if graphics_result is not None:
+        status = graphics_result['status']
+        if status not in ('reused', 'generated'): raise BuildError(f'invalid graphics output status: {status}')
+        graphics = f'Graphics [{status.upper()} v{graphics_result["version"]}]: {graphics_result["path"]}'
+        graphics_color = '1;32' if status == 'reused' else '1;35'
+    rows = [('Build outputs', '1;32'),
+            (f'{primary_label}: {primary}', '1;36'),
+            (f'ROM: {romfs_image if romfs_image is not None else "included in the app"}', '1;33'),
+            (graphics, graphics_color)]
+    PROG.say('\n' + '\n'.join(f'\033[{style}m{text}\033[0m' if color else text for text, style in rows))
 
 
 def tree_size(d):   # (files, bytes) under d; (0, 0) when it does not exist yet
@@ -2017,11 +2034,17 @@ def reuse_graphics_package(repo, archive, work, g, build, env):
         chain = chain_of(repo)
         if not chain: raise BuildError('the shader chain header is missing; prepare the shaders before reusing a graphics package')
         required = graphics_pack.requirements(g.id, build, 'nvn', 'b-' + chain, g.dir)
-        packages = graphics_pack.published_packages(archive, required['series'])
-        if not packages:
-            say('graphics: UPDATE REQUIRED (graphics compatibility series changed)')
+        selected = None
+        for package in graphics_pack.published_packages(archive):
+            manifest, candidate = graphics_pack.reuse_requirements(package, required)
+            if graphics_pack.compatible(manifest, candidate) is None:
+                selected = package
+                required = candidate
+                break
+        if selected is None:
+            say('graphics: CHECK OUTPUTS (no compatible package or current equivalence proof; verifying generated resources)')
             return None
-        archive = packages[0]
+        archive = selected
         directory, manifest = graphics_pack.restore(archive, required, work / 'graphics-cache')
     except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile) as e:
         say(f'graphics: UPDATE REQUIRED ({e})')
@@ -2030,10 +2053,12 @@ def reuse_graphics_package(repo, archive, work, g, build, env):
         source = directory / 'tables' / table
         if source.is_file():
             g.dir.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, g.dir / table)
+            target = g.dir / table
+            if not target.is_file() or source.read_bytes() != target.read_bytes():
+                shutil.copyfile(source, target)
     env['DM_GRAPHICS_REUSE'] = str(archive)
     env['DM_GRAPHICS_PSO'] = str(directory / 'pso') if (directory / 'pso').is_dir() else ''
-    PROG.stage('iOS shaders', step='reusing the compatible graphics ZIP')
+    PROG.stage('iOS shaders', step='reusing the compatible graphics package')
     PROG.end(f'graphics v{manifest["version"]}, reused; no Metal compilation')
     say(f'graphics: REUSE v{manifest["version"]}, series {manifest["series"]}')
     return directory / 'msl'
@@ -2457,17 +2482,18 @@ def parse_args(argv):
     import argparse
     ap = argparse.ArgumentParser(prog='build_ipa_from_nsp.py',
         description='Build an unsigned IPA or prepare an Xcode project from a game\'s NSPs; a game with no profile is surveyed and gets a provisional profile.',
-        epilog='example: python3 scripts/build_ipa_from_nsp.py ~/nsp/"Super Mario Bros Wonder" -k ~/keys/prod.keys')
+        epilog='example: python3 scripts/build_ipa_from_nsp.py ~/nsp/"Super Mario Bros Wonder" -k ~/keys/prod.keys --version 1.0.0')
     ap.add_argument('nsp_dir', nargs='?', help='folder holding one game\'s NSPs (default: the NSP_DIR setting, else asked)')
     ap.add_argument('-k', '--keys', help='path of prod.keys (default: the PROD_KEYS setting, else asked)')
     ap.add_argument('--title-id', help='the game to pack when the folder holds several (a cartridge dump with two games): its title ID, 16 hex digits (default: the TITLE_ID setting)')
-    ap.add_argument('-p', '--package', help='version packed into the IPA, e.g. v327680 / v0 (default: the newest in the folder)')
-    ap.add_argument('-o', '--out', help='output IPA, or app with --platform mac-app (default: <the profile\'s ipa>, or <game name>.app, in the NSP folder)')
+    ap.add_argument('-p', '--package', help='game content version packed into the IPA, e.g. v327680 / v0 (default: the newest in the folder)')
+    ap.add_argument('--version', required=True, help='app release version, one to three numeric components such as 2 or 1.2.3; also used in the dated IPA filename')
+    ap.add_argument('-o', '--out', help='base output name; iOS appends -touch-the-wild-YYYYMMDD-<version>.ipa; mac-app uses the given .app path (default: the profile\'s IPA name, or game name.app)')
     ap.add_argument('--app-name', help='app name on the home screen (default: the game name in the base NSP)')
     ap.add_argument('--bundle-id', help='the app\'s bundle ID (default: saved Xcode ID when preparing again, else org.nxnative.<base game title ID in lowercase>)')
     ap.add_argument('--romfs', choices=('bundle', 'separate'), help='bundle = game files and DLC go into the IPA (default: the ROMFS setting, bundle); separate = both stay outside the IPA and Xcode app in one image, which '
                     'is copied to the phone once per game version with the scripts/push_romfs.sh command printed at the end (the app refuses an image of another version)')
-    ap.add_argument('--graphics', choices=('bundle', 'separate'), help='iOS graphics: separate = a stored ZIP imported from the launcher (default); bundle = include graphics in the app')
+    ap.add_argument('--graphics', choices=('bundle', 'separate'), help='iOS graphics: separate = a .graphics package imported from the launcher (default, legacy ZIPs supported); bundle = include graphics in the app')
     ap.add_argument('--prepare-xcode', action='store_true', help='prepare a per-game Xcode project and add it to the shared workspace instead of packing an IPA (requires keeping extracted files)')
     ap.add_argument('--platform', choices=('ios', 'mac', 'mac-app'), help='ios = the IPA (or the Xcode project); mac = for development: build only what running the game on this Mac needs (the Mac shaders and the Mac host, '
                     'no iOS shaders, Xcode project or IPA), keep the extracted files and print the command that runs the game; mac-app = what mac builds, then a self-contained, double-clickable '
@@ -2496,7 +2522,10 @@ def parse_args(argv):
     ap.add_argument('--no-heap-check', action='store_true', help='a provisional profile: skip the heap check and the address region check on the Mac (the alias / heap split stays a guess); a derived profile: skip the address region check')
     ap.add_argument('--progress', choices=('auto', 'bar', 'lines', 'json', 'off'), help='stage lines on the console: bar = one line per stage, redrawn in place; lines = a plain line every BEAT seconds; json = newline-delimited JSON events (no prompts); off = only each stage\'s start and end '
                     '(default: the PROGRESS setting; auto = bar in a terminal or Spyder, lines when the output goes to a file or a pipe)')
-    return ap.parse_args(argv)
+    args = ap.parse_args(argv)
+    if not re.fullmatch(r'[0-9]+(?:\.[0-9]+){0,2}', args.version):
+        ap.error('--version must contain one to three numeric components, such as 2 or 1.2.3')
+    return args
 
 
 def separate_game_image(py, repo, work, romfs, aoc, env, logs):
@@ -2661,6 +2690,10 @@ def main(args=None):
     out_ipa = Path(os.path.expanduser(args.out or OUT_IPA)).resolve() if (args.out or OUT_IPA) else work.parent / g.get('ipa')   # by default next to the build folder (the NSP folder, beside the NSPs and <id>_build/, unless --work-dir moved it)
     if shadowed and not (args.out or OUT_IPA): out_ipa = out_ipa.with_name(out_ipa.stem + '-provisional.ipa')   # never over the IPA of the game's real profile
     if mac_pack and (args.out or OUT_IPA) and out_ipa.suffix != '.app': raise BuildError(f'the Mac app (-o / OUT_IPA) must end in .app: {out_ipa}')
+    graphics_out = out_ipa.with_suffix('.graphics')
+    if not mac:
+        if out_ipa.suffix != '.ipa': raise BuildError(f'the base IPA output name must end in .ipa: {out_ipa}')
+        out_ipa = out_ipa.with_name(f'{out_ipa.stem}-touch-the-wild-{time.strftime("%Y%m%d")}-{args.version}.ipa')
     project = work / 'xcode/DmIOS.xcodeproj'
     workspace = Path(os.path.expanduser(args.xcode_workspace or XCODE_WORKSPACE)).resolve() if (args.xcode_workspace or XCODE_WORKSPACE) else nsp_dir.parent / 'NxNative.xcworkspace'
     if prepare_xcode and workspace.suffix != '.xcworkspace': raise BuildError('--xcode-workspace must end in .xcworkspace')
@@ -2736,10 +2769,9 @@ def main(args=None):
     if prepare_xcode:
         try: xcode_projects.check_bundle_id(workspace, project, bundle_id)
         except ValueError as e: raise BuildError(str(e)) from e
-    # the app version is the packed game's display version: the update's control data when an update is packed (nx_extract saves it next to the RomFS), else the base game's
-    app_version = nacp.version(game / 'control.nacp') or nacp.version(base / 'control.nacp')
+    app_version = args.version
     if mac_pack and not (args.out or OUT_IPA): out_ipa = work.parent / f'{mac_app_name(app_name)}{"-provisional" if shadowed else ""}.app'
-    if not mac or mac_pack: say(f'app name: {app_name}; version: {app_version or "1.0"}; bundle ID: {bundle_id}' + (f'; app: {out_ipa}' if mac_pack else ''))
+    if not mac or mac_pack: say(f'app name: {app_name}; version: {app_version}; bundle ID: {bundle_id}' + (f'; app: {out_ipa}' if mac_pack else ''))
     # the game language: Horizon gives the game one of the languages its control data lists (the packed version's, which an update may extend), so the one packed must be among them
     have = nacp.languages(game / 'control.nacp') or nacp.languages(base / 'control.nacp')
     lang = game_language(want_lang, bool(lang_in), have)
@@ -2786,7 +2818,7 @@ def main(args=None):
         pkey = split_shaders(py, repo, [rfs.source(dirs[v]) for v in sv], [dirs[v] / 'ExeFS/main' for v in sv], sh / 'pkg', env, logs, g, own, oodle, dlc_roms, derive_dlc, derive_compute)
         ios = None
         if not mac and graphics_mode == 'separate' and not (args.gpu or PSO_GPUS):
-            ios = reuse_graphics_package(repo, out_ipa.with_suffix('.graphics.zip'), work, g, pkg_ver, env)
+            ios = reuse_graphics_package(repo, graphics_out, work, g, pkg_ver, env)
         if ios is None:
             if not mac: check_metal(py, repo, env)
             ios = build_shaders(py, repo, sh, xlate, env, logs, g, pkey, mac)
@@ -2821,10 +2853,10 @@ def main(args=None):
     if not control.is_file(): control = base / 'control.nacp'
     ipa_env = dict(env, GAME=g.id, W=str(work / 'ipa'), PATCHED=str(patched), ROMFS=str(game_image), VNACP=str(control), MSL_IOS=str(ios), GFXAPI=gfx, FONT_PY=py, DM_DISPLAY_NAME=app_name, DM_BUNDLE_ID=bundle_id, AOC='' if separate else str(aoc or ''), DM_XCODE_DERIVED_DATA=str(work / 'xcode-derived-data'), DM_TEAM_ID=team_id, DM_LANG=lang)
     ipa_env['DM_COPY_GRAPHICS'] = 'NO' if graphics_mode == 'separate' else 'YES'
-    ipa_env['DM_GRAPHICS_OUT'] = str(out_ipa.with_suffix('.graphics.zip'))
+    ipa_env['DM_GRAPHICS_OUT'] = str(graphics_out)
     if prepare_xcode: ipa_env['DM_XCODE_PROJECT_DIR'] = str(project.parent)
     if separate: ipa_env['DM_COPY_ROMFS'] = 'NO'; say('game files and DLC: separate (DM_COPY_ROMFS=NO), left out of the app; the image stays at ' + str(game_image))
-    if app_version: ipa_env['DM_APP_VERSION'] = app_version
+    ipa_env['DM_APP_VERSION'] = app_version
     if icon: ipa_env['DM_ICON'] = str(icon); say(f'app icon: {icon}')   # app icon (found above)
     else: say('[RED] no game icon in the extraction (an older extraction did not save it: delete extract/ and run again); the home-screen icon will be blank')
     if env_file: ipa_env['DM_ENV_FILE'] = str(Path(os.path.expanduser(env_file)).resolve())
@@ -2849,9 +2881,11 @@ def main(args=None):
         say(f'game project: {project}')
         say(f'Xcode derived data: {work / "xcode-derived-data"}')
         if separate: say_push_romfs(game_image, bundle_id)
-        if graphics_mode == 'separate': say('graphics ZIP: ' + json.loads((work / 'ipa/graphics-result.json').read_text())['path'] + ' (Import shaders in the launcher)')
+        if graphics_mode == 'separate': say('graphics package: ' + json.loads((work / 'ipa/graphics-result.json').read_text())['path'] + ' (Import graphics in the launcher; do not unzip)')
         say('choose the game scheme in Xcode, select your Team and iPhone or iPad, then Run (Release)')
         report_profile_status(g, reg, pkg_ver, derived, provisional, 'Xcode project', patched)
+        graphics_result = json.loads((work / 'ipa/graphics-result.json').read_text()) if graphics_mode == 'separate' else None
+        report_ios_outputs('Xcode project', project, game_image if separate else None, graphics_result)
         return
     watch = IpaWatch(repo, work / 'ipa', out_ipa)
     PROG.stage('app build', poll=watch.poll, step='starting')   # build_ipa.sh's "pack IPA" line starts the stage "IPA pack"
@@ -2865,8 +2899,10 @@ def main(args=None):
         say(f'deleting the extracted game files: {ex}'); rmtree(ex)
     say(f'done: {out_ipa} ({out_ipa.stat().st_size / 2**30:.1f} GB)')
     if separate: say_push_romfs(game_image, bundle_id)
-    if graphics_mode == 'separate': say('graphics ZIP: ' + json.loads((work / 'ipa/graphics-result.json').read_text())['path'] + ' (Import shaders in the launcher)')
+    if graphics_mode == 'separate': say('graphics package: ' + json.loads((work / 'ipa/graphics-result.json').read_text())['path'] + ' (Import graphics in the launcher; do not unzip)')
     report_profile_status(g, reg, pkg_ver, derived, provisional, patched=patched)
+    graphics_result = json.loads((work / 'ipa/graphics-result.json').read_text()) if graphics_mode == 'separate' else None
+    report_ios_outputs('IPA', out_ipa, game_image if separate else None, graphics_result)
 
 
 def cli(argv):   # returns the exit code: 0 done, 1 error, 130 interrupted

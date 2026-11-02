@@ -6,7 +6,7 @@ One page for people and agents: the tools this repository has for building, runn
 
 | Step | Tool | Details |
 |---|---|---|
-| Pack a game for the Mac | `scripts/build_ipa_from_nsp.py <NSP folder> -k <prod.keys> --platform mac` | Extraction, rewriter, shader split and chain, the Mac host; prints the command that runs the game. [A Mac-only build](../development.md#a-mac-only-build-for-development) |
+| Pack a game for the Mac | `scripts/build_ipa_from_nsp.py <NSP folder> -k <prod.keys> --version <release> --platform mac` | Extraction, rewriter, shader split and chain, the Mac host; prints the command that runs the game. [A Mac-only build](../development.md#a-mac-only-build-for-development) |
 | A double-clickable app | the same with `--platform mac-app` (adds the offline pipeline archive) | [A Mac app](../development.md#a-mac-app) |
 | An iPhone build | the same without `--platform` (an unsigned IPA the user sideloads) | [The packing script in detail](../development.md#the-packing-script-in-detail) |
 | Rebuild only the host | `make -C dm/host GAME=<id>` | [Build by hand (Mac)](../development.md#build-by-hand-mac) |

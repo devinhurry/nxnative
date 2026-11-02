@@ -6,6 +6,7 @@ the app commit or UI. Versions increase within a series; package IDs identify
 the actual bytes and recorded compilers. No shader translation happens here.
 """
 import argparse
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ import re
 import shutil
 import sys
 import tempfile
+from typing import Any
 import zipfile
 
 REPO = Path(__file__).resolve().parents[2]
@@ -40,7 +42,7 @@ def atomic_json(path, value):
     os.replace(temporary, path)
 
 
-def requirements(game, build, api, library, tables, external=True, minimum=MINIMUM_VERSION, repo=REPO):
+def requirements(game, build, api, library, tables, external=True, minimum=MINIMUM_VERSION, repo=REPO) -> dict[str, Any]:
     """Conservatively include renderer contracts, never launcher or touch UI files."""
     if not 1 <= minimum <= 1_000_000: raise ValueError('invalid minimum graphics version')
     if not re.fullmatch(r'[A-Za-z0-9_-]+', library): raise ValueError('invalid shader library directory')
@@ -109,9 +111,8 @@ def restore(archive, required, cache):
             raise ValueError('invalid graphics inventory')
         if not re.fullmatch(r'[0-9a-f]{64}', str(manifest.get('id', ''))) or manifest['id'] != package_id(manifest):
             raise ValueError('invalid graphics package identity')
-        expected = {e['path']: e for e in files}
         entries = z.infolist()
-        if len(entries) != len(files) + 1 or {e.filename for e in entries} != set(expected) | {'manifest.json'}:
+        if not entries or entries[0].filename != 'manifest.json' or len(entries) != len(files) + 1 or {e.filename for e in entries} != {e['path'] for e in files} | {'manifest.json'}:
             raise ValueError('graphics ZIP inventory differs from manifest')
         cache = Path(cache); cache.mkdir(parents=True, exist_ok=True)
         destination = cache / manifest['id']
@@ -123,16 +124,7 @@ def restore(archive, required, cache):
         except (OSError, ValueError): pass
         stage = Path(tempfile.mkdtemp(prefix='.graphics-', dir=cache))
         try:
-            for entry in entries:
-                if entry.filename == 'manifest.json': continue
-                record = expected[entry.filename]
-                if entry.file_size != record['size'] or entry.compress_type != zipfile.ZIP_STORED or entry.external_attr >> 28 == 0xA:
-                    raise ValueError('invalid graphics ZIP entry')
-                target = stage / entry.filename; target.parent.mkdir(parents=True, exist_ok=True)
-                h = hashlib.sha256()
-                with z.open(entry) as source, target.open('xb') as output:
-                    for block in iter(lambda: source.read(1024 * 1024), b''): output.write(block); h.update(block)
-                if h.hexdigest() != record['sha256']: raise ValueError('graphics file integrity check failed')
+            read_payloads(z, files, stage)
             atomic_json(stage / 'manifest.json', manifest)
             atomic_json(stage / '.archive.json', archive_stat)
             if destination.exists(): shutil.rmtree(destination)
@@ -142,11 +134,35 @@ def restore(archive, required, cache):
         return destination, manifest
 
 
+def read_payloads(archive, files, directory=None):
+    """Verify a published ZIP, optionally restoring its payloads into a private directory."""
+    expected = {entry['path']: entry for entry in files}
+    entries = archive.infolist()
+    if not entries or entries[0].filename != 'manifest.json' or len(entries) != len(files) + 1 or {entry.filename for entry in entries} != set(expected) | {'manifest.json'}:
+        raise ValueError('graphics ZIP inventory differs from manifest')
+    for entry in entries[1:]:
+        record = expected[entry.filename]
+        if entry.file_size != record['size'] or entry.compress_type != zipfile.ZIP_STORED or entry.external_attr >> 28 == 0xA:
+            raise ValueError('invalid graphics ZIP entry')
+        target = directory / entry.filename if directory is not None else None
+        if target is not None: target.parent.mkdir(parents=True, exist_ok=True)
+        h = hashlib.sha256()
+        with archive.open(entry) as source, (target.open('xb') if target is not None else nullcontext()) as output:
+            for block in iter(lambda: source.read(1024 * 1024), b''):
+                if output is not None: output.write(block)
+                h.update(block)
+        if h.hexdigest() != record['sha256']: raise ValueError('graphics file integrity check failed')
+
+
 def compatible(manifest, required):
     if not isinstance(manifest, dict): return 'unsupported graphics package format'
     if manifest.get('schema') != SCHEMA or manifest.get('kind') != 'graphics': return 'unsupported graphics package format'
     if manifest.get('series') != required['series'] or manifest.get('compatibility') != required['compatibility']:
-        return 'graphics compatibility series changed'
+        actual = manifest.get('compatibility')
+        expected = required['compatibility']
+        if (not isinstance(actual, dict) or manifest.get('id') not in required.get('equivalent_package_ids', []) or
+                {k: v for k, v in actual.items() if k != 'contract'} != {k: v for k, v in expected.items() if k != 'contract'}):
+            return 'graphics compatibility series changed'
     version = manifest.get('version')
     if type(version) is not int or version < required['minimum_version']:
         return f'graphics package version {version} is below required {required["minimum_version"]}'
@@ -215,20 +231,80 @@ def archive_path(output, manifest):
     return output.with_name(f'{output.stem}.v{manifest["version"]}{output.suffix}')
 
 
+def archive_bases(output):
+    output = Path(output)
+    if output.suffix == '.graphics':
+        return [output, output.with_suffix('.graphics.zip'), output.with_suffix('.zip')]
+    if output.suffix == '.zip':
+        return [output, output.with_name(output.stem) if output.stem.endswith('.graphics') else output.with_suffix('.graphics')]
+    return [output]
+
+
 def published_packages(output, series=None):
     output = Path(output)
     if not output.parent.is_dir(): return []
-    pattern = re.compile(re.escape(output.stem) + r'\.v([1-9][0-9]*)' + re.escape(output.suffix))
+    patterns = [re.compile(re.escape(base.stem) + r'\.v([1-9][0-9]*)' + re.escape(base.suffix)) for base in archive_bases(output)]
     found = []
     for path in output.parent.iterdir():
-        match = pattern.fullmatch(path.name)
+        match = next((m for pattern in patterns if (m := pattern.fullmatch(path.name))), None)
         if match and path.is_file():
             if series is not None:
                 with zipfile.ZipFile(path) as archive: manifest = json.loads(archive.read('manifest.json'))
                 if manifest.get('version') != int(match[1]): raise ValueError('graphics archive filename disagrees with its manifest')
                 if manifest.get('series') != series: continue
-            found.append((int(match[1]), path))
-    return [path for _, path in sorted(found, reverse=True)]
+            found.append((int(match[1]), path.suffix == output.suffix, path))
+    return [path for _, _, path in sorted(found, reverse=True)]
+
+
+def publish_reused_archive(output, archive, manifest):
+    """Give immutable legacy ZIP releases the current name without repacking bytes."""
+    archive = Path(archive)
+    target = archive_path(output, manifest)
+    if target == archive: return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() or target.is_symlink():
+        if target.is_symlink() or not target.is_file() or (not target.samefile(archive) and digest(target) != digest(archive)):
+            raise ValueError(f'graphics release already exists with different contents: {target}')
+    else:
+        # Published releases are replaced atomically, never edited in place.
+        # A sibling hard link preserves the old download without a second copy.
+        if archive.stat().st_dev == target.parent.stat().st_dev:
+            os.link(archive, target)
+        else:
+            descriptor, temporary = tempfile.mkstemp(prefix=target.name + '.', suffix='.part', dir=target.parent)
+            os.close(descriptor)
+            try:
+                shutil.copyfile(archive, temporary)
+                os.replace(temporary, target)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+    stamp = archive.with_suffix(archive.suffix + '.inputs.json')
+    if stamp.is_file():
+        proof = json.loads(stamp.read_text())
+        proof['archive'] = [target.stat().st_size, target.stat().st_mtime_ns]
+        atomic_json(target.with_suffix(target.suffix + '.inputs.json'), proof)
+    return target
+
+
+def reuse_requirements(archive, required):
+    """Recover an exact-ID proof previously completed for these current requirements."""
+    archive = Path(archive)
+    with zipfile.ZipFile(archive) as z: manifest = json.loads(z.read('manifest.json'))
+    if compatible(manifest, required) is None: return manifest, required
+    stamp = archive.with_suffix(archive.suffix + '.inputs.json')
+    if stamp.is_file():
+        proof = json.loads(stamp.read_text())
+        state = proof.get('state', {})
+        if (state.get('required') == required and state.get('producer') == digest(__file__) and
+                proof.get('archive') == [archive.stat().st_size, archive.stat().st_mtime_ns]):
+            for _, path, size, modified in state['sources']:
+                source = Path(path)
+                # Deleted build caches can be restored from the verified ZIP.
+                # Existing outputs that changed must be independently compared.
+                if source.exists() and (source.is_symlink() or [source.stat().st_size, source.stat().st_mtime_ns] != [size, modified]):
+                    return manifest, required
+            required = dict(required, equivalent_package_ids=[manifest['id']])
+    return manifest, required
 
 
 def build(output, required, shaders, tables, pso=None, version=VERSION):
@@ -237,30 +313,43 @@ def build(output, required, shaders, tables, pso=None, version=VERSION):
     floor = max(version, required['minimum_version'])
     base = Path(output); base.parent.mkdir(parents=True, exist_ok=True)
     releases = published_packages(base)
-    previous = published_packages(base, required['series'])
-    output = previous[0] if previous else archive_path(base, dict(series=required['series'], version=floor))
     files = sources(shaders, tables, pso, required['compatibility']['library'])
     snapshot = [[name, str(p.resolve()), p.stat().st_size, p.stat().st_mtime_ns] for name, p in files.items()]
     state = dict(schema=SCHEMA, producer=digest(__file__), required=required,
                  version=floor, sources=snapshot)
-    stamp = output.with_suffix(output.suffix + '.inputs.json')
-    old = None
-    if previous:
-        with zipfile.ZipFile(output) as z: old = json.loads(z.read('manifest.json'))
-        if output != archive_path(base, old): raise ValueError('graphics archive filename disagrees with its manifest')
-        why = compatible(old, required)
-        print(f'graphics: {"UPDATE REQUIRED: " + why if why else "previous package is compatible"}', flush=True)
-        cached = json.loads(stamp.read_text()) if stamp.is_file() else {}
-        if cached.get('state') == state and cached.get('archive') == [output.stat().st_size, output.stat().st_mtime_ns]:
-            print(f'graphics: REUSE v{old["version"]}, series {old["series"]} ({output})', flush=True)
+    compilers = entries = None
+    for output in releases:
+        with zipfile.ZipFile(output) as archive:
+            old = json.loads(archive.read('manifest.json'))
+            if output not in {archive_path(name, old) for name in archive_bases(base)}:
+                raise ValueError('graphics archive filename disagrees with its manifest')
+            # This provisional ID only screens hard requirements. It is approved
+            # for the app after the current, independently built payloads match.
+            candidate = dict(required, minimum_version=floor, equivalent_package_ids=[old.get('id')])
+            if compatible(old, candidate): continue
+            if old.get('id') != package_id(old): raise ValueError('invalid graphics package identity')
+            stamp = output.with_suffix(output.suffix + '.inputs.json')
+            cached = json.loads(stamp.read_text()) if stamp.is_file() else {}
+            archive_stat = [output.stat().st_size, output.stat().st_mtime_ns]
+            if cached.get('state') == state and cached.get('archive') == archive_stat:
+                current = publish_reused_archive(base, output, old)
+                print(f'graphics: REUSE v{old["version"]} (verified unchanged inputs; {current})', flush=True)
+                return old
+            if entries is None:
+                compilers = compiler_records(files)
+                entries = [dict(path=name, size=p.stat().st_size, sha256=digest(p)) for name, p in files.items()]
+            if old.get('files') != entries or old.get('compilers') != compilers: continue
+            read_payloads(archive, entries)
+            after = [[name, str(p.resolve()), p.stat().st_size, p.stat().st_mtime_ns] for name, p in files.items()]
+            if after != snapshot or [output.stat().st_size, output.stat().st_mtime_ns] != archive_stat:
+                raise ValueError('graphics inputs changed during verification; retry after the build finishes')
+            atomic_json(stamp, dict(state=state, archive=archive_stat))
+            current = publish_reused_archive(base, output, old)
+            print(f'graphics: REUSE v{old["version"]} (identical contents, verified {len(entries)} files; {current})', flush=True)
             return old
-    else: print('graphics: NEW package (no previous package)', flush=True)
-    compilers = compiler_records(files)
-    entries = [dict(path=name, size=p.stat().st_size, sha256=digest(p)) for name, p in files.items()]
-    if old and compatible(old, required) is None and old.get('files') == entries and old.get('compilers') == compilers and old.get('version', 0) >= floor:
-        atomic_json(stamp, dict(state=state, archive=[output.stat().st_size, output.stat().st_mtime_ns]))
-        print(f'graphics: REUSE v{old["version"]} (identical contents)', flush=True)
-        return old
+    if entries is None:
+        compilers = compiler_records(files)
+        entries = [dict(path=name, size=p.stat().st_size, sha256=digest(p)) for name, p in files.items()]
     # File versions share one sequence across series so short names never replace another release.
     latest_version = int(releases[0].stem.rsplit('.v', 1)[1]) if releases else 0
     version = max(floor, latest_version + 1)
@@ -294,10 +383,10 @@ def main(argv=None):
     p.add_argument('--library', required=True); p.add_argument('--shaders', required=True, type=Path)
     p.add_argument('--tables', required=True, type=Path); p.add_argument('--pso', type=Path)
     p.add_argument('--requirements', type=Path)
-    p.add_argument('--out', type=Path, help='base ZIP name; .v<version> is added before its extension')
-    p.add_argument('--result', type=Path, help='write the actual versioned ZIP path and release metadata as JSON')
+    p.add_argument('--out', type=Path, help='base .graphics name; .v<version> is added before its extension (legacy .zip names are supported)')
+    p.add_argument('--result', type=Path, help='write the actual versioned package path and release metadata as JSON')
     p.add_argument('--check', type=Path, help='verify a prepared app still has current compatibility requirements')
-    p.add_argument('--reuse', type=Path, help='keep a previously validated compatible graphics ZIP')
+    p.add_argument('--reuse', type=Path, help='keep a previously validated compatible .graphics or legacy .zip package')
     p.add_argument('--version', type=int, default=VERSION); p.add_argument('--minimum-version', type=int, default=MINIMUM_VERSION)
     p.add_argument('--bundle', action='store_true')
     a = p.parse_args(argv)
@@ -312,17 +401,22 @@ def main(argv=None):
     if a.bundle and (a.reuse or a.result): p.error('--bundle cannot be combined with --reuse or --result')
     if not a.bundle:
         if a.reuse:
-            with zipfile.ZipFile(a.reuse) as z: old = json.loads(z.read('manifest.json'))
+            old, required = reuse_requirements(a.reuse, required)
             why = compatible(old, required)
             if why: raise ValueError(why)
-            archive = a.reuse
+            archive = publish_reused_archive(a.out, a.reuse, old) if a.out else a.reuse
+            status = 'reused'
             print(f'graphics: REUSE v{old["version"]}, series {old["series"]} ({a.reuse})', flush=True)
         else:
             if not a.out: p.error('--out is required for separate graphics')
+            existing = {int(path.stem.rsplit('.v', 1)[1]) for path in published_packages(a.out)}
             old = build(a.out, required, a.shaders, a.tables, a.pso, a.version)
             archive = archive_path(a.out, old)
+            status = 'reused' if old['version'] in existing else 'generated'
+            if old['series'] != required['series'] or old['compatibility'] != required['compatibility']:
+                required['equivalent_package_ids'] = [old['id']]
         if a.result:
-            atomic_json(a.result, dict(path=str(archive.resolve()), series=old['series'], version=old['version']))
+            atomic_json(a.result, dict(path=str(archive.resolve()), series=old['series'], version=old['version'], status=status))
     atomic_json(a.requirements, required)
 
 

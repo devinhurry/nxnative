@@ -15,6 +15,9 @@ private final class LandscapeLauncherController<Content: View>: UIHostingControl
 
 private func info(_ key: String) -> Any? { Bundle.main.object(forInfoDictionaryKey: key) }
 
+private extension UTType {
+    static let graphicsPackage = UTType(exportedAs: "org.nxnative.graphics", conformingTo: .data)
+}
 
 /// Cloud saves: an iCloud Drive folder shared with the Mac app (chosen in its settings window's
 /// Cloud saves too). The host brings the save in from there when the game starts and
@@ -145,7 +148,7 @@ private struct LauncherView: View {
             Button("OK") { importError = nil }
         } message: { Text(importError ?? "") }
         .sheet(item: $importing) { kind in
-            DocumentPicker(types: kind == .rom ? [.data] : [.zip]) { url in
+            DocumentPicker(types: kind == .rom ? [.data] : [.graphicsPackage, .zip]) { url in
                 importing = nil
                 importResource(url, kind: kind)
             } onCancel: { importing = nil }

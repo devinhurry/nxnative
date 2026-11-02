@@ -50,7 +50,7 @@ class UnsignedIpaTests(unittest.TestCase):
             (root / 'DmIOS.app/executable').write_text('app')
             if image: romfs_image.pack(root / 'romfs', root / 'RomFS.img')
             result = run_step(PACKING, root, APP=str(root / 'DmIOS.app'), MSL_IOS=str(root / 'shaders'), MSLDIR='b-fixture', ROMFS=str(root / ('RomFS.img' if image else 'romfs')),
-                              AOC=str(root / 'aoc'), OUT_IPA=str(root / 'out.ipa'), O=str(root / 'pkg'), DM_APP_VERSION='1.2.1', PKG='v327680', **extra)
+                              AOC=str(root / 'aoc'), OUT_IPA=str(root / 'out.ipa'), O=str(root / 'pkg'), DM_APP_VERSION='2.0.0', GAME_VERSION='1.2.1', PKG='v327680', **extra)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             with zipfile.ZipFile(root / 'out.ipa') as archive:
                 if identity is not None: identity.append((archive.read('Payload/DmIOS.app/romfs.id').decode() if 'Payload/DmIOS.app/romfs.id' in archive.namelist() else None, (root / 'RomFS.img').read_bytes() if image else None))
@@ -92,7 +92,7 @@ class UnsignedIpaTests(unittest.TestCase):
             combined = root / 'combined.img'
             subprocess.run([sys.executable, '-I', str(REPO / 'dm/tools/game_image.py'), str(base), str(root / 'aoc'), str(combined)], check=True, capture_output=True)
             result = run_step(PACKING, root, APP=str(root / 'DmIOS.app'), MSL_IOS=str(root / 'shaders'), MSLDIR='b-fixture',
-                              ROMFS=str(combined), AOC='', OUT_IPA=str(root / 'out.ipa'), O=str(root / 'pkg'), DM_APP_VERSION='1.2.1', PKG='v327680', DM_COPY_ROMFS='NO')
+                              ROMFS=str(combined), AOC='', OUT_IPA=str(root / 'out.ipa'), O=str(root / 'pkg'), DM_APP_VERSION='2.0.0', GAME_VERSION='1.2.1', PKG='v327680', DM_COPY_ROMFS='NO')
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             with zipfile.ZipFile(root / 'out.ipa') as archive:
                 self.assertTrue(romfs_image.same_identity(archive.read('Payload/DmIOS.app/romfs.id').decode(), romfs_image.identity(combined)))

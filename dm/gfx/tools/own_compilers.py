@@ -18,6 +18,8 @@ strict = tool_lock.check_tools
 def allowed(): return os.environ.get(ALLOW) == '1'
 
 def metal_version(sdk):   # as tool_lock.tools_now records it: the first line of metal --version, 'missing' without one
+    # Record the compiler's own identity, independently of this launcher's source.
+    # The shader cache keys describe the compiler and its effective build inputs.
     r = subprocess.run(['xcrun', '-sdk', sdk, 'metal', '--version'], capture_output=True, text=True)
     return (r.stdout.splitlines() or ['missing'])[0]
 
