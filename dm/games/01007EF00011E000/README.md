@@ -224,20 +224,23 @@ compact A keeps 22.1pt and 43.9pt. Resizing keeps each control's side and bottom
 edge margins. Saved fraction/scale customizations project onto those reference
 layouts once; new `_X_PT`, `_Y_PT` and `_SIZE_PT` choices take precedence.
 Resetting point defaults does not reimport the retired fraction values.
-From 2026-11-03, normal-layout base left margins contract below 768pt of actual
-control-area width, by width / 768 with a 0.9 lower bound. Safe insets do not
+From 2026-11-03, normal-layout base left margins contract below 800pt of actual
+control-area width, by width / 800 with a 0.8 lower bound. Safe insets do not
 enter that calculation, and user offsets apply afterward in points. Diameters,
 right/bottom margins and compact left margins retain their point values.
-At 669pt wide, the movement-stick left margin becomes 54.36pt, ZL 31.5pt and
-the D-pad 221.49pt; the conservative gap to Y grows from 122.3pt to 146.91pt.
+At 669pt wide, the movement-stick left margin becomes about 50.51pt, ZL 29.27pt
+and the D-pad 205.80pt; the conservative gap to Y grows from 122.3pt to 162.60pt.
 The shared geometry applies this rule to UIKit, the Mac preview and the editor.
-The margin trial passes native geometry/aspect/HUD checks, 702 UIKit checks
+The earlier 768pt/90% trial passed native geometry/aspect/HUD checks, 702 UIKit checks
 with 40 look sessions, and 37 focused settings/storage/documentation tests.
 Current-source Mac test gameplay uses the matching existing shader cache and a
 copied save. The independent quick shader regression stops before comparison:
 local Metal 32023.883 differs from the pinned 32023.922. LLVM 19 reports the
 same two frontend findings on unchanged main and this trial. Evidence is under
 `touch-margins-20261103/` in the external game work folder.
+The 800pt/80% parameter update has updated fixture expectations but has not
+rerun validation. Expanded stick/D-pad grab circles can overlap at this floor;
+the visible controls remain separate, and input ownership uses the existing routing.
 The [touch settings guide](../../../docs/settings.md#touch-left-stick) describes
 the keys and units. The 2026-10-29 group/percentage defaults described earlier
 are superseded by this layout; response deadzone/curve/full-travel fractions
