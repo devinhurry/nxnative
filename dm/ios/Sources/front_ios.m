@@ -126,11 +126,16 @@ NSUInteger dm_touch_editor_orientations(void);
 UIInterfaceOrientationMask front_ios_orientations(UIWindow *window) {
     UIInterfaceOrientationMask editor=dm_touch_editor_orientations();
     if (editor) return editor;
-    // Match the root controller while the launcher is being presented. Saved
-    // portrait play preferences apply only after the game view exists.
-    if (!g_root.game) return UIInterfaceOrientationMaskLandscape;
-    CGSize size=window.bounds.size; UIEdgeInsets safe=window.safeAreaInsets;
-    return !strcmp(DM_GAME_ID,"01007EF00011E000") && dm_botw_portrait_allowed(size.width,size.height,safe.left,safe.right) ?
+    if (strcmp(DM_GAME_ID,"01007EF00011E000")) return UIInterfaceOrientationMaskLandscape;
+    CGSize size=window ? window.bounds.size : UIScreen.mainScreen.bounds.size;
+    BOOL portrait=dm_botw_portrait_allowed(size.width,size.height,0,0);
+    // The launcher has not applied saved choices yet. Read the same compact
+    // preference now, while explicit environment overrides retain priority.
+    if (!getenv("DM_BOTW_PORTRAIT") && (!getenv("DM_SAVED_CHOICES") || strcmp(getenv("DM_SAVED_CHOICES"),"0"))) {
+        id saved=[NSUserDefaults.standardUserDefaults objectForKey:@"launcher.DM_BOTW_PORTRAIT"];
+        if ([saved isKindOfClass:NSString.class] && [saved isEqualToString:@"1"]) portrait=YES;
+    }
+    return portrait ?
         UIInterfaceOrientationMaskLandscape | UIInterfaceOrientationMaskPortrait : UIInterfaceOrientationMaskLandscape;
 }
 static void launcher_done(void) { [g_root startGame]; }
@@ -238,7 +243,8 @@ static void game_settings_done(void) { dm_gamepad_settings_done(); }
 }
 - (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
     UIInterfaceOrientation current=self.view.window.windowScene.interfaceOrientation;
-    return UIInterfaceOrientationIsLandscape(current) ? current : UIInterfaceOrientationLandscapeRight;
+    return current!=UIInterfaceOrientationUnknown && (self.supportedInterfaceOrientations & (1UL<<current)) ?
+        current : UIInterfaceOrientationLandscapeRight;
 }
 @end
 UIViewController *front_ios_root(void) { return [DmRootVC new]; }

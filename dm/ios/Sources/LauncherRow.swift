@@ -4,8 +4,6 @@ import SwiftUI
 import DmTouchPad
 
 let launcherTint = Color(red: 66.0 / 255, green: 102.0 / 255, blue: 134.0 / 255)
-// Dark surfaces need a lighter accent for text and control indicators.
-let launcherControlTint = Color(red: 142.0 / 255, green: 188.0 / 255, blue: 229.0 / 255)
 
 // Only the game process links the frame-capture adapter; the standalone Mac launcher does not.
 #if os(iOS) || DM_HOST_UI
@@ -264,7 +262,7 @@ struct LauncherDashboard: View {
             Text("Touch UI cannot cover every game screen. If a button does not respond, double-tap with three fingers to temporarily show the virtual gamepad and continue. Please report the issue to the developer.")
         }
         .preferredColorScheme(.dark)
-        .tint(launcherControlTint).accentColor(launcherControlTint)
+        .tint(launcherTint).accentColor(launcherTint)
     }
 
     private func readiness(_ ready: Bool) -> some View {
@@ -331,7 +329,7 @@ struct LauncherSettingsPage: View {
                     Spacer(minLength: 0)
                     if section == selection { Image(systemName: "chevron.right").font(.caption) }
                 }
-                .foregroundStyle(section == selection ? launcherControlTint : Color.primary)
+                .foregroundStyle(section == selection ? launcherTint : Color.primary)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -406,7 +404,7 @@ struct LauncherSettingsPage: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("launcher.settings.page")
         .preferredColorScheme(.dark)
-        .tint(launcherControlTint).accentColor(launcherControlTint)
+        .tint(launcherTint).accentColor(launcherTint)
     }
 }
 

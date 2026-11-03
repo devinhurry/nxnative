@@ -9,10 +9,13 @@ import UniformTypeIdentifiers
 import os
 import DmTouchPad
 
-private final class LandscapeLauncherController<Content: View>: UIHostingController<Content> {
-    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { touchEditorOrientations ?? .landscape }
+private final class LauncherHostingController<Content: View>: UIHostingController<Content> {
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+        touchEditorOrientations ?? presentingViewController?.supportedInterfaceOrientations
+            ?? viewIfLoaded?.window?.rootViewController?.supportedInterfaceOrientations ?? .landscape
+    }
     override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation {
-        let current = view.window?.windowScene?.interfaceOrientation ?? .unknown
+        let current = (viewIfLoaded?.window ?? presentingViewController?.view.window)?.windowScene?.interfaceOrientation ?? .unknown
         if current != .unknown && supportedInterfaceOrientations.contains(UIInterfaceOrientationMask(rawValue: 1 << current.rawValue)) { return current }
         return supportedInterfaceOrientations == .portrait ? .portrait : .landscapeRight
     }
@@ -24,13 +27,12 @@ private var touchEditorOrientations: UIInterfaceOrientationMask?
 @_cdecl("dm_touch_editor_orientations")
 public func dmTouchEditorOrientations() -> UInt { touchEditorOrientations?.rawValue ?? 0 }
 
-func setBotwTouchEditorOrientation(_ portrait: Bool?, window: UIWindow?, running: Bool) {
+func setBotwTouchEditorOrientation(_ portrait: Bool?, window: UIWindow?) {
     let size = window?.bounds.size ?? .zero
     if let portrait {
         touchEditorOrientations = portrait ? .portrait : min(size.width, size.height) >= 600 ? [.landscape, .portrait] : .landscape
     } else { touchEditorOrientations = nil }
-    let restore: UIInterfaceOrientationMask = running && dm_botw_portrait_allowed(Float(size.width), Float(size.height), 0, 0) != 0
-        ? [.landscape, .portrait] : .landscape
+    let restore = window?.rootViewController?.supportedInterfaceOrientations ?? .landscape
     let mask = touchEditorOrientations ?? restore
     var controller = window?.rootViewController
     while let current = controller {
@@ -323,7 +325,7 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
         host = nil
         h.dismiss(animated: false) { done() }
     }
-    let h = LandscapeLauncherController(rootView: view)
+    let h = LauncherHostingController(rootView: view)
     h.modalPresentationStyle = .fullScreen
     host = h
     parent.present(h, animated: false)
