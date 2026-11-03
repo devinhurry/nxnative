@@ -381,7 +381,14 @@ struct BotwTouchSettingsView: View {
                 } else if controlOptions.count > 1 {
                     Menu {
                         ForEach(controlOptions) { controlOption($0) }
-                    } label: { Image(systemName: "ellipsis.circle").accessibilityLabel("Button options") }
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text("Button configuration")
+                            Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
+                        }
+                    }
+                    .menuIndicator(.hidden).fixedSize()
+                    .accessibilityLabel("Button configuration")
                     .accessibilityIdentifier("botw.touch.control.options")
                 }
                 Spacer(minLength: 0)
