@@ -5,6 +5,8 @@ import DmTouchPad
 
 let launcherTint = Color(red: 66.0 / 255, green: 102.0 / 255, blue: 134.0 / 255)
 
+// Only the game process links the frame-capture adapter; the standalone Mac launcher does not.
+#if os(iOS) || DM_HOST_UI
 func withGameSettingsBackground(_ complete: @escaping (Image?) -> Void) {
     var delivered = false
     let finish: (Image?) -> Void = { image in
@@ -19,6 +21,7 @@ func withGameSettingsBackground(_ complete: @escaping (Image?) -> Void) {
     // A game that has stopped presenting must still allow settings to open.
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { finish(nil) }
 }
+#endif
 
 extension LauncherModel {
     func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.setValue($0, for: s) }) }

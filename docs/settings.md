@@ -67,7 +67,7 @@ Breath of the Wild renders 1280x720 in handheld mode. Docked it renders its worl
 
 ### Game language
 
-The game's own languages. The app was packed with one of them; pick another here without repacking.
+The game's own languages. By default, the app follows the device's preferred languages, choosing one the game supports. If none match, it uses the language the app was packed with. A manual selection is remembered, including a choice equal to the current system default. Reset to tested defaults restores automatic selection. The same rules apply when the startup screen is skipped; changing the language while playing takes effect at the next game start.
 
 ### Frame-rate counter
 

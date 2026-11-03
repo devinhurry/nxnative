@@ -1,4 +1,4 @@
-// The launcher's storage (LauncherSettings.swift LauncherModel), run by test_launcher_storage.py on macOS: only choices that differ from the game's default are
+// The launcher's storage (LauncherSettings.swift LauncherModel), run by test_launcher_storage.py on macOS: changed choices and explicit automatic-default overrides are
 // stored, Reset to tested defaults followed by Play forgets the choices, an env file's values are kept. Arguments: the iOS and the Mac launcher.json of Breath of the Wild (settings.py, GFXAPI=nvn)
 import Foundation
 import CoreGraphics
@@ -377,7 +377,7 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
         expect(memoryDefaults.string(forKey: "launcher.DM_LOW_MEMORY") == nil,
                "runtime reset removes an explicit memory override even when its value already equals automatic")
         setenv("DM_LANG", "en-US", 1)
-        runtimeModel.values["DM_LANG"] = "ja"
+        runtimeModel.setValue("ja", for: runtimeModel.settings.first { $0.env == "DM_LANG" }!)
         expect(memoryDefaults.string(forKey: "launcher.DM_LANG") == "ja" && String(cString: getenv("DM_LANG")) == "en-US",
                "runtime restart-only edits persist without altering the running language")
         #if DM_HOST_UI
@@ -444,10 +444,93 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
             }
         }
         unsetenv("DM_ENV_FILE_KEYS"); unsetenv("DM_NVN_FB_SNAP")
+        failed += checkGameLanguageDefaults()
         failed += checkTouchLayoutPresets(file.settings)
         print("launcher storage: \(failed) failed")
         exit(failed == 0 ? 0 : 1)
     }
+}
+
+private func checkGameLanguageDefaults() -> Int {
+    var failed = 0
+    func expect(_ condition: Bool, _ what: String) { print((condition ? "PASS " : "FAIL ") + what); if !condition { failed += 1 } }
+    let keys = ["DM_LANG", "DM_ENV_FILE_KEYS", "DM_ENV_LAUNCH_KEYS", "DM_SAVED_CHOICES"]
+    let previous = ProcessInfo.processInfo.environment
+    defer { for key in keys { if let value = previous[key] { setenv(key, value, 1) } else { unsetenv(key) } } }
+    for key in keys { unsetenv(key) }
+    let suite = "nxnative.language-test." + UUID().uuidString
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let language = try! JSONDecoder().decode(Setting.self, from: Data(#"{"env":"DM_LANG","kind":"choice","label":"Game language","note":"","default":"en-US","options":[["en-US","English"],["ja","Japanese"],["zh-Hans","Simplified Chinese"],["zh-Hant","Traditional Chinese"]]}"#.utf8))
+    func model(_ preferences: [String], row: Setting? = nil) -> LauncherModel {
+        LauncherModel([row ?? language], defaults: defaults, preferredLanguages: preferences)
+    }
+    for (preferences, expected) in [(["zh-Hans-CN"], "zh-Hans"), (["zh-TW"], "zh-Hant"), (["en-GB"], "en-US"),
+                                    (["de-DE", "ja-JP"], "ja"), (["de-DE"], "en-US"), ([], "en-US")] {
+        let automatic = model(preferences)
+        expect(automatic.values["DM_LANG"] == expected && !automatic.changed, "game language matches device preferences: \(preferences)")
+        automatic.apply()
+        expect(defaults.string(forKey: "launcher.DM_LANG") == nil, "starting a game never saves the automatic language")
+    }
+    var fallback = language
+    fallback.def = "ja"
+    expect(model(["de-DE"], row: fallback).values["DM_LANG"] == "ja", "an unsupported device language falls back to the packed language")
+    expect(model(["ja-JP"]).values["DM_LANG"] == "ja" && model(["zh-Hans-CN"]).values["DM_LANG"] == "zh-Hans",
+           "automatic language follows changed preferences on the next launch")
+    for chosen in ["en-US", "zh-Hans"] {
+        defaults.removeObject(forKey: "launcher.DM_LANG")
+        let manual = model([chosen])
+        manual.binding(manual.settings[0]).wrappedValue = chosen
+        expect(manual.changed && defaults.string(forKey: "launcher.DM_LANG") == chosen,
+               "explicitly choosing the automatic language is remembered, including the packed default: \(chosen)")
+        manual.apply()
+        let reopened = model(["ja-JP"])
+        setenv("DM_LANG", "en-US", 1)
+        reopened.applySaved()
+        expect(reopened.values["DM_LANG"] == chosen && String(cString: getenv("DM_LANG")) == chosen,
+               "manual language survives changed system preferences and a skipped startup screen")
+    }
+    let reset = model(["ja-JP"])
+    reset.reset(keys: ["DM_RENDER_SCALE"])
+    expect(reset.values["DM_LANG"] == "zh-Hans", "an unrelated reset preserves the manual language")
+    reset.reset(); reset.apply()
+    expect(reset.values["DM_LANG"] == "ja" && !reset.changed && defaults.string(forKey: "launcher.DM_LANG") == nil &&
+           model(["zh-TW"]).values["DM_LANG"] == "zh-Hant", "Reset restores automatic language selection for future launches")
+    defaults.set("de-DE", forKey: "launcher.DM_LANG")
+    let unsupported = model(["zh-TW"])
+    expect(unsupported.values["DM_LANG"] == "zh-Hant", "a saved language the game no longer supports falls back to the device")
+    unsupported.apply()
+    expect(defaults.string(forKey: "launcher.DM_LANG") == nil, "an unsupported old language is not converted into a manual override")
+    for marker in ["DM_ENV_FILE_KEYS", "DM_ENV_LAUNCH_KEYS"] {
+        defaults.set("en-US", forKey: "launcher.DM_LANG")
+        setenv(marker, "DM_LANG", 1); setenv("DM_LANG", "ja", 1)
+        let locked = model(["zh-Hans-CN"])
+        locked.setValue("zh-Hant", for: locked.settings[0]); locked.reset(); locked.apply(); locked.applySaved()
+        expect(locked.values["DM_LANG"] == "ja" && String(cString: getenv("DM_LANG")) == "ja" &&
+               defaults.string(forKey: "launcher.DM_LANG") == "en-US", "a temporary language override preserves the saved manual choice: \(marker)")
+        unsetenv(marker)
+    }
+    setenv("DM_SAVED_CHOICES", "0", 1)
+    let ignored = model(["zh-TW"])
+    expect(ignored.values["DM_LANG"] == "zh-Hant", "ignoring saved choices resumes following device language")
+    ignored.setValue("ja", for: ignored.settings[0]); ignored.apply()
+    expect(defaults.string(forKey: "launcher.DM_LANG") == "en-US", "DM_SAVED_CHOICES=0 leaves the saved language untouched")
+    unsetenv("DM_SAVED_CHOICES")
+    defaults.removeObject(forKey: "launcher.DM_LANG")
+    let runtime = model(["zh-TW"])
+    runtime.applySaved()
+    expect(String(cString: getenv("DM_LANG")) == "zh-Hant" && defaults.string(forKey: "launcher.DM_LANG") == nil,
+           "skipping the startup screen applies automatic language without saving it")
+    runtime.beginRuntime()
+    runtime.setValue("zh-Hant", for: runtime.settings[0])
+    expect(defaults.string(forKey: "launcher.DM_LANG") == "zh-Hant", "a runtime manual choice is saved even when equal to automatic")
+    runtime.setValue("ja", for: runtime.settings[0])
+    expect(defaults.string(forKey: "launcher.DM_LANG") == "ja" && String(cString: getenv("DM_LANG")) == "zh-Hant",
+           "changing language while playing takes effect at the next game start")
+    runtime.reset()
+    expect(defaults.string(forKey: "launcher.DM_LANG") == nil && String(cString: getenv("DM_LANG")) == "zh-Hant",
+           "runtime Reset removes the manual language without changing the running game")
+    return failed
 }
 
 import DmTouchPad

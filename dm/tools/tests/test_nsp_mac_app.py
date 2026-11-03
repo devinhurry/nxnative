@@ -519,7 +519,7 @@ class App(unittest.TestCase):
             with mock.patch.object(pack_app, 'sign', lambda *x: None), mock.patch('sys.stdout'): pack_app.pack(a)
             return self.tmp / f'{name}.app'
 
-        def run(app, args=(), **env):
+        def run(app, args=('-AppleLanguages', '(en)'), **env):
             p = self.launch(app=app, args=args, **env); out = p.communicate(timeout=30)[0].decode()
             self.assertEqual(p.returncode, 7, out)
             return self.host_run()
@@ -529,6 +529,9 @@ class App(unittest.TestCase):
             app = pack('Saved', listed)
             self.assertEqual(plistlib.loads((app / 'Contents/Info.plist').read_bytes())['DMSettings'][:3],
                              [{'env': 'DM_FPS_TARGET', 'values': ['30', '60']}, {'env': 'DM_RENDER_SCALE', 'min': 0.5, 'max': 1.0}, {'env': 'DM_FPS_HOLD', 'values': ['on', 'off']}])
+            self.assertEqual(run(app, args=['-AppleLanguages', '(ja)'])['DM_LANG'], 'ja')
+            self.assertEqual(run(app, args=['--no-launcher', '-AppleLanguages', '(ja)'], DM_LAUNCHER='1')['DM_LANG'], 'ja')
+            self.assertEqual(run(app, args=['-AppleLanguages', '(de)'])['DM_LANG'], 'fr')
             for key, value in [('DM_FPS_TARGET', '30'), ('DM_RENDER_SCALE', '0.75'), ('DM_FPS_HOLD', 'maybe'), ('DM_LANG', 'ja'), ('DM_BOTH', 'saved'), ('DM_BAKED', '0')]: save(key, '-string', value)
             save('DM_OPMODE', '-string', '0')   # not one of this build's settings
             r = run(app)   # from Finder or the Dock: no environment of its own
