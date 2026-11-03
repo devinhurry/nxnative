@@ -59,7 +59,6 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) { (void)phase; (voi
 void dm_botw_touch_button_begin(int control,int mode) { (void)control; (void)mode; }
 void dm_botw_touch_button_end(int control,int cancelled) { (void)control; (void)cancelled; }
 void dm_botw_touch_switch_cancel(void) {}
-void dm_botw_touch_switch_selected(void) {}
 void dm_botw_touch_menu_dump_tree(const char *arg) { (void)arg; }
 static int applet_depth, applet_opens, applet_closes_at_depth0;   // hle_oe.c: the applet stand-ins open and close their applet around the answer
 void dm_applet_enter(const char *name) { (void)name; applet_depth++; applet_opens++; }

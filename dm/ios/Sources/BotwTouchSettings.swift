@@ -22,7 +22,6 @@ struct BotwTouchSettingsMenu: View {
     @ObservedObject var m: LauncherModel
     let open: (BotwTouchPage) -> Void
     var body: some View {
-        Section("Saved touch layouts") { BotwTouchLibraryControls(m: m) }
         Section("BOTW touch settings") {
             ForEach(BotwTouchPage.allCases, id: \.self) { page in
                 Button { open(page) } label: {
@@ -35,6 +34,7 @@ struct BotwTouchSettingsMenu: View {
                 .accessibilityIdentifier("settings.touch." + page.identifier)
             }
         }
+        Section("Saved touch layouts") { BotwTouchLibraryControls(m: m) }
         if let row = m.settings.first(where: { $0.env == "DM_BOTW_PORTRAIT" }) {
             Section { SettingRow(s: row, m: m) }
         }
@@ -188,11 +188,16 @@ struct BotwStickSettingsView: View {
 struct BotwTouchSettingsView: View {
     @ObservedObject var m: LauncherModel
     let portrait: Bool
+    let background: Image?
     let close: () -> Void
     @State private var values: [String: String]
+    @State private var originalValues: [String: String]
     @State private var selected = BotwTouchControl.all[4]
-    @State private var copied = false
+    @State private var confirmingExit = false
     @State private var saveFailed = false
+    @State private var exporting = false
+    @State private var document: BotwTouchJSONDocument?
+    @State private var exportError: String?
     @State private var controlRegion = CGRect(x: 0, y: 0, width: 1, height: 1)
     @State private var panelInsets = EdgeInsets()
     @State private var editorArea = CGSize(width: 932, height: 430)
@@ -202,10 +207,36 @@ struct BotwTouchSettingsView: View {
             return dm_botw_layout_control_visible(&config, Int32(control.id)) != 0
         }
     }
+    private var controlOptions: [Setting] {
+        let keys = selected.keys(portrait: portrait)
+        return m.settings.filter { keys.contains($0.env) && $0.kind == "choice" && !$0.env.hasSuffix("_ANCHOR") }
+    }
+    private func controlOption(_ row: Setting) -> some View {
+        Picker(LocalizedStringKey(row.env.hasSuffix("_MODE") ? "Button action" : row.label),
+               selection: Binding(get: { values[row.env] ?? row.def }, set: { values[row.env] = $0 })) {
+            if row.env == selected.option("MODE", portrait: portrait) {
+                if selected.id == 6 {
+                    Text("Native L").tag("0")
+                    Text("Hold to switch (release to close)").tag("1")
+                    Text("Hold to switch (cancel to close)").tag("2")
+                } else {
+                    Text("Open inventory").tag("0")
+                    Text("Hold to switch (release to close)").tag("1")
+                    Text("Tap to switch (cancel to close)").tag("2")
+                }
+            } else {
+                ForEach(row.options ?? [], id: \.[0]) { Text(LocalizedStringKey($0[1])).tag($0[0]) }
+            }
+        }
+        .pickerStyle(.menu)
+        .disabled(m.fixed.contains(row.env))
+        .accessibilityIdentifier(row.env)
+    }
 
-    init(m: LauncherModel, portrait: Bool, close: @escaping () -> Void) {
-        self.m = m; self.portrait = portrait; self.close = close
+    init(m: LauncherModel, portrait: Bool, background: Image? = nil, close: @escaping () -> Void) {
+        self.m = m; self.portrait = portrait; self.background = background; self.close = close
         _values = State(initialValue: m.values)
+        _originalValues = State(initialValue: m.values)
     }
     private func key(_ base: String) -> String { botwTouchKey(base, portrait: portrait) }
     private var layout: dm_botw_touch_layout { m.touchLayout(portrait: portrait, values: values) }
@@ -230,26 +261,38 @@ struct BotwTouchSettingsView: View {
     private func reset(_ keys: Set<String>) {
         for row in m.settings where keys.contains(row.env) && !m.fixed.contains(row.env) { values[row.env] = row.def }
     }
-    private func copyParameters() {
-        guard let data = try? m.exportTouchLayoutDraft(values, portrait: portrait,
-            area: .init(width: Double(editorArea.width), height: Double(editorArea.height))),
-            let text = String(data: data, encoding: .utf8) else { saveFailed = true; return }
-        #if os(iOS)
-        UIPasteboard.general.string = text
-        #else
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        #endif
-        copied = true
+    private var hasUnsavedChanges: Bool {
+        let keys = m.touchSettingsKeys(portrait: portrait)
+        return m.settings.contains { row in
+            guard keys.contains(row.env), !m.fixed.contains(row.env) else { return false }
+            let original = originalValues[row.env] ?? row.def, current = values[row.env] ?? row.def
+            return row.kind == "range" ? Double(original) != Double(current) : original != current
+        }
+    }
+    private func requestExit() {
+        if hasUnsavedChanges { confirmingExit = true }
+        else { close() }
+    }
+    private func exportParameters() {
+        do {
+            document = BotwTouchJSONDocument(data: try m.exportTouchLayoutDraft(values, portrait: portrait,
+                area: .init(width: Double(editorArea.width), height: Double(editorArea.height))))
+            exporting = true
+        } catch { exportError = error.localizedDescription }
     }
     private var panel: some View {
         VStack(spacing: 8) {
             HStack {
-                Button(action: close) { Text("Exit").frame(minWidth: 44, minHeight: 44) }
+                Button(action: requestExit) { Text("Exit").frame(minWidth: 44, minHeight: 44) }
+                    .keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("botw.touch.exit")
                 Spacer(minLength: 8)
                 Text(LocalizedStringKey(portrait ? "Compact layout" : "Normal layout")).font(.headline).lineLimit(1)
                 Spacer(minLength: 8)
+                Menu("Reset") {
+                    Button("Restore this control") { reset(selected.keys(portrait: portrait)) }
+                    Button("Restore this layout") { reset(m.touchSettingsKeys(portrait: portrait)) }
+                }.accessibilityIdentifier("botw.touch.reset")
                 Button("Save") {
                     if m.saveTouchSettings(values, portrait: portrait) { close() }
                     else { saveFailed = true }
@@ -259,6 +302,14 @@ struct BotwTouchSettingsView: View {
                 Picker("Control", selection: $selected) {
                     ForEach(controls) { Text(LocalizedStringKey($0.label)).tag($0) }
                 }.pickerStyle(.menu).labelsHidden().accessibilityIdentifier("botw.touch.control")
+                if controlOptions.count == 1, let row = controlOptions.first {
+                    controlOption(row).labelsHidden()
+                } else if controlOptions.count > 1 {
+                    Menu {
+                        ForEach(controlOptions) { controlOption($0) }
+                    } label: { Image(systemName: "ellipsis.circle").accessibilityLabel("Button options") }
+                    .accessibilityIdentifier("botw.touch.control.options")
+                }
                 Menu {
                     ForEach((BotwTouchControl.added + [BotwTouchControl.all.last!]).filter { !controls.contains($0) }) { control in
                         Button(LocalizedStringKey(control.label)) {
@@ -269,40 +320,16 @@ struct BotwTouchSettingsView: View {
                 } label: { Image(systemName: "plus.circle").accessibilityLabel("Add button") }
                 .accessibilityIdentifier("botw.touch.add")
                 Spacer(minLength: 8)
-                Menu("Reset") {
-                    Button("Restore this control") { reset(selected.keys(portrait: portrait)) }
-                    Button("Restore this layout") { reset(m.touchSettingsKeys(portrait: portrait)) }
-                }.accessibilityIdentifier("botw.touch.reset")
                 Menu {
-                    if selected.id == 6 || selected.id == 16 || selected.id == 17 {
-                        let modeKey = selected.option("MODE", portrait: portrait)
-                        Picker("Button action", selection: Binding(get: { values[modeKey] ?? "0" }, set: { values[modeKey] = $0 })) {
-                            if selected.id == 6 {
-                                Text("Native L").tag("0")
-                                Text("Hold to switch (release to close)").tag("1")
-                                Text("Hold to switch (cancel to close)").tag("2")
-                            } else {
-                                Text("Open inventory").tag("0")
-                                Text("Hold to switch (release to close)").tag("1")
-                                Text("Tap to switch (select to close)").tag("2")
-                            }
-                        }.disabled(m.fixed.contains(modeKey))
-                    }
-                    if selected.removable {
-                        Button("Remove button", role: .destructive) {
-                            values[selected.visibilityKey(portrait: portrait)] = "0"
-                            selected = BotwTouchControl.all[4]
-                        }.disabled(m.fixed.contains(selected.visibilityKey(portrait: portrait)))
-                    }
                     if let row = m.settings.first(where: { $0.env == key("DM_BOTW_PAD_BADGES") }) {
                         Toggle("Corner button labels", isOn: Binding(
                             get: { values[row.env] == row.onValue },
                             set: { values[row.env] = $0 ? row.onValue : row.offValue }))
                             .disabled(m.fixed.contains(row.env))
                     }
-                    Button(action: copyParameters) {
-                        Label(copied ? "Copied" : "Copy layout JSON", systemImage: copied ? "checkmark" : "doc.on.doc")
-                    }.accessibilityIdentifier("botw.touch.copy")
+                    Button(action: exportParameters) {
+                        Label("Export JSON", systemImage: "square.and.arrow.up")
+                    }.accessibilityIdentifier("botw.touch.export")
                 } label: { Image(systemName: "ellipsis.circle").accessibilityLabel("Layout options") }
                 .accessibilityIdentifier("botw.touch.options")
             }
@@ -322,9 +349,14 @@ struct BotwTouchSettingsView: View {
             let area = CGRect(x: controlRegion.minX * geometry.size.width, y: controlRegion.minY * geometry.size.height,
                 width: controlRegion.width * geometry.size.width, height: controlRegion.height * geometry.size.height)
             ZStack(alignment: .topLeading) {
-                Color(white: 0.07)
+                Color(white: background == nil ? 0.07 : 0)
+                if let background {
+                    background.resizable().scaledToFit()
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .allowsHitTesting(false).accessibilityHidden(true)
+                }
                 if area.minY > 0 {
-                    Rectangle().fill(.white.opacity(0.04)).frame(height: area.minY)
+                    Rectangle().fill(.white.opacity(background == nil ? 0.04 : 0)).frame(height: area.minY)
                         .overlay(alignment: .bottom) { Divider() }.allowsHitTesting(false)
                 }
                 ForEach(10...11, id: \.self) { id in
@@ -368,9 +400,21 @@ struct BotwTouchSettingsView: View {
         }
         #endif
         .onChange(of: values) { _, _ in
-            copied = false
             if !controls.contains(selected) { selected = BotwTouchControl.all[4] }
         }
+        .interactiveDismissDisabled(hasUnsavedChanges)
+        .alert("Unsaved layout changes", isPresented: $confirmingExit) {
+            Button("Exit without saving", role: .destructive, action: close)
+                .accessibilityIdentifier("botw.touch.discard")
+            Button("Continue editing", role: .cancel) {}
+                .accessibilityIdentifier("botw.touch.continue")
+        } message: { Text("Exit without saving your changes?") }
+        .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "botw-touch-layout") { result in
+            if case .failure(let error) = result, (error as NSError).code != NSUserCancelledError { exportError = error.localizedDescription }
+        }
+        .alert("Unable to export layout", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: { Text(exportError ?? "") }
         .alert("Unable to save layout", isPresented: $saveFailed) { Button("OK", role: .cancel) {} }
         .preferredColorScheme(.dark)
     }
@@ -571,6 +615,23 @@ private struct BotwControlPreview: View {
         .accessibilityLabel(Text(LocalizedStringKey(control.label))).accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("botw.touch.preview.\(control.key)")
         .accessibilityAction { selected = control }
+        .overlay(alignment: .topTrailing) {
+            if control.removable {
+                Button {
+                    values[control.visibilityKey(portrait: portrait)] = "0"
+                    if selected == control { selected = BotwTouchControl.all[4] }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 20)).symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, .red)
+                        .frame(width: 32, height: 32).contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(m.fixed.contains(control.visibilityKey(portrait: portrait)))
+                .accessibilityLabel("Remove button")
+                .accessibilityIdentifier("botw.touch.remove.\(control.key)")
+            }
+        }
     }
 }
 

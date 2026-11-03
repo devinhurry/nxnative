@@ -40,20 +40,27 @@ int main(void) {
     dm_botw_touch_button_begin(17,0); assert(g_category==1);
     g_bow=0; dm_botw_touch_button_begin(17,0); assert(g_category==2);
     dm_botw_touch_button_begin(18,0); assert(g_category==5);
-    dm_botw_touch_button_begin(16,2); dm_botw_touch_button_end(16,0);
-    assert(dm_botw_touch_switch_cancel_visible());
     uint64_t test_buttons=0,test_virtual=0;
-    dm_botw_touch_actions_apply(&test_buttons,&test_virtual,1); assert(test_buttons==DM_BTN_RIGHT);
-    dm_botw_touch_switch_selected(); test_buttons=0;
-    dm_botw_touch_actions_apply(&test_buttons,&test_virtual,2); assert(test_buttons==DM_BTN_RIGHT);
-    test_buttons=0; dm_botw_touch_actions_apply(&test_buttons,&test_virtual,4); assert(!test_buttons);
+    for (int control=16;control<=17;control++) {
+        dm_botw_touch_actions_reset();
+        dm_botw_touch_button_begin(control,2); dm_botw_touch_button_end(control,0);
+        uint64_t direction=control==16 ? DM_BTN_RIGHT : DM_BTN_LEFT;
+        for (uint64_t frame=1;frame<10;frame++) {
+            test_buttons=0;
+            dm_botw_touch_actions_apply(&test_buttons,&test_virtual,frame);
+            assert(test_buttons==direction && dm_botw_touch_switch_cancel_visible());
+        }
+        dm_botw_touch_switch_cancel(); assert(!dm_botw_touch_switch_cancel_visible());
+        test_buttons=0; dm_botw_touch_actions_apply(&test_buttons,&test_virtual,10);
+        assert(test_buttons==(direction|DM_BTN_B));
+        test_buttons=0; dm_botw_touch_actions_apply(&test_buttons,&test_virtual,12); assert(!test_buttons);
+    }
     dm_botw_touch_button_begin(17,1); assert(!dm_botw_touch_switch_cancel_visible());
     dm_botw_touch_button_end(17,0); test_buttons=0;
     dm_botw_touch_actions_apply(&test_buttons,&test_virtual,3); assert(!test_buttons);
     dm_botw_touch_button_begin(6,2); g_rune_down-=1; test_buttons=0;
     dm_botw_touch_actions_apply(&test_buttons,&test_virtual,4); assert(test_buttons==DM_BTN_UP);
     dm_botw_touch_button_end(6,0); assert(dm_botw_touch_switch_cancel_visible());
-    dm_botw_touch_switch_selected(); assert(dm_botw_touch_switch_cancel_visible()); // rune stays open
     dm_botw_touch_switch_cancel(); assert(!dm_botw_touch_switch_cancel_visible());
     dm_botw_touch_actions_reset();
     g_action_notifications=0;

@@ -1,6 +1,22 @@
 // Shared launcher dashboard, settings pages and rows for the iOS and native Mac wrappers.
 // A row whose setting is fixed by an env file or by the launch environment is shown but disabled.
 import SwiftUI
+import DmTouchPad
+
+func withGameSettingsBackground(_ complete: @escaping (Image?) -> Void) {
+    var delivered = false
+    let finish: (Image?) -> Void = { image in
+        guard !delivered else { return }
+        delivered = true
+        complete(image)
+    }
+    dm_launcher_grab_game_frame { image in
+        let background = image.map { Image(decorative: $0, scale: 1) }
+        DispatchQueue.main.async { finish(background) }
+    }
+    // A game that has stopped presenting must still allow settings to open.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { finish(nil) }
+}
 
 extension LauncherModel {
     func binding(_ s: Setting) -> Binding<String> { Binding(get: { self.values[s.env] ?? s.def }, set: { self.setValue($0, for: s) }) }
@@ -47,9 +63,10 @@ struct SettingRow: View {
                 .accessibilityHint(note)
             case "choice":
                 if s.env == "DM_FPS_TARGET" {
-                    VStack(alignment: .leading, spacing: 8) {
+                    HStack {
                         settingLabel
-                        choices.pickerStyle(.segmented)
+                        Spacer(minLength: 12)
+                        choices.labelsHidden().pickerStyle(.segmented).frame(width: 180)
                     }
                 } else {
                     choices.pickerStyle(.menu)
@@ -254,6 +271,7 @@ struct LauncherDashboard: View {
 // Keep both columns visible on compact phones as well as larger displays.
 struct LauncherSettingsPage: View {
     @ObservedObject var m: LauncherModel
+    var gameBackground: Image? = nil
     let close: () -> Void
     @State private var selection: String = "Game"
     @State private var touchPage: BotwTouchPage?
@@ -303,7 +321,7 @@ struct LauncherSettingsPage: View {
     var body: some View {
         GeometryReader { geometry in
             if let touchPage, touchPage != .stick {
-                BotwTouchSettingsView(m: m, portrait: touchPage == .compact) { self.touchPage = nil }
+                BotwTouchSettingsView(m: m, portrait: touchPage == .compact, background: gameBackground) { self.touchPage = nil }
                     .id(touchPage)
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("settings.touch.page." + touchPage.identifier)
@@ -335,16 +353,17 @@ struct LauncherSettingsPage: View {
                                 CloudSavesSection().disabled(m.isRunning)
                                 if m.isRunning { Text("Applies next time you start the game.").font(.footnote).foregroundStyle(.secondary) }
                             } else {
+                                if selection == "Controls" && m.touchStickResponse != nil {
+                                    BotwTouchSettingsMenu(m: m) { touchPage = $0 }
+                                }
                                 Section(LocalizedStringKey(sectionTitle(selection))) {
-                                    ForEach(m.rows(in: selection)) { SettingRow(s: $0, m: m) }
+                                    let rows = m.rows(in: selection)
+                                    ForEach(rows.filter { $0.env == "DM_SHOW_FPS" } + rows.filter { $0.env != "DM_SHOW_FPS" }) { SettingRow(s: $0, m: m) }
                                     #if os(macOS)
                                     if selection == "Game" && ProcessInfo.processInfo.environment["DM_TOUCH_PREVIEW"] != "1" {
                                         Toggle("Show this window at launch", isOn: $showLauncherAtLaunch).toggleStyle(.checkbox)
                                     }
                                     #endif
-                                }
-                                if selection == "Controls" && m.touchStickResponse != nil {
-                                    BotwTouchSettingsMenu(m: m) { touchPage = $0 }
                                 }
                             }
                             Section {

@@ -32,6 +32,11 @@ void dm_gamepad_open_settings(void);
 void dm_gamepad_refresh_touch_settings(void);
 
 static CAMetalLayer *g_layer;
+void mtl_grab_next_present(void (^callback)(CGImageRef)) __attribute__((weak_import));
+void dm_launcher_grab_game_frame(void (^callback)(CGImageRef)) {
+    if (mtl_grab_next_present) mtl_grab_next_present(callback);
+    else callback(NULL);
+}
 static _Atomic int g_screen_hz=60;
 static void front_ios_power_watch(void);
 static void front_ios_audio_watch(void);
@@ -202,10 +207,11 @@ static void game_settings_done(void) { dm_gamepad_settings_done(); }
         if (w / h > 16.0 / 9.0) w = h * 16.0 / 9.0; else h = w * 9.0 / 16.0;
         self.game.frame = CGRectMake(floor((b.size.width - w) / 2), floor((b.size.height - h) / 2), w, h);
     }
-    // The top row's free stretch, right of the pad's L3 key and left of its central − / layout / + controls.
     CGRect s = UIEdgeInsetsInsetRect(b, self.surface.safeAreaInsets); CGFloat u = MIN(b.size.height / 430.0, 1.3);
-    CGFloat x = floor(CGRectGetMinX(s) + 130 * u);
-    if (self.fps) self.fps.frame = CGRectMake(x, floor(CGRectGetMinY(s) + 22 * u - 11), MAX(64, ceil(self.fps.intrinsicContentSize.width) + 12), 22);
+    if (self.fps) {
+        CGFloat width = MAX(64, ceil(self.fps.intrinsicContentSize.width) + 12);
+        self.fps.frame = CGRectMake(floor(CGRectGetMidX(b) - width * .5), floor(CGRectGetMinY(s) + 22 * u - 11), width, 22);
+    }
 }
 - (void)viewDidAppear:(BOOL)a {
     [super viewDidAppear:a];
@@ -319,7 +325,7 @@ static UIButton *front_ios_fps_button(void) {
             double fps = (n - n0) / elapsed;
             NSString *title = dm_fg_enabled() ? [NSString stringWithFormat:@"%.0f+%.0f fps", fps, (generated - generated0) / elapsed] : [NSString stringWithFormat:@"%.0f fps", fps];
             [l setTitle:title forState:UIControlStateNormal]; l.accessibilityValue = title;
-            CGRect frame = l.frame; frame.size.width = MAX(64, ceil(l.intrinsicContentSize.width) + 12); l.frame = frame;
+            [g_root.view setNeedsLayout];
         }
         n0 = n; generated0 = generated; t0 = now;
     }];

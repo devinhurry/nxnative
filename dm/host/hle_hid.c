@@ -253,11 +253,11 @@ static void *ctl_main(void *arg) {
                         mode<0 || mode>2 || (control!=6 && (control<16 || control>20))) {
                         LOG("[RED] DM_CTL touch-button wants control(6,16..20) mode(0..2) down|up|cancel|select"); continue;
                     }
-                    if (!strcmp(phase,"select")) dm_botw_touch_switch_selected();
-                    else if (!strcmp(phase,"down") && control==20) dm_botw_touch_switch_cancel();
+                    if (!strcmp(phase,"down") && control==20) dm_botw_touch_switch_cancel();
                     else if (!strcmp(phase,"down")) dm_botw_touch_button_begin(control,mode);
                     else if (!strcmp(phase,"up") || !strcmp(phase,"cancel")) dm_botw_touch_button_end(control,!strcmp(phase,"cancel"));
-                    else { LOG("[RED] DM_CTL invalid touch-button phase: %s",phase); continue; }
+                    else if (strcmp(phase,"select")) { LOG("[RED] DM_CTL invalid touch-button phase: %s",phase); continue; }
+                    // Selection release keeps a tap-mode shortcut open.
                     LOG("DM_CTL: touch-button control=%d mode=%d phase=%s",control,mode,phase);
                     continue;
                 }

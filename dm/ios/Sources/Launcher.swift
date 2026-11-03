@@ -264,28 +264,34 @@ private struct LauncherView: View {
 }
 
 private var sessionLauncherModel: LauncherModel?
+private var gameSettingsOpening = false
 
 @_cdecl("dm_show_game_settings")
 public func dmShowGameSettings(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
-    guard parent.presentedViewController == nil else { return false }
+    guard parent.presentedViewController == nil, !gameSettingsOpening else { return false }
     let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json")
     let settings = url.flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(SettingsFile.self, from: $0) }?.settings ?? []
     let model = sessionLauncherModel ?? LauncherModel(settings)
     sessionLauncherModel = model
-    model.beginRuntime()
-    var host: UIViewController?
-    let page = LauncherSettingsPage(m: model) {
-        guard let presented = host else { return }
-        host = nil
-        presented.dismiss(animated: false) { dm_launcher_settings_pause(0); done() }
+    gameSettingsOpening = true
+    withGameSettingsBackground { background in
+        gameSettingsOpening = false
+        guard parent.presentedViewController == nil else { done(); return }
+        model.beginRuntime()
+        var host: UIViewController?
+        let page = LauncherSettingsPage(m: model, gameBackground: background) {
+            guard let presented = host else { return }
+            host = nil
+            presented.dismiss(animated: false) { dm_launcher_settings_pause(0); done() }
+        }
+        let controller = UIHostingController(rootView: page.preferredColorScheme(.dark))
+        controller.modalPresentationStyle = .fullScreen
+        controller.isModalInPresentation = true
+        host = controller
+        dm_launcher_settings_pause(1)
+        parent.present(controller, animated: false)
     }
-    let controller = UIHostingController(rootView: page.preferredColorScheme(.dark))
-    controller.modalPresentationStyle = .fullScreen
-    controller.isModalInPresentation = true
-    host = controller
-    dm_launcher_settings_pause(1)
-    parent.present(controller, animated: false)
     return true
 }
 
