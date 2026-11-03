@@ -9,6 +9,8 @@ mkdir -p "$APP/dm" "$WORK/metadata"
 mkdir -p "$APP/msl/fixture"
 printf 'MTLBfixture' > "$APP/msl/fixture/fixture.metallib"   # No GPU is used by this launcher-only app.
 cp -R "$ROOT/dm/ios/Sources/"*.lproj "$APP/"
+cp "$ROOT/dm/games/01007EF00011E000/"touch_*.png "$APP/dm/"
+if [ -n "${DM_BOTW_TOUCH_ICONS:-}" ]; then cp "$DM_BOTW_TOUCH_ICONS"/touch_*.png "$APP/dm/"; fi
 cat > "$APP/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -23,9 +25,11 @@ cat > "$APP/Info.plist" <<'PLIST'
 <key>MinimumOSVersion</key><string>26.0</string>
 <key>LSRequiresIPhoneOS</key><true/>
 <key>UILaunchScreen</key><dict/>
+<key>UIStatusBarHidden</key><true/>
+<key>UIViewControllerBasedStatusBarAppearance</key><false/>
 <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
-<key>UIDeviceFamily</key><array><integer>1</integer></array>
-<key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+<key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
+<key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string><string>UIInterfaceOrientationPortrait</string></array>
 </dict></plist>
 PLIST
 GFXAPI=nvn python3 "$ROOT/dm/games/settings.py" 01007EF00011E000 "$WORK/metadata" "$WORK/control.nacp" "$APP/dm/launcher.json"

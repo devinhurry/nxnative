@@ -5,12 +5,12 @@
 typedef struct { float x, y; } dm_touchpad_point;
 typedef struct { float x, y, width, height; } dm_touchpad_rect;
 
-// Place the temporary Settings entry in free space between the drawn controls.
+// Place the temporary Settings and Close entries in free space between controls.
 // Search the center column first; move below each intersecting control.
 static inline dm_touchpad_rect dm_touchpad_settings_rect(dm_touchpad_rect safe,
         const dm_touchpad_rect *controls, int count) {
     const float gap=10, height=34;
-    float width=fminf(94,safe.width-2*gap);
+    float width=fminf(166,safe.width-2*gap);
     if (width<=0 || safe.height<height+2*gap) return (dm_touchpad_rect){0};
     float center=safe.x+(safe.width-width)*.5f, stride=width+gap;
     int columns=(int)ceilf(safe.width/stride)*2+1;
@@ -169,6 +169,19 @@ static inline int dm_touchpad_look_dragged(float down_x, float down_y,
 }
 static inline int dm_touchpad_look_tap(float duration, int dragged) {
     return !dragged && duration >= 0.0f && duration <= DM_TP_LOOK_TAP_MAX_SECONDS;
+}
+// Scope double taps exclude a fixed 100 pt disk around visible controls on the
+// right half, plus the full button bounds when a control is larger. Dragging
+// remains independent of this tap-only test.
+static inline int dm_touchpad_scope_button_excludes_tap(dm_touchpad_rect button,
+        float middle_x, float x, float y) {
+    if (button.width <= 0 || button.height <= 0) return 0;
+    float cx=button.x+button.width*.5f, cy=button.y+button.height*.5f;
+    if (cx < middle_x) return 0;
+    float dx=x-cx, dy=y-cy;
+    return dx*dx+dy*dy <= 50*50 ||
+        (x >= button.x && x <= button.x+button.width &&
+         y >= button.y && y <= button.y+button.height);
 }
 static inline int dm_touchpad_stick_double_tap_gap(double gap) {
     return gap >= 0.0 && gap <= DM_TP_STICK_DOUBLE_TAP_GAP;

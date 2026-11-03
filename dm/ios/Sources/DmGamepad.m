@@ -41,7 +41,7 @@
 #include <stdatomic.h>
 
 enum { B_A = 0, B_B, B_X, B_Y, B_LS, B_RS, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_LEFT, B_UP, B_RIGHT, B_DOWN, B_N };
-enum { C_NONE = 0, C_STICK, C_DPAD, C_FACE, C_BTN, C_SWAP, C_GAME, C_LOOK, C_BOTW_MAP, C_SHIELD, C_MENU, C_MENU_EXTRA };
+enum { C_NONE = 0, C_STICK, C_DPAD, C_FACE, C_BTN, C_SWAP, C_GAME, C_LOOK, C_BOTW_MAP, C_SHIELD, C_MENU, C_MENU_EXTRA, C_BOTW_ADDED };
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t g_touch_btn, g_shake_btn;
@@ -168,7 +168,8 @@ static void motion_device_start(void) {
 // So the phone's device motion (gyro + accelerometer, CoreMotion's fused gravity and user acceleration, 100 Hz, no permission prompt) drives player 1's six-axis sensor, turned
 // into the Switch frame for the screen's orientation (motion_phone_to_switch, motion_fusion.h): x to the right of the picture, y to its top, z toward the player.
 // The host keeps phone and controller orientations separately, choosing fresh controller data in auto mode and the phone alone in forced mode.
-// DM_PHONE_MOTION: auto (default) while no controller supplies fresh gyro data (a DualSense held apart from the phone uses its own, motion_apple.h), 1 always, 0 never.
+// DM_MOTION_SOURCE selects auto (controller first), controller, device, or off in the host.
+// Keep this stream ready so changing the live setting never requires reconnecting a controller.
 // DM_MOTION=0 (all live motion off; the NSP script's --no-motion builds it in) never starts device motion.
 // Which frame the samples come in: on iOS 27 and later the pad view (full screen, over the picture) is the motion body (CMMotionManager.deviceMotionBody), so Core Motion delivers
 // them in that view's frame for whichever display shows it and however it is turned: x to the right of the picture, y to its top, z toward the player, the Switch frame as it is.
@@ -193,10 +194,8 @@ void dm_test_phone_motion_publish(const float a[3], const float w[3], int body_f
 static void phone_motion_start(UIView *body) {
     const char *e = getenv("DM_MOTION");
     if (e && !atoi(e)) { LOG("front end: motion is off (DM_MOTION=0), the phone's gyro is not used"); return; }
-    e = getenv("DM_PHONE_MOTION"); int mode = !e || !strcmp(e, "auto") ? -1 : atoi(e);
-    if (!mode) { LOG("front end: the phone's gyro is off (DM_PHONE_MOTION=0)"); return; }
     if (!g_motion.deviceMotionAvailable) { LOG("front end: no device motion, the phone's gyro is not used"); return; }
-    LOG("front end: the phone's gyro drives the controller's six-axis sensor %s", mode < 0 ? "while no controller supplies fresh motion" : "always (DM_PHONE_MOTION=1)");
+    LOG("front end: the phone's gyro is available to the selected motion source");
     g_motion.deviceMotionUpdateInterval = 1.0 / 100;
 #if defined(__IPHONE_27_0) && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_27_0
     if (@available(iOS 27.0, *)) { g_motion.deviceMotionBody = body; g_motion_body = YES; LOG("front end: the phone's motion comes in the pad view's frame (deviceMotionBody)"); }
@@ -242,6 +241,8 @@ int dm_opmode(void);   // hle_oe.c: 0 = handheld
 - (void)emitTouchFeedback;
 - (BOOL)inSwap:(CGPoint)p;
 - (BOOL)botwTouchControlsActive;
+- (int)extraAt:(CGPoint)point;
+- (void)layoutExtraButtons;
 - (BOOL)botwMenuDpadActive;
 - (CGRect)botwControlArea;
 - (UIEdgeInsets)botwControlInsets;
@@ -257,11 +258,15 @@ int dm_opmode(void);   // hle_oe.c: 0 = handheld
 - (BOOL)manualPadGestureAllowed;
 - (BOOL)settingsGestureAllowed;
 - (void)revealBotwMenuPad:(UITapGestureRecognizer *)recognizer;
+- (void)setTemporaryGamepadVisible:(BOOL)visible;
+- (void)closeTemporaryGamepad:(UIButton *)sender;
 - (void)showGameSettings:(UIButton *)sender;
+- (void)openGameSettings;
 - (void)settingsDidClose;
 @end
 static __weak DmGamepad *g_view;
 void dm_gamepad_settings_done(void) { [g_view settingsDidClose]; }
+void dm_gamepad_open_settings(void) { [g_view openGameSettings]; }
 void front_botw_touch_hud_mode_changed(void) { dispatch_async(dispatch_get_main_queue(), ^{ [g_view refreshTouchHudMode]; }); }
 void front_botw_touch_hud_map_region(int valid, float x, float y, float width, float height) {
     dispatch_async(dispatch_get_main_queue(), ^{ [g_view setBotwMapRectValid:valid x:x y:y width:width height:height]; });
@@ -280,6 +285,9 @@ static void pads_start(void);   // Physical controllers, below
 @implementation DmGamepad {
     dm_touchpad_stick_response _moveResponse, _moveProfiles[2];
     dm_botw_touch_layout _touchLayout, _touchProfiles[2];
+    CAShapeLayer *_extraKey[5], *_extraBorder[5], *_extraCancel;
+    CALayer *_extraIcon[5];
+    UIImage *_extraImages[7];
     NSMapTable<UITouch *, NSNumber *> *_owner;     // touch → control (with the key for C_BTN or the stick for C_STICK, << 8)
     UITouch *_stick[2]; CGPoint _stickNow[2];      // the touch holding each stick and where it is now (0 left, 1 right)
     UITouch *_leftAxisTouch, *_shieldTouch; CGPoint _shieldNow, _shieldOrigin;
@@ -302,7 +310,7 @@ static void pads_start(void);   // Physical controllers, below
     CAShapeLayer *_swap; CATextLayer *_swapLabel; BOOL _swapHeld; CFTimeInterval _swapT0;
     UITapGestureRecognizer *_leftStickDoubleTap;
     UITapGestureRecognizer *_menuPadDoubleTap;
-    UIButton *_settingsButton;
+    UIButton *_settingsButton, *_closePadButton;
     NSMutableSet<UITouch *> *_menuPadChord;
     BOOL _manualMenuPad, _settingsPresented;
     NSTimeInterval _leftStickTapEnd, _leftStickTapGap;
@@ -457,7 +465,19 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
             _settingsButton.layer.cornerRadius = 7;
             _settingsButton.hidden = YES;
             [_settingsButton addTarget:self action:@selector(showGameSettings:) forControlEvents:UIControlEventTouchUpInside];
+            _settingsButton.accessibilityIdentifier = @"gamepad.settings";
             [self addSubview:_settingsButton];
+            _closePadButton = [UIButton buttonWithType:UIButtonTypeSystem];
+            [_closePadButton setTitle:NSLocalizedString(@"Close", nil) forState:UIControlStateNormal];
+            _closePadButton.titleLabel.font = _settingsButton.titleLabel.font;
+            _closePadButton.tintColor = _settingsButton.tintColor;
+            _closePadButton.backgroundColor = _settingsButton.backgroundColor;
+            _closePadButton.layer.cornerRadius = _settingsButton.layer.cornerRadius;
+            _closePadButton.hidden = YES;
+            _closePadButton.accessibilityLabel = NSLocalizedString(@"Hide virtual gamepad", nil);
+            _closePadButton.accessibilityIdentifier = @"gamepad.close";
+            [_closePadButton addTarget:self action:@selector(closeTemporaryGamepad:) forControlEvents:UIControlEventTouchUpInside];
+            [self addSubview:_closePadButton];
         }
         _swap = shape(_controls); _swapLabel = label(_swap, @"");
         NSNumber *saved = [NSUserDefaults.standardUserDefaults objectForKey:k_layout_key];
@@ -496,7 +516,7 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
     [self refreshBotwRuneIcon];
     _key[B_MINUS].hidden = _tap || (botwActive && _botwMapValid);
     _leftStickDoubleTap.enabled = botwActive && !_botwMenuMode;
-    BOOL hideDpadArt = ([self botwTouchControlsActive] && dm_botw_touch_loadout_visible()) || _padOff;
+    BOOL hideDpadArt = ([self botwTouchControlsActive] && (dm_botw_touch_loadout_visible() || !_touchLayout.dpad_visible)) || _padOff;
     _key[B_LEFT].hidden = _key[B_UP].hidden = _key[B_RIGHT].hidden = _key[B_DOWN].hidden = _tap || !_full || hideDpadArt;
     _ring.hidden = _tap || (botwActive && !_stick[0]); _knob.hidden = _tap;
     _stickDirection.hidden = YES;
@@ -506,6 +526,7 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
     [self publishTouchHudForController:atomic_load(&g_any_controller_connected)];
 }
 - (void)publishTouchHudForController:(BOOL)connected {
+    dm_botw_touch_hud_keep_native_loadout(!_touchLayout.dpad_visible);
     // The backup pad is still touch mode. Disabling the HUD here also disables
     // scene observation, which would clear this pad as a false menu transition.
     BOOL active = botwTouchHudSupported() && _full && !_tap && !connected;
@@ -538,7 +559,7 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
     }
     BOOL botwActive = [self botwTouchControlsActive];
     if (!botwActive) _botwLookTapPending = NO;
-    BOOL hideDpadArt = (botwActive && dm_botw_touch_loadout_visible()) || _padOff;
+    BOOL hideDpadArt = (botwActive && (dm_botw_touch_loadout_visible() || !_touchLayout.dpad_visible)) || _padOff;
     _key[B_ZL].hidden = _tap || botwActive;
     _shieldGraph.hidden = !botwActive;
     _shieldRing.hidden = !botwActive || !(_shieldTouch || _shieldLatched);
@@ -690,7 +711,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     return botwTouchHudSupported() && _full && !_tap && !_padOff && !_manualMenuPad &&
         (!_botwMenuMode || _botwCameraPadVisible || botwSeated()) && !atomic_load(&g_any_controller_connected);
 }
-- (BOOL)botwMenuDpadActive { return !botwSeated() && botwTouchHudSupported() && _full && !_tap && !_padOff && _botwMenuMode && !_manualMenuPad && !atomic_load(&g_any_controller_connected) && dm_botw_touch_menu_dpad_visible(); }
+- (BOOL)botwMenuDpadActive { return _touchLayout.dpad_visible && !botwSeated() && botwTouchHudSupported() && _full && !_tap && !_padOff && _botwMenuMode && !_manualMenuPad && !atomic_load(&g_any_controller_connected) && dm_botw_touch_menu_dpad_visible(); }
 
 - (void)sendBotwMenuPointer:(int)phase point:(CGPoint)p {
     if (phase == DM_BOTW_MENU_CANCEL) {
@@ -742,23 +763,33 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
 - (void)revealBotwMenuPad:(UITapGestureRecognizer *)recognizer {
     [self refreshBotwTouchMenuMode];
     if (recognizer.state != UIGestureRecognizerStateRecognized || ![self settingsGestureAllowed]) return;
-    BOOL visible=!_manualMenuPad;
+    [self setTemporaryGamepadVisible:!_manualMenuPad];
+}
+- (void)closeTemporaryGamepad:(UIButton *)sender {
+    (void)sender;
+    if (_manualMenuPad && [self settingsGestureAllowed]) [self setTemporaryGamepadVisible:NO];
+}
+- (void)setTemporaryGamepadVisible:(BOOL)visible {
     [self reset];
     dm_input_cancel_virtual_latch(0xffffull);
     _manualMenuPad=visible;
     if (visible) { _full=YES; _tap=NO; }
     [self applyLayout];
     _controls.hidden=_padOff || (_botwMenuMode && !_botwCameraPadVisible && !_manualMenuPad && !botwSeated());
-    _settingsButton.hidden=!visible;
+    _settingsButton.hidden=_closePadButton.hidden=!visible;
     LOG("BOTW touch: temporary gamepad and settings %s",visible ? "shown" : "hidden");
     [self setNeedsLayout];
 }
 - (void)showGameSettings:(UIButton *)sender {
     (void)sender;
     if (!_manualMenuPad || ![self settingsGestureAllowed]) return;
+    [self openGameSettings];
+}
+- (void)openGameSettings {
+    if (_settingsPresented) return;
     [self reset];
     dm_input_cancel_virtual_latch(0xffffull);
-    _settingsButton.hidden = YES;
+    _settingsButton.hidden = _closePadButton.hidden = YES;
     _settingsPresented = YES;
     if (!front_show_game_settings()) [self settingsDidClose];
 }
@@ -768,7 +799,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
         [self reset];
         dm_input_cancel_virtual_latch(0xffffull);
         [self refreshBotwTouchMenuMode];
-        self->_settingsButton.hidden = !self->_manualMenuPad || self->_controls.hidden;
+        self->_settingsButton.hidden = self->_closePadButton.hidden = !self->_manualMenuPad || self->_controls.hidden;
         [self setNeedsLayout];
     };
     if (NSThread.isMainThread) finish(); else dispatch_async(dispatch_get_main_queue(),finish);
@@ -780,7 +811,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     BOOL cameraPadChanged = _botwCameraPadVisible != cameraPadVisible;
     if (_padOff || atomic_load(&g_any_controller_connected)) {
         _manualMenuPad = NO;
-        _settingsButton.hidden = YES;
+        _settingsButton.hidden = _closePadButton.hidden = YES;
     }
     if (_botwMenuMode == active && !cameraPadChanged) {
         if (!_menuDpad.hidden && ![self botwMenuDpadActive]) {
@@ -794,7 +825,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
         return;
     }
     _botwCameraPadVisible = cameraPadVisible;
-    _manualMenuPad=NO; _settingsButton.hidden=YES;
+    _manualMenuPad=NO; _settingsButton.hidden=_closePadButton.hidden=YES;
     [self reset];
     if (botwTouchHudSupported()) dm_input_cancel_virtual_latch(0xffffull);
     _botwMenuMode = active;
@@ -863,6 +894,24 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     return rect[2] > 0 && rect[3] > 0 &&
         dm_botw_touch_scope_prompt_at((p.x-rect[0])/rect[2],(p.y-rect[1])/rect[3]);
 }
+- (BOOL)botwScopeTapExcludedAt:(CGPoint)p {
+    if (![self botwTouchControlsActive] || _controls.hidden) return NO;
+    CGFloat middle=CGRectGetMidX([self botwControlArea]);
+    const int buttons[]={B_A,B_B,B_X,B_Y,B_LS,B_L,B_R,B_ZL,B_ZR,B_PLUS,B_MINUS,B_LEFT,
+        DM_BOTW_WEAPON,DM_BOTW_SHIELD,DM_BOTW_FOOD,DM_BOTW_WHISTLE,DM_BOTW_CANCEL};
+    for (unsigned i=0;i<sizeof buttons/sizeof *buttons;i++) {
+        int control=buttons[i]; BOOL visible;
+        if (control>=DM_BOTW_WEAPON)
+            visible=_extraKey[control-DM_BOTW_WEAPON] && !_extraKey[control-DM_BOTW_WEAPON].hidden;
+        else if (control==B_LS) visible=!_knob.hidden;
+        else if (control==B_ZL) visible=!_shieldGraph.hidden;
+        else visible=!_key[control].hidden;
+        if (!visible) continue;
+        CGRect r=[self botwLayoutRect:control];
+        if (dm_touchpad_scope_button_excludes_tap((dm_touchpad_rect){r.origin.x,r.origin.y,r.size.width,r.size.height},middle,p.x,p.y)) return YES;
+    }
+    return NO;
+}
 - (int)btnAt:(CGPoint)p {   // locked keys (tested on touch-down only, then locked)
     CGFloat u = self.u;
     if ([self botwTouchControlsActive] && dist(p, [self runeButtonCenter]) <= [self dropR:B_L] * 1.45) return B_L;
@@ -893,10 +942,11 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     return -1;
 }
 - (BOOL)compactDpadOwnsPoint:(CGPoint)p {
-    return [self botwTouchControlsActive] && _touchLayout.portrait && _full &&
+    return [self botwTouchControlsActive] && _touchLayout.dpad_visible && _touchLayout.portrait && _full &&
         dist(p,self.dpadCenter) <= self.dpadR*K_DPAD_GRAB;
 }
 - (BOOL)leftStickOwnsPoint:(CGPoint)p {
+    if ([self extraAt:p]>=0) return NO;
     if (![self botwTouchControlsActive] || _tap || [self btnAt:p] >= 0 || [self inSwap:p]) return NO;
     if (dist(p,self.shieldHome) <= self.shieldR*K_STICK_GRAB) return NO;
     if ([self compactDpadOwnsPoint:p]) return NO;
@@ -905,7 +955,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     int kind = C_NONE;
     CGFloat f = dist(p, self.faceCenter) / (self.faceGap + self.faceR * 1.6);
     if ([self faceAt:p] && f <= best) { best = f; kind = C_FACE; }
-    if (_full) {
+    if (_full && (![self botwTouchControlsActive] || _touchLayout.dpad_visible)) {
         CGFloat d = dist(p, self.dpadCenter) / (self.dpadR * K_DPAD_GRAB);
         if (d < best) { best = d; kind = C_DPAD; }
     }
@@ -920,6 +970,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
         (!_botwCameraPadVisible || botwSeated());
 }
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
+    if ([touch.view isKindOfClass:UIControl.class]) return NO;
     if (gestureRecognizer == _menuPadDoubleTap) {
         [self refreshBotwTouchMenuMode];
         return [self manualPadGestureAllowed] || [self settingsGestureAllowed];
@@ -1089,6 +1140,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     CGFloat scale = MIN(self.bounds.size.width*picture[2], self.bounds.size.height*picture[3]);
     if (scale <= 0) return;
     _lookTouch = t; _lookLast = _lookDown = p; _lookDownTime = t.timestamp; _lookDragged = NO; _lookScale = scale;
+    if ([self botwScopeTapExcludedAt:p]) _botwLookTapPending=NO;
     _stick[1] = t; _stickNow[1] = p; _rCentre = p;
     dm_look_input(DM_LOOK_BEGIN, 0, 0);
 }
@@ -1115,7 +1167,10 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     if (t == _lookTouch) {
         BOOL tap = dm_touchpad_look_tap((float)(t.timestamp - _lookDownTime), _lookDragged);
         dm_look_input(DM_LOOK_END, 0, 0); _lookTouch = nil; _lookScale = 0;
-        if (tap && [self botwTouchControlsActive]) {
+        if (dm_botw_touch_quick_select_active()) {
+            dm_botw_touch_switch_selected(); _botwLookTapPending=NO;
+        } else if (tap && [self botwTouchControlsActive] &&
+                   ![self botwScopeTapExcludedAt:_lookDown] && ![self botwScopeTapExcludedAt:p]) {
             CGFloat u = self.u;
             if (_botwLookTapPending && dm_touchpad_look_double_tap((double)_botwLookTapTime, (double)t.timestamp,
                     (float)_botwLookTapPoint.x, (float)_botwLookTapPoint.y, (float)_lookDown.x, (float)_lookDown.y, (float)u)) {
@@ -1212,7 +1267,19 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         }
         if (_padOff) { _botwLookTapPending = NO; game |= [self gameBegin:t]; continue; }
         CGPoint p = [t locationInView:self];
+        int extra=[self extraAt:p];
+        if (extra>=0) {
+            _botwLookTapPending=NO;
+            [_owner setObject:@(C_BOTW_ADDED | (uint64_t)extra<<8) forKey:t];
+            if (extra==DM_BOTW_CANCEL) dm_botw_touch_switch_cancel();
+            else dm_botw_touch_button_begin(extra,extra<18 ? _touchLayout.switch_mode[extra-16] : 0);
+            [self emitTouchFeedback]; [self setNeedsLayout]; continue;
+        }
         int hit = _tap ? -1 : [self btnAt:p];
+        if (hit==B_L && [self botwTouchControlsActive] && _touchLayout.rune_mode) {
+            [_owner setObject:@(C_BOTW_ADDED | (uint64_t)B_L<<8) forKey:t];
+            dm_botw_touch_button_begin(B_L,_touchLayout.rune_mode); continue;
+        }
         if ([self botwTouchControlsActive] && hit != B_L && !_shieldTouch && dist(p, self.shieldHome) <= self.shieldR * K_STICK_GRAB) {
             _botwLookTapPending = NO; _shieldTouch = _leftAxisTouch = t; _shieldNow = _shieldOrigin = p;
             _shieldDownTime = t.timestamp; _shieldDragged = NO;
@@ -1260,7 +1327,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
             CGFloat f = dist(p, self.faceCenter) / (self.faceGap + self.faceR * 1.6);
             if (f <= best) { best = f; kind = C_FACE; }
         }
-        if (_full) { CGFloat d = dist(p, self.dpadCenter) / (self.dpadR * K_DPAD_GRAB); if (d < best) { best = d; kind = C_DPAD; } }
+        if (_full && (![self botwTouchControlsActive] || _touchLayout.dpad_visible)) { CGFloat d = dist(p, self.dpadCenter) / (self.dpadR * K_DPAD_GRAB); if (d < best) { best = d; kind = C_DPAD; } }
         // Compact Rune owns its grab region before the floating movement stick.
         if (kind != C_FACE && [self compactDpadOwnsPoint:p]) { best = 0; kind = C_DPAD; }
         if (!_stick[0]) { CGFloat sl = dist(p, self.stickHome) / ([self stickR:0] * K_STICK_GRAB); if (sl < best) { best = sl; kind = C_STICK; } }
@@ -1378,6 +1445,9 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     BOOL swap = NO, game = NO;
     for (UITouch *t in ts) {
         uint64_t v = [_owner objectForKey:t].unsignedLongLongValue;
+        if ((v&0xff)==C_BOTW_ADDED) {
+            dm_botw_touch_button_end((int)(v>>8),!ended); [self setNeedsLayout];
+        }
         if (t == _botwCameraModifierTouch) {
             dm_botw_touch_camera_pose_modifier(0);
             _botwCameraModifierTouch = nil;
@@ -1544,7 +1614,7 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
 - (void)deviceOrientationChanged { motion_update_flip(self.window.windowScene); [self checkLookGeometry]; }
 - (void)layoutSettingsButton {
     if (!_settingsButton) return;
-    _settingsButton.hidden=!_manualMenuPad || _settingsPresented || _controls.hidden || ![self settingsGestureAllowed];
+    _settingsButton.hidden=_closePadButton.hidden=!_manualMenuPad || _settingsPresented || _controls.hidden || ![self settingsGestureAllowed];
     if (_settingsButton.hidden) return;
     dm_touchpad_rect occupied[B_N+1]; int count=0;
     for (int b=0;b<B_N;b++) if (!_key[b].hidden && _key[b].path) {
@@ -1557,7 +1627,58 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
     }
     CGRect safe=self.safe;
     dm_touchpad_rect r=dm_touchpad_settings_rect((dm_touchpad_rect){safe.origin.x,safe.origin.y,safe.size.width,safe.size.height},occupied,count);
-    _settingsButton.frame=CGRectMake(r.x,r.y,r.width,r.height);
+    CGFloat settingsWidth=MIN(94,MAX(0,r.width-72));
+    _settingsButton.frame=CGRectMake(r.x,r.y,settingsWidth,r.height);
+    _closePadButton.frame=CGRectMake(r.x+settingsWidth+8,r.y,MAX(0,r.width-settingsWidth-8),r.height);
+}
+- (int)extraAt:(CGPoint)p {
+    if (![self botwTouchControlsActive] || _botwMenuMode || _padOff) return -1;
+    for (int id=DM_BOTW_CANCEL;id>=DM_BOTW_WEAPON;id--) {
+        BOOL visible=id==DM_BOTW_CANCEL ? dm_botw_touch_switch_cancel_visible() : dm_botw_layout_control_visible(&_touchLayout,id);
+        if (!visible) continue;
+        CGRect r=[self botwLayoutRect:id];
+        if (dist(p,CGPointMake(CGRectGetMidX(r),CGRectGetMidY(r)))<=r.size.width*.55) return id;
+    }
+    return -1;
+}
+- (void)layoutExtraButtons {
+    BOOL active=[self botwTouchControlsActive] && !_botwMenuMode && !_padOff;
+    BOOL bow=dm_botw_touch_bow_active();
+    for (int i=0;i<5;i++) {
+        if (!_extraKey[i]) {
+            _extraBorder[i]=botwBorder(_controls); _extraKey[i]=shape(_controls);
+            _extraKey[i].fillColor=k_botwIdle.CGColor; _extraKey[i].strokeColor=nil;
+            _extraBorder[i].fillColor=k_botwLine.CGColor;
+            _extraIcon[i]=[CALayer layer]; [_controls addSublayer:_extraIcon[i]];
+            _extraIcon[i].contentsGravity=kCAGravityResizeAspect;
+        }
+        int control=16+i;
+        BOOL visible=active && (i==4 ? dm_botw_touch_switch_cancel_visible() : dm_botw_layout_control_visible(&_touchLayout,control));
+        _extraKey[i].hidden=_extraBorder[i].hidden=_extraIcon[i].hidden=!visible;
+        if (!visible) continue;
+        BOOL pressed=NO;
+        for (UITouch *touch in _owner) {
+            uint64_t owner=[_owner objectForKey:touch].unsignedLongLongValue;
+            if ((owner&0xff)==C_BOTW_ADDED && (owner>>8)==control) { pressed=YES; break; }
+        }
+        _extraKey[i].fillColor=(pressed ? k_botwOn : k_botwIdle).CGColor;
+        CGRect r=[self botwLayoutRect:control];
+        setPath(_extraKey[i],CGPathCreateWithEllipseInRect(r,NULL));
+        setPath(_extraBorder[i],dm_botw_outer_border_path(_extraKey[i].path,1.5*DM_BOTW_STROKE_WIDTH_SCALE));
+        int icon=bow && i<2 ? 21+i : control;
+        if (i<4) {
+            int index=icon-16;
+            if (!_extraImages[index]) _extraImages[index]=[UIImage imageWithContentsOfFile:dm_botw_touch_button_icon_path(icon)];
+            _extraIcon[i].contents=(__bridge id)_extraImages[index].CGImage;
+            _extraIcon[i].frame=CGRectInset(r,r.size.width*.25,r.size.height*.25);
+        }
+    }
+    if (!_extraCancel) { _extraCancel=shape(_controls); _extraCancel.strokeColor=nil; _extraCancel.fillColor=_shieldGraph.fillColor; }
+    _extraCancel.hidden=_extraKey[4].hidden;
+    if (!_extraCancel.hidden) {
+        CGRect r=[self botwLayoutRect:DM_BOTW_CANCEL];
+        setPath(_extraCancel,dm_botw_switch_cancel_path(CGPointMake(CGRectGetMidX(r),CGRectGetMidY(r)),r.size.width));
+    }
 }
 - (void)layoutSubviews {
     [super layoutSubviews];
@@ -1582,6 +1703,7 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
     }
     for (int b = B_A; b <= B_Y; b++) { CGPoint c = [self facePos:b]; setPath(_key[b], circlePath(c, [self faceRadiusForButton:b])); placeLabel(_label[b], c, 20 * u); }
     BOOL botw = [self botwTouchControlsActive];
+    [self layoutExtraButtons];
     for (int i = 0; i < (int)(sizeof k_btns / sizeof *k_btns); i++) { int b = k_btns[i];
         if (b == B_L && [self botwTouchControlsActive]) {
             CGPoint c=[self runeButtonCenter]; CGFloat r=[self dropR:B_L];
@@ -1673,7 +1795,7 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
             setPath(_buttonBadgeBorder[b], dm_botw_outer_border_path(_buttonBadge[b].path, _buttonBadge[b].lineWidth));
         setPath(_runeBadgeBorder, dm_botw_outer_border_path(_runeBadge.path, _runeBadge.lineWidth));
     }
-    BOOL hideDpadArt = (botw && dm_botw_touch_loadout_visible()) || _padOff;
+    BOOL hideDpadArt = (botw && (dm_botw_touch_loadout_visible() || !_touchLayout.dpad_visible)) || _padOff;
     _key[B_LEFT].hidden = _key[B_UP].hidden = _key[B_RIGHT].hidden = _key[B_DOWN].hidden = _tap || !_full || hideDpadArt;
     [CATransaction commit];
     [self publishTouchHudForController:atomic_load(&g_any_controller_connected)];
@@ -1693,7 +1815,7 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
             if (!held) _botwCancelLatched &= ~bit;
         }
     }
-    [self recompute];
+    [self recompute]; [self setNeedsLayout];
 }
 #ifdef DM_TEST_HOOKS
 - (void)dm_testSetTouchHudModeFull:(BOOL)full tap:(BOOL)tap connected:(BOOL)connected {
@@ -1721,6 +1843,7 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
 - (BOOL)dm_testL3GestureEnabled { return _leftStickDoubleTap.enabled; }
 - (BOOL)dm_testL3ReceiveTouch:(UITouch *)touch { return [self gestureRecognizer:_leftStickDoubleTap shouldReceiveTouch:touch]; }
 - (BOOL)dm_testL3MayBegin { return [self gestureRecognizerShouldBegin:_leftStickDoubleTap]; }
+- (BOOL)dm_testScopeTapExcludedAt:(CGPoint)p { return [self botwScopeTapExcludedAt:p]; }
 - (BOOL)dm_testLeftStickOwnsPoint:(CGPoint)p { return [self leftStickOwnsPoint:p]; }
 - (BOOL)dm_testSetBotwMapRectValid:(BOOL)valid x:(CGFloat)x y:(CGFloat)y width:(CGFloat)width height:(CGFloat)height {
     [self setBotwMapRectValid:valid x:x y:y width:width height:height]; return _botwMapValid;
@@ -1752,6 +1875,7 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
 - (UITapGestureRecognizer *)dm_testMenuPadGesture { return _menuPadDoubleTap; }
 - (BOOL)dm_testManualMenuPad { return _manualMenuPad; }
 - (UIButton *)dm_testSettingsButton { return _settingsButton; }
+- (UIButton *)dm_testClosePadButton { return _closePadButton; }
 - (BOOL)dm_testSettingsRevealed { return _manualMenuPad; }
 - (CAShapeLayer *)dm_testButtonLayer:(int)b { return _key[b]; }
 - (CAShapeLayer *)dm_testButtonBorder:(int)b { return _keyBorder[b]; }

@@ -136,8 +136,15 @@ class LauncherSettingsTests(unittest.TestCase):
                              ['59.400', '59.400', '59.400', '59.400', '123.200', '154.000', '57.600', '57.200', '57.200', '96.000']))
         expected = {'DM_BOTW_PAD_BADGES': '0'}
         for control, diameter in diameters.items():
-            for field, value in [('X_PT', '0.000'), ('Y_PT', '0.000'), ('SIZE_PT', diameter)]:
+            for field, value in [('X_PT', '0.000'), ('Y_PT', '0.000'), ('SIZE_PT', diameter), ('ANCHOR', '0')]:
                 expected[f'DM_BOTW_PAD_{control}_{field}'] = value
+        for control in ('WEAPON', 'SHIELD', 'FOOD', 'WHISTLE', 'CANCEL'):
+            for field, value in [('X_PT', '0'), ('Y_PT', '0'), ('SIZE_PT', '52'), ('ANCHOR', '0')]:
+                expected[f'DM_BOTW_PAD_{control}_{field}'] = value
+            if control != 'CANCEL': expected[f'DM_BOTW_PAD_{control}_ENABLED'] = '0'
+        for control in ('WEAPON', 'SHIELD', 'L'):
+            expected[f'DM_BOTW_PAD_{control}_MODE'] = '0'
+        expected['DM_BOTW_PAD_DPAD_VISIBLE'] = '1'
         for platform in ('mac', 'ios'):
             botw = build(BOTW, 'nvn', platform)
             self.assertEqual({key: row['default'] for key, row in botw.items() if key.startswith('DM_BOTW_PAD_')}, expected)
@@ -145,6 +152,26 @@ class LauncherSettingsTests(unittest.TestCase):
                 if key.endswith('_PT'):
                     self.assertEqual(botw[key]['format'], 'number')
         self.assertTrue(set(expected).isdisjoint(build(WONDER, 'nvn')))
+
+    def test_cross_screen_anchor_choices_and_point_bounds(self):
+        for platform in ('mac', 'ios'):
+            rows = build(BOTW, 'nvn', platform)
+            for prefix in ('DM_BOTW_PAD_', 'DM_BOTW_PORTRAIT_PAD_'):
+                for control in ('A', 'B', 'X', 'Y', 'STICK', 'ZL', 'L', 'R', 'ZR', 'DPAD',
+                                'WEAPON', 'SHIELD', 'FOOD', 'WHISTLE', 'CANCEL'):
+                    anchor = rows[f'{prefix}{control}_ANCHOR']
+                    self.assertEqual(anchor['default'], '0')
+                    self.assertEqual(anchor['options'], [['0', 'Default'], ['1', 'Left'], ['2', 'Right']])
+                    for axis in ('X', 'Y'):
+                        point = rows[f'{prefix}{control}_{axis}_PT']
+                        self.assertEqual((point['min'], point['max']), (-10000, 10000))
+
+    def test_motion_source_is_shared_and_defaults_to_automatic(self):
+        for platform in ('mac', 'ios'):
+            for gid in (BOTW, WONDER):
+                row = build(gid, 'nvn', platform)['DM_MOTION_SOURCE']
+                self.assertEqual((row['kind'], row['section'], row['default']), ('choice', 'Controls', 'auto'))
+                self.assertEqual([o[0] for o in row['options']], ['off', 'auto', 'controller', 'device'])
 
     def test_iphone_switches_only_on_the_iphone(self):   # the frame-rate counter and touch feedback are the iOS front end's (front_ios.m, DmGamepad.m)
         ios, mac = build(BOTW, 'nvn'), build(BOTW, 'nvn', 'mac')
@@ -191,7 +218,7 @@ class LauncherSettingsTests(unittest.TestCase):
             listed = settings.build(BOTW, tmp, Path(tmp) / 'control.nacp')
         rows = {s['env']: s for s in listed['settings']}
         self.assertEqual(listed['schema'], 1)
-        self.assertEqual([e for e, s in rows.items() if s.get('level') == 'basic'], ['DM_FPS_TARGET', 'DM_FRAMEGEN', 'DM_RENDER_SCALE', 'DM_OPMODE', 'DM_LANG', 'DM_RUMBLE'])
+        self.assertEqual([e for e, s in rows.items() if s.get('level') == 'basic'], ['DM_FPS_TARGET', 'DM_FRAMEGEN', 'DM_RENDER_SCALE', 'DM_OPMODE', 'DM_LANG', 'DM_MOTION_SOURCE', 'DM_RUMBLE'])
         self.assertEqual(rows['DM_RUMBLE_GAIN']['needs'], 'DM_RUMBLE=1')
         self.assertFalse({'level', 'needs'} & set(rows['DM_METAL_HUD']), 'a row without meta has no optional fields')
 

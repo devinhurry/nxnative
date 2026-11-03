@@ -5,12 +5,15 @@ import io
 import shutil
 import tempfile
 import unittest
+import sys
+from unittest.mock import patch
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 
 
 REPO = Path(__file__).resolve().parents[3]
+sys.path.insert(0,str(REPO / 'dm/tools'))
 SPEC = importlib.util.spec_from_file_location('run_mac', REPO / 'scripts/run_mac.py')
 assert SPEC is not None and SPEC.loader is not None
 run_mac = importlib.util.module_from_spec(SPEC)
@@ -36,6 +39,11 @@ def stamp_nvn(lib, g):
 
 
 class MacLauncherTests(unittest.TestCase):
+    def setUp(self):
+        # Synthetic runtime fixtures contain no extracted game art.
+        patcher = patch('botw_touch_assets.prepare')
+        patcher.start(); self.addCleanup(patcher.stop)
+
     def test_only_explicit_launch_values_lock_settings(self):
         g = game_profile('01007EF00011E000')
         with tempfile.TemporaryDirectory() as t:

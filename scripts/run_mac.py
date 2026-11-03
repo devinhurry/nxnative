@@ -438,6 +438,11 @@ def launch_host(plan, args, env, repo, exec_call=None, prepared_host=None):
     if getattr(args, 'touch_safe_area', None) is not None: env['DM_TEST_BOTW_SAFE_AREA'] = args.touch_safe_area
     env.setdefault('DM_NVN_SHMAP', str(plan['game'].table('shader_map.tsv')))
     env = profile_environment(env, plan['game'], repo)
+    if game_id == '01007EF00011E000':
+        from botw_touch_assets import prepare
+        icons = plan['base'] / 'build' / 'touch-icons'
+        prepare(plan['romfs'], icons)
+        env['DM_BOTW_TOUCH_ICONS'] = str(icons)
     env.setdefault('DM_SAVE', str(plan['base'] / 'run' / 'save'))
     if getattr(args, 'save_copy', None) is not None:
         source = _path(args.save_copy)

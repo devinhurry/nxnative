@@ -117,6 +117,10 @@ static int g_presented_menu;
 static int g_presented_gameplay;
 static int g_presented_loadout;
 static int g_presented_quick_select;
+static int g_presented_bow;
+static int g_open_category = -1, g_open_phase;
+static uint64_t g_open_frame, g_open_tab_page;
+static uint64_t g_open_tab_frame=UINT64_MAX;
 static uint64_t g_presented_menu_frame;
 static _Atomic uintptr_t g_presented_menu_root;
 static _Atomic uintptr_t g_presented_gameplay_root;
@@ -3175,7 +3179,7 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
     uintptr_t screens = selector_read_ptr(registry, 0x30);
     uintptr_t flags = selector_read_ptr(registry, 0x40);
     int auditing = g_ui_audit && dm_botw_touch_hud_active();
-    int presented = 0, gameplay = 0, loadout = 0, quick_select = 0;
+    int presented = 0, gameplay = 0, loadout = 0, quick_select = 0, bow = 0;
     uintptr_t presented_root = 0;
     uintptr_t gameplay_root = 0;
     char presented_name[64] = {0};
@@ -3206,6 +3210,8 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
             if (!registered || !presented_state) continue;
             if (!strcmp(name, "MainShortCut_00") && root_visible) {
                 loadout |= selector_loadout_visible(root);
+                static const char *const bow_path[] = {"N_All_00","N_MainAll_00","N_Pos_00","N_MainGuideR_01","P_BowIcon_00"};
+                bow |= selector_hud_path_visible(root,bow_path,sizeof bow_path/sizeof *bow_path);
                 quick_select |= mode == 2 && shown >= 0 && input_owned && selector_quick_select_visible(root);
             }
             if (!strcmp(name, "MainScreen_00") && mode == 2 && shown >= 0 &&
@@ -3233,13 +3239,15 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
     }
     pthread_mutex_lock(&g_menu_mu);
     int changed = g_presented_menu != presented || g_presented_menu_root != presented_root ||
-        g_presented_gameplay != gameplay || g_presented_loadout != loadout;
+        g_presented_gameplay != gameplay || g_presented_loadout != loadout ||
+        g_presented_bow != bow || g_presented_quick_select != quick_select;
     g_presented_menu = presented;
     g_presented_menu_root = presented_root;
     g_presented_menu_frame = frame;
     g_presented_gameplay = gameplay;
     g_presented_loadout = loadout;
     g_presented_quick_select = quick_select;
+    g_presented_bow = bow;
     g_presented_gameplay_root = gameplay_root;
     pthread_mutex_unlock(&g_menu_mu);
     if (auditing) {
@@ -5402,6 +5410,17 @@ void dm_botw_touch_menu_selector(const uint64_t *regs) {
     }
 
     pthread_mutex_lock(&g_menu_mu);
+    if (g_open_category >= 0 && menu_active_locked(frame) && !g_view.generic_mode &&
+        g_view.inventory_visible && !g_view.popup_visible) {
+        for (int i=0;i<g_view.category_count;i++) if (g_view.category_ids[i]==g_open_category && g_view.category_panes[i]) {
+            g_target_valid=1; g_target_popup=g_target_generic=0;
+            g_target_index=g_open_category; g_target_category=1; g_target_pane=g_view.category_panes[i];
+            g_requested_entry=0; g_selector_ready=g_confirm_pending=0;
+            g_target_page_key=g_view.page_key; g_target_popup_key=g_view.popup_key;
+            g_open_category=-1; g_open_phase=0;
+            break;
+        }
+    }
     if (!menu_active_locked(frame) || !g_target_valid || !g_target_pane ||
         g_target_page_key != g_view.page_key || g_target_popup_key != g_view.popup_key) {
         pthread_mutex_unlock(&g_menu_mu);
@@ -5813,6 +5832,21 @@ int dm_botw_touch_quick_select_active(void) {
     int active = g_presented_quick_select && frame >= g_presented_menu_frame && frame-g_presented_menu_frame <= 2;
     pthread_mutex_unlock(&g_menu_mu);
     return active;
+}
+int dm_botw_touch_bow_active(void) {
+    pthread_mutex_lock(&g_menu_mu);
+    uint64_t frame=menu_render_frame();
+    int active=g_presented_bow && frame>=g_presented_menu_frame && frame-g_presented_menu_frame<=2;
+    pthread_mutex_unlock(&g_menu_mu);
+    return active;
+}
+void dm_botw_touch_menu_open_category(int category) {
+    if (category<0 || category>6 || !dm_botw_touch_controls_visible()) return;
+    pthread_mutex_lock(&g_menu_mu);
+    g_open_category=category; g_open_phase=1; g_open_frame=UINT64_MAX; g_open_tab_page=UINT64_MAX;
+    g_open_tab_frame=UINT64_MAX;
+    g_last_apply_valid=0;
+    pthread_mutex_unlock(&g_menu_mu);
 }
 int dm_botw_touch_menu_dpad_visible(void) {
     pthread_mutex_lock(&g_menu_mu);
@@ -6551,6 +6585,27 @@ int dm_botw_touch_menu_apply(uint64_t *buttons, int32_t axes[4], uint64_t frame)
     int notify = 0;
     pthread_mutex_lock(&g_menu_mu);
     int menu_active = menu_active_locked(render_frame);
+    if (!dm_botw_touch_hud_active()) {
+        g_open_category=-1; g_open_phase=0; g_open_tab_frame=UINT64_MAX;
+    }
+    // Every getter in the acknowledged pair of guest frames must see the
+    // native tab edge, even after its first getter queued the destination.
+    if (g_open_tab_frame!=UINT64_MAX && frame<=g_open_tab_frame+1) *buttons|=DM_BTN_L;
+    if (g_open_category>=0) {
+        if (g_open_frame==UINT64_MAX) g_open_frame=frame;
+        if (g_open_phase==1) {
+            if (frame<=g_open_frame+1) *buttons|=DM_BTN_PLUS;
+            else g_open_phase=2;
+        } else if (menu_active && g_view.generic_mode && g_view.generic_screen &&
+                   g_view.page_key!=g_open_tab_page) {
+            char name[64];
+            if (selector_screen_name(g_view.generic_screen,name) && !strcmp(name,"PauseMenu_00")) {
+                // Cycle native Pause tabs until inventory owns input. Wait
+                // for a new live publication before requesting another edge.
+                *buttons|=DM_BTN_L; g_open_tab_page=g_view.page_key; g_open_tab_frame=frame;
+            }
+        }
+    }
     if (g_last_apply_valid && g_last_apply_frame == frame && menu_active) {
         *buttons |= g_apply_output_bits;
         if (g_apply_output_map_left_valid) {
@@ -6860,6 +6915,8 @@ void dm_botw_touch_menu_reset(void) {
     notify = g_active_notified || g_presented_menu || g_camera_notified_active;
     g_presented_menu = 0; g_presented_menu_frame = 0; g_presented_menu_root = 0;
     g_presented_gameplay = 0; g_presented_gameplay_root = 0; g_presented_loadout = g_presented_quick_select = 0;
+    g_presented_bow=0; g_open_category=-1; g_open_phase=0;
+    g_open_tab_frame=UINT64_MAX;
     atomic_store_explicit(&g_presentation_observed_frame, UINT64_MAX, memory_order_release);
     memset(&g_view, 0, sizeof g_view); g_view_valid = 0;
     g_map_published_pane = g_map_published_root = 0;

@@ -17,7 +17,7 @@ enum { BOTW_TOUCH_PANE_NAME = 0xb8, BOTW_TOUCH_PARENT = 0x18, BOTW_TOUCH_FLAGS =
 static const char BOTW_BUILD[] = "cd57b23fa4bbad65803d9788c01821ee";
 static pthread_mutex_t g_touchhud_mu = PTHREAD_MUTEX_INITIALIZER;
 static struct {
-    int active, home_valid, delta_valid, map_rect_valid;
+    int active, home_valid, delta_valid, map_rect_valid, keep_native_loadout;
     float x, y, dpad_scale, home_x, home_y, map_dx, map_dy, map_rect[4];
     int rune_valid;
     uint64_t rune_token;
@@ -41,6 +41,11 @@ int dm_botw_touch_hud_active(void) {
     if (strcmp(DM_GAME_ID, "01007EF00011E000") || !dm_botw_touch_hud_available() ||
         strcmp(dm_main_build(), BOTW_BUILD)) return 0;
     return atomic_load_explicit(&g_touchhud_active, memory_order_acquire);
+}
+void dm_botw_touch_hud_keep_native_loadout(int keep) {
+    pthread_mutex_lock(&g_touchhud_mu);
+    g_touchhud.keep_native_loadout=!!keep;
+    pthread_mutex_unlock(&g_touchhud_mu);
 }
 
 void dm_botw_touch_hud_publish(int active, float center_x, float center_y, float dpad_scale) {
@@ -476,6 +481,7 @@ static void botw_touchhud_matrix(const uint64_t *regs) {
         pthread_mutex_lock(&g_touchhud_mu);
         g_touchhud.home_x = tx; g_touchhud.home_y = ty; g_touchhud.home_valid = 1;
         x = g_touchhud.x; y = g_touchhud.y; scale = g_touchhud.dpad_scale;
+        active = active && !g_touchhud.keep_native_loadout;
         pthread_mutex_unlock(&g_touchhud_mu);
         if (active) {
             // Preserve the animated N_Pos_00 parent delta by translating the

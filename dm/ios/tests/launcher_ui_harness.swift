@@ -1,6 +1,7 @@
 // A small simulator app using the production launcher. Play exposes the applied
 // values; Reopen checks saved choices without needing game files or a GPU host.
 import UIKit
+import Darwin
 
 // The production launcher reads cloud-save providers through its app bridge.
 // This isolated UI fixture has no shared-folder access or cloud-save storage.
@@ -46,6 +47,7 @@ final class LauncherHarnessRoot: UIViewController {
 
 final class LauncherHarnessScene: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
+    private var captureSignal: DispatchSourceSignal?
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options: UIScene.ConnectionOptions) {
         guard let scene = scene as? UIWindowScene else { return }
         if CommandLine.arguments.contains("--custom-stick") {
@@ -57,6 +59,22 @@ final class LauncherHarnessScene: UIResponder, UIWindowSceneDelegate {
         let window = UIWindow(windowScene: scene)
         window.rootViewController = LauncherHarnessRoot(); window.backgroundColor = .black
         window.makeKeyAndVisible(); self.window = window
+        if CommandLine.arguments.contains("--capture-window") {
+            // Capture the actual view in its current orientation. Simulator
+            // framebuffer screenshots otherwise retain portrait coordinates.
+            signal(SIGUSR1, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+            source.setEventHandler { [weak window] in
+                guard let window else { return }
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                }
+                let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("editor-capture.png")
+                do { try image.pngData()?.write(to: url) }
+                catch { fputs("fixture: screenshot: \(error.localizedDescription)\n", stderr) }
+            }
+            source.resume(); captureSignal = source
+        }
     }
 }
 

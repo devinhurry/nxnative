@@ -1,6 +1,7 @@
 // Launcher settings, validation and persistence. Shared by the iOS UI, the Mac app's settings window (dm/mac/Launcher.swift) and the native storage regression test.
 import Foundation
 import Combine
+import CoreGraphics
 import DmTouchPad
 
 struct Setting: Decodable, Identifiable {
@@ -67,12 +68,27 @@ struct BotwTouchControl: Identifiable, Hashable {
         .init(id: 6, key: "L", label: "Rune (L)"), .init(id: 7, key: "R", label: "R"),
         .init(id: 9, key: "ZR", label: "ZR"), .init(id: 12, key: "DPAD", label: "D-pad")
     ]
+    static let added: [Self] = [
+        .init(id: 16, key: "WEAPON", label: "Weapons"), .init(id: 17, key: "SHIELD", label: "Shields"),
+        .init(id: 18, key: "FOOD", label: "Food"), .init(id: 19, key: "WHISTLE", label: "Whistle")
+    ]
+    static let cancel = Self(id: 20, key: "CANCEL", label: "Cancel switching")
+    static let editable = all + added + [cancel]
     static let compact = all
+    func option(_ field: String, portrait: Bool) -> String {
+        botwTouchKey("DM_BOTW_PAD_\(key)_\(field)", portrait: portrait)
+    }
+    var removable: Bool { id == 12 || (16...19).contains(id) }
+    func visibilityKey(portrait: Bool) -> String { option(id == 12 ? "VISIBLE" : "ENABLED", portrait: portrait) }
     func env(_ field: String, portrait: Bool = false) -> String {
         botwTouchKey("DM_BOTW_PAD_\(key)_\(field)_PT", portrait: portrait)
     }
     var keys: Set<String> { keys(portrait: false) }
-    func keys(portrait: Bool) -> Set<String> { Set([env("X", portrait: portrait), env("Y", portrait: portrait), env("SIZE", portrait: portrait)]) }
+    func keys(portrait: Bool) -> Set<String> {
+        var keys = Set([env("X", portrait: portrait), env("Y", portrait: portrait), env("SIZE", portrait: portrait), option("ANCHOR", portrait: portrait)])
+        if id == 6 || id == 16 || id == 17 { keys.insert(option("MODE", portrait: portrait)) }
+        return keys
+    }
 
     // Old offsets were fractions of a reference phone canvas. Project saved
     // customizations once into the new point keys; never reinterpret a fraction
@@ -128,6 +144,63 @@ struct BotwTouchControl: Identifiable, Hashable {
     }
 }
 
+struct BotwTouchArea: Codable, Equatable {
+    var width, height: Double
+    static let normal = Self(width: 932, height: 430)
+    static let compact = Self(width: 390, height: 844)
+    var valid: Bool { width.isFinite && height.isFinite && width >= 20 && height >= 20 && width <= 10000 && height <= 10000 }
+}
+
+struct BotwSavedTouchLayout: Codable, Identifiable {
+    var id = UUID().uuidString
+    var name: String
+    var values: [String: String]
+    var normalArea = BotwTouchArea.normal
+    var compactArea = BotwTouchArea.compact
+}
+
+private struct BotwTouchLibrary: Codable {
+    var schemaVersion = 1
+    var selected: String
+    var layouts: [BotwSavedTouchLayout]
+}
+
+struct BotwPortableControl: Codable {
+    enum Anchor: String, Codable { case left, right }
+    var anchor: Anchor
+    var side, bottom, size: Double
+    enum CodingKeys: String, CodingKey { case anchor, side = "sidePt", bottom = "bottomPt", size = "sizePt" }
+}
+
+struct BotwPortableBank: Codable {
+    var controls: [String: BotwPortableControl]
+    var options: [String: String]
+}
+
+struct BotwPortableLayout: Codable {
+    var name: String
+    var normal, compact: BotwPortableBank?
+}
+
+struct BotwTouchLayoutsFile: Codable {
+    var schemaVersion = 1
+    var game = "01007EF00011E000"
+    var layouts: [BotwPortableLayout]
+}
+
+enum BotwTouchFileError: Error, LocalizedError {
+    case invalid, version, limit
+    var errorDescription: String? {
+        let key: String
+        switch self {
+        case .invalid: key = "This file does not contain valid touch layouts."
+        case .version: key = "This layout file uses an unsupported schema version."
+        case .limit: key = "Keep up to 256 layouts. Layout files must be smaller than 4 MB."
+        }
+        return NSLocalizedString(key, comment: "")
+    }
+}
+
 final class LauncherModel: ObservableObject {
     static let lowMemoryKey = "DM_LOW_MEMORY"
     static let lowMemoryNotice = "Low-memory mode is enabled to help keep the game running. Performance may be affected."
@@ -136,8 +209,13 @@ final class LauncherModel: ObservableObject {
     let fromLaunch: Set<String>   // of those, the ones the launch environment set (a front end's launch overrides, Xcode; DM_ENV_LAUNCH_KEYS from launcher.c or main.m)
     let ignoreSaved: Bool   // DM_SAVED_CHOICES=0: start from the defaults, and leave the saved choices as they are
     @Published var values: [String: String] = [:] {
-        didSet { if isRunning { applyRuntimeChanges(previous: oldValue) } }
+        didSet {
+            syncTouchLayout()
+            if isRunning { applyRuntimeChanges(previous: oldValue); persistTouchLayouts() }
+        }
     }
+    @Published private(set) var touchLayouts: [BotwSavedTouchLayout] = []
+    @Published private(set) var selectedTouchLayoutID = ""
     @Published private(set) var isRunning = false
     @Published private(set) var deferredSettings: Set<String> = []
 
@@ -162,20 +240,25 @@ final class LauncherModel: ObservableObject {
                 lowMemoryOverride = saved
             }
         }
-        var legacyPoints: [String: String] = [:]
-        if !ignoreSaved && defaults.integer(forKey: "launcher.botwPointLayoutVersion") == 0 {
-            for portrait in [false, true] {
-                for control in BotwTouchControl.all {
-                    legacyPoints.merge(control.legacyPointValues(portrait: portrait) { defaults.object(forKey: "launcher." + $0) as? String }) { current, _ in current }
-                }
-            }
-        }
+        let legacyPoints = !ignoreSaved && defaults.integer(forKey: "launcher.botwPointLayoutVersion") == 0
+            ? Self.legacyTouchPoints(defaults) : [:]
         for s in settings {
             if fixed.contains(s.env), let v = env[s.env] { values[s.env] = v; continue }
             let saved = ignoreSaved ? nil : (defaults.object(forKey: "launcher." + s.env) as? String ?? legacyPoints[s.env])   // accept only strings, as launcher.c does
             values[s.env] = saved.flatMap { s.accepts($0) ? $0 : nil } ?? defaultValue(s)
         }
         alignFrameGeneration()
+        loadTouchLayouts()
+    }
+
+    private static func legacyTouchPoints(_ defaults: UserDefaults) -> [String: String] {
+        var points: [String: String] = [:]
+        for portrait in [false, true] {
+            for control in BotwTouchControl.all {
+                points.merge(control.legacyPointValues(portrait: portrait) { defaults.object(forKey: "launcher." + $0) as? String }) { current, _ in current }
+            }
+        }
+        return points
     }
 
     private func memoryDefault() -> String {
@@ -326,21 +409,305 @@ final class LauncherModel: ObservableObject {
     func touchSettingsKeys(portrait: Bool) -> Set<String> {
         Set(touchSettingsKeys.filter { $0 != "DM_BOTW_PORTRAIT" && $0.hasPrefix("DM_BOTW_PORTRAIT_") == portrait })
     }
+    private var touchLayoutKeys: Set<String> { touchSettingsKeys.subtracting(["DM_BOTW_PORTRAIT"]) }
+    private var defaultTouchValues: [String: String] {
+        let keys = touchLayoutKeys
+        return Dictionary(uniqueKeysWithValues: settings.filter { keys.contains($0.env) }.map { ($0.env, $0.def) })
+    }
+    private func touchSnapshot(_ source: [String: String]) -> [String: String] {
+        var snapshot = defaultTouchValues
+        let keys = touchLayoutKeys
+        for row in settings where keys.contains(row.env) {
+            if let value = source[row.env], row.accepts(value) { snapshot[row.env] = value }
+        }
+        return snapshot
+    }
+    private func syncTouchLayout() {
+        guard let index = touchLayouts.firstIndex(where: { $0.id == selectedTouchLayoutID }) else { return }
+        var snapshot = touchSnapshot(values)
+        for key in fixed {
+            if let saved = touchLayouts[index].values[key] { snapshot[key] = saved }
+        }
+        if touchLayouts[index].values != snapshot { touchLayouts[index].values = snapshot }
+    }
+    private func loadTouchLayouts() {
+        guard !touchLayoutKeys.isEmpty else { return }
+        if !ignoreSaved, let data = defaults.data(forKey: "launcher.botwTouchLayouts"),
+           let library = try? JSONDecoder().decode(BotwTouchLibrary.self, from: data), library.schemaVersion == 1,
+           !library.layouts.isEmpty, library.layouts.count <= 256 {
+            var ids = Set<String>()
+            touchLayouts = library.layouts.filter {
+                !$0.id.isEmpty && ids.insert($0.id).inserted && !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                $0.name.count <= 80 && $0.normalArea.valid && $0.compactArea.valid && validTouchAnchors($0.values)
+            }.map { var layout = $0; layout.values = touchSnapshot(layout.values); return layout }
+            selectedTouchLayoutID = touchLayouts.contains { $0.id == library.selected } ? library.selected : touchLayouts.first?.id ?? ""
+        }
+        if touchLayouts.isEmpty {
+            var source = values
+            for row in settings where fixed.contains(row.env) {
+                let saved = ignoreSaved ? nil : defaults.string(forKey: "launcher." + row.env)
+                source[row.env] = saved.flatMap { row.accepts($0) ? $0 : nil } ?? row.def
+            }
+            let layout = BotwSavedTouchLayout(name: "Default layout", values: touchSnapshot(source))
+            touchLayouts = [layout]; selectedTouchLayoutID = layout.id
+        }
+        // The ordinary scalar choices are the active layout's compatibility
+        // record. Older app versions can update them without knowing about the
+        // library; retain their validated values instead of reviving a stale
+        // active snapshot. Inactive layouts remain independent in the library.
+        syncTouchLayout()
+    }
+    private func persistTouchLayouts() {
+        guard !ignoreSaved, !touchLayouts.isEmpty else { return }
+        let library = BotwTouchLibrary(selected: selectedTouchLayoutID, layouts: touchLayouts)
+        if let data = try? JSONEncoder().encode(library) { defaults.set(data, forKey: "launcher.botwTouchLayouts") }
+    }
+    private func persistCurrentTouchChoices() {
+        let keys = touchLayoutKeys
+        for row in settings where keys.contains(row.env) && !fixed.contains(row.env) {
+            if let value = values[row.env], row.accepts(value) { storeChoice(row, value) }
+        }
+        persistTouchLayouts()
+    }
+    func selectTouchLayout(_ id: String) {
+        guard let layout = touchLayouts.first(where: { $0.id == id }) else { return }
+        syncTouchLayout()
+        selectedTouchLayoutID = id
+        var next = values
+        for (key, value) in layout.values where !fixed.contains(key) { next[key] = value }
+        values = next
+        persistCurrentTouchChoices()
+    }
+    func addTouchLayout(name: String, copyCurrent: Bool) {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= 80, touchLayouts.count < 256 else { return }
+        syncTouchLayout()
+        let current = touchLayouts.first(where: { $0.id == selectedTouchLayoutID })
+        var layout = BotwSavedTouchLayout(name: name, values: copyCurrent ? current?.values ?? touchSnapshot(values) : defaultTouchValues)
+        if copyCurrent, let current = touchLayouts.first(where: { $0.id == selectedTouchLayoutID }) {
+            layout.normalArea = current.normalArea; layout.compactArea = current.compactArea
+        }
+        touchLayouts.append(layout)
+        selectTouchLayout(layout.id)
+    }
+    func renameTouchLayout(_ name: String) {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= 80, let index = touchLayouts.firstIndex(where: { $0.id == selectedTouchLayoutID }) else { return }
+        touchLayouts[index].name = name
+        persistTouchLayouts()
+    }
+    func deleteTouchLayout(_ id: String) {
+        guard touchLayouts.count > 1, let index = touchLayouts.firstIndex(where: { $0.id == id }) else { return }
+        let wasSelected = selectedTouchLayoutID == id
+        touchLayouts.remove(at: index)
+        if wasSelected { selectTouchLayout(touchLayouts[min(index, touchLayouts.count - 1)].id) }
+        else { persistTouchLayouts() }
+    }
+    func rememberTouchArea(_ area: BotwTouchArea, portrait: Bool) {
+        guard area.valid, let index = touchLayouts.firstIndex(where: { $0.id == selectedTouchLayoutID }) else { return }
+        if portrait { if touchLayouts[index].compactArea != area { touchLayouts[index].compactArea = area } }
+        else { if touchLayouts[index].normalArea != area { touchLayouts[index].normalArea = area } }
+    }
+    private func validTouchAnchors(_ source: [String: String]) -> Bool {
+        for portrait in [false, true] {
+            for control in BotwTouchControl.editable {
+                let anchor = source[control.option("ANCHOR", portrait: portrait)] ?? "0"
+                guard ["0", "1", "2"].contains(anchor) else { return false }
+                if anchor != "0" {
+                    guard let x = Double(source[control.env("X", portrait: portrait)] ?? "0"), x.isFinite, x >= 0, x <= 10000,
+                          let y = Double(source[control.env("Y", portrait: portrait)] ?? "0"), y.isFinite, y >= 0, y <= 10000 else { return false }
+                }
+            }
+        }
+        return true
+    }
+    func touchLayout(portrait: Bool, values source: [String: String]? = nil) -> dm_botw_touch_layout {
+        let source = source ?? values
+        var result = dm_botw_layout_defaults_for(portrait ? 1 : 0)
+        func number(_ key: String, _ fallback: Double = 0) -> Double {
+            guard let row = settings.first(where: { $0.env == key }) else { return fallback }
+            let text = source[key] ?? row.def
+            return Double(row.accepts(text) ? text : row.def) ?? fallback
+        }
+        withUnsafeMutableBytes(of: &result.control) { bytes in
+            let controls = bytes.bindMemory(to: dm_botw_control_transform.self)
+            for control in BotwTouchControl.editable {
+                controls[control.id] = .init(x: Float(number(control.env("X", portrait: portrait))),
+                    y: Float(number(control.env("Y", portrait: portrait))),
+                    size: Float(number(control.env("SIZE", portrait: portrait), Double(controls[control.id].size))),
+                    anchor: Int32(number(control.option("ANCHOR", portrait: portrait))))
+            }
+        }
+        result.badges = Int32(number(botwTouchKey("DM_BOTW_PAD_BADGES", portrait: portrait)))
+        result.dpad_visible = Int32(number(botwTouchKey("DM_BOTW_PAD_DPAD_VISIBLE", portrait: portrait), 1))
+        withUnsafeMutableBytes(of: &result.added) { bytes in
+            let flags = bytes.bindMemory(to: Int32.self)
+            for (i, control) in BotwTouchControl.added.enumerated() { flags[i] = Int32(number(control.visibilityKey(portrait: portrait))) }
+        }
+        withUnsafeMutableBytes(of: &result.switch_mode) { bytes in
+            let modes = bytes.bindMemory(to: Int32.self)
+            for i in 0..<2 { modes[i] = Int32(number(BotwTouchControl.added[i].option("MODE", portrait: portrait))) }
+        }
+        result.rune_mode = Int32(number(botwTouchKey("DM_BOTW_PAD_L_MODE", portrait: portrait)))
+        return result
+    }
+    private func portableBank(_ saved: BotwSavedTouchLayout, portrait: Bool) -> BotwPortableBank {
+        let area = portrait ? saved.compactArea : saved.normalArea
+        var config = touchLayout(portrait: portrait, values: saved.values)
+        var controls: [String: BotwPortableControl] = [:]
+        var positionKeys = Set<String>()
+        for control in BotwTouchControl.editable {
+            let r = dm_botw_layout_control(&config, Int32(control.id), Float(area.width), Float(area.height), 0, 0, 0, 0,
+                dm_botw_layout_canvas(Float(area.width), Float(area.height)))
+            let right = Double(r.x + r.width / 2) > area.width / 2
+            let storedAnchor = saved.values[control.option("ANCHOR", portrait: portrait)] ?? "0"
+            let anchor: BotwPortableControl.Anchor = storedAnchor == "1" ? .left : storedAnchor == "2" ? .right : right ? .right : .left
+            controls[control.key] = .init(anchor: anchor,
+                side: (max(0, anchor == .right ? area.width - Double(r.x + r.width) : Double(r.x)) * 1000).rounded() / 1000,
+                bottom: (max(0, area.height - Double(r.y + r.height)) * 1000).rounded() / 1000,
+                size: (Double(r.width) * 1000).rounded() / 1000)
+            positionKeys.formUnion([control.env("X", portrait: portrait), control.env("Y", portrait: portrait),
+                control.env("SIZE", portrait: portrait), control.option("ANCHOR", portrait: portrait)])
+        }
+        let optionKeys = touchSettingsKeys(portrait: portrait).subtracting(positionKeys)
+        return .init(controls: controls, options: saved.values.filter { optionKeys.contains($0.key) })
+    }
+    func exportTouchLayouts(all: Bool, normalArea: BotwTouchArea? = nil, compactArea: BotwTouchArea? = nil) throws -> Data {
+        syncTouchLayout()
+        let layouts = touchLayouts.filter { all || $0.id == selectedTouchLayoutID }.map {
+            var saved = $0
+            if let normalArea, normalArea.valid { saved.normalArea = normalArea }
+            if let compactArea, compactArea.valid { saved.compactArea = compactArea }
+            return BotwPortableLayout(name: saved.name, normal: portableBank(saved, portrait: false), compact: portableBank(saved, portrait: true))
+        }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(BotwTouchLayoutsFile(layouts: layouts))
+    }
+    func exportTouchLayoutDraft(_ draft: [String: String], portrait: Bool, area: BotwTouchArea) throws -> Data {
+        guard var layout = touchLayouts.first(where: { $0.id == selectedTouchLayoutID }), area.valid else { throw BotwTouchFileError.invalid }
+        for key in touchSettingsKeys(portrait: portrait) where !fixed.contains(key) { if let value = draft[key] { layout.values[key] = value } }
+        if portrait { layout.compactArea = area } else { layout.normalArea = area }
+        let file = BotwTouchLayoutsFile(layouts: [.init(name: layout.name, normal: portableBank(layout, portrait: false), compact: portableBank(layout, portrait: true))])
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try encoder.encode(file)
+    }
+    @discardableResult func importTouchLayouts(_ data: Data, normalArea: BotwTouchArea, compactArea: BotwTouchArea) throws -> Int {
+        guard data.count <= 4_194_304 else { throw BotwTouchFileError.limit }
+        guard normalArea.valid, compactArea.valid else { throw BotwTouchFileError.invalid }
+        let file: BotwTouchLayoutsFile
+        do { file = try JSONDecoder().decode(BotwTouchLayoutsFile.self, from: data) }
+        catch { throw BotwTouchFileError.invalid }
+        guard file.schemaVersion == 1 else { throw BotwTouchFileError.version }
+        guard file.game == "01007EF00011E000", !file.layouts.isEmpty else { throw BotwTouchFileError.invalid }
+        guard file.layouts.count <= 256, touchLayouts.count + file.layouts.count <= 256 else { throw BotwTouchFileError.limit }
+        var added: [BotwSavedTouchLayout] = []
+        for incoming in file.layouts {
+            let name = incoming.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, name.count <= 80, incoming.normal != nil || incoming.compact != nil else { throw BotwTouchFileError.invalid }
+            var next = defaultTouchValues
+            for portrait in [false, true] {
+                guard let bank = portrait ? incoming.compact : incoming.normal else { continue }
+                let area = portrait ? compactArea : normalArea
+                var geometryKeys = Set<String>()
+                for control in BotwTouchControl.editable {
+                    geometryKeys.formUnion([control.env("X", portrait: portrait), control.env("Y", portrait: portrait),
+                        control.env("SIZE", portrait: portrait), control.option("ANCHOR", portrait: portrait)])
+                }
+                let optionKeys = touchSettingsKeys(portrait: portrait).subtracting(geometryKeys)
+                for (key, value) in bank.options {
+                    guard optionKeys.contains(key), let row = settings.first(where: { $0.env == key }), row.accepts(value) else { throw BotwTouchFileError.invalid }
+                    next[key] = value
+                }
+                guard !bank.controls.isEmpty else { throw BotwTouchFileError.invalid }
+                for (name, position) in bank.controls {
+                    guard let control = BotwTouchControl.editable.first(where: { $0.key == name }),
+                          position.side.isFinite, position.bottom.isFinite, position.size.isFinite,
+                          abs(position.side) <= 10000, abs(position.bottom) <= 10000,
+                          position.size >= 20, position.size <= 240 else { throw BotwTouchFileError.invalid }
+                    let size = min(position.size, min(area.width, area.height))
+                    next[control.option("ANCHOR", portrait: portrait)] = position.anchor == .left ? "1" : "2"
+                    next[control.env("X", portrait: portrait)] = Self.touchPoint(min(max(0, position.side), max(0, area.width - size)))
+                    next[control.env("Y", portrait: portrait)] = Self.touchPoint(min(max(0, position.bottom), max(0, area.height - size)))
+                    next[control.env("SIZE", portrait: portrait)] = Self.touchPoint(size)
+                }
+            }
+            // Missing banks and controls use defaults, fitted to this device
+            // too. A sparse imported file must not leave fallback controls out
+            // of a narrow or short pane.
+            for portrait in [false, true] {
+                let area = portrait ? compactArea : normalArea
+                var config = touchLayout(portrait: portrait, values: next)
+                for control in BotwTouchControl.editable {
+                    let r = dm_botw_layout_control(&config, Int32(control.id), Float(area.width), Float(area.height), 0, 0, 0, 0,
+                        dm_botw_layout_canvas(Float(area.width), Float(area.height)))
+                    let storedAnchor = next[control.option("ANCHOR", portrait: portrait)] ?? "0"
+                    let right = storedAnchor == "2" || (storedAnchor == "0" && Double(r.x + r.width / 2) > area.width / 2)
+                    let size = min(Double(r.width), min(area.width, area.height))
+                    let side = right ? area.width - Double(r.x + r.width) : Double(r.x)
+                    let bottom = area.height - Double(r.y + r.height)
+                    next[control.option("ANCHOR", portrait: portrait)] = right ? "2" : "1"
+                    next[control.env("X", portrait: portrait)] = Self.touchPoint(min(max(0, side), max(0, area.width - size)))
+                    next[control.env("Y", portrait: portrait)] = Self.touchPoint(min(max(0, bottom), max(0, area.height - size)))
+                    next[control.env("SIZE", portrait: portrait)] = Self.touchPoint(size)
+                }
+            }
+            guard validTouchAnchors(next) else { throw BotwTouchFileError.invalid }
+            var uniqueName = name, suffix = 2
+            while (touchLayouts + added).contains(where: { $0.name == uniqueName }) {
+                let ending = " (\(suffix))"
+                uniqueName = String(name.prefix(80 - ending.count)) + ending
+                suffix += 1
+            }
+            added.append(.init(name: uniqueName, values: next, normalArea: normalArea, compactArea: compactArea))
+        }
+        syncTouchLayout()
+        touchLayouts.append(contentsOf: added)
+        // Import is additive. The currently selected layout keeps running until
+        // the player selects one of the newly imported layouts.
+        persistTouchLayouts()
+        return added.count
+    }
+    static func touchPoint(_ value: Double) -> String {
+        String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), value)
+    }
     // Export the same normalized values consumed by both gamepads, including
     // defaults and locked values. No device-specific preview pixels are saved.
     var touchSettingsExport: String {
-        touchSettingsExport(keys: touchSettingsKeys)
+        touchSettingsExport(keys: touchSettingsKeys, values: values)
     }
-    func touchSettingsExport(portrait: Bool) -> String {
-        touchSettingsExport(keys: touchSettingsKeys(portrait: portrait))
+    func touchSettingsExport(portrait: Bool, values: [String: String]? = nil) -> String {
+        touchSettingsExport(keys: touchSettingsKeys(portrait: portrait), values: values ?? self.values)
     }
-    private func touchSettingsExport(keys: Set<String>) -> String {
+    private func touchSettingsExport(keys: Set<String>, values: [String: String]) -> String {
         settings.filter { keys.contains($0.env) }.map { row in
             let current = values[row.env] ?? row.def
             let value = row.accepts(current) ? current : row.def
             let text = row.kind == "range" ? String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), Double(value) ?? 0) : value
             return "\(row.env)=\(text)"
         }.joined(separator: "\n")
+    }
+
+    // The full-screen editor keeps a draft until Save. Persist only this bank;
+    // unrelated launcher choices still wait for Play.
+    @discardableResult func saveTouchSettings(_ draft: [String: String], portrait: Bool) -> Bool {
+        let keys = touchSettingsKeys(portrait: portrait)
+        let rows = settings.filter { keys.contains($0.env) && !fixed.contains($0.env) }
+        guard rows.allSatisfy({ row in draft[row.env].map(row.accepts) ?? false }), validTouchAnchors(draft) else { return false }
+        if !ignoreSaved && defaults.integer(forKey: "launcher.botwPointLayoutVersion") == 0 {
+            // Finish both banks' stored legacy conversion before retiring it.
+            // Do not save unrelated, uncommitted values from the current UI.
+            let migrated = Self.legacyTouchPoints(defaults)
+            for row in settings where defaults.object(forKey: "launcher." + row.env) == nil {
+                if let value = migrated[row.env], row.accepts(value) { storeChoice(row, value) }
+            }
+            defaults.set(1, forKey: "launcher.botwPointLayoutVersion")
+        }
+        var next = values
+        for row in rows { next[row.env] = draft[row.env] }
+        values = next
+        for row in rows { storeChoice(row, next[row.env]!) }
+        persistTouchLayouts()
+        return true
     }
 
     var changed: Bool {
@@ -358,10 +725,12 @@ final class LauncherModel: ObservableObject {
            keys?.contains(Self.lowMemoryKey) ?? true {
             automaticLowMemoryValue = memoryDefault(); lowMemoryOverride = nil
         }
+        var next = values
         for s in settings where !fixed.contains(s.env) && (keys?.contains(s.env) ?? true) {
-            values[s.env] = defaultValue(s)
+            next[s.env] = defaultValue(s)
             if isRunning { storeChoice(s, defaultValue(s)) }
         }
+        values = next
         alignFrameGeneration()
         fputs("launcher: settings reset to the game's defaults\n", stderr)
     }
@@ -380,6 +749,8 @@ final class LauncherModel: ObservableObject {
         if !ignoreSaved && settings.contains(where: { $0.env == "DM_BOTW_PAD_A_X_PT" }) {
             defaults.set(1, forKey: "launcher.botwPointLayoutVersion")
         }
+        syncTouchLayout()
+        persistTouchLayouts()
     }
 
     // DM_LAUNCHER=0: no screen, but the saved choices still apply (only DM_SAVED_CHOICES=0 ignores them); nothing is written

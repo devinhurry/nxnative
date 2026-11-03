@@ -10,7 +10,31 @@ import os
 import DmTouchPad
 
 private final class LandscapeLauncherController<Content: View>: UIHostingController<Content> {
-    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscape }
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { touchEditorOrientations ?? .landscape }
+}
+
+private var touchEditorOrientations: UIInterfaceOrientationMask?
+
+// The editor can show the compact bank upright without enabling portrait play.
+@_cdecl("dm_touch_editor_orientations")
+public func dmTouchEditorOrientations() -> UInt { touchEditorOrientations?.rawValue ?? 0 }
+
+func setBotwTouchEditorOrientation(_ portrait: Bool?, window: UIWindow?, running: Bool) {
+    let size = window?.bounds.size ?? .zero
+    if let portrait {
+        touchEditorOrientations = portrait ? .portrait : min(size.width, size.height) >= 600 ? [.landscape, .portrait] : .landscape
+    } else { touchEditorOrientations = nil }
+    let restore: UIInterfaceOrientationMask = running && dm_botw_portrait_allowed(Float(size.width), Float(size.height), 0, 0) != 0
+        ? [.landscape, .portrait] : .landscape
+    let mask = touchEditorOrientations ?? restore
+    var controller = window?.rootViewController
+    while let current = controller {
+        current.setNeedsUpdateOfSupportedInterfaceOrientations()
+        controller = current.presentedViewController
+    }
+    window?.windowScene?.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { error in
+        fputs("launcher: touch editor orientation: \(error.localizedDescription)\n", stderr)
+    }
 }
 
 private func info(_ key: String) -> Any? { Bundle.main.object(forInfoDictionaryKey: key) }

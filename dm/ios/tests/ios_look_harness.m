@@ -14,6 +14,7 @@
 #include "../../host/botw_touch_menu.h"
 #include "../../host/botw_touch_style.h"
 UIView *dm_gamepad_view(CGRect frame);
+void dm_gamepad_open_settings(void);
 void dm_test_motion_reset(void);
 void dm_test_motion_recenter(void);
 void dm_test_motion_publish(CMQuaternion q, CMAcceleration a, CMRotationRate r);
@@ -43,6 +44,7 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y, float
 - (UITapGestureRecognizer *)dm_testMenuPadGesture;
 - (BOOL)dm_testManualMenuPad;
 - (UIButton *)dm_testSettingsButton;
+- (UIButton *)dm_testClosePadButton;
 - (BOOL)dm_testSettingsRevealed;
 - (void)revealBotwMenuPad:(UITapGestureRecognizer *)recognizer;
 - (CAShapeLayer *)dm_testButtonLayer:(int)button;
@@ -64,6 +66,8 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y, float
 - (BOOL)dm_testL3GestureEnabled;
 - (BOOL)dm_testL3ReceiveTouch:(UITouch *)touch;
 - (BOOL)dm_testL3MayBegin;
+- (BOOL)dm_testScopeTapExcludedAt:(CGPoint)point;
+- (void)refreshTouchSettings;
 - (BOOL)dm_testLeftStickOwnsPoint:(CGPoint)point;
 - (BOOL)dm_testSetBotwMapRectValid:(BOOL)valid x:(CGFloat)x y:(CGFloat)y width:(CGFloat)width height:(CGFloat)height;
 - (int)dm_testBtnAt:(CGPoint)point;
@@ -175,6 +179,13 @@ int dm_botw_touch_menu_active(void) { return g_botw_touch_menu_active; }
 int dm_botw_touch_menu_visible(void) { return (g_botw_touch_menu_active && !g_botw_scope_active) || g_botw_touch_menu_presented; }
 int dm_botw_touch_loadout_visible(void) { return g_botw_loadout_visible; }
 int dm_botw_touch_quick_select_active(void) { return g_botw_quick_select; }
+int dm_botw_touch_bow_active(void) { return 0; }
+void dm_botw_touch_hud_keep_native_loadout(int keep) { (void)keep; }
+void dm_botw_touch_button_begin(int control,int mode) { (void)control; (void)mode; }
+void dm_botw_touch_button_end(int control,int cancelled) { (void)control; (void)cancelled; }
+void dm_botw_touch_switch_cancel(void) {}
+void dm_botw_touch_switch_selected(void) {}
+int dm_botw_touch_switch_cancel_visible(void) { return 0; }
 int dm_botw_touch_menu_dpad_visible(void) { return g_botw_hero_path; }
 int dm_botw_touch_controls_visible(void) {
     if (g_force_controls_hidden || (g_botw_touchhud_available && !g_published_touchhud_active)) return 0;
@@ -840,7 +851,7 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
     g_botw_touch_actions_available=NO; g_botw_cancel_complete=0; g_botw_cancel_requested=0;
 
     g_look_enabled = YES; reset_look(); g_input_sets = 0; g_input_history[0] = g_input_history[1] = 0;
-    CGPoint camera = CGPointMake(view.bounds.size.width * .82, view.bounds.size.height * .38);
+    CGPoint camera = CGPointMake(view.bounds.size.width * .65, view.bounds.size.height * .38);
     CHECK([view dm_testBtnAt:camera] < 0, "BOTW camera area has no visible or active R3 button hit region");
     FakeTouch *cameraTap = touch(camera.x,camera.y); beganAt(view,cameraTap,1.0); endedAt(view,cameraTap,camera.x,camera.y,1.08);
     BOOL r3Pressed = NO, r3Released = NO;
@@ -1108,7 +1119,7 @@ static void test_botw_stick_feedback(DmGamepad *view) {
           "release restores the idle graph without an extra haptic");
 
     g_look_enabled=YES; reset_look(); feedback.count=0;
-    CGPoint camera=CGPointMake(view.bounds.size.width*.82,view.bounds.size.height*.38);
+    CGPoint camera=CGPointMake(view.bounds.size.width*.65,view.bounds.size.height*.38);
     FakeTouch *drag=touch(camera.x,camera.y); beganAt(view,drag,5.0);
     moved(view,drag,camera.x+40,camera.y); endedAt(view,drag,camera.x+40,camera.y,5.1);
     CHECK(feedback.count==0,"BOTW camera dragging produces no touch haptic");
@@ -1368,6 +1379,47 @@ static void test_botw_inventory_pointer(DmGamepad *view) {
           [view dm_testR3ArtworkHidden] && [view dm_testL3GestureEnabled],
           "loading exit restores shield stick and double-tap L3 without ordinary ZL/L3/R3");
     g_botw_touchhud_available = NO;
+}
+
+static void test_botw_scope_protection(DmGamepad *view) {
+    [view reset];
+    g_botw_touchhud_available=g_botw_gameplay_ready=YES;
+    g_botw_touch_menu_active=g_botw_touch_menu_presented=g_botw_scope_active=NO;
+    g_look_enabled=YES;
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view layoutIfNeeded];
+    CGPoint zr=[view dm_testDropCenter:9], protected=CGPointMake(zr.x-45,zr.y);
+    CGPoint outside=CGPointMake(zr.x-55,zr.y);
+    CHECK([view dm_testBtnAt:protected]<0 && [view dm_testScopeTapExcludedAt:protected] &&
+          ![view dm_testScopeTapExcludedAt:outside],
+          "scope protection extends to a fixed 50 pt radius beyond the visible right button hit target");
+    reset_look(); g_input_sets=0;
+    FakeTouch *first=touch(protected.x,protected.y), *second=touch(protected.x,protected.y);
+    beganAt(view,first,11); endedAt(view,first,protected.x,protected.y,11.08);
+    beganAt(view,second,11.20); endedAt(view,second,protected.x,protected.y,11.28);
+    BOOL r3=NO; for (int i=0;i<g_input_sets;i++) r3|=(g_input_history[i]&DM_BTN_RS)!=0;
+    CHECK(!r3 && g_look_count==4,
+          "two taps beside a right button remain ordinary camera touches without a scope toggle");
+    reset_look(); g_input_sets=0;
+    first=touch(outside.x,outside.y); beganAt(view,first,12); endedAt(view,first,outside.x,outside.y,12.08);
+    second=touch(protected.x,protected.y); beganAt(view,second,12.20); endedAt(view,second,protected.x,protected.y,12.28);
+    FakeTouch *third=touch(outside.x,outside.y); beganAt(view,third,12.40); endedAt(view,third,outside.x,outside.y,12.48);
+    r3=NO; for (int i=0;i<g_input_sets;i++) r3|=(g_input_history[i]&DM_BTN_RS)!=0;
+    CHECK(!r3,"a protected tap clears timing so taps across the protected boundary cannot form a scope double tap");
+    reset_look();
+    first=touch(protected.x,protected.y); beganAt(view,first,13);
+    moved(view,first,protected.x-30,protected.y+15); endedAt(view,first,protected.x-30,protected.y+15,13.2);
+    CHECK(g_look_count==3 && g_look_events[1].phase==DM_LOOK_MOVE &&
+          g_look_events[1].dx<0 && g_look_events[1].dy>0,
+          "scope protection leaves relative camera dragging beside buttons unchanged");
+
+    setenv("DM_BOTW_PAD_L_ANCHOR","2",1); setenv("DM_BOTW_PAD_L_X_PT","200",1);
+    setenv("DM_BOTW_PAD_L_Y_PT","200",1); [view refreshTouchSettings]; [view layoutIfNeeded];
+    CGPoint movedL=[view dm_testRuneButtonCenter];
+    CHECK(movedL.x>view.bounds.size.width*.5 && [view dm_testScopeTapExcludedAt:movedL],
+          "an L button moved to the right protects its actual customized position");
+    unsetenv("DM_BOTW_PAD_L_ANCHOR"); unsetenv("DM_BOTW_PAD_L_X_PT"); unsetenv("DM_BOTW_PAD_L_Y_PT");
+    [view refreshTouchSettings]; [view layoutIfNeeded];
+    g_botw_touchhud_available=NO; [view reset];
 }
 
 static void test_botw_scope_pointer(DmGamepad *view) {
@@ -1841,7 +1893,8 @@ static void test_botw_gameplay_settings(DmGamepad *view) {
     g_botw_touch_menu_active=g_botw_touch_menu_presented=NO; g_force_controls_hidden=NO;
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES];
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view layoutIfNeeded];
-    UIButton *button=[view dm_testSettingsButton]; UITapGestureRecognizer *gesture=[view dm_testMenuPadGesture];
+    UIButton *button=[view dm_testSettingsButton], *close=[view dm_testClosePadButton];
+    UITapGestureRecognizer *gesture=[view dm_testMenuPadGesture];
     CHECK(button && button.hidden && ![view dm_testSettingsRevealed],
           "BOTW gameplay has no settings button until the three-finger gesture is recognized");
     CHECK([gesture.delegate gestureRecognizer:gesture shouldReceiveTouch:touch(300,100)],
@@ -1860,10 +1913,13 @@ static void test_botw_gameplay_settings(DmGamepad *view) {
                            [NSValue valueWithCGSize:CGSizeMake(568,320)], [NSValue valueWithCGSize:CGSizeMake(1024,768)]]) {
         view.bounds=(CGRect){CGPointZero,size.CGSizeValue}; [view setNeedsLayout]; [view layoutIfNeeded];
         CHECK(!button.hidden && button.frame.size.width>0,"temporary Settings has a visible position in landscape, portrait and tablet bounds");
+        CHECK(!close.hidden && close.frame.size.width>0 && CGRectGetMinX(close.frame)>CGRectGetMaxX(button.frame) &&
+              CGRectGetMinY(close.frame)==CGRectGetMinY(button.frame),"Close stays immediately right of Settings at each viewport size");
         for (int b=0;b<16;b++) {
             CAShapeLayer *key=[view dm_testButtonLayer:b];
-            if (!key.hidden && key.path) CHECK(!CGRectIntersectsRect(button.frame,CGPathGetPathBoundingBox(key.path)),
-                "temporary Settings never overlaps a visible virtual button");
+            if (!key.hidden && key.path) CHECK(!CGRectIntersectsRect(button.frame,CGPathGetPathBoundingBox(key.path)) &&
+                !CGRectIntersectsRect(close.frame,CGPathGetPathBoundingBox(key.path)),
+                "temporary Settings and Close never overlap a visible virtual button");
         }
     }
     view.bounds=originalBounds; [view setNeedsLayout]; [view layoutIfNeeded];
@@ -1878,9 +1934,15 @@ static void test_botw_gameplay_settings(DmGamepad *view) {
     dm_gamepad_settings_done(); [view layoutIfNeeded];
     CHECK(!button.hidden && [view dm_testSettingsRevealed] && [view dm_testManualMenuPad],
           "dismissing settings restores the temporary handpad and its Settings entry");
-    [view revealBotwMenuPad:[RecognizedMenuTap new]]; [view layoutIfNeeded];
-    CHECK(button.hidden && ![view dm_testManualMenuPad] && [view dm_testL3ArtworkHidden],
-          "three-finger close restores the custom gameplay layout without a floating Settings button");
+    [close sendActionsForControlEvents:UIControlEventTouchUpInside]; [view layoutIfNeeded];
+    CHECK(button.hidden && close.hidden && ![view dm_testManualMenuPad] && [view dm_testL3ArtworkHidden],
+          "Close restores the custom gameplay layout and hides both temporary shortcuts");
+    presentations=g_settings_presentations; dm_gamepad_open_settings(); [view layoutIfNeeded];
+    CHECK(g_settings_presentations==presentations+1 && button.hidden && close.hidden && ![view dm_testManualMenuPad],
+          "FPS settings entry opens directly without revealing the temporary gamepad");
+    dm_gamepad_open_settings();
+    CHECK(g_settings_presentations==presentations+1,"repeated settings taps do not present a second settings screen");
+    dm_gamepad_settings_done(); [view layoutIfNeeded];
     g_botw_gameplay_ready=NO; g_botw_touch_menu_active=g_botw_touch_menu_presented=YES;
     [view refreshBotwTouchMenuMode];
     [view revealBotwMenuPad:[RecognizedMenuTap new]]; [view layoutIfNeeded];
@@ -1892,6 +1954,9 @@ static void test_botw_gameplay_settings(DmGamepad *view) {
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES]; [view layoutIfNeeded];
     CHECK(button.hidden && ![view dm_testSettingsRevealed],
           "controller connection hides and clears the settings button");
+    presentations=g_settings_presentations; dm_gamepad_open_settings();
+    CHECK(g_settings_presentations==presentations+1,"FPS settings entry remains available with a physical controller connected");
+    dm_gamepad_settings_done();
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view reset];
 }
 
@@ -2147,6 +2212,7 @@ static void run_tests(DmGamepad *view) {
     test_dpad_art_visibility(view);
     test_botw_button_artwork(view);
     test_botw_virtual_buttons(view);
+    test_botw_scope_protection(view);
     test_botw_map_menu_return(view);
     test_botw_rune_press(view);
     test_botw_l3_timing(view);
