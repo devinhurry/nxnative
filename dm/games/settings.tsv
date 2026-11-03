@@ -56,6 +56,7 @@ DM_BOTW_PAD_STICK_ANCHOR	choice	0=Default,1=Left,2=Right	0	DM_GAME_ID==01007EF00
 DM_BOTW_PAD_ZL_X_PT	range	-10000:10000:0.5	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	Shield stick: Horizontal offset	Offsets and diameters are in pt; edge margins do not depend on safe areas.	format=number
 DM_BOTW_PAD_ZL_Y_PT	range	-10000:10000:0.5	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	Shield stick: Vertical offset	Offsets and diameters are in pt; edge margins do not depend on safe areas.	format=number
 DM_BOTW_PAD_ZL_SIZE_PT	range	20:240:0.5	154.000	DM_GAME_ID==01007EF00011E000	Touch layout	Shield stick: Size	Offsets and diameters are in pt; edge margins do not depend on safe areas.	format=number
+DM_BOTW_PAD_ZL_HIT_PT	range	20:480:0.5	215.600	DM_GAME_ID==01007EF00011E000	Touch layout	Shield stick: Touch diameter	Touch diameter in pt, independent of artwork size.	format=number
 DM_BOTW_PAD_ZL_ANCHOR	choice	0=Default,1=Left,2=Right	0	DM_GAME_ID==01007EF00011E000	Touch layout	Shield stick: Anchor	Explicit anchors use side and bottom edge distances in pt.
 DM_BOTW_PAD_L_X_PT	range	-10000:10000:0.5	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	Rune: Horizontal offset	Offsets and diameters are in pt; edge margins do not depend on safe areas.	format=number
 DM_BOTW_PAD_L_Y_PT	range	-10000:10000:0.5	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	Rune: Vertical offset	Offsets and diameters are in pt; edge margins do not depend on safe areas.	format=number
@@ -106,6 +107,7 @@ DM_BOTW_PORTRAIT_PAD_STICK_ANCHOR	choice	0=Default,1=Left,2=Right	0	DM_GAME_ID==
 DM_BOTW_PORTRAIT_PAD_ZL_X_PT	range	-10000:10000:0.5	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	Shield stick: Horizontal offset	Offsets and diameters are in pt; edge margins do not depend on safe areas.	format=number
 DM_BOTW_PORTRAIT_PAD_ZL_Y_PT	range	-10000:10000:0.5	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	Shield stick: Vertical offset	Offsets and diameters are in pt; edge margins do not depend on safe areas.	format=number
 DM_BOTW_PORTRAIT_PAD_ZL_SIZE_PT	range	20:240:0.5	139.700	DM_GAME_ID==01007EF00011E000	Touch layout	Shield stick: Size	Offsets and diameters are in pt; edge margins do not depend on safe areas.	format=number
+DM_BOTW_PORTRAIT_PAD_ZL_HIT_PT	range	20:480:0.5	195.580	DM_GAME_ID==01007EF00011E000	Touch layout	Shield stick: Touch diameter	Touch diameter in pt, independent of artwork size.	format=number
 DM_BOTW_PORTRAIT_PAD_ZL_ANCHOR	choice	0=Default,1=Left,2=Right	0	DM_GAME_ID==01007EF00011E000	Touch layout	Shield stick: Anchor	Explicit anchors use side and bottom edge distances in pt.
 DM_BOTW_PORTRAIT_PAD_L_X_PT	range	-10000:10000:0.5	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	Rune: Horizontal offset	Offsets and diameters are in pt; edge margins do not depend on safe areas.	format=number
 DM_BOTW_PORTRAIT_PAD_L_Y_PT	range	-10000:10000:0.5	0.000	DM_GAME_ID==01007EF00011E000	Touch layout	Rune: Vertical offset	Offsets and diameters are in pt; edge margins do not depend on safe areas.	format=number

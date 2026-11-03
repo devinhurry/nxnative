@@ -296,3 +296,6 @@
 "Automatic prefers controller motion, then the device gyroscope." = "Automatic prefers controller motion, then the device gyroscope.";
 "Explicit anchors use side and bottom edge distances in pt." = "Explicit anchors use side and bottom edge distances in pt.";
 "Keep up to 256 layouts. Layout files must be smaller than 4 MB." = "Keep up to 256 layouts. Layout files must be smaller than 4 MB.";
+"Touch diameter" = "Touch diameter";
+"Shield stick: Touch diameter" = "Shield stick: Touch diameter";
+"Touch diameter in pt, independent of artwork size." = "Touch diameter in pt, independent of artwork size.";

@@ -345,10 +345,14 @@ struct BotwTouchSettingsView: View {
                 .menuIndicator(.hidden).fixedSize()
                 .accessibilityIdentifier("botw.touch.options")
             }.frame(height: 26)
-            if let row = m.settings.first(where: { $0.env == selected.env("SIZE", portrait: portrait) }) {
-                BotwLayoutSlider(row: row, values: $values, locked: m.fixed.contains(row.env))
-                    .frame(height: 22)
-            }
+            HStack(spacing: 12) {
+                if let row = m.settings.first(where: { $0.env == selected.env("SIZE", portrait: portrait) }) {
+                    BotwLayoutSlider(row: row, values: $values, locked: m.fixed.contains(row.env))
+                }
+                if selected.id == 8, let row = m.settings.first(where: { $0.env == selected.env("HIT", portrait: portrait) }) {
+                    BotwLayoutSlider(row: row, values: $values, locked: m.fixed.contains(row.env), label: "Touch diameter")
+                }
+            }.frame(height: 22)
         }
         .font(.system(size: 12))
         .controlSize(.mini)
@@ -533,14 +537,15 @@ private struct BotwLayoutSlider: View {
     let row: Setting
     @Binding var values: [String: String]
     let locked: Bool
+    var label = "Size"
     private var binding: Binding<Double> {
         .init(get: { Double(values[row.env] ?? row.def) ?? 0 }, set: { values[row.env] = String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), $0) })
     }
     var body: some View {
-        HStack(spacing: 10) {
-            Text("Size")
+        HStack(spacing: 6) {
+            Text(LocalizedStringKey(label))
             Slider(value: binding, in: (row.min ?? 0)...(row.max ?? 1), step: row.step ?? 0.01)
-                .accessibilityLabel("Size").accessibilityIdentifier(row.env)
+                .accessibilityLabel(Text(LocalizedStringKey(label))).accessibilityIdentifier(row.env)
             Text(String(format: "%.1f pt", binding.wrappedValue)).monospacedDigit().foregroundStyle(.secondary)
                 .fixedSize()
         }.disabled(locked)
@@ -642,6 +647,13 @@ private struct BotwControlPreview: View {
         ZStack {
             BotwTouchArtwork(control: control.id, size: rect.size, badges: badges, appearance: layout)
             if selected.id == control.id { RoundedRectangle(cornerRadius: 8).stroke(gold, style: StrokeStyle(lineWidth: 2, dash: [4,3])).padding(-3) }
+        }
+        .overlay {
+            if selected.id == 8 && control.id == 8 {
+                Circle().stroke(gold, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                    .frame(width: CGFloat(layout.shield_hit_size), height: CGFloat(layout.shield_hit_size))
+                    .allowsHitTesting(false)
+            }
         }
         .foregroundStyle(gold)
         .contentShape(Circle())

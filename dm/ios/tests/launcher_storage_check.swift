@@ -443,11 +443,25 @@ private func checkTouchLayoutPresets(_ settings: [Setting]) -> Int {
     let exportAreaDefaults = UserDefaults(suiteName: suite + ".export-area")!
     let manySourceDefaults = UserDefaults(suiteName: suite + ".many-source")!
     let manyTargetDefaults = UserDefaults(suiteName: suite + ".many-target")!
+    let shieldDefaults = UserDefaults(suiteName: suite + ".shield-range")!
     defer {
-        for suffix in [".source", ".target", ".fallback", ".fixed", ".export-area", ".many-source", ".many-target"] {
+        for suffix in [".source", ".target", ".fallback", ".fixed", ".export-area", ".many-source", ".many-target", ".shield-range"] {
             UserDefaults(suiteName: suite + suffix)?.removePersistentDomain(forName: suite + suffix)
         }
     }
+    shieldDefaults.set("100.000", forKey: "launcher.DM_BOTW_PAD_ZL_SIZE_PT")
+    let shieldModel = LauncherModel(settings, defaults: shieldDefaults)
+    expect(shieldModel.touchLayout(portrait: false).shield_hit_size == 140,
+           "an older layout retains its former shield touch diameter")
+    var shieldDraft = shieldModel.values
+    shieldDraft["DM_BOTW_PAD_ZL_SIZE_PT"] = "180.000"
+    expect(shieldModel.saveTouchSettings(shieldDraft, portrait: false) &&
+           LauncherModel(settings, defaults: shieldDefaults).touchLayout(portrait: false).shield_hit_size == 140,
+           "the migrated touch diameter is saved once and stays independent after resizing and reopening")
+    shieldDraft["DM_BOTW_PAD_ZL_HIT_PT"] = "215.600"
+    expect(shieldModel.saveTouchSettings(shieldDraft, portrait: false) &&
+           abs(LauncherModel(settings, defaults: shieldDefaults).touchLayout(portrait: false).shield_hit_size - 215.6) < 0.001,
+           "a touch diameter equal to its default also stays fixed after artwork resizing and reopening")
     let source = LauncherModel(settings, defaults: sourceDefaults)
     expect(source.touchLayouts.count == 1 && source.selectedTouchLayoutID == source.touchLayouts.first?.id,
            "an empty preset library starts with one selected default layout")
@@ -457,6 +471,7 @@ private func checkTouchLayoutPresets(_ settings: [Setting]) -> Int {
     draft["DM_BOTW_PAD_FILL_GRAY"] = "0.630"; draft["DM_BOTW_PAD_FILL_ALPHA"] = "0.470"
     draft["DM_BOTW_PAD_STROKE_GRAY"] = "0.740"; draft["DM_BOTW_PAD_STROKE_ALPHA"] = "0.580"
     draft["DM_BOTW_PAD_ICON_ALPHA"] = "0.810"
+    draft["DM_BOTW_PAD_ZL_HIT_PT"] = "80.000"
     expect(source.saveTouchSettings(draft, portrait: false), "a default left control can save a right-edge anchor")
     source.rememberTouchArea(.init(width: 900, height: 430), portrait: false)
     source.addTouchLayout(name: "Right hand", copyCurrent: true)
@@ -498,6 +513,8 @@ private func checkTouchLayoutPresets(_ settings: [Setting]) -> Int {
                oneFile.layouts.count == 1 && oneFile.layouts[0].name == "Right hand" && allFile.layouts.count == 3,
                "JSON export includes its schema and game and supports one or all presets")
         let originalL = oneFile.layouts[0].normal?.controls["L"]
+        expect(oneFile.layouts[0].normal?.options["DM_BOTW_PAD_ZL_HIT_PT"] == "80.000",
+               "portable JSON records the independent shield touch diameter")
         expect(oneFile.layouts[0].normal?.options["DM_BOTW_PAD_ICON_ALPHA"] == "0.810" &&
                oneFile.layouts[0].normal?.options["DM_BOTW_PAD_FILL_GRAY"] == "0.630",
                "portable JSON includes the current layout's global appearance")
@@ -514,6 +531,12 @@ private func checkTouchLayoutPresets(_ settings: [Setting]) -> Int {
                "a colliding imported name is renamed and receives an independent ID")
         target.selectTouchLayout(imported.id)
         var sourceConfig = source.touchLayout(portrait: false), targetConfig = target.touchLayout(portrait: false)
+        expect(targetConfig.shield_hit_size == 80 && abs(target.touchLayout(portrait: true).shield_hit_size - 195.58) < 0.001,
+               "shield touch diameter survives save, duplicate, export and import independently per bank")
+        var resizedShield = target.values
+        resizedShield["DM_BOTW_PAD_ZL_SIZE_PT"] = "100.000"
+        expect(target.touchLayout(portrait: false, values: resizedShield).shield_hit_size == 80,
+               "resizing shield artwork does not change its saved touch diameter")
         expect(abs(targetConfig.fill_gray - 0.63) < 0.0001 && abs(targetConfig.fill_alpha - 0.47) < 0.0001 &&
                abs(targetConfig.stroke_gray - 0.74) < 0.0001 && abs(targetConfig.stroke_alpha - 0.58) < 0.0001 &&
                abs(targetConfig.icon_alpha - 0.81) < 0.0001 && target.touchLayout(portrait: true).icon_alpha == 1,
@@ -548,6 +571,13 @@ private func checkTouchLayoutPresets(_ settings: [Setting]) -> Int {
         invalid.normal!.options["DM_BOTW_PAD_L_MODE"] = "9"
         var invalidBatch = oneFile; invalidBatch.layouts.append(invalid)
         try rejectedAtomically(encoder.encode(invalidBatch), "a bad mode after a valid layout rejects the whole import atomically")
+        var oldFile = oneFile
+        oldFile.layouts[0].normal!.options.removeValue(forKey: "DM_BOTW_PAD_ZL_HIT_PT")
+        oldFile.layouts[0].normal!.controls["ZL"]!.size = 100
+        let oldCount = try shieldModel.importTouchLayouts(encoder.encode(oldFile), normalArea: normal, compactArea: compact)
+        shieldModel.selectTouchLayout(shieldModel.touchLayouts.last!.id)
+        expect(oldCount == 1 && shieldModel.touchLayout(portrait: false).shield_hit_size == 140,
+               "older JSON without a touch diameter derives it from its imported shield size")
 
         let tinyFile = BotwTouchLayoutsFile(layouts: [.init(name: "Tiny compact", normal: nil, compact: .init(controls: [
             "L": .init(anchor: .right, side: 999, bottom: 999, size: 60),

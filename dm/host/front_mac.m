@@ -737,7 +737,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
 - (BOOL)leftStickOwnsTop:(dm_touchpad_point)p {
     if ([self buttonAtTop:p] >= 0 || [self extraAtTop:p]>=0) return NO;
     dm_touchpad_point shield = [self shieldHome];
-    if (_active && hypotf(p.x-shield.x,p.y-shield.y) <= self.shieldRadius*DM_TP_STICK_GRAB) return NO;
+    if (_active && hypotf(p.x-shield.x,p.y-shield.y) <= _touchLayout.shield_hit_size*.5f) return NO;
     if ([self compactDpadOwnsTop:p]) return NO;
     dm_touchpad_point face = [self faceCenter], dpad = [self dpadCenter], stick = [self stickHome];
     float f = preview_distance(NSMakePoint(p.x, p.y), NSMakePoint(face.x, face.y)) /
@@ -841,7 +841,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     // the explicit L button's touch-down ownership ahead of shield capture.
     if (_active && b != 6) {
         dm_touchpad_point sh = [self shieldHome];
-        if (hypotf(p.x-sh.x,p.y-sh.y) <= self.shieldRadius*DM_TP_STICK_GRAB) {
+        if (hypotf(p.x-sh.x,p.y-sh.y) <= _touchLayout.shield_hit_size*.5f) {
             _lookTapPending = NO; _owner = PREVIEW_SHIELD; _shieldOrigin = NSMakePoint(p.x,p.y); _held |= DM_BTN_ZL; [self updateShield:p]; return;
         }
     }

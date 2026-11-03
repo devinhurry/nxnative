@@ -87,6 +87,7 @@ struct BotwTouchControl: Identifiable, Hashable {
     func keys(portrait: Bool) -> Set<String> {
         var keys = Set([env("X", portrait: portrait), env("Y", portrait: portrait), env("SIZE", portrait: portrait), option("ANCHOR", portrait: portrait)])
         if id == 6 || id == 16 || id == 17 { keys.insert(option("MODE", portrait: portrait)) }
+        if id == 8 { keys.insert(env("HIT", portrait: portrait)) }
         return keys
     }
 
@@ -247,6 +248,13 @@ final class LauncherModel: ObservableObject {
             let saved = ignoreSaved ? nil : (defaults.object(forKey: "launcher." + s.env) as? String ?? legacyPoints[s.env])   // accept only strings, as launcher.c does
             values[s.env] = saved.flatMap { s.accepts($0) ? $0 : nil } ?? defaultValue(s)
         }
+        for portrait in [false, true] {
+            let hit = botwTouchKey("DM_BOTW_PAD_ZL_HIT_PT", portrait: portrait)
+            if !fixed.contains(hit), ignoreSaved || defaults.string(forKey: "launcher." + hit) == nil {
+                values.removeValue(forKey: hit)
+            }
+        }
+        values.merge(touchSnapshot(values)) { _, migrated in migrated }
         alignFrameGeneration()
         loadTouchLayouts()
     }
@@ -331,6 +339,9 @@ final class LauncherModel: ObservableObject {
         if s.env == Self.lowMemoryKey {
             if let choice = lowMemoryOverride { defaults.set(choice, forKey: "launcher." + s.env) }
             else { defaults.removeObject(forKey: "launcher." + s.env) }
+        } else if s.env.hasSuffix("_ZL_HIT_PT") {
+            // Keep the migrated reach even at its default; artwork can resize later.
+            defaults.set(value, forKey: "launcher." + s.env)
         } else if s.isDefault(value) { defaults.removeObject(forKey: "launcher." + s.env) }
         else { defaults.set(value, forKey: "launcher." + s.env) }
     }
@@ -419,6 +430,13 @@ final class LauncherModel: ObservableObject {
         let keys = touchLayoutKeys
         for row in settings where keys.contains(row.env) {
             if let value = source[row.env], row.accepts(value) { snapshot[row.env] = value }
+        }
+        for portrait in [false, true] {
+            let hit = botwTouchKey("DM_BOTW_PAD_ZL_HIT_PT", portrait: portrait)
+            let size = botwTouchKey("DM_BOTW_PAD_ZL_SIZE_PT", portrait: portrait)
+            if source[hit] == nil, snapshot[hit] != nil, let diameter = Double(snapshot[size] ?? "") {
+                snapshot[hit] = Self.touchPoint(diameter * Double(DM_TP_STICK_GRAB))
+            }
         }
         return snapshot
     }
@@ -549,6 +567,7 @@ final class LauncherModel: ObservableObject {
             for i in 0..<2 { modes[i] = Int32(number(BotwTouchControl.added[i].option("MODE", portrait: portrait))) }
         }
         result.rune_mode = Int32(number(botwTouchKey("DM_BOTW_PAD_L_MODE", portrait: portrait)))
+        result.shield_hit_size = Float(number(botwTouchKey("DM_BOTW_PAD_ZL_HIT_PT", portrait: portrait), Double(result.shield_hit_size)))
         result.fill_gray = Float(number(botwTouchKey("DM_BOTW_PAD_FILL_GRAY", portrait: portrait), Double(result.fill_gray)))
         result.fill_alpha = Float(number(botwTouchKey("DM_BOTW_PAD_FILL_ALPHA", portrait: portrait), Double(result.fill_alpha)))
         result.stroke_gray = Float(number(botwTouchKey("DM_BOTW_PAD_STROKE_GRAY", portrait: portrait), Double(result.stroke_gray)))
@@ -634,6 +653,11 @@ final class LauncherModel: ObservableObject {
                     next[control.env("X", portrait: portrait)] = Self.touchPoint(min(max(0, position.side), max(0, area.width - size)))
                     next[control.env("Y", portrait: portrait)] = Self.touchPoint(min(max(0, position.bottom), max(0, area.height - size)))
                     next[control.env("SIZE", portrait: portrait)] = Self.touchPoint(size)
+                }
+                let hit = botwTouchKey("DM_BOTW_PAD_ZL_HIT_PT", portrait: portrait)
+                if bank.options[hit] == nil {
+                    next.removeValue(forKey: hit)
+                    next = touchSnapshot(next)
                 }
             }
             // Missing banks and controls use defaults, fitted to this device
