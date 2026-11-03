@@ -72,6 +72,10 @@
 "Play" = "开始游戏";
 "Start game" = "\U542F\U52A8\U6E38\U620F";
 "Return to game" = "\U8FD4\U56DE\U6E38\U620F";
+"Icon display" = "\U56FE\U6807\U663E\U793A";
+"Current rune" = "\U5F53\U524D\U7B26\U6587";
+"Fixed icon" = "\U56FA\U5B9A\U56FE\U6807";
+"Show the currently selected rune or the fixed button icon." = "\U663E\U793A\U5F53\U524D\U9009\U4E2D\U7684\U7B26\U6587\U6216\U56FA\U5B9A\U6309\U94AE\U56FE\U6807\U3002";
 "Quit" = "退出";
 "Quit %@" = "退出 %@";
 "R: Button spacing" = "R：按钮间距";

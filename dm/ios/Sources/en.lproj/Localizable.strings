@@ -72,6 +72,10 @@
 "Play" = "Play";
 "Start game" = "Start game";
 "Return to game" = "Return to game";
+"Icon display" = "Icon display";
+"Current rune" = "Current rune";
+"Fixed icon" = "Fixed icon";
+"Show the currently selected rune or the fixed button icon." = "Show the currently selected rune or the fixed button icon.";
 "Quit" = "Quit";
 "Quit %@" = "Quit %@";
 "R: Button spacing" = "R: Button spacing";

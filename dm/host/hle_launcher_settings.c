@@ -27,6 +27,7 @@ static int known_key(const char *key) {
         "DM_BOTW_PAD_ZL_HIT_PT", "DM_BOTW_PORTRAIT_PAD_ZL_HIT_PT",
         "DM_BOTW_PAD_STICK_ALPHA", "DM_BOTW_PORTRAIT_PAD_STICK_ALPHA",
         "DM_BOTW_PAD_R_DRAG_MODE", "DM_BOTW_PAD_ZR_DRAG_MODE",
+        "DM_BOTW_PAD_L_ICON_MODE", "DM_BOTW_PORTRAIT_PAD_L_ICON_MODE",
         "DM_BOTW_PORTRAIT_PAD_R_DRAG_MODE", "DM_BOTW_PORTRAIT_PAD_ZR_DRAG_MODE",
         "DM_BOTW_PAD_FILL_GRAY", "DM_BOTW_PAD_FILL_ALPHA", "DM_BOTW_PAD_STROKE_GRAY",
         "DM_BOTW_PAD_STROKE_ALPHA", "DM_BOTW_PAD_ICON_ALPHA",
@@ -177,7 +178,7 @@ static int value_valid(const char *key, const char *value) {
     if (strstr(key, "MOVE_CURVE")) return v >= .3f && v <= 2.f;
     if (strstr(key, "MOVE_FULL")) return v >= .35f && v <= 1.f;
     if (strstr(key, "_ENABLED") || strstr(key, "_VISIBLE")) return v==0 || v==1;
-    if (strstr(key, "_DRAG_MODE")) return v==0 || v==1;
+    if (strstr(key, "_DRAG_MODE") || strstr(key, "_ICON_MODE")) return v==0 || v==1;
     if (strstr(key, "_MODE") || strstr(key, "_ANCHOR")) return v==0 || v==1 || v==2;
     if (strstr(key, "_SIZE_PT")) return v >= 20 && v <= 240;
     return v >= -10000 && v <= 10000;

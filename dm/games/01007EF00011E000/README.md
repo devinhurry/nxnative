@@ -29,6 +29,8 @@ No `tex_flush_upload` (a minute's boot saw it flush 32 CPU-filled textures with 
 
 ## Found on this game
 
+- **Current-rune L icon restored:** [L follows the selected BOTW rune](../../../docs/reference/services.md#l-follows-the-selected-botw-rune).
+
 - **Resolved cancel-control editing:** [The touch layout editor hides its cancel control](../../../docs/reference/services.md#the-touch-layout-editor-hides-its-cancel-control).
 
 - **Resolved in tools (2026-11-03):** [Generated shader-table timestamps publish duplicate graphics packages](../../../docs/reference/packing.md#generated-shader-table-timestamps-publish-duplicate-graphics-packages). The extra v7 differed from v6 only in two table-header times. Both corrected generators preserved the restored v6 bytes on real BOTW outputs; packaging verified all 78,018 runtime files and reused v6. The rebuilt unsigned 1.9.1 IPA reports `Graphics [REUSED v6]` and authorizes v6's exact package ID. Evidence and the existing lint/game-regression blockers are recorded in `graphics-timestamp-fix/validation.md` in the game's work folder; physical iPhone acceptance remains pending.

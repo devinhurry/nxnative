@@ -157,7 +157,7 @@ class LauncherSettingsTests(unittest.TestCase):
         expected['DM_BOTW_PAD_DPAD_VISIBLE'] = '1'
         for field, value in [('ZL_HIT_PT', '215.600'), ('STROKE_GRAY', '0.570'), ('STROKE_ALPHA', '0.300'),
                              ('FILL_GRAY', '0.350'), ('FILL_ALPHA', '0.140'), ('ICON_ALPHA', '0.900'),
-                             ('STICK_ALPHA', '0.150'), ('R_DRAG_MODE', '0'), ('ZR_DRAG_MODE', '0')]:
+                             ('STICK_ALPHA', '0.150'), ('R_DRAG_MODE', '0'), ('ZR_DRAG_MODE', '0'), ('L_ICON_MODE', '0')]:
             expected[f'DM_BOTW_PAD_{field}'] = value
         for platform in ('mac', 'ios'):
             botw = build(BOTW, 'nvn', platform)
