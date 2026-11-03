@@ -70,6 +70,8 @@
 "Performance HUD" = "性能信息";
 "Pipeline prebuild" = "预先构建渲染管线";
 "Play" = "开始游戏";
+"Start game" = "\U542F\U52A8\U6E38\U620F";
+"Return to game" = "\U8FD4\U56DE\U6E38\U620F";
 "Quit" = "退出";
 "Quit %@" = "退出 %@";
 "R: Button spacing" = "R：按钮间距";

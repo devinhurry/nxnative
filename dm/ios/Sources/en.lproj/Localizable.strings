@@ -70,6 +70,8 @@
 "Performance HUD" = "Performance HUD";
 "Pipeline prebuild" = "Pipeline prebuild";
 "Play" = "Play";
+"Start game" = "Start game";
+"Return to game" = "Return to game";
 "Quit" = "Quit";
 "Quit %@" = "Quit %@";
 "R: Button spacing" = "R: Button spacing";
