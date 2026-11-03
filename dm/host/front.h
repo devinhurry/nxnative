@@ -53,10 +53,16 @@ float dm_aspect_hud_y_scale(void);
 float dm_aspect_hud_gain(void);
 float dm_aspect_hud_top(void);
 
+// Live six-axis source choice: auto, off, controller, or device. Auto prefers
+// fresh controller motion and falls back to the device gyro. Any thread.
+void dm_motion_source_set(const char *source);
+const char *dm_motion_source_get(void);
+
 // Publish the virtual 3D-pad target used by BOTW's gameplay HUD. The centre is
 // normalized to the centered 16:9 touch rectangle (top-left origin). Other
 // profiles ignore this state. May be called from the UI thread.
 void dm_botw_touch_hud_publish(int active, float center_x, float center_y, float dpad_scale);
+void dm_botw_touch_hud_keep_native_loadout(int keep);
 void dm_botw_touch_hud_map_tapped(void);   // consume the published host hit region until native panes are calculated again
 int dm_botw_touch_hud_available(void);
 // Minimap bounds use the safe-area-aware HUD rectangle, unlike the centered D-pad.

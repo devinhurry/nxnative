@@ -30,6 +30,9 @@ int dm_botw_touch_controls_visible(void);
 int dm_botw_touch_loadout_visible(void);
 // The native quick equipment/rune strip is open. Only touch drag changes sign.
 int dm_botw_touch_quick_select_active(void);
+int dm_botw_touch_bow_active(void);
+// Open Pause inventory and select a native category when its live owner is ready.
+void dm_botw_touch_menu_open_category(int category);
 // A live Hero's Path map exposes only the virtual direction keys, not combat controls.
 int dm_botw_touch_menu_dpad_visible(void);
 

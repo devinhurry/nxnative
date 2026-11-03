@@ -4326,6 +4326,17 @@ int main(void) {
     test_long_hud_path();
     test_hero_path_native_guides();
     test_passive_ui_audit();
+    // Opening inventory needs an input edge before a menu owner exists.
+    // Repeated getters must retain it; disabling touch must discard it.
+    dm_botw_touch_menu_reset(); mock_touch_hud_active=1;
+    g_open_category=5; g_open_phase=1; g_open_frame=UINT64_MAX;
+    uint64_t shortcut_buttons=0; int32_t shortcut_axes[4]={0};
+    dm_botw_touch_menu_apply(&shortcut_buttons,shortcut_axes,10000); assert(shortcut_buttons==DM_BTN_PLUS);
+    shortcut_buttons=0; dm_botw_touch_menu_apply(&shortcut_buttons,shortcut_axes,10000); assert(shortcut_buttons==DM_BTN_PLUS);
+    shortcut_buttons=0; dm_botw_touch_menu_apply(&shortcut_buttons,shortcut_axes,10001); assert(shortcut_buttons==DM_BTN_PLUS);
+    shortcut_buttons=0; dm_botw_touch_menu_apply(&shortcut_buttons,shortcut_axes,10002); assert(!shortcut_buttons);
+    mock_touch_hud_active=0; g_open_phase=1; g_open_frame=UINT64_MAX;
+    dm_botw_touch_menu_apply(&shortcut_buttons,shortcut_axes,10003); assert(!shortcut_buttons && g_open_category==-1);
     puts("t_botw_touch_menu: native inventory/category/popup and current-screen generic targets, eligibility, delayed focus and inactive gates passed");
     return 0;
 }

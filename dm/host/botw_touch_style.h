@@ -17,7 +17,7 @@
 // MainShortCut's guide uses four pale round keys with triangular cutouts.
 // Draw the same silhouette at the larger virtual D-pad size, without the
 // ordinary pad's pentagonal arms, background or border.
-static inline CGPathRef dm_botw_dpad_key_path(CGPoint center, CGFloat radius, int button) {
+static inline CGPathRef CF_RETURNS_RETAINED dm_botw_dpad_key_path(CGPoint center, CGFloat radius, int button) {
     CGFloat angle = button == 12 ? M_PI : button == 13 ? -M_PI_2 : button == 14 ? 0 : M_PI_2;
     CGFloat r = radius * .20, gap = radius * .64;
     CGPoint c = CGPointMake(center.x + gap*cos(angle), center.y + gap*sin(angle));
@@ -34,7 +34,7 @@ static inline CGPathRef dm_botw_dpad_key_path(CGPoint center, CGFloat radius, in
 }
 
 // Menu glyphs sit over a translucent circular button fill.
-static inline CGPathRef dm_botw_menu_key_path(CGPoint center, CGFloat size, CGFloat circleSize, int plus) {
+static inline CGPathRef CF_RETURNS_RETAINED dm_botw_menu_key_path(CGPoint center, CGFloat size, CGFloat circleSize, int plus) {
     CGMutablePathRef path = CGPathCreateMutable();
     CGFloat stroke = circleSize * .11;
     CGPathAddRect(path, NULL, CGRectMake(center.x-size/2, center.y-stroke/2, size, stroke));
@@ -56,7 +56,7 @@ static inline int dm_botw_button_badge_contains(CGPoint point, CGPoint center, C
 
 // Core Graphics centers strokes on the path. Keep only the outside half of a
 // double-width stroke so its inner edge meets the fill without covering it.
-static inline CGPathRef dm_botw_outer_border_path(CGPathRef fill, CGFloat width) {
+static inline CGPathRef CF_RETURNS_RETAINED dm_botw_outer_border_path(CGPathRef fill, CGFloat width) {
     if (!fill || width <= 0) return NULL;
     CGPathRef stroke = CGPathCreateCopyByStrokingPath(fill, NULL, 2 * width,
         kCGLineCapButt, kCGLineJoinRound, 10);
@@ -67,7 +67,9 @@ static inline CGPathRef dm_botw_outer_border_path(CGPathRef fill, CGFloat width)
 
 static inline NSString *dm_botw_touch_button_icon_path(int button) {
     static NSString *const files[] = {@"touch_a.png", @"touch_b.png", @"touch_x.png", @"touch_y.png",
-        nil, nil, @"touch_l.png", @"touch_r.png", nil, @"touch_zr.png"};
+        nil, nil, @"touch_l.png", @"touch_r.png", nil, @"touch_zr.png", nil, nil, nil, nil, nil, nil,
+        @"touch_weapon.png", @"touch_shield.png", @"touch_food.png", @"touch_whistle.png", nil,
+        @"touch_bow.png", @"touch_arrow.png"};
     if (button < 0 || button >= sizeof files / sizeof *files || !files[button]) return nil;
 #if TARGET_OS_IOS
     // Touch artwork ships with the app; importing shaders only moves their tables.
@@ -77,7 +79,18 @@ static inline NSString *dm_botw_touch_button_icon_path(int button) {
     NSString *folder = map && *map ? [[NSString stringWithUTF8String:map] stringByDeletingLastPathComponent] :
         [NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"dm"];
 #endif
+    const char *icons = getenv("DM_BOTW_TOUCH_ICONS");
+    if (button >= 16 && icons && *icons) folder = [NSString stringWithUTF8String:icons];
     return [folder stringByAppendingPathComponent:files[button]];
+}
+
+static inline CGPathRef CF_RETURNS_RETAINED dm_botw_switch_cancel_path(CGPoint center, CGFloat size) {
+    CGMutablePathRef path=CGPathCreateMutable();
+    CGFloat d=size*.14;
+    CGPathMoveToPoint(path,NULL,center.x-d,center.y-d); CGPathAddLineToPoint(path,NULL,center.x+d,center.y+d);
+    CGPathMoveToPoint(path,NULL,center.x+d,center.y-d); CGPathAddLineToPoint(path,NULL,center.x-d,center.y+d);
+    CGPathRef glyph=CGPathCreateCopyByStrokingPath(path,NULL,size*.045,kCGLineCapRound,kCGLineJoinRound,0);
+    CGPathRelease(path); return glyph;
 }
 
 // Arrow and shield paths adapted from https://github.com/chaos-xxl/zelda-hyrule-ui.
@@ -106,7 +119,7 @@ SOFTWARE.
 */
 
 // Paths use top-left coordinates on both frontends. The source arrow points right.
-static inline CGPathRef dm_botw_hyrule_arrow_path(CGPoint center, CGFloat height, CGFloat angle) {
+static inline CGPathRef CF_RETURNS_RETAINED dm_botw_hyrule_arrow_path(CGPoint center, CGFloat height, CGFloat angle) {
     CGMutablePathRef path = CGPathCreateMutable();
     CGAffineTransform transform = CGAffineTransformMakeTranslation(center.x, center.y);
     transform = CGAffineTransformRotate(transform, angle);
@@ -126,7 +139,7 @@ static inline CGPathRef dm_botw_hyrule_arrow_path(CGPoint center, CGFloat height
     return path;
 }
 
-static inline CGPathRef dm_botw_four_arrows_path(CGPoint center, CGFloat offset, CGFloat height) {
+static inline CGPathRef CF_RETURNS_RETAINED dm_botw_four_arrows_path(CGPoint center, CGFloat offset, CGFloat height) {
     CGMutablePathRef path = CGPathCreateMutable();
     for (int i = 0; i < 4; i++) {
         CGFloat angle = i * M_PI_2;
@@ -137,7 +150,7 @@ static inline CGPathRef dm_botw_four_arrows_path(CGPoint center, CGFloat offset,
     return path;
 }
 
-static inline CGPathRef dm_botw_shield_graph_path(CGPoint center, CGFloat unit) {
+static inline CGPathRef CF_RETURNS_RETAINED dm_botw_shield_graph_path(CGPoint center, CGFloat unit) {
     CGMutablePathRef path = CGPathCreateMutable();
     CGFloat scale = 24 * unit / 38.89;
     CGAffineTransform transform = CGAffineTransformMake(scale, 0, 0, scale,
@@ -182,7 +195,7 @@ static inline CGPathRef dm_botw_shield_graph_path(CGPoint center, CGFloat unit) 
     return path;
 }
 
-static inline CGPathRef dm_botw_stick_direction_path(CGPoint origin, CGPoint touch,
+static inline CGPathRef CF_RETURNS_RETAINED dm_botw_stick_direction_path(CGPoint origin, CGPoint touch,
                                                      CGFloat radius, CGFloat unit) {
     CGFloat dx = touch.x - origin.x, dy = touch.y - origin.y, distance = hypot(dx, dy);
     if (!(distance > 0)) return NULL;

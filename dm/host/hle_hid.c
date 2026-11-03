@@ -212,6 +212,7 @@ void hid_keys_init(void) {
 // DM_CTL=<file> (Mac, for driving a game step by step from a shell): the host reads the lines appended to the file (polled every 100 ms) and acts on each at once:
 //   "key[+key][~hold]" presses as a DM_KEYS step does (hold 0.15 s by default), "shot <path>" saves the next presented frame as a PNG (dm_gfx_shot_at), "passdump <n>" dumps the
 //   render passes of the next n frames as DM_NVN_PASSDUMP does (to stderr, the run's log), "texdump <path with %d>" saves the colour targets of the next frame as DM_NVN_TEXDUMP does,
+//   "touch-button <control> <mode> down|up|cancel|select" drives the same BOTW action intents as the touch frontends (6=L, 16=weapon, 17=shield, 18=food, 19=whistle, 20=cancel).
 //   "env KEY=VALUE" sets a switch read at the time of use (DM_NVN_SNAPRAW for the next texdump), "cvarf <main offset> <value>" sets an Unreal float console variable
 //   (hle_fpslock.c dm_ctl_cvar_f32; "cvari" an int one), "panes <hex root> [depth]" logs the live pane tree below a native layout root
 //   (hle_botw_touch_menu.c dm_botw_touch_menu_dump_tree), "peek <address> <count>" logs that many floats of guest memory, "memdump <address> <bytes> <path>" saves guest memory
@@ -246,6 +247,20 @@ static void *ctl_main(void *arg) {
                     continue;
                 }
                 if (!strncmp(line, "env ", 4)) { char *eq = strchr(line + 4, '='); if (eq) { *eq = 0; setenv(line + 4, eq + 1, 1); LOG("DM_CTL: env %s=%s", line + 4, eq + 1); } continue; }
+                if (!strncmp(line,"touch-button ",13)) {
+                    int control,mode; char phase[16],extra;
+                    if (sscanf(line+13,"%d %d %15s %c",&control,&mode,phase,&extra)!=3 ||
+                        mode<0 || mode>2 || (control!=6 && (control<16 || control>20))) {
+                        LOG("[RED] DM_CTL touch-button wants control(6,16..20) mode(0..2) down|up|cancel|select"); continue;
+                    }
+                    if (!strcmp(phase,"select")) dm_botw_touch_switch_selected();
+                    else if (!strcmp(phase,"down") && control==20) dm_botw_touch_switch_cancel();
+                    else if (!strcmp(phase,"down")) dm_botw_touch_button_begin(control,mode);
+                    else if (!strcmp(phase,"up") || !strcmp(phase,"cancel")) dm_botw_touch_button_end(control,!strcmp(phase,"cancel"));
+                    else { LOG("[RED] DM_CTL invalid touch-button phase: %s",phase); continue; }
+                    LOG("DM_CTL: touch-button control=%d mode=%d phase=%s",control,mode,phase);
+                    continue;
+                }
                 if (!strncmp(line, "look ", 5)) {
                     if (!dm_look_enabled()) die("[RED] DM_CTL look requested while relative look is disabled");
                     char *p = line + 5, *end; errno = 0; long phase = strtol(p, &end, 10);
@@ -683,6 +698,7 @@ static MotionSample g_mhist[MOTION_HIST];
 static int g_mhead, g_mcount, g_motion_live, g_frame_ok, g_motion_logged;
 static float g_qdc[4], g_rdc[9];   // device -> controller (qdc: quaternion, rdc: matrix)
 static pthread_mutex_t g_ml = PTHREAD_MUTEX_INITIALIZER;
+static int motion_device_enabled(void);
 static int shaking(uint64_t t) { return t >= atomic_load(&g_shake_t0) && t < atomic_load(&g_shake_end); }
 static void qnorm(float q[4]) {
     float n = sqrtf(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
@@ -780,6 +796,7 @@ void dm_device_motion_set(const dm_motion *m) {
     pthread_mutex_unlock(&g_ml);
 }
 static int motion_sample(MotionSample *out, uint64_t t) {   // newest sample at or before t; the oldest when t is older than the history
+    if (!motion_device_enabled()) return 0;
     int ok = 0;
     pthread_mutex_lock(&g_ml);
     if (g_motion_live && g_mcount > 0) {
@@ -814,14 +831,46 @@ static live_motion g_motion[DM_PLAYERS] = {[0 ... DM_PLAYERS - 1] = {.mu = PTHRE
 static live_motion g_hid_motion[DM_PLAYERS] = {[0 ... DM_PLAYERS - 1] = {.mu = PTHREAD_MUTEX_INITIALIZER}};
 static live_motion g_phone_motion = {.mu = PTHREAD_MUTEX_INITIALIZER};
 static pthread_once_t g_motion_once = PTHREAD_ONCE_INIT;
-static motion_map g_motion_map; static float g_motion_gain = 0.5f; static int g_motion_off, g_motion_log, g_phone_mode;
+enum { MOTION_SOURCE_AUTO = -1, MOTION_SOURCE_CONTROLLER, MOTION_SOURCE_DEVICE, MOTION_SOURCE_OFF };
+static motion_map g_motion_map; static float g_motion_gain = 0.5f; static int g_motion_off, g_motion_log;
+static _Atomic int g_phone_mode = MOTION_SOURCE_AUTO;
+static int motion_source_parse(const char *source) {
+    if (!source || !strcmp(source,"auto")) return MOTION_SOURCE_AUTO;
+    if (!strcmp(source,"off")) return MOTION_SOURCE_OFF;
+    if (!strcmp(source,"controller")) return MOTION_SOURCE_CONTROLLER;
+    if (!strcmp(source,"device")) return MOTION_SOURCE_DEVICE;
+    return -2;
+}
 static void motion_env(void) {
     const char *e = getenv("DM_MOTION"); g_motion_off = e && !atoi(e);
     if (!motion_map_parse(&g_motion_map, getenv("DM_MOTION_AXES"))) LOG("[hid] DM_MOTION_AXES='%s' is not like \"x,-z,y\": using x,y,z", getenv("DM_MOTION_AXES"));
     if ((e = getenv("DM_MOTION_ACC_SIGN")) && atof(e) < 0) g_motion_map.acc_sign = -1;
     if ((e = getenv("DM_MOTION_GAIN"))) g_motion_gain = (float)atof(e);
     g_motion_log = (e = getenv("DM_MOTION_LOG")) && atoi(e);
-    e = getenv("DM_PHONE_MOTION"); g_phone_mode = !e || !strcmp(e, "auto") ? -1 : !!atoi(e);
+    e = getenv("DM_PHONE_MOTION");
+    int source = !e || !strcmp(e,"auto") ? MOTION_SOURCE_AUTO : atoi(e) ? MOTION_SOURCE_DEVICE : MOTION_SOURCE_CONTROLLER;
+    e = getenv("DM_MOTION_SOURCE");
+    if (e && motion_source_parse(e) != -2) source = motion_source_parse(e);
+    atomic_store(&g_phone_mode,source);
+}
+void dm_motion_source_set(const char *source) {
+    int mode=motion_source_parse(source); if (mode == -2) return;
+    pthread_once(&g_motion_once,motion_env);
+    atomic_store(&g_phone_mode,mode);
+}
+const char *dm_motion_source_get(void) {
+    pthread_once(&g_motion_once,motion_env);
+    switch (atomic_load(&g_phone_mode)) {
+        case MOTION_SOURCE_OFF: return "off";
+        case MOTION_SOURCE_CONTROLLER: return "controller";
+        case MOTION_SOURCE_DEVICE: return "device";
+        default: return "auto";
+    }
+}
+static int motion_device_enabled(void) {
+    pthread_once(&g_motion_once,motion_env);
+    int source=atomic_load(&g_phone_mode);
+    return !g_motion_off && (source == MOTION_SOURCE_AUTO || source == MOTION_SOURCE_DEVICE);
 }
 static void motion_set(int p, const float acc[3], const float rot[3], int source, uint64_t sample_ns) {
     if (p < 0 || p >= DM_PLAYERS || (source == 1 && p)) return;
@@ -866,7 +915,9 @@ static uint64_t motion_copy(live_motion *m, motion_state *out) {   // copies a s
 static int motion_live(int p, motion_state *out) {
     if (p < 0 || p >= DM_PLAYERS) return 0;
     pthread_once(&g_motion_once, motion_env);
-    if (!p && g_phone_mode > 0) return motion_copy(&g_phone_motion, out) != 0;
+    int source=atomic_load(&g_phone_mode);
+    if (g_motion_off || source == MOTION_SOURCE_OFF) return 0;
+    if (source == MOTION_SOURCE_DEVICE) return !p && motion_copy(&g_phone_motion,out) != 0;
     // Match the button path: in a one-player game, a controller in another slot also drives player 1.
     uint32_t src = p ? 1u << p : 1u | merged_players(); uint64_t newest = 0;
     for (int i = 0; i < DM_PLAYERS; i++) if (src >> i & 1) {
@@ -875,7 +926,7 @@ static int motion_live(int p, motion_state *out) {
         if (t > newest) { newest = t; *out = st; }
     }
     if (newest) return 1;
-    return !p && g_phone_mode < 0 && motion_copy(&g_phone_motion, out);
+    return !p && source == MOTION_SOURCE_AUTO && motion_copy(&g_phone_motion, out);
 }
 static void six_sample_live(SixAxisState *s, int64_t samp, const motion_state *ms, int shakes) {
     memset(s, 0, sizeof *s);
@@ -901,7 +952,7 @@ static void six_synthetic(SixAxisState *s, int64_t samp, uint64_t t, int shakes)
 static void six_sample(SixAxisState *s, int64_t samp, int shakes) {
     uint64_t t = (uint64_t)samp * SIX_PERIOD_NS;
     MotionSample m;
-    if (shakes && g_phone_mode && !shaking(t) && motion_sample(&m, t)) {   // real device motion; a scripted shake still uses the synthetic cycle
+    if (shakes && !shaking(t) && motion_sample(&m, t)) {   // real device motion; a scripted shake still uses the synthetic cycle
         memset(s, 0, sizeof *s);
         s->delta_ns = SIX_PERIOD_NS; s->sampling = samp; s->attributes = 1;
         memcpy(s->acc, m.acc, sizeof m.acc); memcpy(s->gyro, m.gyro, sizeof m.gyro);
@@ -1091,7 +1142,7 @@ _Static_assert(sizeof(SevenState) == 0x40, "SevenState");
 static int seven_states(SevenState *out, int n) {
     if (n <= 0) return 0;
     motion_state controller;
-    if (motion_live(0, &controller) || g_motion_off || !g_phone_mode) return 0;
+    if (motion_live(0, &controller) || !motion_device_enabled()) return 0;
     uint64_t now = guest_ns();
     MotionSample m;
     if (!motion_sample(&m, now)) return 0;

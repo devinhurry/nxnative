@@ -2,3 +2,4 @@
 #import "CloudSaves.h"
 #import "GameFiles.h"
 #import "GraphicsPack.h"
+#import "BotwTouchSurface.h"

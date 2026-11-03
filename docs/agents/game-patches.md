@@ -541,7 +541,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - frame step `+0x151d484`: optional frame generation: latched real-time VFR / fade / UI / physics step; zero preserves original
   - render scale stub (the launcher offers DM_RENDER_SCALE)
   - launcher capabilities: DYNAMIC_RESOLUTION
-  - host [hle_botw_touch_actions.c:11](../../dm/host/hle_botw_touch_actions.c#L11): build check
+  - host [hle_botw_touch_actions.c:13](../../dm/host/hle_botw_touch_actions.c#L13): build check
   - host [hle_botw_touch_menu.c:20](../../dm/host/hle_botw_touch_menu.c#L20): build check
   - host [hle_botw_touchhud.c:17](../../dm/host/hle_botw_touchhud.c#L17): build check
 

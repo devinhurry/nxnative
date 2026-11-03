@@ -231,6 +231,40 @@ right/bottom margins and compact left margins retain their point values.
 At 669pt wide, the movement-stick left margin becomes about 50.51pt, ZL 29.27pt
 and the D-pad 205.80pt; the conservative gap to Y grows from 122.3pt to 162.60pt.
 The shared geometry applies this rule to UIKit, the Mac preview and the editor.
+
+**Saved layout library and scope protection (2026-11-03, current).** The shared
+launcher keeps named layouts with independent normal/compact banks. Portable
+JSON carries a schema version, one or multiple layouts, per-button left/right
+anchors and point side/bottom margins; importing appends without replacing
+existing layouts. Dragging across the center changes the horizontal anchor,
+so a Rune/L moved to the right no longer inherits the default left-side width
+rule. Explicit anchors fit to the actual control pane on both frontends;
+import also fits a diameter that is larger than the pane. The library keeps at
+least one layout and falls back to defaults when local data is absent or
+unusable. Temporary launch overrides do not overwrite saved user geometry.
+See [saved layouts](../../../docs/settings.md#touch-left-stick) for the file
+format and user actions.
+
+A visible button placed on the right excludes scope double taps in a fixed
+100pt-diameter disk, at least its actual bounds; ordinary camera dragging stays
+active. The guard uses actual custom positions, including L moved right.
+Controls now contains both controller and touch settings; Game is displayed as
+Graphics. Temporary virtual controls expose Close beside Settings, and the iOS
+FPS counter opens the same paused settings page. The shared
+[live motion source selector](../../../docs/reference/services.md#live-controller-motion)
+defaults to controller-first automatic fallback to device motion.
+
+Validation: native Mac host and iOS launcher fixture compile; the complete
+Swift storage/layout check, 25 launcher metadata tests, 19 Mac-runner tests,
+13 documentation checks and 157 HID checks pass. Current-source Mac testing
+with matching shaders and a copied outdoor save reaches gameplay. Simulator
+installation stalled before the new UIKit handler checks could run. Full
+shader regression stops on Metal 32023.883 versus locked 32023.922; the full
+GPU fixture also fails experimental frame-generation controls, whose graphics
+sources this task does not change. Required LLVM23 tidy is unavailable; LLVM19
+reports no finding in new code regions. Physical iPhone/iPad/Duo input and file
+picker acceptance remain pending. Evidence is in `layout-library-20261103/` in
+the external game work folder.
 The earlier 768pt/90% trial passed native geometry/aspect/HUD checks, 702 UIKit checks
 with 40 look sessions, and 37 focused settings/storage/documentation tests.
 Current-source Mac test gameplay uses the matching existing shader cache and a
@@ -604,6 +638,20 @@ host also compiles.
 No `tex_flush_upload` (a minute's boot saw it flush 32 CPU-filled textures with data, and it needs none).
 
 ### Direct categories and gameplay HUD prompts
+
+**Current, 2026-11-03:** the full-screen touch editor can add separate Weapons,
+Shields, Food and Whistle controls in either point-layout bank. Their glyphs
+are extracted from the user's `Pack/Bootup.pack!Layout/Common.sblarc` BNTX
+(`Nt_PauseIconL_00/02/05`, `Ds_ShortCutHorseIcon_00`); bow context uses
+`Nt_PauseIconL_01` and `Nt_PauseIcon_08`. The build prepares these masks outside
+the repository. Inventory shortcuts wait for live native category ownership
+and use the existing validated category refresh/commit adapter below. Equipment
+switches hold native Right/Left; L's optional long modes hold native Up, with
+release or explicit Cancel. Tap equipment selection releases only after native
+input has consumed the final selection sample. Hiding D-pad leaves touch mode
+active while bypassing only `N_MainAll_00` translation/scaling, so a fresh
+native matrix restores the authored loadout position and size.
+
 
 Touch category selection uses the native completion paths, rather than
 intermediate stick navigation. Compendium's five-category widget calls

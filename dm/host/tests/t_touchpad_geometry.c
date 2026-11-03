@@ -146,6 +146,13 @@ static void test_botw_right_cluster_and_camera_tap(void) {
         assert(dm_touchpad_look_double_tap(10000000.08,10000000.28,100,100,101,102,u));
         assert(!dm_touchpad_look_double_tap(10000000.08,10000000.48,100,100,101,102,u));
         assert(!dm_touchpad_look_double_tap(10000000.08,10000000.28,100,100,100+49*u,102,u));
+        dm_touchpad_rect small={w-80,100,40,40};
+        assert(dm_touchpad_scope_button_excludes_tap(small,w*.5f,w-60,169));
+        assert(!dm_touchpad_scope_button_excludes_tap(small,w*.5f,w-60,171));
+        dm_touchpad_rect large={w-180,100,160,160};
+        assert(dm_touchpad_scope_button_excludes_tap(large,w*.5f,w-179,101));
+        small.x=10;
+        assert(!dm_touchpad_scope_button_excludes_tap(small,w*.5f,30,120));
         assert(dm_touchpad_stick_double_tap_gap(.19));
         assert(dm_touchpad_stick_double_tap_gap(.20));
         assert(!dm_touchpad_stick_double_tap_gap(.21));
@@ -248,7 +255,7 @@ static void test_custom_layout(void) {
     nearf(after.width,80,.001f);
     dm_touchpad_rect other=dm_botw_layout_control(&layout,1,932,430,0,0,0,0,canvas);
     nearf(other.x,b.x,.001f); nearf(other.y,b.y,.001f); nearf(other.width,b.width,.001f);
-    const char *bad[]={"nan","inf","-inf","invalid","","1junk","501","-501"};
+    const char *bad[]={"nan","inf","-inf","invalid","","1junk","10001","-10001"};
     for (unsigned i=0;i<sizeof bad/sizeof *bad;i++) {
         setenv("DM_BOTW_PAD_A_X_PT",bad[i],1); assert(!dm_botw_layout_read(&layout));
     }

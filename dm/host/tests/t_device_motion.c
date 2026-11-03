@@ -105,6 +105,19 @@ int main(void) {
     assert(near(seven[0].quat[0], 0) && near(seven[0].quat[1], 0));
     assert(near(seven[0].quat[2], sinf(half_yaw)) && near(seven[0].quat[3], cosf(half_yaw)));
 
+    // Source changes gate both the ordinary and console sensor APIs, including
+    // the independent legacy attitude stream when no controller feed exists.
+    dm_motion_source_set("off");
+    assert(six_states(six,1,handheld_handle) == 1 && near(six[0].gyro[2],0) && near(six[0].angle[2],0));
+    assert(seven_states(seven,1) == 0);
+    dm_motion_source_set("controller");
+    assert(six_states(six,1,handheld_handle) == 1 && near(six[0].gyro[2],0));
+    assert(seven_states(seven,1) == 0);
+    dm_motion_source_set("device");
+    assert(six_states(six,1,handheld_handle) == 1 && near(six[0].gyro[2],0.3f));
+    assert(seven_states(seven,1) == 1);
+    dm_motion_source_set("auto");
+
     // Recenter at the same tilted pose, then move in screen pitch. The baseline must stay neutral and map gravity to controller axes.
     test_now += SIX_PERIOD_NS;
     dm_device_motion_set(&neutral);

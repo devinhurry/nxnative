@@ -97,6 +97,9 @@ if [ -f "$PATCHED/nro.tsv" ]; then cp "$PATCHED/nro.tsv" Gen/dm/ || die "copy th
 for artwork in "$GD"/touch_*.png; do
   if [ -f "$artwork" ]; then cp "$artwork" Gen/dm/ || die "copy touch artwork"; fi
 done
+if [ "$GAME" = 01007EF00011E000 ]; then
+  python3 "$DM/tools/botw_touch_assets.py" "$ROMFS" Gen/dm || die "prepare BOTW touch icons"
+fi
 if [ "$GFXAPI" = vulkan ] || [ "$GFXAPI" = gl ]; then cp "$GD/shader_map.tsv" "$GD/pso_manifest.tsv" Gen/dm/ || die "copy shader tables"   # empty NVN tables: the NVN layer draws nothing
 else cp "$GD/shader_map.tsv" "$GD/pso_manifest.tsv" "$GD/c1_full.tsv" Gen/dm/ || die "copy shader tables"
   if [ -f "$GD/cb_extent.tsv" ]; then cp "$GD/cb_extent.tsv" Gen/dm/ || die "copy cb_extent.tsv"; else t "no $GD/cb_extent.tsv: the host copies whole uniform bindings"; fi

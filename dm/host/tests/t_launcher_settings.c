@@ -8,6 +8,8 @@ uint8_t *dm_fps_state;
 static uint8_t state_page[0x40];
 static int opmode, fps_apply_count, fps_lock_target, haptics_refresh_count, touch_refresh_count;
 static int framegen_mode, framegen_available = 1;
+static char motion_source[16];
+static int motion_refresh_count;
 static unsigned clock_pauses, graphics_pauses, audio_pauses;
 void guest_clock_freeze_for(int reason, int on) { if (on) clock_pauses |= 1u << reason; else clock_pauses &= ~(1u << reason); }
 void dm_gfx_suspend_for(int reason, int on) { if (on) graphics_pauses |= 1u << reason; else graphics_pauses &= ~(1u << reason); }
@@ -18,6 +20,7 @@ void dm_fps_state_apply(void) { fps_apply_count++; }
 void dm_fps_lock_setting_changed(int target) { fps_lock_target = target; }
 void dm_haptics_apple_settings_changed(void) { haptics_refresh_count++; }
 void front_refresh_touch_settings(void) { touch_refresh_count++; }
+void dm_motion_source_set(const char *value) { strcpy(motion_source,value); motion_refresh_count++; }
 
 int main(void) {
     dm_launcher_settings_pause(1);
@@ -36,6 +39,13 @@ int main(void) {
     assert(dm_launcher_setting_apply("DM_OPMODE", "2") == -1);
     assert(dm_launcher_setting_apply("DM_OPMODE", "0") == 1 && opmode == 0);
     assert(!strcmp(getenv("DM_OPMODE"), "0"));
+    assert(dm_launcher_setting_is_live("DM_MOTION_SOURCE") == 1);
+    const char *sources[]={"auto","off","controller","device"};
+    for (int i=0;i<4;i++) {
+        assert(dm_launcher_setting_apply("DM_MOTION_SOURCE",sources[i])==1);
+        assert(!strcmp(motion_source,sources[i]) && motion_refresh_count==i+1);
+    }
+    assert(dm_launcher_setting_apply("DM_MOTION_SOURCE","phone")==-1 && motion_refresh_count==4);
 
     assert(dm_launcher_setting_is_live("DM_RENDER_SCALE") == 0);
     dm_fps_state = state_page;
@@ -66,9 +76,14 @@ int main(void) {
         assert(dm_launcher_setting_apply("DM_BOTW_PAD_A_X_PT", "-35.5") == 1 && touch_refresh_count == 2);
         assert(dm_launcher_setting_apply("DM_BOTW_PAD_B_SIZE_PT", "75") == 1 && touch_refresh_count == 3);
         assert(dm_launcher_setting_apply("DM_BOTW_PORTRAIT_PAD_Y_Y_PT", "120") == 1 && touch_refresh_count == 4);
-        assert(dm_launcher_setting_apply("DM_BOTW_PAD_A_X_PT", "501") == -1 && touch_refresh_count == 4);
-        assert(dm_launcher_setting_apply("DM_BOTW_PAD_B_SIZE_PT", "19") == -1 && touch_refresh_count == 4);
-        assert(dm_launcher_setting_apply("DM_BOTW_PAD_B_SIZE_PT", "nan") == -1 && touch_refresh_count == 4);
+        assert(dm_launcher_setting_apply("DM_BOTW_PAD_A_X_PT", "1800") == 1 && touch_refresh_count == 5);
+        assert(dm_launcher_setting_apply("DM_BOTW_PAD_L_ANCHOR", "2") == 1 && touch_refresh_count == 6);
+        assert(dm_launcher_setting_apply("DM_BOTW_PORTRAIT_PAD_A_ANCHOR", "1") == 1 && touch_refresh_count == 7);
+        assert(dm_launcher_setting_apply("DM_BOTW_PAD_L_ANCHOR", "1.5") == -1 && touch_refresh_count == 7);
+        assert(dm_launcher_setting_apply("DM_BOTW_PAD_L_ANCHOR", "3") == -1 && touch_refresh_count == 7);
+        assert(dm_launcher_setting_apply("DM_BOTW_PAD_A_X_PT", "10001") == -1 && touch_refresh_count == 7);
+        assert(dm_launcher_setting_apply("DM_BOTW_PAD_B_SIZE_PT", "19") == -1 && touch_refresh_count == 7);
+        assert(dm_launcher_setting_apply("DM_BOTW_PAD_B_SIZE_PT", "nan") == -1 && touch_refresh_count == 7);
         assert(dm_launcher_setting_is_live("DM_BOTW_PAD_FACE_X") == -1);
     }
     return 0;

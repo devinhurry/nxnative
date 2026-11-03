@@ -56,6 +56,10 @@ int dm_botw_touch_menu_apply(uint64_t *buttons, int32_t axes[4], uint64_t frame)
     return 0;
 }
 void dm_botw_touch_menu_pointer(int phase, float x, float y) { (void)phase; (void)x; (void)y; }
+void dm_botw_touch_button_begin(int control,int mode) { (void)control; (void)mode; }
+void dm_botw_touch_button_end(int control,int cancelled) { (void)control; (void)cancelled; }
+void dm_botw_touch_switch_cancel(void) {}
+void dm_botw_touch_switch_selected(void) {}
 void dm_botw_touch_menu_dump_tree(const char *arg) { (void)arg; }
 static int applet_depth, applet_opens, applet_closes_at_depth0;   // hle_oe.c: the applet stand-ins open and close their applet around the answer
 void dm_applet_enter(const char *name) { (void)name; applet_depth++; applet_opens++; }
@@ -456,10 +460,16 @@ static void t_motion_live(void) {
 
     dm_motion_set_switch(0, (float[]){0, -1, 0}, (float[]){0, 0, 0});
     dm_motion_set(0, a, w);
-    g_phone_mode = 1;
+    dm_motion_source_set("device");
     h_hid_SixStates(st, 1, &h);
-    CHECK(st[0].acc[1] == -1, "forced phone: a controller publishing last cannot replace it");
-    g_phone_mode = 0;
+    CHECK(st[0].acc[1] == -1 && !strcmp(dm_motion_source_get(),"device"), "forced phone: a controller publishing last cannot replace it");
+    dm_motion_source_set("off");
+    h_hid_SixStates(st, 1, &h);
+    CHECK(st[0].acc[2] == -1 && st[0].acc[0] == 0 && st[0].gyro[2] == 0 && h_hid_SixRest(&h),
+          "motion off ignores fresh controller and phone samples immediately");
+    dm_motion_source_set("invalid");
+    CHECK(!strcmp(dm_motion_source_get(),"off"),"invalid source cannot replace the current selection");
+    dm_motion_source_set("controller");
     h_hid_SixStates(st, 1, &h);
     CHECK(st[0].acc[0] == a[0], "phone off: controller remains live");
     dm_motion_clear(0);
@@ -474,10 +484,23 @@ static void t_motion_live(void) {
     ids((uint32_t[]){0, 1, NPAD_HANDHELD}, 3);
     h_hid_SixStates(st, 1, &h);
     CHECK(st[0].acc[2] == -1 && h_hid_SixRest(&h), "co-op: player 2's motion stays on its own sensor");
-    dm_motion_clear(1); dm_pad_players(1); g_phone_mode = -1;
+    dm_motion_clear(1); dm_pad_players(1); dm_motion_source_set("auto");
+
+    motion_now += MOTION_STALE_NS + 1;
+    dm_motion_set(0,a,w); dm_motion_source_set("device");
+    h_hid_SixStates(st,1,&h);
+    CHECK(st[0].acc[2] == -1 && st[0].gyro[2] == 0,
+          "device-only mode cannot fall back to a fresh controller when the device stream is stale");
+    motion_now++; dm_motion_set_switch(0,(float[]){0,-1,0},(float[]){0,0,0});
+    dm_motion_source_set("auto"); h_hid_SixStates(st,1,&h);
+    CHECK(st[0].acc[0] == a[0],"switching back to auto immediately restores controller priority");
+    motion_now += MOTION_STALE_NS + 1;
+    dm_motion_set_switch(0,(float[]){0,-1,0},(float[]){0,0,0}); h_hid_SixStates(st,1,&h);
+    CHECK(st[0].acc[1] == -1,"auto falls back to fresh device motion when controller samples become stale");
+    dm_motion_clear(0); g_phone_motion.last_ns=0;
 }
 static void t_motion_hid(void) {
-    g_mode = 1; dm_pad_players(3); ids((uint32_t[]){0, 1, NPAD_HANDHELD}, 3); g_phone_mode = 0;
+    g_mode = 1; dm_pad_players(3); ids((uint32_t[]){0, 1, NPAD_HANDHELD}, 3); dm_motion_source_set("controller");
     uint32_t h = 0; SixAxisState st;   // SixAxisSensorHandle uses the style bit index (FullKey = 0), unlike VibrationDeviceHandle's SDK style = 3.
     float flat[3] = {0, 0, -1}, tilted[3] = {.5f, 0, -.8660254f}, turn[3] = {0, 0, 2 * (float)M_PI};
     motion_now += 1000000000;
@@ -503,10 +526,10 @@ static void t_motion_hid(void) {
     CHECK(st.acc[0] == .5f, "HID: stale raw stream yields to live GC motion");
     dm_motion_set_hid(1, flat, turn, motion_now); h_hid_SixStates(&st, 1, &h);
     CHECK(st.acc[0] == .5f, "HID: another player's raw data stays on its own sensor");
-    dm_motion_set_hid(0, flat, turn, motion_now); dm_motion_set_switch(0, (float[]){0, -1, 0}, (float[]){0, 0, 0}); g_phone_mode = 1;
+    dm_motion_set_hid(0, flat, turn, motion_now); dm_motion_set_switch(0, (float[]){0, -1, 0}, (float[]){0, 0, 0}); dm_motion_source_set("device");
     h_hid_SixStates(&st, 1, &h); CHECK(st.acc[1] == -1, "HID: forced phone selection still wins");
     dm_motion_clear_hid(0); dm_motion_clear_hid(1); dm_motion_clear(0); g_phone_motion.last_ns = 0;
-    dm_pad_players(1); g_phone_mode = -1;
+    dm_pad_players(1); dm_motion_source_set("auto");
 }
 
 int main(void) {

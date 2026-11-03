@@ -13,6 +13,7 @@
 #include "haptics_apple.h"
 #include "save_sync.h"
 #include "botw_touch_layout.h"
+#import "BotwTouchSurface.h"
 #include "framegen_policy.h"
 #import "CloudSaves.h"
 #import "GameFiles.h"
@@ -27,13 +28,14 @@ const char *front_ios_device_check(void);   // main.m: no Metal device (NULL = s
 bool dm_show_launcher(void *view_controller, void (*done)(void));   // Launcher.swift: false = no launcher (no dm/launcher.json, or DM_LAUNCHER=0)
 bool dm_show_game_settings(void *view_controller, void (*done)(void));
 void dm_gamepad_settings_done(void);
+void dm_gamepad_open_settings(void);
 void dm_gamepad_refresh_touch_settings(void);
 
 static CAMetalLayer *g_layer;
 static _Atomic int g_screen_hz=60;
 static void front_ios_power_watch(void);
 static void front_ios_audio_watch(void);
-static UILabel *front_ios_fps_label(void);
+static UIButton *front_ios_fps_button(void);
 
 @interface DmGameView : UIView
 @end
@@ -90,20 +92,7 @@ static UILabel *front_ios_fps_label(void);
     if (changed) [self setNeedsUpdateConstraints];
 }
 - (void)updateConstraints {
-    CGRect division=CGRectNull;
-#if defined(__IPHONE_27_1) && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_27_1
-    if (@available(iOS 27.1, *)) {
-        if (!strcmp(DM_GAME_ID,"01007EF00011E000")) {
-            for (UIViewReservedRegion *region in [self reservedRegionsOfKind:[UIViewReservedRegionKind divisionRegionKind]]) {
-                dm_touchpad_rect picture,controls; CGRect r=region.frame,b=self.bounds;
-                if (dm_touchpad_seated_split((dm_touchpad_rect){b.origin.x,b.origin.y,b.size.width,b.size.height},
-                    (dm_touchpad_rect){r.origin.x,r.origin.y,r.size.width,r.size.height},&picture,&controls)) {
-                    division=r; break;
-                }
-            }
-        }
-    }
-#endif
+    CGRect division=!strcmp(DM_GAME_ID,"01007EF00011E000") ? dm_botw_touch_division(self) : CGRectNull;
     if (!CGRectEqualToRect(_division,division)) { _division=division; [self setNeedsLayout]; }
     [super updateConstraints];
 }
@@ -119,15 +108,19 @@ static void tv_attach(void);
 @property (nonatomic, strong) DmGameView *game;
 @property (nonatomic, strong) UIView *surface;
 @property (nonatomic, strong) UIView *pad;
-@property (nonatomic, strong) UILabel *fps;
+@property (nonatomic, strong) UIButton *fps;
 @property (nonatomic) BOOL launched;
 @property (nonatomic, strong) id tv;   // the TV scene accessory's registration (iOS 27)
 - (void)startGame;
 - (void)showLauncher;
+- (void)openSettings:(id)sender;
 @end
 static DmRootVC *g_root;
 int front_screen_max_fps(void) { return atomic_load(&g_screen_hz); }
+NSUInteger dm_touch_editor_orientations(void);
 UIInterfaceOrientationMask front_ios_orientations(UIWindow *window) {
+    UIInterfaceOrientationMask editor=dm_touch_editor_orientations();
+    if (editor) return editor;
     CGSize size=window.bounds.size; UIEdgeInsets safe=window.safeAreaInsets;
     return !strcmp(DM_GAME_ID,"01007EF00011E000") && dm_botw_portrait_allowed(size.width,size.height,safe.left,safe.right) ?
         UIInterfaceOrientationMaskLandscape | UIInterfaceOrientationMaskPortrait : UIInterfaceOrientationMaskLandscape;
@@ -179,7 +172,7 @@ static void game_settings_done(void) { dm_gamepad_settings_done(); }
     self.pad = dm_gamepad_view(self.view.bounds);
     self.pad.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.surface addSubview:self.pad];
-    self.fps = front_ios_fps_label();   // above the pad, which hides while a controller is connected
+    self.fps = front_ios_fps_button();   // above the pad, which hides while a controller is connected
     if (self.fps) [self.surface addSubview:self.fps];
     [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     UIApplication.sharedApplication.idleTimerDisabled = YES;
@@ -223,6 +216,7 @@ static void game_settings_done(void) { dm_gamepad_settings_done(); }
 - (void)showLauncher {
     if (!dm_show_launcher((__bridge void *)self, launcher_done)) [self startGame];   // the settings screen first (Launcher.swift), when the app has one
 }
+- (void)openSettings:(id)sender { (void)sender; dm_gamepad_open_settings(); }
 - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
 - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }   // Edge gestures need two swipes, to avoid accidental exits
 - (BOOL)prefersStatusBarHidden { return YES; }
@@ -307,19 +301,24 @@ static void front_ios_power_watch(void) {
 // On when the IPA was built with it (the NSP script's SHOW_FPS / --show-fps → DMShowFPS in Info.plist); DM_SHOW_FPS=0 / 1 in Documents/env.txt overrides that without a rebuild. NULL when off
 uint64_t mtl_present_count(void);
 uint64_t mtl_generated_present_count(void);
-static UILabel *front_ios_fps_label(void) {
+static UIButton *front_ios_fps_button(void) {
     const char *e = getenv("DM_SHOW_FPS");
     if (!(e ? atoi(e) != 0 : [[NSBundle.mainBundle objectForInfoDictionaryKey:@"DMShowFPS"] boolValue])) return nil;
-    UILabel *l = [UILabel new];
-    l.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightSemibold]; l.textColor = UIColor.whiteColor; l.textAlignment = NSTextAlignmentCenter;
-    l.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45]; l.layer.cornerRadius = 6; l.layer.masksToBounds = YES; l.userInteractionEnabled = NO;
-    l.text = @"-- fps";
+    UIButton *l = [UIButton buttonWithType:UIButtonTypeSystem];
+    l.titleLabel.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightSemibold];
+    [l setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    l.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45]; l.layer.cornerRadius = 6; l.layer.masksToBounds = YES;
+    [l setTitle:@"-- fps" forState:UIControlStateNormal];
+    l.accessibilityLabel = NSLocalizedString(@"Settings", nil);
+    l.accessibilityIdentifier = @"game.fps.settings";
+    [l addTarget:g_root action:@selector(openSettings:) forControlEvents:UIControlEventTouchUpInside];
     __block uint64_t n0 = mtl_present_count(), generated0 = mtl_generated_present_count(); __block double t0 = CACurrentMediaTime();
     [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
         (void)t; uint64_t n = mtl_present_count(), generated = mtl_generated_present_count(); double now = CACurrentMediaTime(), elapsed = now - t0;
         if (elapsed > 0 && elapsed < 1.5) {   // A longer span is time in the background: no reading.
             double fps = (n - n0) / elapsed;
-            l.text = dm_fg_enabled() ? [NSString stringWithFormat:@"%.0f+%.0f fps", fps, (generated - generated0) / elapsed] : [NSString stringWithFormat:@"%.0f fps", fps];
+            NSString *title = dm_fg_enabled() ? [NSString stringWithFormat:@"%.0f+%.0f fps", fps, (generated - generated0) / elapsed] : [NSString stringWithFormat:@"%.0f fps", fps];
+            [l setTitle:title forState:UIControlStateNormal]; l.accessibilityValue = title;
             CGRect frame = l.frame; frame.size.width = MAX(64, ceil(l.intrinsicContentSize.width) + 12); l.frame = frame;
         }
         n0 = n; generated0 = generated; t0 = now;

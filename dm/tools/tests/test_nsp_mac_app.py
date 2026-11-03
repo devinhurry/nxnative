@@ -105,6 +105,8 @@ class PackReuse(unittest.TestCase):
     """Call the real pack entry point; only external compiler, icon and signing tools are faked. No host is run."""
     def setUp(self):
         TEST_ROOT.mkdir(parents=True, exist_ok=True)
+        artwork = mock.patch('botw_touch_assets.prepare')
+        artwork.start(); self.addCleanup(artwork.stop)
         self.tmp = Path(tempfile.mkdtemp(prefix='pack-reuse-', dir=TEST_ROOT)).resolve()
         self.addCleanup(shutil.rmtree, self.tmp)
         t = self.tmp
@@ -117,9 +119,9 @@ class PackReuse(unittest.TestCase):
             'font/nintendo_ext.ttf': b'font', 'aoc/1/data': b'dlc', 'pso/gpu.mtl4a': b'archive',
             'pso/prebuilt.tsv': b'prebuilt', 'pso/rest_pairs.tsv': b'rest', 'pso/archive.tsv': b'index',
             'env.txt': b'DM_TEST=1', 'split.tsv': b'split', 'icon.jpg': b'jpeg', 'source/launcher.c': b'launcher',
-            'host/romfs_image.h': b'validator', 'host/save_sync.c': b'sync', 'host/save_sync.h': b'sync api', 'host/memory_mode.h': b'memory policy', 'tools/romfs.py': b'reader',
+            'host/romfs_image.h': b'validator', 'host/save_sync.c': b'sync', 'host/save_sync.h': b'sync api', 'host/memory_mode.h': b'memory policy', 'tools/romfs.py': b'reader', 'tools/botw_touch_assets.py': b'category masks', 'tools/botw_ui_audit.py': b'archive reader',
             'source/Launcher.swift': b'window', 'ios/Sources/LauncherSettings.swift': b'model', 'ios/Sources/LauncherRow.swift': b'rows', 'ios/Sources/BotwTouchSettings.swift': b'touch editor',
-            'host/botw_touch_layout.h': b'layout', 'host/touchpad_geometry.h': b'geometry', 'host/dm_input.h': b'input', 'host/module.modulemap': b'module',
+            'host/botw_touch_layout.h': b'layout', 'host/botw_touch_style.h': b'artwork', 'host/touchpad_geometry.h': b'geometry', 'host/dm_input.h': b'input', 'host/module.modulemap': b'module',
             'host/aoc_files.h': b'DLC discovery', 'host/launcher_settings.h': b'runtime settings api',
         }
         for n in pack_app.TABLES: files['profile/' + n] = n.encode()
@@ -230,7 +232,7 @@ class PackReuse(unittest.TestCase):
         names = ['dmhost', 'patched/main.patched.bin', 'patched/main.fixups.tsv', 'patched/main.gates.tsv', 'patched/main.cuts.tsv',
                  'patched/main.obs.tsv', 'patched/nro.tsv', 'msl/k.metallib', 'msl/k.json', 'msl/inputs.tsv', 'font/nintendo_ext.ttf',
                  'pso/gpu.mtl4a', 'pso/prebuilt.tsv', 'pso/rest_pairs.tsv', 'pso/archive.tsv', 'env.txt', 'icon.jpg', 'source/launcher.c',
-                 'source/Launcher.swift', 'ios/Sources/LauncherSettings.swift', 'ios/Sources/LauncherRow.swift', 'ios/Sources/BotwTouchSettings.swift', 'host/botw_touch_layout.h', 'host/touchpad_geometry.h', 'host/dm_input.h', 'host/module.modulemap',
+                 'source/Launcher.swift', 'ios/Sources/LauncherSettings.swift', 'ios/Sources/LauncherRow.swift', 'ios/Sources/BotwTouchSettings.swift', 'host/botw_touch_layout.h', 'host/botw_touch_style.h', 'host/touchpad_geometry.h', 'host/dm_input.h', 'host/module.modulemap',
                  'host/save_sync.c', 'host/save_sync.h', 'host/memory_mode.h', 'host/aoc_files.h', 'host/launcher_settings.h']   # launcher/settings sources, memory policy and cloud-save code
         names += ['profile/' + n for n in pack_app.TABLES]
         for name in names:

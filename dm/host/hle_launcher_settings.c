@@ -2,6 +2,7 @@
 // the game and front end. Environment variables alone are not live state.
 #include "hle.h"
 #include "launcher_settings.h"
+#include "front.h"
 #include "hle_haptics.h"
 #include "../gfx/nvn/framegen_policy.h"
 #include <math.h>
@@ -22,6 +23,83 @@ void dm_launcher_settings_pause(int on) {
 
 static int known_key(const char *key) {
     static const char *const keys[] = {
+        "DM_MOTION_SOURCE",
+        "DM_BOTW_PAD_A_ANCHOR",
+        "DM_BOTW_PAD_B_ANCHOR",
+        "DM_BOTW_PAD_X_ANCHOR",
+        "DM_BOTW_PAD_Y_ANCHOR",
+        "DM_BOTW_PAD_STICK_ANCHOR",
+        "DM_BOTW_PAD_ZL_ANCHOR",
+        "DM_BOTW_PAD_L_ANCHOR",
+        "DM_BOTW_PAD_R_ANCHOR",
+        "DM_BOTW_PAD_ZR_ANCHOR",
+        "DM_BOTW_PAD_DPAD_ANCHOR",
+        "DM_BOTW_PAD_WEAPON_ANCHOR",
+        "DM_BOTW_PAD_SHIELD_ANCHOR",
+        "DM_BOTW_PAD_FOOD_ANCHOR",
+        "DM_BOTW_PAD_WHISTLE_ANCHOR",
+        "DM_BOTW_PAD_CANCEL_ANCHOR",
+        "DM_BOTW_PORTRAIT_PAD_A_ANCHOR",
+        "DM_BOTW_PORTRAIT_PAD_B_ANCHOR",
+        "DM_BOTW_PORTRAIT_PAD_X_ANCHOR",
+        "DM_BOTW_PORTRAIT_PAD_Y_ANCHOR",
+        "DM_BOTW_PORTRAIT_PAD_STICK_ANCHOR",
+        "DM_BOTW_PORTRAIT_PAD_ZL_ANCHOR",
+        "DM_BOTW_PORTRAIT_PAD_L_ANCHOR",
+        "DM_BOTW_PORTRAIT_PAD_R_ANCHOR",
+        "DM_BOTW_PORTRAIT_PAD_ZR_ANCHOR",
+        "DM_BOTW_PORTRAIT_PAD_DPAD_ANCHOR",
+        "DM_BOTW_PORTRAIT_PAD_WEAPON_ANCHOR",
+        "DM_BOTW_PORTRAIT_PAD_SHIELD_ANCHOR",
+        "DM_BOTW_PORTRAIT_PAD_FOOD_ANCHOR",
+        "DM_BOTW_PORTRAIT_PAD_WHISTLE_ANCHOR",
+        "DM_BOTW_PORTRAIT_PAD_CANCEL_ANCHOR",
+        "DM_BOTW_PAD_WEAPON_X_PT",
+        "DM_BOTW_PAD_WEAPON_Y_PT",
+        "DM_BOTW_PAD_WEAPON_SIZE_PT",
+        "DM_BOTW_PAD_WEAPON_ENABLED",
+        "DM_BOTW_PAD_SHIELD_X_PT",
+        "DM_BOTW_PAD_SHIELD_Y_PT",
+        "DM_BOTW_PAD_SHIELD_SIZE_PT",
+        "DM_BOTW_PAD_SHIELD_ENABLED",
+        "DM_BOTW_PAD_FOOD_X_PT",
+        "DM_BOTW_PAD_FOOD_Y_PT",
+        "DM_BOTW_PAD_FOOD_SIZE_PT",
+        "DM_BOTW_PAD_FOOD_ENABLED",
+        "DM_BOTW_PAD_WHISTLE_X_PT",
+        "DM_BOTW_PAD_WHISTLE_Y_PT",
+        "DM_BOTW_PAD_WHISTLE_SIZE_PT",
+        "DM_BOTW_PAD_WHISTLE_ENABLED",
+        "DM_BOTW_PAD_CANCEL_X_PT",
+        "DM_BOTW_PAD_CANCEL_Y_PT",
+        "DM_BOTW_PAD_CANCEL_SIZE_PT",
+        "DM_BOTW_PAD_WEAPON_MODE",
+        "DM_BOTW_PAD_SHIELD_MODE",
+        "DM_BOTW_PAD_L_MODE",
+        "DM_BOTW_PAD_DPAD_VISIBLE",
+        "DM_BOTW_PORTRAIT_PAD_WEAPON_X_PT",
+        "DM_BOTW_PORTRAIT_PAD_WEAPON_Y_PT",
+        "DM_BOTW_PORTRAIT_PAD_WEAPON_SIZE_PT",
+        "DM_BOTW_PORTRAIT_PAD_WEAPON_ENABLED",
+        "DM_BOTW_PORTRAIT_PAD_SHIELD_X_PT",
+        "DM_BOTW_PORTRAIT_PAD_SHIELD_Y_PT",
+        "DM_BOTW_PORTRAIT_PAD_SHIELD_SIZE_PT",
+        "DM_BOTW_PORTRAIT_PAD_SHIELD_ENABLED",
+        "DM_BOTW_PORTRAIT_PAD_FOOD_X_PT",
+        "DM_BOTW_PORTRAIT_PAD_FOOD_Y_PT",
+        "DM_BOTW_PORTRAIT_PAD_FOOD_SIZE_PT",
+        "DM_BOTW_PORTRAIT_PAD_FOOD_ENABLED",
+        "DM_BOTW_PORTRAIT_PAD_WHISTLE_X_PT",
+        "DM_BOTW_PORTRAIT_PAD_WHISTLE_Y_PT",
+        "DM_BOTW_PORTRAIT_PAD_WHISTLE_SIZE_PT",
+        "DM_BOTW_PORTRAIT_PAD_WHISTLE_ENABLED",
+        "DM_BOTW_PORTRAIT_PAD_CANCEL_X_PT",
+        "DM_BOTW_PORTRAIT_PAD_CANCEL_Y_PT",
+        "DM_BOTW_PORTRAIT_PAD_CANCEL_SIZE_PT",
+        "DM_BOTW_PORTRAIT_PAD_WEAPON_MODE",
+        "DM_BOTW_PORTRAIT_PAD_SHIELD_MODE",
+        "DM_BOTW_PORTRAIT_PAD_L_MODE",
+        "DM_BOTW_PORTRAIT_PAD_DPAD_VISIBLE",
         "DM_FPS_TARGET", "DM_DYNAMIC_RESOLUTION", "DM_RENDER_SCALE", "DM_OPMODE",
         "DM_PRESENT_UPSCALE", "DM_LANG", "DM_FULLSCREEN", "DM_SHOW_FPS",
         "DM_TOUCH_HAPTICS", "DM_RUMBLE", "DM_RUMBLE_GAIN", "DM_RUMBLE_MIN",
@@ -71,6 +149,8 @@ static int parse_number(const char *s, float *out) {
 static int value_valid(const char *key, const char *value) {
     float v;
     if (!value || !*value) return 0;
+    if (!strcmp(key, "DM_MOTION_SOURCE")) return !strcmp(value, "auto") || !strcmp(value, "off") ||
+        !strcmp(value, "controller") || !strcmp(value, "device");
     if (!strcmp(key, "DM_FRAMEGEN")) return !strcmp(value, "0") || !strcmp(value, "30") || !strcmp(value, "60");
     if (!strcmp(key, "DM_FPS_TARGET")) return !strcmp(value, "30") || !strcmp(value, "60");
     if (!strcmp(key, "DM_OPMODE")) return !strcmp(value, "0") || !strcmp(value, "1");
@@ -86,13 +166,15 @@ static int value_valid(const char *key, const char *value) {
     if (strstr(key, "MOVE_DEADZONE")) return v >= 0 && v <= .3f;
     if (strstr(key, "MOVE_CURVE")) return v >= .3f && v <= 2.f;
     if (strstr(key, "MOVE_FULL")) return v >= .35f && v <= 1.f;
+    if (strstr(key, "_ENABLED") || strstr(key, "_VISIBLE")) return v==0 || v==1;
+    if (strstr(key, "_MODE") || strstr(key, "_ANCHOR")) return v==0 || v==1 || v==2;
     if (strstr(key, "_SIZE_PT")) return v >= 20 && v <= 240;
-    return v >= -500 && v <= 500;
+    return v >= -10000 && v <= 10000;
 }
 
 int dm_launcher_setting_is_live(const char *key) {
     if (!known_key(key)) return -1;
-    if (!strcmp(key, "DM_OPMODE")) return 1;
+    if (!strcmp(key, "DM_OPMODE") || !strcmp(key, "DM_MOTION_SOURCE")) return 1;
     if (!strcmp(key, "DM_FRAMEGEN")) return *DM_GAME_FRAMEGEN_SCENE ? dm_fps_state != NULL : 0;
     if ((!strcmp(key, "DM_FPS_TARGET") || !strcmp(key, "DM_RENDER_SCALE")) && dm_fps_state) return 1;
     if (botw_key(key) && !strcmp(DM_GAME_ID, "01007EF00011E000")) return 1;
@@ -113,6 +195,7 @@ int dm_launcher_setting_apply(const char *key, const char *value) {
     }
     if (setenv(key, value, 1)) return -1;
     if (!strcmp(key, "DM_OPMODE")) dm_set_opmode(atoi(value));
+    else if (!strcmp(key, "DM_MOTION_SOURCE")) dm_motion_source_set(value);
     else if (!strcmp(key, "DM_FPS_TARGET")) {
         dm_fps_lock_setting_changed(atoi(value));
         dm_fps_state_apply();

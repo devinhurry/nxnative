@@ -108,6 +108,39 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
         expect(portraitRestored.values["DM_BOTW_PORTRAIT_PAD_A_X_PT"] == "0.000" && portraitRestored.values["DM_BOTW_PORTRAIT_PAD_B_Y_PT"] == "10.000", "restoring compact A preserves other buttons")
         portraitRestored.reset(keys: portraitRestored.touchSettingsKeys(portrait: true))
         expect(portraitRestored.values["DM_BOTW_PORTRAIT_PAD_X_SIZE_PT"] == "53.900" && portraitRestored.values["DM_BOTW_PAD_A_X_PT"] == "12.000" && portraitRestored.values["DM_BOTW_PORTRAIT"] == "1", "compact restore preserves normal settings and rotation permission")
+        let editorSuite = suite + ".editor"
+        let editorDefaults = UserDefaults(suiteName: editorSuite)!
+        defer { editorDefaults.removePersistentDomain(forName: editorSuite) }
+        editorDefaults.set("-0.100", forKey: "launcher.DM_BOTW_PAD_FACE_X")
+        editorDefaults.set("0.100", forKey: "launcher.DM_BOTW_PORTRAIT_PAD_B_Y")
+        let editor = LauncherModel(file.settings, defaults: editorDefaults)
+        editor.values["DM_FPS_TARGET"] = "30"
+        var draft = editor.values
+        draft["DM_BOTW_PAD_A_X_PT"] = "15.300"
+        draft["DM_BOTW_PAD_WEAPON_ENABLED"] = "1"
+        draft["DM_BOTW_PAD_WEAPON_MODE"] = "2"
+        draft["DM_BOTW_PAD_DPAD_VISIBLE"] = "0"
+        draft["DM_BOTW_PORTRAIT_PAD_B_Y_PT"] = "100.000"
+        expect(editor.values["DM_BOTW_PAD_A_X_PT"] != "15.300" && editorDefaults.string(forKey: "launcher.DM_BOTW_PAD_A_X_PT") == nil,
+               "an editor draft can be discarded without changing the launcher or saved choices")
+        expect(editor.touchSettingsExport(portrait: false, values: draft).contains("DM_BOTW_PAD_A_X_PT=15.300") && !editor.touchSettingsExport(portrait: false).contains("DM_BOTW_PAD_A_X_PT=15.300"),
+               "copying editor parameters exports the draft rather than the applied layout")
+        expect(editor.saveTouchSettings(draft, portrait: false), "Save accepts a complete valid layout draft")
+        let savedEditor = LauncherModel(file.settings, defaults: editorDefaults)
+        expect(savedEditor.values["DM_BOTW_PAD_WEAPON_ENABLED"] == "1" && savedEditor.values["DM_BOTW_PAD_WEAPON_MODE"] == "2" &&
+               savedEditor.values["DM_BOTW_PAD_DPAD_VISIBLE"] == "0" && savedEditor.values["DM_BOTW_PORTRAIT_PAD_WEAPON_ENABLED"] == "0",
+               "added buttons, switch modes and D-pad visibility save only in the edited bank")
+        expect(savedEditor.values["DM_BOTW_PAD_A_X_PT"] == "15.300" && editorDefaults.string(forKey: "launcher.DM_FPS_TARGET") == nil,
+               "Save persists point offsets before Play without saving unrelated game choices")
+        expect(savedEditor.values["DM_BOTW_PORTRAIT_PAD_B_Y_PT"] == "84.400" && editorDefaults.integer(forKey: "launcher.botwPointLayoutVersion") == 1,
+               "saving one layout finishes the other bank's legacy migration without saving its uncommitted draft")
+        draft["DM_BOTW_PAD_A_X_PT"] = "80.000"; draft["DM_BOTW_PAD_A_SIZE_PT"] = "nan"
+        expect(!editor.saveTouchSettings(draft, portrait: false) && editor.values["DM_BOTW_PAD_A_X_PT"] == "15.300" && editorDefaults.string(forKey: "launcher.DM_BOTW_PAD_A_X_PT") == "15.300",
+               "an invalid draft is rejected without partially applying or saving it")
+        draft = editor.values
+        for row in file.settings where editor.touchSettingsKeys(portrait: false).contains(row.env) { draft[row.env] = row.def }
+        expect(editor.saveTouchSettings(draft, portrait: false) && LauncherModel(file.settings, defaults: editorDefaults).values["DM_BOTW_PAD_A_X_PT"] == "0.000",
+               "Save after layout reset does not resurrect the legacy offsets")
         let legacySuite = suite + ".legacy"
         let legacyDefaults = UserDefaults(suiteName: legacySuite)!
         defer { legacyDefaults.removePersistentDomain(forName: legacySuite) }
@@ -384,7 +417,233 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
             }
         }
         unsetenv("DM_ENV_FILE_KEYS"); unsetenv("DM_NVN_FB_SNAP")
+        failed += checkTouchLayoutPresets(file.settings)
         print("launcher storage: \(failed) failed")
         exit(failed == 0 ? 0 : 1)
     }
+}
+
+import DmTouchPad
+
+private func checkTouchLayoutPresets(_ settings: [Setting]) -> Int {
+    var failed = 0
+    func expect(_ condition: Bool, _ message: String) {
+        print((condition ? "PASS " : "FAIL ") + message)
+        if !condition { failed += 1 }
+    }
+    let suite = "nxnative.touch-presets-test." + UUID().uuidString
+    let sourceDefaults = UserDefaults(suiteName: suite + ".source")!
+    let targetDefaults = UserDefaults(suiteName: suite + ".target")!
+    let fallbackDefaults = UserDefaults(suiteName: suite + ".fallback")!
+    let fixedDefaults = UserDefaults(suiteName: suite + ".fixed")!
+    let exportAreaDefaults = UserDefaults(suiteName: suite + ".export-area")!
+    let manySourceDefaults = UserDefaults(suiteName: suite + ".many-source")!
+    let manyTargetDefaults = UserDefaults(suiteName: suite + ".many-target")!
+    defer {
+        for suffix in [".source", ".target", ".fallback", ".fixed", ".export-area", ".many-source", ".many-target"] {
+            UserDefaults(suiteName: suite + suffix)?.removePersistentDomain(forName: suite + suffix)
+        }
+    }
+    let source = LauncherModel(settings, defaults: sourceDefaults)
+    expect(source.touchLayouts.count == 1 && source.selectedTouchLayoutID == source.touchLayouts.first?.id,
+           "an empty preset library starts with one selected default layout")
+    var draft = source.values
+    draft["DM_BOTW_PAD_L_ANCHOR"] = "2"; draft["DM_BOTW_PAD_L_X_PT"] = "20.000"
+    draft["DM_BOTW_PAD_L_Y_PT"] = "100.000"; draft["DM_BOTW_PAD_L_SIZE_PT"] = "60.000"
+    expect(source.saveTouchSettings(draft, portrait: false), "a default left control can save a right-edge anchor")
+    source.rememberTouchArea(.init(width: 900, height: 430), portrait: false)
+    source.addTouchLayout(name: "Right hand", copyCurrent: true)
+    let rightID = source.selectedTouchLayoutID
+    expect(source.touchLayouts.count == 2 && source.touchLayouts.last?.normalArea.width == 900 &&
+           source.values["DM_BOTW_PAD_L_ANCHOR"] == "2", "copying a preset retains its anchors and source pane")
+    source.addTouchLayout(name: "Fresh", copyCurrent: false)
+    expect(source.touchLayouts.count == 3 && source.values["DM_BOTW_PAD_L_ANCHOR"] == "0" &&
+           source.values["DM_BOTW_PAD_L_SIZE_PT"] == "57.600", "a fresh preset uses defaults rather than the previous preset")
+    source.selectTouchLayout(rightID)
+    let target = LauncherModel(settings, defaults: targetDefaults)
+    target.addTouchLayout(name: "Right hand", copyCurrent: false)
+    let previousID = target.selectedTouchLayoutID
+    var previousDraft = target.values; previousDraft["DM_BOTW_PAD_A_X_PT"] = "7.000"
+    expect(target.saveTouchSettings(previousDraft, portrait: false), "the pre-import selected preset has an independent edit")
+    let previousLayouts = target.touchLayouts
+    let normal = BotwTouchArea(width: 430, height: 300), compact = BotwTouchArea(width: 320, height: 400)
+    let encoder = JSONEncoder()
+    do {
+        let unopened = LauncherModel(settings, defaults: exportAreaDefaults)
+        unopened.addTouchLayout(name: "Unopened", copyCurrent: false)
+        let beforeAreaExport = exportAreaDefaults.data(forKey: "launcher.botwTouchLayouts")
+        let beforeAreaLayouts = unopened.touchLayouts, beforeAreaSelection = unopened.selectedTouchLayoutID
+        let actualAreaExport = try unopened.exportTouchLayouts(all: true, normalArea: normal, compactArea: compact)
+        let actualAreaFile = try JSONDecoder().decode(BotwTouchLayoutsFile.self, from: actualAreaExport)
+        expect(actualAreaFile.layouts.count == 2 && actualAreaFile.layouts.allSatisfy {
+            $0.normal?.controls["L"]?.anchor == .left && $0.normal?.controls["L"]?.side == 164.56 &&
+            $0.compact?.controls["WHISTLE"]?.anchor == .right && $0.compact?.controls["WHISTLE"]?.side == 70
+        }, "all exported presets use the supplied source panes even before opening the editor, including normal L at 164.56pt on a 430pt pane")
+        expect(exportAreaDefaults.data(forKey: "launcher.botwTouchLayouts") == beforeAreaExport &&
+               unopened.selectedTouchLayoutID == beforeAreaSelection && beforeAreaLayouts.allSatisfy { before in
+                   unopened.touchLayouts.contains { $0.id == before.id && $0.values == before.values &&
+                       $0.normalArea == before.normalArea && $0.compactArea == before.compactArea }
+               }, "exporting with actual source areas leaves saved layouts, stored areas and selection unchanged")
+        let one = try source.exportTouchLayouts(all: false), all = try source.exportTouchLayouts(all: true)
+        let oneFile = try JSONDecoder().decode(BotwTouchLayoutsFile.self, from: one)
+        let allFile = try JSONDecoder().decode(BotwTouchLayoutsFile.self, from: all)
+        expect(oneFile.schemaVersion == 1 && oneFile.game == "01007EF00011E000" &&
+               oneFile.layouts.count == 1 && oneFile.layouts[0].name == "Right hand" && allFile.layouts.count == 3,
+               "JSON export includes its schema and game and supports one or all presets")
+        let originalL = oneFile.layouts[0].normal?.controls["L"]
+        expect(originalL?.anchor == .right && originalL?.side == 20 && originalL?.size == 60,
+               "export records L's chosen right anchor and actual point distances")
+        expect(try target.importTouchLayouts(one, normalArea: normal, compactArea: compact) == 1,
+               "a single-layout JSON imports successfully")
+        expect(target.touchLayouts.count == 3 && target.selectedTouchLayoutID == previousID &&
+               target.values["DM_BOTW_PAD_A_X_PT"] == "7.000" && previousLayouts.allSatisfy { old in
+                   target.touchLayouts.contains { $0.id == old.id && $0.name == old.name && $0.values == old.values }
+               }, "import adds a layout while preserving previous presets, edits and selection")
+        let imported = target.touchLayouts.last!
+        expect(imported.name == "Right hand (2)" && !previousLayouts.contains { $0.id == imported.id },
+               "a colliding imported name is renamed and receives an independent ID")
+        target.selectTouchLayout(imported.id)
+        var sourceConfig = source.touchLayout(portrait: false), targetConfig = target.touchLayout(portrait: false)
+        let sourceRect = dm_botw_layout_control(&sourceConfig, 6, 900, 430, 0, 0, 0, 0, dm_botw_layout_canvas(900, 430))
+        let targetRect = dm_botw_layout_control(&targetConfig, 6, 430, 300, 0, 0, 0, 0, dm_botw_layout_canvas(430, 300))
+        expect(sourceRect.x + sourceRect.width / 2 == 850 && targetRect.x + targetRect.width / 2 == 380 &&
+               targetRect.width == 60 && 300 - targetRect.y - targetRect.height == 100,
+               "L moves from center 850pt on a 900pt pane to 380pt on a 430pt pane with unchanged size and bottom margin")
+        let selectionBeforeAll = target.selectedTouchLayoutID, idsBeforeAll = Set(target.touchLayouts.map(\.id))
+        expect(try target.importTouchLayouts(all, normalArea: normal, compactArea: compact) == 3,
+               "a multi-layout JSON imports all of its presets")
+        expect(target.touchLayouts.count == 6 && target.selectedTouchLayoutID == selectionBeforeAll &&
+               idsBeforeAll.isSubset(of: Set(target.touchLayouts.map(\.id))) &&
+               Set(target.touchLayouts.map(\.name)).count == target.touchLayouts.count,
+               "multi-layout import remains additive and resolves all existing name collisions")
+
+        func rejectedAtomically(_ data: Data, _ message: String) throws {
+            let before = try target.exportTouchLayouts(all: true), selection = target.selectedTouchLayoutID
+            let savedBefore = targetDefaults.data(forKey: "launcher.botwTouchLayouts"), valuesBefore = target.values
+            var rejected = false
+            do { try target.importTouchLayouts(data, normalArea: normal, compactArea: compact) }
+            catch { rejected = true }
+            let after = try target.exportTouchLayouts(all: true)
+            expect(rejected && before == after && target.selectedTouchLayoutID == selection && target.values == valuesBefore &&
+                   targetDefaults.data(forKey: "launcher.botwTouchLayouts") == savedBefore, message)
+        }
+        try rejectedAtomically(Data("{malformed".utf8), "malformed JSON leaves the entire library and saved data unchanged")
+        var future = oneFile; future.schemaVersion = 99
+        try rejectedAtomically(encoder.encode(future), "an unsupported schema is rejected without modifying presets")
+        var invalid = oneFile.layouts[0]
+        invalid.normal!.options["DM_BOTW_PAD_L_MODE"] = "9"
+        var invalidBatch = oneFile; invalidBatch.layouts.append(invalid)
+        try rejectedAtomically(encoder.encode(invalidBatch), "a bad mode after a valid layout rejects the whole import atomically")
+
+        let tinyFile = BotwTouchLayoutsFile(layouts: [.init(name: "Tiny compact", normal: nil, compact: .init(controls: [
+            "L": .init(anchor: .right, side: 999, bottom: 999, size: 60),
+            "A": .init(anchor: .left, side: -10, bottom: -20, size: 50)
+        ], options: [:]))])
+        try target.importTouchLayouts(encoder.encode(tinyFile), normalArea: normal, compactArea: .init(width: 80, height: 90))
+        target.selectTouchLayout(target.touchLayouts.last!.id)
+        let tiny = try JSONDecoder().decode(BotwTouchLayoutsFile.self, from: target.exportTouchLayouts(all: false)).layouts[0]
+        var missingBank = target.touchLayout(portrait: false), defaultsBank = dm_botw_layout_defaults_for(0)
+        let missingL = dm_botw_layout_control(&missingBank, 6, 430, 300, 0, 0, 0, 0, dm_botw_layout_canvas(430, 300))
+        let defaultL = dm_botw_layout_control(&defaultsBank, 6, 430, 300, 0, 0, 0, 0, dm_botw_layout_canvas(430, 300))
+        let missingBankFitted = BotwTouchControl.editable.allSatisfy { control in
+            if dm_botw_layout_control_visible(&missingBank, Int32(control.id)) == 0 { return true }
+            let r = dm_botw_layout_control(&missingBank, Int32(control.id), 430, 300, 0, 0, 0, 0, dm_botw_layout_canvas(430, 300))
+            return r.x >= -0.001 && r.y >= -0.001 && r.x + r.width <= 430.001 && r.y + r.height <= 300.001
+        }
+        expect(tiny.compact?.controls["L"]?.side == 20 && tiny.compact?.controls["L"]?.bottom == 30 &&
+               tiny.compact?.controls["L"]?.size == 60 && tiny.compact?.controls["A"]?.side == 0 &&
+               tiny.compact?.controls["A"]?.bottom == 0 && tiny.compact?.controls["A"]?.size == 50 &&
+               abs(missingL.x - defaultL.x) < 0.001 && abs(missingL.y - defaultL.y) < 0.001 && missingBankFitted,
+               "a compact-only import fits tiny-pane margins without resizing and supplies a fitted default normal bank")
+
+        let oversized = BotwTouchLayoutsFile(layouts: [.init(name: "Oversized", normal: .init(controls: [
+            "L": .init(anchor: .right, side: 999, bottom: 999, size: 240)
+        ], options: [:]), compact: nil)])
+        try target.importTouchLayouts(encoder.encode(oversized), normalArea: .init(width: 80, height: 90), compactArea: compact)
+        target.selectTouchLayout(target.touchLayouts.last!.id)
+        var fittedConfig = target.touchLayout(portrait: false)
+        let fitted = dm_botw_layout_control(&fittedConfig, 6, 80, 90, 0, 0, 0, 0, dm_botw_layout_canvas(80, 90))
+        expect(fitted.x == 0 && fitted.y == 0 && fitted.width == 80 && fitted.height == 80,
+               "import reduces a button only when its original size cannot fit the target pane")
+
+        let longName = String(repeating: "N", count: 80)
+        target.addTouchLayout(name: longName, copyCurrent: false)
+        var longFile = oneFile; longFile.layouts[0].name = longName
+        try target.importTouchLayouts(encoder.encode(longFile), normalArea: normal, compactArea: compact)
+        let renamedLong = target.touchLayouts.last!
+        let longReloaded = LauncherModel(settings, defaults: targetDefaults)
+        expect(renamedLong.name.count == 80 && renamedLong.name.hasSuffix(" (2)") &&
+               longReloaded.touchLayouts.contains { $0.id == renamedLong.id && $0.name == renamedLong.name },
+               "an imported duplicate 80-character name is shortened for its suffix and survives reopening")
+
+        let manySource = LauncherModel(settings, defaults: manySourceDefaults)
+        let seedBank = BotwPortableBank(controls: ["L": .init(anchor: .right, side: 20, bottom: 40, size: 60)], options: [:])
+        let seed = BotwTouchLayoutsFile(layouts: (0..<64).map { .init(name: "Layout \($0)", normal: seedBank, compact: nil) })
+        try manySource.importTouchLayouts(encoder.encode(seed), normalArea: normal, compactArea: compact)
+        let ownExport = try manySource.exportTouchLayouts(all: true)
+        let manyTarget = LauncherModel(settings, defaults: manyTargetDefaults)
+        let manyCount = try manyTarget.importTouchLayouts(ownExport, normalArea: normal, compactArea: compact)
+        expect(manySource.touchLayouts.count == 65 && manyCount == 65 && manyTarget.touchLayouts.count == 66,
+               "an app-generated 65-layout JSON can be imported within the same documented limits")
+
+        let fixedSeed = LauncherModel(settings, defaults: fixedDefaults)
+        var fixedDraft = fixedSeed.values
+        fixedDraft["DM_BOTW_PAD_L_ANCHOR"] = "2"; fixedDraft["DM_BOTW_PAD_L_X_PT"] = "27.000"
+        fixedDraft["DM_BOTW_PAD_L_Y_PT"] = "40.000"; fixedDraft["DM_BOTW_PAD_L_SIZE_PT"] = "60.000"
+        expect(fixedSeed.saveTouchSettings(fixedDraft, portrait: false), "the env-override check starts with a saved user preset")
+        let previousKeys = getenv("DM_ENV_FILE_KEYS").map { String(cString: $0) }
+        let previousX = getenv("DM_BOTW_PAD_L_X_PT").map { String(cString: $0) }
+        do {
+            setenv("DM_ENV_FILE_KEYS", "DM_BOTW_PAD_L_X_PT", 1); setenv("DM_BOTW_PAD_L_X_PT", "99.000", 1)
+            defer {
+                if let previousKeys { setenv("DM_ENV_FILE_KEYS", previousKeys, 1) } else { unsetenv("DM_ENV_FILE_KEYS") }
+                if let previousX { setenv("DM_BOTW_PAD_L_X_PT", previousX, 1) } else { unsetenv("DM_BOTW_PAD_L_X_PT") }
+            }
+            let locked = LauncherModel(settings, defaults: fixedDefaults)
+            locked.addTouchLayout(name: "Pinned copy", copyCurrent: true)
+            var editedLocked = locked.values; editedLocked["DM_BOTW_PAD_A_Y_PT"] = "18.000"
+            expect(locked.saveTouchSettings(editedLocked, portrait: false), "unlocked controls remain editable under an env override")
+            let regular = try JSONDecoder().decode(BotwTouchLayoutsFile.self, from: locked.exportTouchLayouts(all: false))
+            let draftFile = try JSONDecoder().decode(BotwTouchLayoutsFile.self,
+                from: locked.exportTouchLayoutDraft(locked.values, portrait: false, area: .normal))
+            expect(locked.values["DM_BOTW_PAD_L_X_PT"] == "99.000" && regular.layouts[0].normal?.controls["L"]?.side == 27 &&
+                   draftFile.layouts[0].normal?.controls["L"]?.side == 27 && locked.touchLayouts.allSatisfy {
+                       $0.values["DM_BOTW_PAD_L_X_PT"] == "27.000"
+                   }, "sync, duplicate, Save and both exports preserve user preset values beneath a temporary env override")
+        }
+        let unpinned = LauncherModel(settings, defaults: fixedDefaults)
+        expect(unpinned.values["DM_BOTW_PAD_L_X_PT"] == "27.000" && unpinned.values["DM_BOTW_PAD_A_Y_PT"] == "18.000",
+               "removing the env override restores the user's preset and preserves unrelated edits")
+
+        target.selectTouchLayout(imported.id)
+        var edited = target.values; edited["DM_BOTW_PAD_L_X_PT"] = "26.000"; edited["DM_BOTW_PAD_L_SIZE_PT"] = "64.000"
+        expect(target.saveTouchSettings(edited, portrait: false), "an imported layout remains editable")
+        let saved = LauncherModel(settings, defaults: targetDefaults)
+        expect(saved.selectedTouchLayoutID == imported.id && saved.touchLayouts.count == target.touchLayouts.count &&
+               saved.values["DM_BOTW_PAD_L_X_PT"] == "26.000" && saved.values["DM_BOTW_PAD_L_SIZE_PT"] == "64.000",
+               "editor Save persists the selected preset and its edits before Play")
+        saved.values["DM_BOTW_PAD_L_X_PT"] = "27.000"; saved.apply()
+        let applied = LauncherModel(settings, defaults: targetDefaults)
+        expect(applied.selectedTouchLayoutID == imported.id && applied.values["DM_BOTW_PAD_L_X_PT"] == "27.000",
+               "Play also persists changes to the selected preset library")
+        while applied.touchLayouts.count > 1 { applied.deleteTouchLayout(applied.touchLayouts[0].id) }
+        let lastID = applied.touchLayouts[0].id
+        applied.deleteTouchLayout(lastID)
+        let last = LauncherModel(settings, defaults: targetDefaults)
+        expect(last.touchLayouts.count == 1 && last.selectedTouchLayoutID == lastID,
+               "deleting presets preserves one selected layout and refusing to delete the last survives reopening")
+    } catch {
+        expect(false, "preset regression completes without unexpected errors: \(error)")
+    }
+    let invalidLibraries = [Data(), Data("not JSON".utf8),
+        Data(#"{"schemaVersion":1,"selected":"missing","layouts":[]}"#.utf8),
+        Data(#"{"schemaVersion":99,"selected":"missing","layouts":[]}"#.utf8)]
+    for data in invalidLibraries {
+        fallbackDefaults.set(data, forKey: "launcher.botwTouchLayouts")
+        let fallback = LauncherModel(settings, defaults: fallbackDefaults)
+        expect(fallback.touchLayouts.count == 1 && fallback.selectedTouchLayoutID == fallback.touchLayouts.first?.id &&
+               fallback.values["DM_BOTW_PAD_L_ANCHOR"] == "0" && fallback.values["DM_BOTW_PAD_L_X_PT"] == "0.000",
+               "empty, corrupt or unsupported saved libraries recover a selected default layout")
+    }
+    return failed
 }

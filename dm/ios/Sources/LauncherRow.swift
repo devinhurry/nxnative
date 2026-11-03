@@ -263,16 +263,18 @@ struct LauncherSettingsPage: View {
 
     private var sections: [String] {
         var result = m.sections.filter { !LauncherModel.isTouchSection($0) }
-        if m.touchStickResponse != nil { result.insert("Touch", at: min(2, result.count)) }
+        if m.touchStickResponse != nil && !result.contains("Controls") { result.insert("Controls", at: min(2, result.count)) }
         result.append("Cloud saves")
         return result
     }
+
+    private func sectionTitle(_ section: String) -> String { section == "Game" ? "Graphics" : section }
 
     private var sectionList: some View {
         #if os(macOS)
         List(sections, id: \.self, selection: Binding<String?>(get: { selection }, set: { if let section = $0 { selection = section } })) { section in
             HStack {
-                Text(LocalizedStringKey(section))
+                Text(LocalizedStringKey(sectionTitle(section)))
                 Spacer(minLength: 0)
                 if section == selection { Image(systemName: "chevron.right").font(.caption) }
             }
@@ -284,7 +286,7 @@ struct LauncherSettingsPage: View {
         List(sections, id: \.self) { section in
             Button { selection = section } label: {
                 HStack {
-                    Text(LocalizedStringKey(section))
+                    Text(LocalizedStringKey(sectionTitle(section)))
                     Spacer(minLength: 0)
                     if section == selection { Image(systemName: "chevron.right").font(.caption) }
                 }
@@ -300,6 +302,12 @@ struct LauncherSettingsPage: View {
 
     var body: some View {
         GeometryReader { geometry in
+            if let touchPage, touchPage != .stick {
+                BotwTouchSettingsView(m: m, portrait: touchPage == .compact) { self.touchPage = nil }
+                    .id(touchPage)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("settings.touch.page." + touchPage.identifier)
+            } else {
             VStack(spacing: 0) {
                 HStack {
                     if touchPage != nil {
@@ -312,14 +320,7 @@ struct LauncherSettingsPage: View {
                 }.padding(.horizontal, 16).padding(.vertical, 10)
                 Divider()
                 if let touchPage {
-                    Group {
-                        switch touchPage {
-                        case .normal, .compact:
-                            BotwTouchSettingsView(m: m, viewport: geometry.size, safeInsets: geometry.safeAreaInsets, portrait: touchPage == .compact)
-                        case .stick:
-                            BotwStickSettingsView(m: m)
-                        }
-                    }
+                    BotwStickSettingsView(m: m)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityIdentifier("settings.touch.page." + touchPage.identifier)
                 } else {
@@ -330,13 +331,11 @@ struct LauncherSettingsPage: View {
                             .accessibilityIdentifier("settings.sections")
                         Divider()
                         Form {
-                            if selection == "Touch" {
-                                BotwTouchSettingsMenu(m: m) { touchPage = $0 }
-                            } else if selection == "Cloud saves" {
+                            if selection == "Cloud saves" {
                                 CloudSavesSection().disabled(m.isRunning)
                                 if m.isRunning { Text("Applies next time you start the game.").font(.footnote).foregroundStyle(.secondary) }
                             } else {
-                                Section(LocalizedStringKey(selection)) {
+                                Section(LocalizedStringKey(sectionTitle(selection))) {
                                     ForEach(m.rows(in: selection)) { SettingRow(s: $0, m: m) }
                                     #if os(macOS)
                                     if selection == "Game" && ProcessInfo.processInfo.environment["DM_TOUCH_PREVIEW"] != "1" {
@@ -344,11 +343,12 @@ struct LauncherSettingsPage: View {
                                     }
                                     #endif
                                 }
-                            }
-                            if selection != "Touch" {
-                                Section {
-                                    Button("Reset to tested defaults") { m.reset() }.disabled(!m.changed)
+                                if selection == "Controls" && m.touchStickResponse != nil {
+                                    BotwTouchSettingsMenu(m: m) { touchPage = $0 }
                                 }
+                            }
+                            Section {
+                                Button("Reset to tested defaults") { m.reset() }.disabled(!m.changed)
                             }
                         }
                         .formStyle(.grouped)
@@ -357,8 +357,10 @@ struct LauncherSettingsPage: View {
                     }
                 }
             }
+            }
         }
         .onAppear { if !sections.contains(selection) { selection = sections.first ?? "Game" } }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("launcher.settings.page")
         .preferredColorScheme(.dark)
     }

@@ -110,6 +110,11 @@ int main(void) {
     calculate_entry(target);
     calculated_matrix(target);
     expect_translation(target, -275, -216);
+    dm_botw_touch_hud_keep_native_loadout(1);
+    matrix_translation(target,-509,210); calculate_entry(target); calculated_matrix(target);
+    expect_translation(target,-509,210);
+    assert(dm_botw_touch_hud_active()); // hiding D-pad does not disable menus or other touch HUD hooks
+    dm_botw_touch_hud_keep_native_loadout(0);
 
     // A resized D-pad scales its native equipment artwork about the touch center.
     dm_botw_touch_hud_publish(1, .25f, .75f, 1.25f);
