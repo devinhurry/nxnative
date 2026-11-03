@@ -157,6 +157,7 @@ static BOOL g_botw_touch_menu_presented;
 static BOOL g_botw_gameplay_ready = YES;
 static BOOL g_botw_loadout_visible = YES;
 static BOOL g_botw_quick_select;
+static BOOL g_botw_switch_opening;
 static BOOL g_botw_hero_path;
 static BOOL g_force_controls_hidden;
 static BOOL g_botw_touch_map_active;
@@ -179,12 +180,15 @@ int dm_botw_touch_menu_active(void) { return g_botw_touch_menu_active; }
 int dm_botw_touch_menu_visible(void) { return (g_botw_touch_menu_active && !g_botw_scope_active) || g_botw_touch_menu_presented; }
 int dm_botw_touch_loadout_visible(void) { return g_botw_loadout_visible; }
 int dm_botw_touch_quick_select_active(void) { return g_botw_quick_select; }
+static unsigned g_quick_taps;
+void dm_botw_touch_quick_select_tap(float x,float y) { (void)x; (void)y; g_quick_taps++; }
 float dm_botw_touch_quick_select_top(void) { return -1; }
 int dm_botw_touch_bow_active(void) { return 0; }
 void dm_botw_touch_hud_keep_native_loadout(int keep) { (void)keep; }
 void dm_botw_touch_button_begin(int control,int mode) { (void)control; (void)mode; }
 void dm_botw_touch_button_end(int control,int cancelled) { (void)control; (void)cancelled; }
 void dm_botw_touch_switch_cancel(void) {}
+int dm_botw_touch_switch_active(void) { return g_botw_switch_opening; }
 int dm_botw_touch_switch_cancel_visible(void) { return 0; }
 int dm_botw_touch_menu_dpad_visible(void) { return g_botw_hero_path; }
 int dm_botw_touch_controls_visible(void) {
@@ -377,6 +381,11 @@ static void test_dpad_art_visibility(DmGamepad *view) {
     CAShapeLayer *leftKey=[view dm_testButtonLayer:12];
     CHECK(CGPathGetPathBoundingBox(leftKey.path).size.width < 30 && !leftKey.strokeColor &&
           [view dm_testButtonBorder:12].hidden,"fallback keys use pale round silhouettes without the ordinary pad border");
+    g_botw_switch_opening=YES; [view setNeedsLayout]; [view layoutIfNeeded];
+    CHECK([view dm_testDpadArtworkHidden],"opening the quick strip suppresses the loadout fallback before native presentation");
+    g_botw_switch_opening=NO; g_botw_quick_select=YES; [view setNeedsLayout]; [view layoutIfNeeded];
+    CHECK([view dm_testDpadArtworkHidden],"the quick strip never shows fallback direction keys when loadout disappears");
+    g_botw_quick_select=NO;
     g_botw_loadout_visible=YES; [view setNeedsLayout]; [view layoutIfNeeded];
     CHECK([view dm_testDpadArtworkHidden],"native loadout restoration hides the fallback immediately");
     CHECK([view dm_testSwapHidden] && ![view dm_testInSwap:CGPointMake(view.bounds.size.width*.5,20)],
@@ -1387,11 +1396,11 @@ static void test_botw_scope_protection(DmGamepad *view) {
     g_botw_touch_menu_active=g_botw_touch_menu_presented=g_botw_scope_active=NO;
     g_look_enabled=YES;
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view layoutIfNeeded];
-    CGPoint zr=[view dm_testDropCenter:9], protected=CGPointMake(zr.x-45,zr.y);
-    CGPoint outside=CGPointMake(zr.x-55,zr.y);
+    CGPoint zr=[view dm_testDropCenter:9], protected=CGPointMake(zr.x-95,zr.y);
+    CGPoint outside=CGPointMake(zr.x-105,zr.y);
     CHECK([view dm_testBtnAt:protected]<0 && [view dm_testScopeTapExcludedAt:protected] &&
           ![view dm_testScopeTapExcludedAt:outside],
-          "scope protection extends to a fixed 50 pt radius beyond the visible right button hit target");
+          "scope protection extends to a fixed 100 pt radius beyond the visible right button hit target");
     reset_look(); g_input_sets=0;
     FakeTouch *first=touch(protected.x,protected.y), *second=touch(protected.x,protected.y);
     beganAt(view,first,11); endedAt(view,first,protected.x,protected.y,11.08);
@@ -1567,7 +1576,12 @@ static void test_look_drag(DmGamepad *view) {
     reset_look(); t=touch(600,150); began(view,t); moved(view,t,615,165);
     CHECK(g_rx<0 && g_ry>0 && g_look_events[1].dx<0 && g_look_events[1].dy<0,
           "BOTW quick selection reverses only the touch stick and relative impulse");
-    ended(view,t,615,165); g_botw_quick_select=NO;
+    unsigned quick_taps=g_quick_taps;
+    ended(view,t,615,165);
+    CHECK(g_quick_taps==quick_taps,"a quick-strip drag never accepts a tap selection");
+    t=touch(500,150); began(view,t); ended(view,t,500,150);
+    CHECK(g_quick_taps==quick_taps+1,"a quick-strip tap selects through the native shortcut list");
+    g_botw_quick_select=NO;
     reset_look(); t=touch(600,150); began(view,t); moved(view,t,615,165);
     CHECK(g_rx>0 && g_look_events[1].dx>0,"closing quick selection restores ordinary look direction");
     ended(view,t,615,165);

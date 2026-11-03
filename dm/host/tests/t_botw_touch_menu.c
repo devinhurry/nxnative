@@ -82,6 +82,8 @@ static int mock_touch_sets;
 void dm_touch_set(const dm_touch *t, int n) { (void)t; if (n > 0) mock_touch_sets++; }
 uint64_t dm_guest_frame(void) { return current_guest_frame; }
 int dm_botw_touch_hud_active(void) { return mock_touch_hud_active; }
+static unsigned mock_quick_selected;
+void dm_botw_touch_switch_selected(void) { mock_quick_selected++; }
 
 static dm_botw_touch_menu_view view;
 typedef struct { _Alignas(16) uint8_t bytes[0x100]; } fake_pane_t;
@@ -367,6 +369,75 @@ static int mock_category_jump(uintptr_t widget, int32_t page, int32_t category, 
     mock_category_widget = widget;
     mock_category_page = page; mock_category_id = category; mock_category_jump_mode = mode;
     return 1;
+}
+static void mock_quick_resolve(uintptr_t screen,uint32_t index) {
+    assert(mock_category_jump_calls==1 && mock_category_page==(int32_t)index);
+    memcpy((void *)(screen+0x387c),(const void *)(screen+0x3884+index*4),4);
+}
+
+static void test_quick_strip_touch(void) {
+    dm_botw_touch_menu_reset(); init_selector_fixture();
+    mock_touch_hud_active=1; current_guest_frame=5000;
+    uintptr_t saved_guest_start=mock_guest_start; size_t saved_guest_size=mock_guest_size;
+    mock_guest_start=(uintptr_t)native_panes; mock_guest_size=sizeof native_panes;
+    dm_botw_touch_menu_test_set_render_frame(5000);
+    uint8_t widget[0x400]={0},descriptor[0x40]={0}; uintptr_t vtable[8]={0};
+    g_test_list_widget_override=1; g_test_list_widget_vtable=(uintptr_t)vtable;
+    g_test_list_widget_update=(uintptr_t)mock_category_set;
+    vtable[BOTW_LIST_WIDGET_VTABLE_SLOT/8]=g_test_list_widget_update;
+    put_ptr(widget,(uintptr_t)vtable); put_ptr(widget+0x60,(uintptr_t)selector.screen);
+    put_ptr(selector.screen+0x37a8,(uintptr_t)widget);
+    uint8_t *root=fake_pane(90,"RootPane",-1,1280,720,0,0);
+    uint8_t *all=fake_pane(91,"N_All_00",90,0,0,0,0);
+    uint8_t *pos=fake_pane(92,"N_ShortCutPos_00",91,0,0,0,0);
+    uint8_t *cut=fake_pane(93,"N_Cut_00",92,0,0,0,0);
+    uint8_t *items=fake_pane(94,"N_ShortCutAll_00",93,0,0,0,0);
+    uint8_t *part=fake_pane(95,"Pa_ShortCutNow_03",94,100,100,0,0);
+    uint8_t *hit=fake_pane(96,"B_Hit_00",95,100,100,0,0);
+    link_child(root,all); link_child(all,pos); link_child(pos,cut); link_child(cut,items);
+    link_child(items,part); link_child(part,hit);
+    put_ptr(selector.owner+0x58,(uintptr_t)hit);
+    put_ptr(descriptor+0x10,(uintptr_t)selector.owner);
+    assert(!get_ptr(descriptor+0x28)); // real HUD cells have no BoxCursor entry
+    mock_list_query_widget=(uintptr_t)widget; mock_list_query_index=3;
+    mock_list_query_descriptor=(uintptr_t)descriptor;
+    g_test_list_widget_index_resolver=(uintptr_t)mock_list_widget_index;
+    g_test_list_widget_descriptor_resolver=(uintptr_t)mock_list_widget_descriptor;
+    g_test_list_category_jump=(uintptr_t)mock_category_jump;
+    g_test_quick_select_resolver=(uintptr_t)mock_quick_resolve;
+    int32_t item_id=17; memcpy(selector.screen+0x3884+3*4,&item_id,4);
+    g_presented_quick_select=1; g_presented_menu_frame=5000;
+    g_presented_quick_screen=(uintptr_t)selector.screen; g_presented_quick_root=(uintptr_t)root;
+    mock_category_jump_calls=mock_quick_selected=0;
+    // This strip has no focused BoxCursor entry or ordinary menu snapshot.
+    assert(!get_ptr(selector.manager+0x48) && !dm_botw_touch_menu_active());
+    dm_botw_touch_quick_select_tap(.5f,.5f);
+    assert(g_quick_tap.pending && selector_quick_select_visible((uintptr_t)root));
+    assert(selector_read_ptr((uintptr_t)widget,0x60)==(uintptr_t)selector.screen);
+    assert(selector_nearest_part((uintptr_t)hit)==(uintptr_t)part);
+    uintptr_t found_hit=0,found_root=0;
+    assert(pane_find_unique(part,"B_Hit_00",NULL,&found_hit)==1 && found_hit==(uintptr_t)hit);
+    assert(selector_pane_visible_alpha((uintptr_t)hit,&found_root) && found_root==(uintptr_t)root);
+    uint64_t regs[31]={0}; regs[0]=(uintptr_t)widget;
+    selector_list_widget_observe(regs);
+    assert(mock_category_jump_calls==1 && mock_category_page==3 && mock_category_id==0 && mock_category_jump_mode==1);
+    int32_t resolved_item=-1; memcpy(&resolved_item,selector.screen+0x387c,4);
+    assert(resolved_item==17); // moving the list alone must not accept the old equipped item
+    assert(!mock_quick_selected && g_quick_tap.issued);
+    selector_service_quick_tap(&g_mod[0],5001); assert(!mock_quick_selected);
+    int32_t index=3; memcpy(widget+0x2dc,&index,4);
+    selector_service_quick_tap(&g_mod[0],5001);
+    assert(mock_quick_selected==1 && !g_quick_tap.pending);
+    selector_service_quick_tap(&g_mod[0],5002); assert(mock_quick_selected==1);
+    dm_botw_touch_quick_select_tap(.1f,.9f); selector_service_quick_tap(&g_mod[0],5001);
+    assert(!g_quick_tap.pending && mock_category_jump_calls==1); // empty space never closes
+    hit[0x59]=0;
+    dm_botw_touch_quick_select_tap(.5f,.5f); selector_service_quick_tap(&g_mod[0],5001);
+    assert(!g_quick_tap.pending && mock_category_jump_calls==1); // hidden items are inert
+    g_test_list_widget_index_resolver=g_test_list_widget_descriptor_resolver=0;
+    g_test_list_category_jump=g_test_quick_select_resolver=0; g_test_list_widget_override=0;
+    mock_guest_start=saved_guest_start; mock_guest_size=saved_guest_size;
+    dm_botw_touch_menu_reset();
 }
 
 static void test_quest_category_touch(void) {
@@ -4309,6 +4380,7 @@ int main(void) {
     atomic_store_explicit(&g_trace, 0, memory_order_release);
     mock_guest_start = saved_guest_start;
     mock_guest_size = saved_guest_size;
+    test_quick_strip_touch();
     test_quest_category_touch();
     test_option_arrow_touch();
     test_message_advance_owner();

@@ -213,6 +213,7 @@ void hid_keys_init(void) {
 //   "key[+key][~hold]" presses as a DM_KEYS step does (hold 0.15 s by default), "shot <path>" saves the next presented frame as a PNG (dm_gfx_shot_at), "passdump <n>" dumps the
 //   render passes of the next n frames as DM_NVN_PASSDUMP does (to stderr, the run's log), "texdump <path with %d>" saves the colour targets of the next frame as DM_NVN_TEXDUMP does,
 //   "touch-button <control> <mode> down|up|cancel|select" drives the same BOTW action intents as the touch frontends (6=L, 16=weapon, 17=shield, 18=food, 19=whistle, 20=cancel).
+//   "quick-select <x> <y>" taps the live BOTW shortcut strip at normalized picture coordinates.
 //   "env KEY=VALUE" sets a switch read at the time of use (DM_NVN_SNAPRAW for the next texdump), "cvarf <main offset> <value>" sets an Unreal float console variable
 //   (hle_fpslock.c dm_ctl_cvar_f32; "cvari" an int one), "panes <hex root> [depth]" logs the live pane tree below a native layout root
 //   (hle_botw_touch_menu.c dm_botw_touch_menu_dump_tree), "peek <address> <count>" logs that many floats of guest memory, "memdump <address> <bytes> <path>" saves guest memory
@@ -256,8 +257,8 @@ static void *ctl_main(void *arg) {
                     if (!strcmp(phase,"down") && control==20) dm_botw_touch_switch_cancel();
                     else if (!strcmp(phase,"down")) dm_botw_touch_button_begin(control,mode);
                     else if (!strcmp(phase,"up") || !strcmp(phase,"cancel")) dm_botw_touch_button_end(control,!strcmp(phase,"cancel"));
-                    else if (strcmp(phase,"select")) { LOG("[RED] DM_CTL invalid touch-button phase: %s",phase); continue; }
-                    // Selection release keeps a tap-mode shortcut open.
+                    else if (!strcmp(phase,"select")) dm_botw_touch_switch_selected();
+                    else { LOG("[RED] DM_CTL invalid touch-button phase: %s",phase); continue; }
                     LOG("DM_CTL: touch-button control=%d mode=%d phase=%s",control,mode,phase);
                     continue;
                 }
@@ -291,6 +292,13 @@ static void *ctl_main(void *arg) {
                     if (phase < 0) { LOG("[RED] DM_CTL invalid menu phase: %s", phase_name); continue; }
                     dm_botw_touch_menu_pointer(phase, x, y);
                     LOG("DM_CTL: menu phase=%s point=(%.4f,%.4f)", phase_name, x, y);
+                    continue;
+                }
+                if (!strncmp(line,"quick-select ",13)) {
+                    float x,y; char extra;
+                    if (sscanf(line+13,"%f %f %c",&x,&y,&extra)!=2 || !isfinite(x) || !isfinite(y) || x<0 || x>1 || y<0 || y>1)
+                        LOG("[RED] DM_CTL quick-select wants normalized x y");
+                    else dm_botw_touch_quick_select_tap(x,y);
                     continue;
                 }
                 if (!strncmp(line, "texdump ", 8)) { void dm_gfx_texdump_next(const char *path); dm_gfx_texdump_next(line + 8); LOG("DM_CTL: colour targets of the next frame → %s (as DM_NVN_TEXDUMP)", line + 8); continue; }

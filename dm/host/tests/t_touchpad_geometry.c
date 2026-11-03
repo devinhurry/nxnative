@@ -147,8 +147,8 @@ static void test_botw_right_cluster_and_camera_tap(void) {
         assert(!dm_touchpad_look_double_tap(10000000.08,10000000.48,100,100,101,102,u));
         assert(!dm_touchpad_look_double_tap(10000000.08,10000000.28,100,100,100+49*u,102,u));
         dm_touchpad_rect small={w-80,100,40,40};
-        assert(dm_touchpad_scope_button_excludes_tap(small,w*.5f,w-60,169));
-        assert(!dm_touchpad_scope_button_excludes_tap(small,w*.5f,w-60,171));
+        assert(dm_touchpad_scope_button_excludes_tap(small,w*.5f,w-60,219));
+        assert(!dm_touchpad_scope_button_excludes_tap(small,w*.5f,w-60,221));
         dm_touchpad_rect large={w-180,100,160,160};
         assert(dm_touchpad_scope_button_excludes_tap(large,w*.5f,w-179,101));
         small.x=10;

@@ -638,6 +638,33 @@ input has consumed the final selection sample. Hiding D-pad leaves touch mode
 active while bypassing only `N_MainAll_00` translation/scaling, so a fresh
 native matrix restores the authored loadout position and size.
 
+**Quick-strip touch correction (2026-11-03).** MainShortCut's horizontal
+widget is independent of the focused BoxCursor menu entries. Routing every
+quick-strip finger through the generic menu pointer intercepted the working
+right-stick drag and left taps without a selectable native menu owner. Touch
+now retains the camera/stick drag route. A tap resolves the visible item's
+native widget descriptor and calls the existing immediate page setter on the
+widget's own update callback, including gameplay frames without cursor updates.
+These HUD descriptors have no BoxCursor entry: their UniteButton owns the
+`B_Hit_00` pane at `+0x58`. The exact-build `main+0xe2785c` selection callback
+also resolves the chosen slot through `screen+0x3884` into the current item/rune
+at `+0x387c` and refreshes its description. Moving the list alone leaves that
+selection stale and would accept the previously equipped item on close.
+The next UI frame acknowledges the selected page before releasing the opening
+direction, accepting the item and closing the strip without B. A still-held
+virtual direction stays suppressed until release. Empty/hidden cells remain
+inert. Quick-strip presentation includes entering/exiting animation, and a
+touch opening hold immediately suppresses the missing-loadout D-pad fallback.
+The round Cancel default moves down 50pt; right-button scope double-tap
+protection now extends to a fixed 100pt radius while retaining camera dragging.
+Mac acceptance used current-checkout `scripts/run_mac.py --test --touch-preview`
+and an independent outdoors save: a weapon tap equipped Spiked Boko Club and
+closed the strip; reopening retained the new equipment. A Camera-to-Cryonis
+tap likewise closed the rune strip and reopening retained Cryonis. Native
+menu/action/geometry checks and the iOS production import/compilation checks
+pass. Physical iPhone gesture acceptance remains pending. Captures and logs
+are in `01007EF00011E000-work/quick-repair-20261103/` outside the repository.
+
 
 Touch category selection uses the native completion paths, rather than
 intermediate stick navigation. Compendium's five-category widget calls

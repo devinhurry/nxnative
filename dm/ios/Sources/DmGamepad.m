@@ -513,7 +513,7 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
     [self refreshBotwRuneIcon];
     _key[B_MINUS].hidden = _tap || (botwActive && _botwMapValid);
     _leftStickDoubleTap.enabled = botwActive && !_botwMenuMode;
-    BOOL hideDpadArt = ([self botwTouchControlsActive] && (dm_botw_touch_loadout_visible() || !_touchLayout.dpad_visible)) || _padOff;
+    BOOL hideDpadArt = ([self botwTouchControlsActive] && (dm_botw_touch_loadout_visible() || dm_botw_touch_quick_select_active() || dm_botw_touch_switch_active() || !_touchLayout.dpad_visible)) || _padOff;
     _key[B_LEFT].hidden = _key[B_UP].hidden = _key[B_RIGHT].hidden = _key[B_DOWN].hidden = _tap || !_full || hideDpadArt;
     _ring.hidden = _tap || (botwActive && !_stick[0]); _knob.hidden = _tap;
     _stickDirection.hidden = YES;
@@ -556,7 +556,7 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
     }
     BOOL botwActive = [self botwTouchControlsActive];
     if (!botwActive) _botwLookTapPending = NO;
-    BOOL hideDpadArt = (botwActive && (dm_botw_touch_loadout_visible() || !_touchLayout.dpad_visible)) || _padOff;
+    BOOL hideDpadArt = (botwActive && (dm_botw_touch_loadout_visible() || dm_botw_touch_quick_select_active() || dm_botw_touch_switch_active() || !_touchLayout.dpad_visible)) || _padOff;
     _key[B_ZL].hidden = _tap || botwActive;
     _shieldGraph.hidden = !botwActive;
     _shieldRing.hidden = !botwActive || !(_shieldTouch || _shieldLatched);
@@ -1176,6 +1176,10 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         dm_look_input(DM_LOOK_END, 0, 0); _lookTouch = nil; _lookScale = 0;
         if (dm_botw_touch_quick_select_active()) {
             _botwLookTapPending=NO;
+            if (tap) {
+                float rect[4]; dm_aspect_touch_rect(self.bounds.size.width,self.bounds.size.height,rect);
+                if (rect[2]>0 && rect[3]>0) dm_botw_touch_quick_select_tap((p.x-rect[0])/rect[2],(p.y-rect[1])/rect[3]);
+            }
         } else if (tap && [self botwTouchControlsActive] &&
                    ![self botwScopeTapExcludedAt:_lookDown] && ![self botwScopeTapExcludedAt:p]) {
             CGFloat u = self.u;
@@ -1283,11 +1287,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
             [self emitTouchFeedback]; [self setNeedsLayout]; continue;
         }
         if ([self botwTouchControlsActive] && dm_botw_touch_quick_select_active()) {
-            if (!_botwMenuTouch) {
-                _botwMenuTouch=t; _botwMenuPointerActive=YES; _botwMenuLast=p;
-                [_owner setObject:@(C_MENU) forKey:t];
-                [self sendBotwMenuPointer:DM_BOTW_MENU_BEGIN point:p];
-            } else [_owner setObject:@(C_MENU_EXTRA) forKey:t];
+            [self beginLook:t at:p];
             continue;
         }
         int hit = _tap ? -1 : [self btnAt:p];
@@ -1831,7 +1831,7 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
             setPath(_buttonBadgeBorder[b], dm_botw_outer_border_path(_buttonBadge[b].path, _buttonBadge[b].lineWidth));
         setPath(_runeBadgeBorder, dm_botw_outer_border_path(_runeBadge.path, _runeBadge.lineWidth));
     }
-    BOOL hideDpadArt = (botw && (dm_botw_touch_loadout_visible() || !_touchLayout.dpad_visible)) || _padOff;
+    BOOL hideDpadArt = (botw && (dm_botw_touch_loadout_visible() || dm_botw_touch_quick_select_active() || dm_botw_touch_switch_active() || !_touchLayout.dpad_visible)) || _padOff;
     _key[B_LEFT].hidden = _key[B_UP].hidden = _key[B_RIGHT].hidden = _key[B_DOWN].hidden = _tap || !_full || hideDpadArt;
     [CATransaction commit];
     [self publishTouchHudForController:atomic_load(&g_any_controller_connected)];
@@ -1931,11 +1931,11 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
 - (void)refresh {   // pressed state → fill, sticks → knob position
     uint64_t all = _faceBits | _dpadBits | _btnBits;
     BOOL botw = [self botwTouchControlsActive];
-    BOOL quick=botw && dm_botw_touch_quick_select_active();
-    _controls.opacity=quick ? 0 : 1;
+    BOOL quick=botw && (dm_botw_touch_quick_select_active() || dm_botw_touch_switch_active());
     UIColor *idle = botw ? _botwIdle : k_idle, *line = botw ? _botwLine : k_line;
     UIColor *pressed = botw ? _botwOn : k_on;
     [CATransaction begin]; [CATransaction setDisableActions:YES];
+    _controls.opacity=quick ? 0 : 1;
     for (int b = 0; b < B_N; b++) { BOOL on = (all >> b) & 1;
         _key[b].shadowOpacity = botw ? 0 : .2;
         BOOL zeldaBadge = botw && b == B_L;

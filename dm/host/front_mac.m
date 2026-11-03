@@ -831,8 +831,9 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         [self setNeedsDisplay:YES]; return;
     }
     if (_active && dm_botw_touch_quick_select_active()) {
-        _owner=PREVIEW_MENU; _menuPointerActive=YES;
-        [self sendBotwMenuPointer:DM_BOTW_MENU_BEGIN point:p]; return;
+        _owner=PREVIEW_LOOK; _lookDownTime=e.timestamp; _lookDragged=NO; _lookTapPending=NO;
+        _lookCenter=NSMakePoint(p.x,p.y); g_mouse_rx=g_mouse_ry=0; push();
+        dm_look_input(DM_LOOK_BEGIN,0,0); return;
     }
     BOOL stickHit = [self leftStickOwnsTop:p];
     if (!stickHit) _stickTapEnd = 0;
@@ -1105,6 +1106,10 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         g_mouse_rx=g_mouse_ry=0;
         if (dm_botw_touch_quick_select_active()) {
             _lookTapPending=NO;
+            if (dm_touchpad_look_tap((float)(e.timestamp-_lookDownTime),_lookDragged)) {
+                float rect[4]; dm_aspect_touch_rect(self.bounds.size.width,self.bounds.size.height,rect);
+                if (rect[2]>0 && rect[3]>0) dm_botw_touch_quick_select_tap((p.x-rect[0])/rect[2],(p.y-rect[1])/rect[3]);
+            }
         } else if (dm_touchpad_look_tap((float)(e.timestamp - _lookDownTime), _lookDragged) &&
                    ![self scopeTapExcludedAtTop:(dm_touchpad_point){_down.x,_down.y}] && ![self scopeTapExcludedAtTop:p]) {
             float u = self.u;
@@ -1198,7 +1203,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         }
         return;
     }
-    if (dm_botw_touch_quick_select_active()) {
+    if (dm_botw_touch_quick_select_active() || dm_botw_touch_switch_active()) {
         if (dm_botw_touch_switch_cancel_visible()) {
             dm_touchpad_rect r=[self layoutRect:DM_BOTW_CANCEL];
             [self drawCircle:preview_from_top(r.x+r.width*.5f,r.y+r.height*.5f,h) radius:r.width*.5f fill:.15 label:@""];
@@ -1231,7 +1236,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         else [self drawButtonIcon:dm_botw_touch_bow_active() && control<18 ? control+5 : control center:at radius:r.width*.5f];
     }
     dm_touchpad_point fc = [self faceCenter];
-    if (_touchLayout.dpad_visible && !dm_botw_touch_loadout_visible()) {
+    if (_touchLayout.dpad_visible && !dm_botw_touch_loadout_visible() && !dm_botw_touch_quick_select_active() && !dm_botw_touch_switch_active()) {
         dm_touchpad_point d = self.dpadCenter;
         for (int b=12;b<16;b++)
             preview_draw_botw_glyph(dm_botw_dpad_key_path(CGPointMake(d.x,d.y),self.dpadRadius,b),h,glyphColor);
