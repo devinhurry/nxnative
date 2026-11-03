@@ -624,7 +624,8 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         if (control>=16 && _menuMode) continue;
         if (control==11 && (_mapValid || _mapTapConsumed)) continue;
         if (control==12 && dm_botw_touch_loadout_visible()) continue;
-        if (!(control==20 ? dm_botw_touch_switch_cancel_visible() : control==10 || control==11 || dm_botw_layout_control_visible(&_touchLayout,control))) continue;
+        if (!(control==10 || control==11 || (dm_botw_layout_control_visible(&_touchLayout,control) &&
+            (control!=DM_BOTW_CANCEL || dm_botw_touch_switch_cancel_visible())))) continue;
         if (dm_touchpad_scope_button_excludes_tap([self layoutRect:control],area.x+area.width*.5f,p.x,p.y)) return YES;
     }
     return NO;
@@ -1198,7 +1199,8 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     if (!_active || _menuMode) return -1;
     for (int control=20;control>=16;control--) {
         if (dm_botw_touch_quick_select_active() && control!=20) continue;
-        if (!(control==20 ? dm_botw_touch_switch_cancel_visible() : dm_botw_layout_control_visible(&_touchLayout,control))) continue;
+        if (!dm_botw_layout_control_visible(&_touchLayout,control) ||
+            (control==DM_BOTW_CANCEL && !dm_botw_touch_switch_cancel_visible())) continue;
         dm_touchpad_rect r=[self layoutRect:control];
         if (hypotf(p.x-r.x-r.width*.5f,p.y-r.y-r.height*.5f)<=r.width*.55f) return control;
     }
@@ -1216,7 +1218,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         return;
     }
     if (dm_botw_touch_quick_select_active() || dm_botw_touch_switch_active()) {
-        if (dm_botw_touch_switch_cancel_visible()) {
+        if (_touchLayout.cancel_enabled && dm_botw_touch_switch_cancel_visible()) {
             dm_touchpad_rect r=[self layoutRect:DM_BOTW_CANCEL];
             [self drawCircle:preview_from_top(r.x+r.width*.5f,r.y+r.height*.5f,h) radius:r.width*.5f fill:.15 label:@""];
             preview_draw_botw_glyph(dm_botw_switch_cancel_path(CGPointMake(r.x+r.width*.5f,r.y+r.height*.5f),r.width),h,
@@ -1240,7 +1242,8 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     center.lineWidth=1.5; [center stroke];
     preview_draw_botw_glyph(dm_botw_four_arrows_path(CGPointMake(sh.x,sh.y),17*u*_moveResponse.size,12*u*_moveResponse.size),h,faint);
     for (int control=16;control<=20;control++) {
-        if (_menuMode || !(control==20 ? dm_botw_touch_switch_cancel_visible() : dm_botw_layout_control_visible(&_touchLayout,control))) continue;
+        if (_menuMode || !dm_botw_layout_control_visible(&_touchLayout,control) ||
+            (control==DM_BOTW_CANCEL && !dm_botw_touch_switch_cancel_visible())) continue;
         dm_touchpad_rect r=[self layoutRect:control]; NSPoint at=preview_from_top(r.x+r.width*.5f,r.y+r.height*.5f,h);
         [self drawCircle:at radius:r.width*.5f fill:(_owner==PREVIEW_ADDED && _button==control) ? .48 : .15 label:@""];
         if (control==20) preview_draw_botw_glyph(dm_botw_switch_cancel_path(CGPointMake(at.x,h-at.y),r.width),h,

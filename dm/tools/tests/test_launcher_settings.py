@@ -151,7 +151,7 @@ class LauncherSettingsTests(unittest.TestCase):
         for control in ('WEAPON', 'SHIELD', 'FOOD', 'WHISTLE', 'CANCEL'):
             for field, value in [('X_PT', '0'), ('Y_PT', '0'), ('SIZE_PT', '52'), ('ANCHOR', '0')]:
                 expected[f'DM_BOTW_PAD_{control}_{field}'] = value
-            if control != 'CANCEL': expected[f'DM_BOTW_PAD_{control}_ENABLED'] = '0'
+            expected[f'DM_BOTW_PAD_{control}_ENABLED'] = '1' if control == 'CANCEL' else '0'
         for control in ('WEAPON', 'SHIELD', 'L'):
             expected[f'DM_BOTW_PAD_{control}_MODE'] = '0'
         expected['DM_BOTW_PAD_DPAD_VISIBLE'] = '1'

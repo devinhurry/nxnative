@@ -22,7 +22,7 @@ enum { DM_BOTW_WEAPON=16, DM_BOTW_SHIELD=17, DM_BOTW_FOOD=18, DM_BOTW_WHISTLE=19
        DM_BOTW_CANCEL=20, DM_BOTW_CONTROL_COUNT=21 };
 typedef struct {
     dm_botw_control_transform control[DM_BOTW_CONTROL_COUNT];
-    int badges, portrait, dpad_visible, added[4], switch_mode[2], rune_mode, rune_icon_mode;
+    int badges, portrait, dpad_visible, cancel_enabled, added[4], switch_mode[2], rune_mode, rune_icon_mode;
     int trigger_drag[2]; // R, ZR: cancel outside or drag the camera.
     float fill_gray, fill_alpha, stroke_gray, stroke_alpha, icon_alpha;
     float shield_hit_size, stick_alpha;
@@ -79,7 +79,7 @@ static inline dm_botw_control_anchor dm_botw_layout_anchor(int id,int portrait) 
     return id>=0 && id<DM_BOTW_CONTROL_COUNT ? (portrait ? compact[id] : normal[id]) : (dm_botw_control_anchor){0};
 }
 static inline dm_botw_touch_layout dm_botw_layout_defaults_for(int portrait) {
-    dm_botw_touch_layout layout={.portrait=portrait,.dpad_visible=1,
+    dm_botw_touch_layout layout={.portrait=portrait,.dpad_visible=1,.cancel_enabled=1,
         .fill_gray=DM_BOTW_BUTTON_GRAY,.fill_alpha=DM_BOTW_BUTTON_ALPHA,
         .stroke_gray=DM_BOTW_STROKE_GRAY,.stroke_alpha=DM_BOTW_STROKE_ALPHA,.icon_alpha=DM_BOTW_ICON_ALPHA,
         .stick_alpha=DM_BOTW_STICK_ALPHA};
@@ -123,9 +123,9 @@ static inline int dm_botw_layout_read_for(dm_botw_touch_layout *out,int portrait
     if (!dm_botw_layout_number(key,0,1,&badges) || (badges!=0 && badges!=1)) return 0;
     out->badges=(int)badges;
     const char *names[]={"DPAD_VISIBLE","WEAPON_ENABLED","SHIELD_ENABLED","FOOD_ENABLED","WHISTLE_ENABLED",
-        "WEAPON_MODE","SHIELD_MODE","L_MODE","R_DRAG_MODE","ZR_DRAG_MODE","L_ICON_MODE"};
+        "WEAPON_MODE","SHIELD_MODE","L_MODE","R_DRAG_MODE","ZR_DRAG_MODE","L_ICON_MODE","CANCEL_ENABLED"};
     int *options[]={&out->dpad_visible,&out->added[0],&out->added[1],&out->added[2],&out->added[3],
-        &out->switch_mode[0],&out->switch_mode[1],&out->rune_mode,&out->trigger_drag[0],&out->trigger_drag[1],&out->rune_icon_mode};
+        &out->switch_mode[0],&out->switch_mode[1],&out->rune_mode,&out->trigger_drag[0],&out->trigger_drag[1],&out->rune_icon_mode,&out->cancel_enabled};
     for (unsigned i=0;i<sizeof options/sizeof *options;i++) {
         float v=*options[i]; snprintf(key,sizeof key,"%s%s",prefix,names[i]);
         if (!dm_botw_layout_number(key,0,i<5 || i>=8 ? 1 : 2,&v) || v!=floorf(v)) return 0;
@@ -148,9 +148,8 @@ static inline uint64_t dm_botw_layout_dpad_mask(const dm_botw_touch_layout *layo
 }
 static inline int dm_botw_layout_control_visible(const dm_botw_touch_layout *layout,int id) {
     if (id==12) return layout->dpad_visible;
+    if (id==DM_BOTW_CANCEL) return layout->cancel_enabled;
     if (id>=16 && id<20) return layout->added[id-16];
-    // Cancel is always editable, including R/ZR camera-drag layouts. Both
-    // frontends decide its gameplay visibility from the current action state.
     return dm_botw_control_name(id)!=NULL;
 }
 static inline int dm_botw_layout_read(dm_botw_touch_layout *out) {

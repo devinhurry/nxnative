@@ -88,6 +88,12 @@ int main(void) {
         assert(dm_launcher_setting_is_live("DM_BOTW_PAD_FACE_X") == -1);
         const char *appearance[]={"FILL_GRAY","FILL_ALPHA","STROKE_GRAY","STROKE_ALPHA","ICON_ALPHA"};
         for (int portrait=0;portrait<2;portrait++) {
+            const char *cancel=portrait ? "DM_BOTW_PORTRAIT_PAD_CANCEL_ENABLED" : "DM_BOTW_PAD_CANCEL_ENABLED";
+            assert(dm_launcher_setting_is_live(cancel)==1);
+            assert(dm_launcher_setting_apply(cancel,"0")==1 && !strcmp(getenv(cancel),"0"));
+            assert(dm_launcher_setting_apply(cancel,"1")==1);
+            assert(dm_launcher_setting_apply(cancel,"2")==-1);
+            unsetenv(cancel);
             const char *icon=portrait ? "DM_BOTW_PORTRAIT_PAD_L_ICON_MODE" : "DM_BOTW_PAD_L_ICON_MODE";
             assert(dm_launcher_setting_is_live(icon)==1);
             assert(dm_launcher_setting_apply(icon,"1")==1);

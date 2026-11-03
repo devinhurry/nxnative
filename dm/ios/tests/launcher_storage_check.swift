@@ -579,7 +579,28 @@ private func checkTouchLayoutPresets(_ settings: [Setting]) -> Int {
     let source = LauncherModel(settings, defaults: sourceDefaults)
     expect(source.touchLayouts.count == 1 && source.selectedTouchLayoutID == source.touchLayouts.first?.id,
            "an empty preset library starts with one selected default layout")
+    expect(BotwTouchControl.cancel.removable, "Cancel can be removed and offered again in Add button")
+    for portrait in [false, true] {
+        let cancel = BotwTouchControl.cancel.visibilityKey(portrait: portrait)
+        for (key, mode) in [("L_MODE", "2"), ("WEAPON_MODE", "2"), ("SHIELD_MODE", "2"),
+                            ("R_DRAG_MODE", "1"), ("ZR_DRAG_MODE", "1")] {
+            var changed = source.values
+            changed[cancel] = "0"
+            let setting = botwTouchKey("DM_BOTW_PAD_" + key, portrait: portrait)
+            source.setTouchValue(mode, for: setting, in: &changed)
+            expect(changed[cancel] == "1", "enabling \(setting) adds Cancel to the same layout bank")
+            changed[cancel] = "0"
+            source.setTouchValue(mode, for: setting, in: &changed)
+            expect(changed[cancel] == "0", "an unchanged action does not undo manual Cancel removal")
+        }
+        var added = source.values
+        added[cancel] = "0"
+        added[BotwTouchControl.added[0].option("MODE", portrait: portrait)] = "2"
+        source.setTouchValue("1", for: BotwTouchControl.added[0].visibilityKey(portrait: portrait), in: &added)
+        expect(added[cancel] == "1", "adding a sticky equipment shortcut restores Cancel")
+    }
     var draft = source.values
+    draft["DM_BOTW_PAD_CANCEL_ENABLED"] = "0"
     draft["DM_BOTW_PAD_L_ANCHOR"] = "2"; draft["DM_BOTW_PAD_L_X_PT"] = "20.000"
     draft["DM_BOTW_PAD_L_Y_PT"] = "100.000"; draft["DM_BOTW_PAD_L_SIZE_PT"] = "60.000"
     draft["DM_BOTW_PAD_FILL_GRAY"] = "0.630"; draft["DM_BOTW_PAD_FILL_ALPHA"] = "0.470"
@@ -587,6 +608,8 @@ private func checkTouchLayoutPresets(_ settings: [Setting]) -> Int {
     draft["DM_BOTW_PAD_ICON_ALPHA"] = "0.810"
     draft["DM_BOTW_PAD_ZL_HIT_PT"] = "80.000"
     expect(source.saveTouchSettings(draft, portrait: false), "a default left control can save a right-edge anchor")
+    expect(LauncherModel(settings, defaults: sourceDefaults).touchLayout(portrait: false).cancel_enabled == 0,
+           "saving and reopening preserves manual Cancel removal")
     source.rememberTouchArea(.init(width: 900, height: 430), portrait: false)
     source.addTouchLayout(name: "Right hand", copyCurrent: true)
     let rightID = source.selectedTouchLayoutID
@@ -645,6 +668,8 @@ private func checkTouchLayoutPresets(_ settings: [Setting]) -> Int {
                "a colliding imported name is renamed and receives an independent ID")
         target.selectTouchLayout(imported.id)
         var sourceConfig = source.touchLayout(portrait: false), targetConfig = target.touchLayout(portrait: false)
+        expect(targetConfig.cancel_enabled == 0 && target.touchLayout(portrait: true).cancel_enabled == 1,
+               "layout import preserves Cancel removal independently in each bank")
         expect(targetConfig.shield_hit_size == 80 && abs(target.touchLayout(portrait: true).shield_hit_size - 195.58) < 0.001,
                "shield touch diameter survives save, duplicate, export and import independently per bank")
         var resizedShield = target.values

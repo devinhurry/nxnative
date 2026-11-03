@@ -168,6 +168,7 @@ DM_BOTW_PAD_CANCEL_X_PT	range	-10000:10000:0.5	0	DM_GAME_ID==01007EF00011E000	To
 DM_BOTW_PAD_CANCEL_Y_PT	range	-10000:10000:0.5	0	DM_GAME_ID==01007EF00011E000	Touch layout	Cancel: Vertical offset	Offsets and diameters are in pt.	format=number
 DM_BOTW_PAD_CANCEL_SIZE_PT	range	20:240:0.5	52	DM_GAME_ID==01007EF00011E000	Touch layout	Cancel: Size	Offsets and diameters are in pt.	format=number
 DM_BOTW_PAD_CANCEL_ANCHOR	choice	0=Default,1=Left,2=Right	0	DM_GAME_ID==01007EF00011E000	Touch layout	Cancel: Anchor	Explicit anchors use side and bottom edge distances in pt.
+DM_BOTW_PAD_CANCEL_ENABLED	toggle	-	1	DM_GAME_ID==01007EF00011E000	Touch layout	Cancel switching	Add this control to this layout.
 DM_BOTW_PAD_WEAPON_MODE	choice	0=Open inventory,1=Hold to switch,2=Tap to switch	0	DM_GAME_ID==01007EF00011E000	Touch layout	Weapons: Action	Choose how this button opens the native game screen.
 DM_BOTW_PAD_SHIELD_MODE	choice	0=Open inventory,1=Hold to switch,2=Tap to switch	0	DM_GAME_ID==01007EF00011E000	Touch layout	Shields: Action	Choose how this button opens the native game screen.
 DM_BOTW_PAD_L_MODE	choice	0=Native L,1=Hold to switch,2=Hold then cancel	0	DM_GAME_ID==01007EF00011E000	Touch layout	Rune (L): Action	Choose how this button opens the native game screen.
@@ -199,6 +200,7 @@ DM_BOTW_PORTRAIT_PAD_CANCEL_X_PT	range	-10000:10000:0.5	0	DM_GAME_ID==01007EF000
 DM_BOTW_PORTRAIT_PAD_CANCEL_Y_PT	range	-10000:10000:0.5	0	DM_GAME_ID==01007EF00011E000	Touch layout	Cancel: Vertical offset	Offsets and diameters are in pt.	format=number
 DM_BOTW_PORTRAIT_PAD_CANCEL_SIZE_PT	range	20:240:0.5	44	DM_GAME_ID==01007EF00011E000	Touch layout	Cancel: Size	Offsets and diameters are in pt.	format=number
 DM_BOTW_PORTRAIT_PAD_CANCEL_ANCHOR	choice	0=Default,1=Left,2=Right	0	DM_GAME_ID==01007EF00011E000	Touch layout	Cancel: Anchor	Explicit anchors use side and bottom edge distances in pt.
+DM_BOTW_PORTRAIT_PAD_CANCEL_ENABLED	toggle	-	1	DM_GAME_ID==01007EF00011E000	Touch layout	Cancel switching	Add this control to this layout.
 DM_BOTW_PORTRAIT_PAD_WEAPON_MODE	choice	0=Open inventory,1=Hold to switch,2=Tap to switch	0	DM_GAME_ID==01007EF00011E000	Touch layout	Weapons: Action	Choose how this button opens the native game screen.
 DM_BOTW_PORTRAIT_PAD_SHIELD_MODE	choice	0=Open inventory,1=Hold to switch,2=Tap to switch	0	DM_GAME_ID==01007EF00011E000	Touch layout	Shields: Action	Choose how this button opens the native game screen.
 DM_BOTW_PORTRAIT_PAD_L_MODE	choice	0=Native L,1=Hold to switch,2=Hold then cancel	0	DM_GAME_ID==01007EF00011E000	Touch layout	Rune (L): Action	Choose how this button opens the native game screen.

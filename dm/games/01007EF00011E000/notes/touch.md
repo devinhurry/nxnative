@@ -637,6 +637,13 @@ release or explicit Cancel. Tap equipment selection releases only after native
 input has consumed the final selection sample. Hiding D-pad leaves touch mode
 active while bypassing only `N_MainAll_00` translation/scaling, so a fresh
 native matrix restores the authored loadout position and size.
+
+Cancel is independently removable and can be restored through Add button in
+either layout bank. Its saved `CANCEL_ENABLED` flag also controls runtime hit
+testing and artwork, while gameplay state decides when an added button appears.
+Choosing sticky equipment/rune switching or R/ZR camera dragging adds Cancel
+once. A later manual removal survives saving, reopening and layout import;
+rendering or retaining the same action choice does not add it again.
 When D-pad relocation is enabled, both frontends move the loadout target 30pt
 upward before HUD normalization, independently of screen size and button scale.
 
