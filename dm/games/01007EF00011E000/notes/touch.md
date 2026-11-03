@@ -676,6 +676,8 @@ Inventory runs the game's own category change: both page fields move to the
 category's first page, the three item lists are re-laid out through `0xe3af74`
 and the current category follows through `0xe3b20c`. The native selection resolver
 (`0xe3f924`) then refreshes the selected item and its card in the same call.
+The native activation body (`0xe39c08(screen, 0)`) also refreshes button
+eligibility after relayout; see the [category sequence](../../../../docs/botw/touch-internals.md#the-fix).
 
 **Resolved on Mac; physical iPhone acceptance pending: item actions stayed on the previous category (2026-11-03).**
 Tapping a category and then an item showed the previous category's action (Eat
@@ -700,6 +702,35 @@ stopped before comparison: this Mac has Metal `32023.883`, while the chain lock
 requires `32023.922.4`. C lint also has LLVM 19.1.2 rather than the baseline's
 23.1.4; Python lint reports no new findings, with four existing baseline entries
 now absent. These are not clean full-regression or lint passes.
+
+**Implemented and checked on Mac; physical iPhone acceptance pending: equipment taps (2026-11-03).**
+In the backpack, a short tap equips swords, bows, arrows and shields directly.
+A stationary hold reaching 150 ms requests the game's normal item menu while
+the finger remains down; lifting afterward does not select a popup row or
+equip again. Already-equipped items remain equipped. Other item types keep
+their normal short-tap menu. The implementation uses the native Equip action,
+with item identity and availability checks, on the guest UI thread. Native
+entry points and item offsets are checked against the registered 1.9.0 build.
+See [equipment taps and timing](../../../../docs/botw/touch-internals.md#equipment-taps-and-the-150-ms-item-menu)
+for the native contracts and cancellation rules.
+
+The current-checkout Mac test used matching shaders and a disposable outdoors
+save. Weapon, bow and shield taps equipped the selected item; holding opened
+their normal Equip/Remove, Drop and Cancel menu, which remained after release.
+Removing the shield through that menu and tapping it again verified a real
+unequipped-to-equipped transition. Food still opened Eat, Recipe and Cancel.
+Arrow taps selected the correct native item after repeated Food/Shield/Bow
+category changes. This route also exposed and resolved stale button eligibility
+after changing categories; the native category sequence above restores it.
+The supplied save contains only one already-equipped arrow stack: its unchanged
+equipment state and native A behavior were checked live; equipping a different
+arrow stack is covered by native tests and instruction analysis, not this save.
+The game ignores A on an already-equipped arrow stack, so its long press retains
+that behavior. Evidence: `01007EF00011E000-work/inventory-equip-20261103/final/`
+(`acceptance.txt`, `game.log`, native item dumps and numbered screenshots).
+Native menu/action tests, 157 HID checks and 40 focused Python tests pass.
+The compiler limitations listed above still apply; the run also retains the
+existing `c1_full.tsv` cache warning.
 
 Compendium category touch cells share inventory's expansion around the native
 glyphs, capped by neighboring category centers and the item-list clip. The native
