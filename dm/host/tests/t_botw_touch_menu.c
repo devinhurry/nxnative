@@ -1795,19 +1795,24 @@ static void test_menu_animation_visibility(void) {
     shortcut_main[0x59]=255; selector.active[1]=0x80;
     selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
     assert(!dm_botw_touch_loadout_visible()); // an allocated but unregistered layout cannot hide the fallback
-    // Magnesis distance uses the rendered vertical D-pad guide. An unused
-    // capture glyph, hidden guide or stale/unregistered screen is not enough.
+    // Captured from held-object Magnesis: Push is E060 and Pull is E061 in
+    // separate guides. E065 is not used; neither private nor hidden text counts.
     uint8_t *guide_root=fake_pane(90,"RootPane",-1,1280,720,0,0);
     uint8_t *align=fake_pane(91,"N_Align_00",90,0,0,0,0);
-    uint8_t *guide=fake_pane(92,"Pa_Guide_00",91,0,0,0,0);
+    uint8_t *guide=fake_pane(92,"Pa_Guide_03",91,0,0,0,0);
     uint8_t *inout=fake_pane(93,"N_InOut_00",92,0,0,0,0);
     uint8_t *icon=fake_pane(94,"T_Icon_00",93,32,32,0,0);
     uint8_t *capture=fake_pane(95,"N_Capture_00",92,0,0,0,0);
     uint8_t *source=fake_pane(96,"T_Icon_01",95,32,32,0,0);
+    uint8_t *pull=fake_pane(97,"Pa_Guide_02",91,0,0,0,0);
+    uint8_t *pull_inout=fake_pane(98,"N_InOut_00",97,0,0,0,0);
+    uint8_t *pull_icon=fake_pane(99,"T_Icon_00",98,32,32,0,0);
     link_child(guide_root,align); link_child(align,guide); link_child(guide,inout);
     link_child(inout,icon); link_child(guide,capture); link_child(capture,source);
-    uint16_t vertical_glyph=0xe065, ordinary_glyph=0xe040;
-    put_ptr(source+0xe0,(uintptr_t)&vertical_glyph);
+    link_child(align,pull); link_child(pull,pull_inout); link_child(pull_inout,pull_icon);
+    uint16_t up_glyph=0xe060, down_glyph=0xe061, paired_glyph=0xe065, ordinary_glyph=0xe040;
+    put_ptr(source+0xe0,(uintptr_t)&up_glyph);
+    put_ptr(pull_icon+0xe0,(uintptr_t)&down_glyph);
     put_ptr(icon+0xe0,(uintptr_t)&ordinary_glyph);
     strcpy((char *)selector.map_screen+0xa0,"SousaGuide_00");
     put_ptr(selector.map_owner+0x18,(uintptr_t)guide_root);
@@ -1815,9 +1820,16 @@ static void test_menu_animation_visibility(void) {
     selector.map_screen[0xfe]=2; selector.active[1]=0;
     selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
     assert(!dm_botw_touch_vertical_dpad_active());
-    put_ptr(icon+0xe0,(uintptr_t)&vertical_glyph);
+    put_ptr(icon+0xe0,(uintptr_t)&paired_glyph);
+    selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
+    assert(!dm_botw_touch_vertical_dpad_active());
+    put_ptr(icon+0xe0,(uintptr_t)&up_glyph);
     selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
     assert(dm_botw_touch_controls_visible() && dm_botw_touch_vertical_dpad_active());
+    pull_inout[0x59]=0;
+    selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
+    assert(!dm_botw_touch_vertical_dpad_active());
+    pull_inout[0x59]=255;
     inout[0x59]=0;
     selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
     assert(!dm_botw_touch_vertical_dpad_active());

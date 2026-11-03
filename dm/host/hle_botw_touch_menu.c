@@ -3167,15 +3167,19 @@ static int selector_loadout_visible(uintptr_t root) {
     return selector_hud_path_visible(root, path, sizeof path / sizeof *path);
 }
 static int selector_vertical_dpad_visible(uintptr_t root) {
+    unsigned directions = 0;
     for (int i = 0; i < GUIDE_SLOTS; i++) {
         char name[25]; snprintf(name, sizeof name, "Pa_Guide_%02d", i);
         const char *path[] = {"N_Align_00", name, "N_InOut_00", "T_Icon_00"};
         uintptr_t icon = selector_hud_path_pane(root, path, sizeof path / sizeof *path);
         // Read the rendered Smoke guide, never its dormant N_Capture_00 copy.
-        if (icon && pane_chain_visible((uint8_t *)icon) && pane_chain_alpha_visible((uint8_t *)icon) &&
-            pane_text_glyph((uint8_t *)icon) == 0xe065) return 1;
+        if (!icon || !pane_chain_visible((uint8_t *)icon) || !pane_chain_alpha_visible((uint8_t *)icon)) continue;
+        // Magnesis exposes separate Push (Up) and Pull (Down) guides, not E065.
+        uint16_t glyph = pane_text_glyph((uint8_t *)icon);
+        if (glyph == 0xe060) directions |= 1;
+        if (glyph == 0xe061) directions |= 2;
     }
-    return 0;
+    return directions == 3;
 }
 static int selector_quick_select_visible(uintptr_t root) {
     static const char *const path[] = {"N_All_00", "N_ShortCutPos_00", "N_Cut_00", "N_ShortCutAll_00"};

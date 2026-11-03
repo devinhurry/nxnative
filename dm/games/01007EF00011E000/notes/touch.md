@@ -642,21 +642,27 @@ upward before HUD normalization, independently of screen size and button scale.
 
 ### Magnesis directions with a hidden D-pad
 
-Implemented (2026-11-03): hiding the D-pad no longer removes the directions
-required by Magnesis. The existing exact-build screen observer reads the
-rendered `SousaGuide_00/N_Align_00/Pa_Guide_*/N_InOut_00/T_Icon_00` vertical
-direction glyph (`E065`), excluding the private capture copy. A fresh gameplay
+Corrected after native reproduction (2026-11-03): the first implementation
+looked for the combined vertical-direction glyph `E065`, which held-object
+Magnesis does not use. The existing exact-build screen observer now requires
+both rendered Push/Up (`E060`) and Pull/Down (`E061`) guides under
+`SousaGuide_00/N_Align_00/Pa_Guide_*/N_InOut_00/T_Icon_00`, excluding each
+private capture copy. A fresh gameplay
 presentation temporarily enables only Up/Down in both touch frontends; menus,
 quick switching and controller handoff retain their visibility rules. Ordinary
 and compact layouts keep their saved hidden flag and native loadout position.
 The same direction mask controls artwork and touch ownership, and leaving the
 operation releases any held temporary direction. Native presentation and layout
 checks cover hidden guides, stale frames, quick switching and both layout banks.
-Production iOS/Mac compilation checks pass; the added UIKit gesture check compiles
-but was not run. The BOTW game regression stopped during shader preparation:
-the local Metal compiler is `32023.883`, while the chain requires `32023.922`.
-Retry gameplay checks with the matching toolchain; physical iPhone acceptance
-remains pending.
+The initial iOS/Mac compilation checks pass; the UIKit gesture check compiles
+but was not run. Current-checkout `scripts/run_mac.py --test --touch-preview`
+with matching shaders reproduced the failure in a disposable save copy. The
+user entered held-object Magnesis; live pane/text dumps established `E060` on
+`Pa_Guide_03` and `E061` on `Pa_Guide_02`. Native regression checks now use that
+observed pair and reject `E065`. Evidence is in
+`01007EF00011E000-work/magnesis-grab-20261103/`. The running test window remains
+open on the pre-fix binary as requested; updated gameplay and physical iPhone
+acceptance remain pending.
 
 **Quick-strip touch correction (2026-11-03).** MainShortCut's horizontal
 widget is independent of the focused BoxCursor menu entries. Routing every
