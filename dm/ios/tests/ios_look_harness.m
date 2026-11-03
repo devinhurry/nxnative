@@ -184,7 +184,6 @@ void dm_botw_touch_hud_keep_native_loadout(int keep) { (void)keep; }
 void dm_botw_touch_button_begin(int control,int mode) { (void)control; (void)mode; }
 void dm_botw_touch_button_end(int control,int cancelled) { (void)control; (void)cancelled; }
 void dm_botw_touch_switch_cancel(void) {}
-void dm_botw_touch_switch_selected(void) {}
 int dm_botw_touch_switch_cancel_visible(void) { return 0; }
 int dm_botw_touch_menu_dpad_visible(void) { return g_botw_hero_path; }
 int dm_botw_touch_controls_visible(void) {

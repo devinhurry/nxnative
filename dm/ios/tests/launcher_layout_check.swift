@@ -9,6 +9,13 @@ func checkLauncherLayout(_ model: LauncherModel, defaults: UserDefaults) -> Int 
         print((condition ? "PASS " : "FAIL ") + message)
         if !condition { failed += 1 }
     }
+    var backgroundCalls = 0
+    withGameSettingsBackground { image in
+        backgroundCalls += 1
+        expect(image == nil, "settings open without a game frame in the launcher-only fixture")
+    }
+    RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+    expect(backgroundCalls == 1, "a completed background request does not also open settings through its fallback")
     func fitting<V: View>(_ content: V, width: CGFloat) -> NSSize {
         let view = NSHostingView(rootView: content.defaultAppStorage(defaults))
         view.sizingOptions = []

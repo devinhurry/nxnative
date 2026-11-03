@@ -1,6 +1,10 @@
 // The launcher's storage (LauncherSettings.swift LauncherModel), run by test_launcher_storage.py on macOS: only choices that differ from the game's default are
 // stored, Reset to tested defaults followed by Play forgets the choices, an env file's values are kept. Arguments: the iOS and the Mac launcher.json of Breath of the Wild (settings.py, GFXAPI=nvn)
 import Foundation
+import CoreGraphics
+
+@_cdecl("dm_launcher_grab_game_frame")
+func launcherGrabGameFrame(_ callback: @convention(block) (CGImage?) -> Void) { callback(nil) }
 #if DM_HOST_UI
 private var nativeApplied: [String: String] = [:]
 @_cdecl("dm_launcher_settings_pause")

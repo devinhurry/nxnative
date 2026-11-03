@@ -2,6 +2,7 @@
 // It never loads a game; ROM images use the production index validator and
 // graphics packages use the complete production importer and selector.
 #import <Foundation/Foundation.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import "GameFiles.h"
 #import "GraphicsPack.h"
 #include "romfs_image.h"
@@ -30,6 +31,7 @@ BOOL dm_startup_prepare(void) {
 
 // Component fixture only: native host setters are covered by t_launcher_settings.
 void dm_launcher_settings_pause(int on) { fprintf(stderr, "fixture: settings paused=%d\n", !!on); }
+void dm_launcher_grab_game_frame(void (^callback)(CGImageRef)) { callback(NULL); }
 int dm_launcher_setting_is_live(const char *key) {
     return !strncmp(key, "DM_BOTW_", 8) || !strcmp(key, "DM_TOUCH_HAPTICS") || !strncmp(key, "DM_RUMBLE", 9);
 }

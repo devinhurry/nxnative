@@ -242,11 +242,12 @@
 "Add button" = "Add button";
 "Remove button" = "Remove button";
 "Button action" = "Button action";
+"Button options" = "Button options";
 "Native L" = "Native L";
 "Hold to switch (release to close)" = "Hold to switch (release to close)";
 "Hold to switch (cancel to close)" = "Hold to switch (cancel to close)";
 "Open inventory" = "Open inventory";
-"Tap to switch (select to close)" = "Tap to switch (select to close)";
+"Tap to switch (cancel to close)" = "Tap to switch (cancel to close)";
 
 "Graphics" = "Graphics";
 "Close" = "Close";
@@ -270,7 +271,11 @@
 "Export current layout" = "Export current layout";
 "Export all layouts" = "Export all layouts";
 "Touch layouts" = "Touch layouts";
-"Copy layout JSON" = "Copy layout JSON";
+"Unsaved layout changes" = "Unsaved layout changes";
+"Exit without saving your changes?" = "Exit without saving your changes?";
+"Exit without saving" = "Exit without saving";
+"Continue editing" = "Continue editing";
+"Unable to export layout" = "Unable to export layout";
 "Imported %d layouts. Select a layout to use it." = "Imported %d layouts. Select a layout to use it.";
 "This file does not contain valid touch layouts." = "This file does not contain valid touch layouts.";
 "This layout file uses an unsupported schema version." = "This layout file uses an unsupported schema version.";

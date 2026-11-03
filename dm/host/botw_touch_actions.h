@@ -13,7 +13,6 @@ void dm_botw_touch_actions_reset(void);
 void dm_botw_touch_button_begin(int control, int mode);
 void dm_botw_touch_button_end(int control, int cancelled);
 void dm_botw_touch_switch_cancel(void);
-void dm_botw_touch_switch_selected(void);
 int dm_botw_touch_switch_cancel_visible(void);
 
 // HID integration: contributes shortcut holds/pulses and accepted R/ZR cancel

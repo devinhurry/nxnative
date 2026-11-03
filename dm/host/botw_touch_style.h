@@ -14,6 +14,11 @@
 #define DM_BOTW_STICK_RING_WIDTH (1.5 * DM_BOTW_STROKE_WIDTH_SCALE)
 #define DM_BOTW_STICK_GRAPH_ALPHA .15
 
+#if __has_feature(blocks)
+// Reuse the present path's game-only capture; other graphics backends may omit it.
+void dm_launcher_grab_game_frame(void (^callback)(CGImageRef));
+#endif
+
 // MainShortCut's guide uses four pale round keys with triangular cutouts.
 // Draw the same silhouette at the larger virtual D-pad size, without the
 // ordinary pad's pentagonal arms, background or border.

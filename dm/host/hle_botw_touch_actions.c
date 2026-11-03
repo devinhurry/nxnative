@@ -18,8 +18,6 @@ static _Atomic int g_actions_test_ready;
 static int touch_mode_active(void);
 static int g_switch_control=-1, g_switch_sticky, g_switch_started, g_rune_mode;
 static uint64_t g_switch_bit, g_pulse_bits, g_pulse_frame=UINT64_MAX;
-static int g_switch_finishing;
-static uint64_t g_switch_finish_frame=UINT64_MAX;
 static double g_rune_down;
 static double action_time(void) {
     struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t);
@@ -36,7 +34,6 @@ void dm_botw_touch_button_begin(int control,int mode) {
         return;
     }
     pthread_mutex_lock(&g_actions_mu);
-    g_switch_finishing=0; g_switch_finish_frame=UINT64_MAX;
     if (control==19) pulse_locked(DM_BTN_DOWN);
     else if (control==6) {
         g_rune_mode=mode; g_rune_down=action_time();
@@ -64,16 +61,6 @@ void dm_botw_touch_switch_cancel(void) {
     pthread_mutex_lock(&g_actions_mu);
     if (g_switch_control>=0) pulse_locked(DM_BTN_B|g_switch_bit);
     g_switch_control=-1; g_switch_bit=0; g_switch_sticky=0;
-    pthread_mutex_unlock(&g_actions_mu);
-    front_botw_touch_action_changed();
-}
-void dm_botw_touch_switch_selected(void) {
-    pthread_mutex_lock(&g_actions_mu);
-    if (g_switch_sticky && (g_switch_control==16 || g_switch_control==17)) {
-        // Keep the direction until the native frame that consumes the final
-        // right-stick sample has run, then let native release equip the item.
-        g_switch_finishing=1; g_switch_finish_frame=UINT64_MAX;
-    }
     pthread_mutex_unlock(&g_actions_mu);
     front_botw_touch_action_changed();
 }
@@ -146,7 +133,6 @@ void dm_botw_touch_actions_reset(void) {
     g_suppressed_virtual_triggers = 0;
     g_switch_control=-1; g_switch_sticky=g_switch_started=g_rune_mode=0;
     g_switch_bit=g_pulse_bits=0; g_pulse_frame=UINT64_MAX;
-    g_switch_finishing=0; g_switch_finish_frame=UINT64_MAX;
     pthread_mutex_unlock(&g_actions_mu);
 }
 
@@ -157,13 +143,7 @@ void dm_botw_touch_actions_apply(uint64_t *other_buttons, uint64_t *virtual_butt
     pthread_mutex_lock(&g_actions_mu);
     if (g_switch_control>=0 && ((*other_buttons|*virtual_buttons)&DM_BTN_B)) {
         pulse_locked(DM_BTN_B|g_switch_bit);
-        g_switch_control=-1; g_switch_bit=0; g_switch_sticky=g_switch_finishing=0; notify=1;
-    }
-    if (g_switch_finishing) {
-        if (g_switch_finish_frame==UINT64_MAX) g_switch_finish_frame=frame;
-        if (frame>g_switch_finish_frame+1) {
-            g_switch_control=-1; g_switch_bit=0; g_switch_sticky=g_switch_finishing=0; notify=1;
-        }
+        g_switch_control=-1; g_switch_bit=0; g_switch_sticky=0; notify=1;
     }
     if (g_switch_control==6 && !g_switch_started && action_time()-g_rune_down>=.35) {
         g_switch_started=1; g_switch_bit=DM_BTN_UP; g_switch_sticky=g_rune_mode==2; notify=1;

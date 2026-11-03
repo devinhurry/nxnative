@@ -1168,7 +1168,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         BOOL tap = dm_touchpad_look_tap((float)(t.timestamp - _lookDownTime), _lookDragged);
         dm_look_input(DM_LOOK_END, 0, 0); _lookTouch = nil; _lookScale = 0;
         if (dm_botw_touch_quick_select_active()) {
-            dm_botw_touch_switch_selected(); _botwLookTapPending=NO;
+            _botwLookTapPending=NO;
         } else if (tap && [self botwTouchControlsActive] &&
                    ![self botwScopeTapExcludedAt:_lookDown] && ![self botwScopeTapExcludedAt:p]) {
             CGFloat u = self.u;
@@ -1648,6 +1648,7 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
         if (!_extraKey[i]) {
             _extraBorder[i]=botwBorder(_controls); _extraKey[i]=shape(_controls);
             _extraKey[i].fillColor=k_botwIdle.CGColor; _extraKey[i].strokeColor=nil;
+            _extraKey[i].shadowOpacity=0;
             _extraBorder[i].fillColor=k_botwLine.CGColor;
             _extraIcon[i]=[CALayer layer]; [_controls addSublayer:_extraIcon[i]];
             _extraIcon[i].contentsGravity=kCAGravityResizeAspect;
@@ -1673,7 +1674,7 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
             _extraIcon[i].frame=CGRectInset(r,r.size.width*.25,r.size.height*.25);
         }
     }
-    if (!_extraCancel) { _extraCancel=shape(_controls); _extraCancel.strokeColor=nil; _extraCancel.fillColor=_shieldGraph.fillColor; }
+    if (!_extraCancel) { _extraCancel=shape(_controls); _extraCancel.strokeColor=nil; _extraCancel.fillColor=_shieldGraph.fillColor; _extraCancel.shadowOpacity=0; }
     _extraCancel.hidden=_extraKey[4].hidden;
     if (!_extraCancel.hidden) {
         CGRect r=[self botwLayoutRect:DM_BOTW_CANCEL];

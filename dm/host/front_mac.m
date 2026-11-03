@@ -35,6 +35,11 @@
 #include <sys/stat.h>
 
 static CAMetalLayer *g_layer;
+void mtl_grab_next_present(void (^callback)(CGImageRef)) __attribute__((weak_import));
+void dm_launcher_grab_game_frame(void (^callback)(CGImageRef)) {
+    if (mtl_grab_next_present) mtl_grab_next_present(callback);
+    else callback(NULL);
+}
 static uint64_t g_btn;
 static int g_w, g_a, g_s, g_d;
 static int g_input_on = 1;
@@ -1074,7 +1079,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         if (!_settingsShortcutVisible) dm_look_input(DM_LOOK_END,0,0);
         g_mouse_rx=g_mouse_ry=0;
         if (dm_botw_touch_quick_select_active()) {
-            dm_botw_touch_switch_selected(); _lookTapPending=NO;
+            _lookTapPending=NO;
         } else if (dm_touchpad_look_tap((float)(e.timestamp - _lookDownTime), _lookDragged) &&
                    ![self scopeTapExcludedAtTop:(dm_touchpad_point){_down.x,_down.y}] && ![self scopeTapExcludedAtTop:p]) {
             float u = self.u;

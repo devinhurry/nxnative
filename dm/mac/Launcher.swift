@@ -202,13 +202,14 @@ private func applyCloudSaves() {
 
 #if DM_HOST_UI
 private var gameSettings: GameSettingsWindow?
+private var gameSettingsOpening = false
 private final class GameSettingsWindow: NSObject, NSWindowDelegate {
     let window: NSWindow
     weak var parent: NSWindow?
     let done: @convention(c) () -> Void
     private var closed = false
 
-    init(model: LauncherModel, parent: NSWindow, done: @escaping @convention(c) () -> Void) {
+    init(model: LauncherModel, parent: NSWindow, background: Image?, done: @escaping @convention(c) () -> Void) {
         self.parent = parent; self.done = done
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 620),
                           styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
@@ -216,7 +217,7 @@ private final class GameSettingsWindow: NSObject, NSWindowDelegate {
         window.title = NSLocalizedString("Settings", comment: "In-game settings")
         window.isReleasedWhenClosed = false; window.delegate = self
         window.contentMinSize = NSSize(width: 720, height: 420)
-        window.contentView = NSHostingView(rootView: LauncherSettingsPage(m: model) { [weak self] in self?.finish() }
+        window.contentView = NSHostingView(rootView: LauncherSettingsPage(m: model, gameBackground: background) { [weak self] in self?.finish() }
             .defaultAppStorage(launcherDefaults))
         parent.beginSheet(window)
     }
@@ -235,13 +236,18 @@ private final class GameSettingsWindow: NSObject, NSWindowDelegate {
 @_cdecl("dm_mac_show_game_settings")
 public func dmMacShowGameSettings(_ parentPointer: UnsafeMutableRawPointer, _ done: @escaping @convention(c) () -> Void) -> Int32 {
     if let current = gameSettings { current.window.makeKeyAndOrderFront(nil); return 1 }
+    if gameSettingsOpening { return 1 }
     guard let model = sessionModel ?? loadModel() else {
         fputs("launcher: no settings configuration for this game\n", stderr); return 0
     }
     let parent = Unmanaged<NSWindow>.fromOpaque(parentPointer).takeUnretainedValue()
-    model.beginRuntime()
-    dm_launcher_settings_pause(1)
-    gameSettings = GameSettingsWindow(model: model, parent: parent, done: done)
+    gameSettingsOpening = true
+    withGameSettingsBackground { background in
+        gameSettingsOpening = false
+        model.beginRuntime()
+        dm_launcher_settings_pause(1)
+        gameSettings = GameSettingsWindow(model: model, parent: parent, background: background, done: done)
+    }
     return 1
 }
 #endif
