@@ -290,15 +290,13 @@ static void selector_clear_map_view_if_owned(uintptr_t candidate_pane,
 static _Atomic int g_test_ready;
 static _Atomic int g_test_native_ready;
 static _Atomic uint64_t g_test_render_frame;
-static uintptr_t g_test_category_commit_screen;
-static unsigned g_test_category_commit_count;
-static int32_t g_test_category_commit_item;
-static uintptr_t g_test_category_flag_screen;
-static int g_test_category_flag_value;
-static unsigned g_test_category_flag_count;
-static uintptr_t g_test_category_refresh_screen;
-static int32_t g_test_category_refresh_delta;
-static unsigned g_test_category_refresh_count;
+static uintptr_t g_test_category_relayout_screen;
+static unsigned g_test_category_relayout_count;
+static uintptr_t g_test_category_current_screen;
+static int32_t g_test_category_current_page;
+static unsigned g_test_category_current_count;
+static uintptr_t g_test_category_resolve_screen;
+static unsigned g_test_category_resolve_count;
 static int g_test_category_call_order[3];
 static unsigned g_test_category_call_order_count;
 static _Atomic int g_test_generic_selector;
@@ -5114,8 +5112,9 @@ static uintptr_t selector_find_category_screen(uintptr_t manager, uintptr_t targ
 }
 
 static int selector_request_category(uintptr_t manager, uintptr_t pane, int category,
-                                     uintptr_t expected_screen_vtable, uintptr_t native_flag_setter,
-                                     uintptr_t native_commit, uintptr_t native_refresh) {
+                                     uintptr_t expected_screen_vtable,
+                                     uintptr_t native_relayout, uintptr_t native_current_category,
+                                     uintptr_t native_resolve_selection) {
     uintptr_t screen = selector_find_category_screen(manager, pane, category, expected_screen_vtable);
     if (!screen) return 0;
     if (!selector_range(screen + 0x368c, 4) || !selector_range(screen + 0x365c, 4) ||
@@ -5139,7 +5138,7 @@ static int selector_request_category(uintptr_t manager, uintptr_t pane, int cate
         return 2;
     }
     if (first_page < 0 || inventory_count <= 0 || first_page >= inventory_count ||
-        !native_flag_setter || !native_commit || !native_refresh) return 0;
+        !native_relayout || !native_current_category || !native_resolve_selection) return 0;
 
     int consume = 0;
     pthread_mutex_lock(&g_menu_mu);
@@ -5155,45 +5154,40 @@ static int selector_request_category(uintptr_t manager, uintptr_t pane, int cate
     pthread_mutex_unlock(&g_menu_mu);
     if (!consume) return 0;
 
-    // OBS37 runs on the guest UI thread. Stage the same pending-page tuple
-    // consumed by the native screen's vtable method. Refresh the category
-    // before committing: refresh starts a transition and disables item focus;
-    // commit finishes it, positions the pages and reenables native focus.
-    int32_t selected_slot = 0;
+    // The game's own category change (the screen's update, main+0xe3a964)
+    // moves both page fields to the category's first page, re-lays out the
+    // three lists while keeping the carousel slot the page already occupied,
+    // and writes the current category. The host used to stage the pending
+    // page alone and commit through main+0xe3b9f0: that commit forces
+    // screen+0x3a30 to the middle slot, so the visible page's item ids move
+    // to another range (the base table at main+0x1e2e828 is indexed by that
+    // slot), and it never re-derives screen+0x3650, which keeps naming the
+    // previous category's widget. The item card and its action list then
+    // belong to the previous category. Resolve the selection immediately too:
+    // a carousel slot can reuse the already focused entry, so no focus-change
+    // callback will refresh screen+0x3648 or the item card for the new page.
+    memcpy((void *)(screen + 0x365c), &first_page, 4);
     memcpy((void *)(screen + 0x3660), &first_page, 4);
 #ifdef DM_TEST_HOOKS
     if (atomic_load_explicit(&g_test_native_ready, memory_order_acquire)) {
-        g_test_category_flag_screen = screen;
-        g_test_category_flag_value = 1;
-        g_test_category_flag_count++;
+        g_test_category_relayout_screen = screen;
+        g_test_category_relayout_count++;
         g_test_category_call_order[g_test_category_call_order_count++] = 1;
-        int32_t request = 1;
-        memcpy((void *)(screen + 0x368c), &request, 4);
-        g_test_category_refresh_screen = screen;
-        g_test_category_refresh_delta = 0;
-        g_test_category_refresh_count++;
-        g_test_category_call_order[g_test_category_call_order_count++] = 3;
-        memcpy((void *)(screen + 0x3664), &selected_slot, 4);
-        g_test_category_commit_screen = screen;
-        g_test_category_commit_count++;
-        memcpy(&g_test_category_commit_item, (const void *)(screen + 0x3664), 4);
+        g_test_category_current_screen = screen;
+        g_test_category_current_page = first_page;
+        g_test_category_current_count++;
         g_test_category_call_order[g_test_category_call_order_count++] = 2;
-        int32_t committed_page = 0;
-        memcpy(&committed_page, (const void *)(screen + 0x3660), 4);
-        memcpy((void *)(screen + 0x365c), &committed_page, 4);
-        request = 0; memcpy((void *)(screen + 0x368c), &request, 4);
-        int32_t no_pending_item = -1;
-        memcpy((void *)(screen + 0x3664), &no_pending_item, 4);
-        memset((void *)(screen + 0x3678), 0, 2);
+        int32_t native_category = category;
+        memcpy((void *)(screen + 0x3a10), &native_category, 4);
+        g_test_category_resolve_screen = screen;
+        g_test_category_resolve_count++;
+        g_test_category_call_order[g_test_category_call_order_count++] = 3;
     } else
 #endif
     {
-        ((void (*)(uintptr_t, int))native_flag_setter)(screen, 1);
-        ((void (*)(uintptr_t, int8_t))native_refresh)(screen, 0);
-        // Refresh preserves the old cursor column. A direct category tap
-        // selects the first slot, after that preservation and before commit.
-        memcpy((void *)(screen + 0x3664), &selected_slot, 4);
-        ((void (*)(uintptr_t))native_commit)(screen);
+        ((void (*)(uintptr_t))native_relayout)(screen);
+        ((void (*)(uintptr_t, int32_t))native_current_category)(screen, first_page);
+        ((void (*)(uintptr_t))native_resolve_selection)(screen);
     }
     return 1;
 }
@@ -5418,11 +5412,12 @@ void dm_botw_touch_menu_selector(const uint64_t *regs) {
 
     if (category) {
         uintptr_t screen_vtable = (uintptr_t)(main->base + 0x1cf9ad8);
-        uintptr_t native_flag_setter = (uintptr_t)(main->base + 0xe39c08);
-        uintptr_t native_commit = (uintptr_t)(main->base + 0xe3b9f0);
-        uintptr_t native_refresh = (uintptr_t)(main->base + 0xe3ddcc);
+        uintptr_t native_relayout = (uintptr_t)(main->base + 0xe3af74);
+        uintptr_t native_current_category = (uintptr_t)(main->base + 0xe3b20c);
+        uintptr_t native_resolve_selection = (uintptr_t)(main->base + 0xe3f924);
         int result = selector_request_category(manager, pane, index, screen_vtable,
-                                               native_flag_setter, native_commit, native_refresh);
+                                               native_relayout, native_current_category,
+                                               native_resolve_selection);
         if (result && atomic_load_explicit(&g_trace, memory_order_acquire))
             LOG("BOTW menu selector %s native category=%d pane=%p",
                 result == 1 ? "refreshed" : "already on", index, (void *)pane);

@@ -344,7 +344,7 @@ The guest address space, heaps, pools, virtual address memory and the allocators
 - **Experiment:** Apple's `metal-lipo -thin` derives a separate GPU-only copy, omitting the intermediate-language slice. Preserve the original portable archives. [Measurements, commands and verification boundary](../experiments/file-backed-memory.md#follow-up-pipeline-archive-bytes-2026-10-31). No default host policy changed.
 - **Cache-policy follow-up:** an initially empty runtime archive with `DM_PSO_PREBUILD=0` keeps the bases requested during play rather than the whole-game prebuild. It saves additional charged memory on the tested Mac while preserving archive hits, but first-use compilation, cache growth and incomplete coverage remain tradeoffs. [Learn and restart measurements](../experiments/file-backed-memory.md#further-experiment-runtime-captured-pipeline-cache-2026-10-31). No default changed.
 - **Check:** allocation stacks identify the archive reads; LLDB confirms the read options. Separate same-save game runs compare kernel footprint and check archived-base hits and gameplay screenshots.
-- **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md#pipelines-on-a-cold-start), retained-graphics Mac experiment. Current-graphics and physical-iPhone validation remain open.
+- **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/notes/shaders.md#pipelines-on-a-cold-start), retained-graphics Mac experiment. Current-graphics and physical-iPhone validation remain open.
 
 ### A null-pool buffer from a game heap that ran out
 
