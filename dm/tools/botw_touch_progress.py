@@ -9,7 +9,8 @@ import re
 
 REPO = Path(__file__).resolve().parents[2]
 INVENTORY = REPO / 'dm/games/01007EF00011E000/touch_ui_inventory.json'
-OUT = REPO / 'docs/botw-touch-implementation.md'
+OUT = REPO / 'docs/botw/touch-implementation.md'
+RESOURCES_OUT = REPO / 'docs/botw/touch-resources.md'
 IMPLEMENTATION = ('implemented', 'partial', 'missing', 'not_required')
 VERIFICATION = ('passed', 'failed', 'not_run', 'blocked', 'not_required')
 VERIFICATION_LEVEL = ('game_state', 'handler_test', 'none', 'not_required')
@@ -111,11 +112,12 @@ def cell(value):
 
 
 def page(data):
+    """The implementation checklist: counts, required actions and their evidence."""
     implemented = Counter(row['implementation_status'] for row in data['requirements'])
     tested = Counter(row['verification_status'] for row in data['requirements'] if row['implementation_status'] != 'not_required')
     levels = Counter(row['verification_level'] for row in data['requirements'] if row['verification_status'] == 'passed')
     lines = ['# BOTW touch implementation checklist', '',
-             'Generated from [the editable inventory](../dm/games/01007EF00011E000/touch_ui_inventory.json) by '
+             'Generated from [the editable inventory](../../dm/games/01007EF00011E000/touch_ui_inventory.json) by '
              '`python3 dm/tools/botw_touch_progress.py`. Change the inventory and regenerate this page.', '',
              'This is the implementation record for BOTW touch menus. It covers the supplied base/update '
              'and both DLC resource sets. Controller input, other games and existing combat controls stay outside this task. '
@@ -134,7 +136,7 @@ def page(data):
               'or hardware is unavailable; it never excuses a missing implementation. `passed` uses the evidence '
               'named in that row and does not imply every conditional variant or physical iPhone was tested. '
               'Runtime observations and per-target replay assertions are tracked separately in '
-              '[UI coverage](botw-ui-coverage.md) and [acceptance progress](botw-menu-touch-progress.md).', '',
+              '[UI coverage](ui-coverage.md) and [acceptance progress](touch-progress.md).', '',
               '## Required actions', '', '| ID / screen and state | Action | Implementation | Verification / evidence level |', '| --- | --- | --- | --- |']
     for row in data['requirements']:
         lines.append('| ' + ' | '.join(map(cell, (f'`{row["id"]}` — {row["screen"]}; {row["state"]}', row['action'], row['implementation_status'],
@@ -144,22 +146,15 @@ def page(data):
         lines += [f'### {row["id"]}', '', row['implementation_status_reason'], '']
         if row.get('implementation_gap'): lines += ['**Implementation remaining:** ' + row['implementation_gap'], '']
         for evidence in row['implementation_evidence']:
-            lines.append(f'- [{evidence["file"]}](../{evidence["file"]}) `{evidence.get("function", "")}`: {evidence["why"]}')
+            lines.append(f'- [{evidence["file"]}](../../{evidence["file"]}) `{evidence.get("function", "")}`: {evidence["why"]}')
         if row['implementation_evidence']: lines.append('')
         lines += [f'**Verification ({row["verification_status"]}; {row["verification_level"].replace("_", " ")}):** {row["verification_reason"]}', '']
         for evidence in row.get('verification_evidence', []):
-            lines.append(f'- [{evidence["file"]}](../{evidence["file"]}) `{evidence.get("function", "")}`: {evidence["why"]}')
+            lines.append(f'- [{evidence["file"]}](../../{evidence["file"]}) `{evidence.get("function", "")}`: {evidence["why"]}')
         if row.get('verification_evidence'): lines.append('')
         for artifact in row.get('verification_artifacts', []):
             lines.append(f'- Recorded artifact: `{artifact["file"]}` — {artifact["why"]}')
         if row.get('verification_artifacts'): lines.append('')
-    lines += ['## Complete resource disposition', '',
-              'Every scanned layout is listed, including passive HUDs, backgrounds and shared parts. '
-              'The JSON retains exact resource hashes, owner/component links, control declarations and classification reasons. '
-              'New/changed resources must be classified before completion can pass.', '',
-              '| Layout | Role | Action requirements |', '| --- | --- | --- |']
-    for layout in sorted(data['layouts'], key=lambda row: row['layout_id'].casefold()):
-        lines.append(f'| `{layout["layout_id"]}` | {layout["disposition"].replace("_", " ")} | {", ".join(layout["requirement_ids"]) or "No independent menu action"} |')
     lines += ['', '## Updating and checking', '', '```sh', 'python3 dm/tools/botw_touch_progress.py',
               'python3 dm/tools/botw_touch_progress.py --check --require-complete',
               'python3 dm/tools/botw_touch_progress.py --check --catalogue /path/to/catalogue.json', '```', '',
@@ -168,6 +163,22 @@ def page(data):
               'required action, independently of verification availability. An explicit catalogue checks that '
               'every resource and exact part reference is accounted for. This validates the record; source review '
               'and interaction tests establish whether its claims are correct.', '']
+    return '\n'.join(lines)
+
+
+def resource_page(data):
+    """The resource disposition: every scanned layout, its role and the actions it needs."""
+    lines = ['# BOTW touch resource disposition', '',
+             'Generated from [the editable inventory](../../dm/games/01007EF00011E000/touch_ui_inventory.json) by '
+             '`python3 dm/tools/botw_touch_progress.py`. Change the inventory and regenerate this page.', '',
+             'Every scanned layout is listed, including passive HUDs, backgrounds and shared parts. '
+             'The JSON retains exact resource hashes, owner/component links, control declarations and classification reasons. '
+             'New/changed resources must be classified before completion can pass. The actions themselves are in the '
+             '[implementation checklist](touch-implementation.md).', '',
+             '| Layout | Role | Action requirements |', '| --- | --- | --- |']
+    for layout in sorted(data['layouts'], key=lambda row: row['layout_id'].casefold()):
+        lines.append(f'| `{layout["layout_id"]}` | {layout["disposition"].replace("_", " ")} | {", ".join(layout["requirement_ids"]) or "No independent menu action"} |')
+    lines.append('')
     return '\n'.join(lines)
 
 
@@ -183,11 +194,16 @@ def main():
     catalogue = json.loads(args.catalogue.read_text()) if args.catalogue else None
     errors = validate(data, catalogue=catalogue, require_complete=args.require_complete)
     result = page(data)
-    if args.check and (not args.out.is_file() or args.out.read_text() != result): errors.append('generated implementation page is stale')
+    resources = resource_page(data)
+    if args.check:
+        if not args.out.is_file() or args.out.read_text() != result: errors.append('generated implementation page is stale')
+        if not RESOURCES_OUT.is_file() or RESOURCES_OUT.read_text() != resources: errors.append('generated resource page is stale')
     if errors:
         for error in errors: print('[RED] ' + error)
         return 1
-    if not args.check: args.out.write_text(result)
+    if not args.check:
+        args.out.write_text(result)
+        RESOURCES_OUT.write_text(resources)
     counts = Counter(row['implementation_status'] for row in data['requirements'])
     print(f'{len(data["layouts"])} classified layouts; implementation: {dict(counts)}; inventory sha256 {hashlib.sha256(args.inventory.read_bytes()).hexdigest()}')
     return 0

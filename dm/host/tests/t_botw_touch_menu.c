@@ -2492,7 +2492,8 @@ int main(void) {
     assert(sample(13) == 0);
 
     // Category icons request the category's actual first page through the
-    // native screen transition setter/refresh/commit path, with no D-pad or A press.
+    // game's own category change: both page fields move to that page, the
+    // lists are re-laid out and the current category follows. No D-pad or A press.
     dm_botw_touch_menu_reset();
     memset(&view, 0, sizeof view);
     view.inventory_visible = view.clip_valid = view.back_valid = 1;
@@ -2519,55 +2520,59 @@ int main(void) {
     view.category_count = 1; view.category_ids[0] = 5;
     view.category_panes[0] = (uintptr_t)category_hit;
     set_rect(view.categories[0], .4f, .2f, .08f, .08f);
-    g_test_category_flag_count = g_test_category_commit_count = 0;
-    g_test_category_flag_screen = g_test_category_commit_screen = 0;
-    g_test_category_flag_value = 0;
-    g_test_category_commit_item = -1;
-    g_test_category_refresh_count = 0; g_test_category_refresh_screen = 0;
-    g_test_category_refresh_delta = -1; g_test_category_call_order_count = 0;
-    put_ptr(selector.manager + 0x48, 0); put_ptr(selector.manager + 0x50, 0);
+    g_test_category_relayout_count = g_test_category_current_count = 0;
+    g_test_category_relayout_screen = g_test_category_current_screen = 0;
+    g_test_category_current_page = -1;
+    g_test_category_resolve_screen = 0;
+    g_test_category_resolve_count = 0;
+    g_test_category_call_order_count = 0;
+    // The new page may reuse this focused entry; selection still needs resolving.
+    put_ptr(selector.manager + 0x48, (uintptr_t)selector.entry);
+    put_ptr(selector.manager + 0x50, 0);
+    selector.screen[0x3a30] = 2;
     publish(20); tap(.44f, .24f);
     put_ptr(selector.screen, (uintptr_t)(g_mod[0].base + 0x1cf9ae0));
     selector_tick();
-    assert(g_test_category_commit_count == 0); // wrong native owner class is inert
+    assert(g_test_category_relayout_count == 0); // wrong native owner class is inert
     put_ptr(selector.screen, (uintptr_t)(g_mod[0].base + 0x1cf9ad8));
     int32_t transitioning = 1;
     memcpy(selector.screen + 0x368c, &transitioning, 4);
     selector_tick();
-    assert(g_test_category_commit_count == 0); // wait for the active carousel transition
+    assert(g_test_category_relayout_count == 0); // wait for the active carousel transition
     transitioning = 0; memcpy(selector.screen + 0x368c, &transitioning, 4);
     selector_tick();
     assert(get_ptr(selector.manager + 0x50) == 0); // category entry is registered but not BoxCursor-focusable
-    assert(g_test_category_flag_count == 1 && g_test_category_commit_count == 1 &&
-           g_test_category_refresh_count == 1);
-    assert(g_test_category_flag_screen == (uintptr_t)selector.screen);
-    assert(g_test_category_commit_screen == (uintptr_t)selector.screen);
-    assert(g_test_category_refresh_screen == (uintptr_t)selector.screen);
-    assert(g_test_category_flag_value == 1);
-    assert(g_test_category_refresh_delta == 0);
+    assert(g_test_category_relayout_count == 1 && g_test_category_current_count == 1);
+    assert(g_test_category_relayout_screen == (uintptr_t)selector.screen);
+    assert(g_test_category_current_screen == (uintptr_t)selector.screen);
+    assert(g_test_category_current_page == 12);
+    assert(g_test_category_resolve_count == 1);
+    assert(g_test_category_resolve_screen == (uintptr_t)selector.screen);
     assert(g_test_category_call_order_count == 3 && g_test_category_call_order[0] == 1 &&
-           g_test_category_call_order[1] == 3 && g_test_category_call_order[2] == 2);
+           g_test_category_call_order[1] == 2 && g_test_category_call_order[2] == 3);
+    // Refresh the item card even when the next page reuses the focused entry.
     int32_t staged_page = 0, staged_item = -1, staged_request = 0;
     memcpy(&staged_page, selector.screen + 0x3660, 4);
     memcpy(&staged_item, selector.screen + 0x3664, 4);
     memcpy(&staged_request, selector.screen + 0x368c, 4);
     assert(staged_page == 12); // category 5's first page, not category id 5
     memcpy(&current_page, selector.screen + 0x365c, 4);
-    assert(current_page == 12 && g_test_category_commit_item == 0);
-    assert(staged_item == -1 && staged_request == 0); // commit finishes the request after refresh
-    assert(!selector.screen[0x3678] && !selector.screen[0x3679]);
+    assert(current_page == 12); // the current page follows, as in the game's own change
+    assert(staged_item == 7); // the host no longer stages a pending item
+    assert(staged_request == 0); // the host no longer starts a carousel transition
     int32_t native_category = 0;
     memcpy(&native_category, selector.screen + 0x3a10, 4);
-    assert(native_category == 0); // host stages no category label/state writes; native updater owns this
+    assert(native_category == 5); // the game's current-category call owns this
+    assert(selector.screen[0x3a30] == 2); // retain the visible list's item-id range
     expect_no_virtual_input(20);
     dm_botw_touch_menu_test_set_render_frame(21); selector_tick();
     assert(sample(21) == 0); // direct tab selection never synthesizes A
-    g_test_category_flag_count = g_test_category_commit_count = 0;
+    g_test_category_relayout_count = g_test_category_current_count = 0;
     int32_t selected_category = 5;
     memcpy(selector.screen + 0x3a10, &selected_category, 4);
     transitioning = 0; memcpy(selector.screen + 0x368c, &transitioning, 4);
     tap(.44f, .24f); selector_tick();
-    assert(g_test_category_flag_count == 0 && g_test_category_commit_count == 0);
+    assert(g_test_category_relayout_count == 0 && g_test_category_current_count == 0);
 
     // Popup geometry hit panes resolve to the selectable N_Cursor sibling
     // under the exact same Pa_Btn row and N_TypeBtn root.
