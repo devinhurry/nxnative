@@ -134,6 +134,7 @@ private struct LauncherView: View {
     @ObservedObject var m: LauncherModel
     let play: () -> Void
     @State private var showSettings = false
+    @State private var startAfterSettings = false
     @State private var memory = os_proc_available_memory()
     @State private var importing: ImportKind?
     @State private var importBusy = false
@@ -170,8 +171,12 @@ private struct LauncherView: View {
                 .toolbar(.hidden, for: .navigationBar)
         }
         .preferredColorScheme(.dark)
-        .fullScreenCover(isPresented: $showSettings) {
-            LauncherSettingsPage(m: m) { showSettings = false }
+        .fullScreenCover(isPresented: $showSettings, onDismiss: {
+            if startAfterSettings { startAfterSettings = false; finishStart() }
+        }) {
+            LauncherSettingsPage(m: m, onPlay: {
+                startAfterSettings = true; showSettings = false
+            }) { showSettings = false }
         }
         .alert("Import failed", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
             Button("OK") { importError = nil }

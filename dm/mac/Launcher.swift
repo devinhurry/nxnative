@@ -30,6 +30,7 @@ struct LauncherView: View {
     @ObservedObject var m: LauncherModel
     let done: (Bool) -> Void
     @State private var showSettings = false
+    @State private var startAfterSettings = false
     @State private var availableMemory = dm_low_memory_available()
 
     private var romfs: String {
@@ -66,8 +67,12 @@ struct LauncherView: View {
             onPlay: { done(true) }, onSettings: { showSettings = true },
             onImportROM: nil, onImportShaders: nil)
             .frame(minWidth: 720, minHeight: 420)
-            .sheet(isPresented: $showSettings) {
-                LauncherSettingsPage(m: m) { showSettings = false }.frame(width: 1000, height: 620)
+            .sheet(isPresented: $showSettings, onDismiss: {
+                if startAfterSettings { startAfterSettings = false; done(true) }
+            }) {
+                LauncherSettingsPage(m: m, onPlay: {
+                    startAfterSettings = true; showSettings = false
+                }) { showSettings = false }.frame(width: 1000, height: 620)
             }
             .task {
                 while !Task.isCancelled {

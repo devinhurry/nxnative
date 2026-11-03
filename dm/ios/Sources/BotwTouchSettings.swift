@@ -60,7 +60,7 @@ private struct BotwTouchShareSheet: UIViewControllerRepresentable {
     @Binding var presented: Bool
     func makeUIViewController(context: Context) -> UIActivityViewController {
         let controller = UIActivityViewController(activityItems: [file.url], applicationActivities: nil)
-        controller.view.tintColor = UIColor(launcherTint)
+        controller.view.tintColor = UIColor(launcherControlTint)
         controller.completionWithItemsHandler = { _, _, _, _ in
             presented = false
             try? FileManager.default.removeItem(at: file.url.deletingLastPathComponent())
@@ -240,6 +240,7 @@ struct BotwTouchSettingsView: View {
     @ObservedObject var m: LauncherModel
     let portrait: Bool
     let background: Image?
+    let play: (() -> Void)?
     let close: () -> Void
     @State private var values: [String: String]
     @State private var originalValues: [String: String]
@@ -288,8 +289,9 @@ struct BotwTouchSettingsView: View {
 
     init(m: LauncherModel, portrait: Bool, background: Image? = nil,
          selectedControl: BotwTouchControl = BotwTouchControl.all[4], appearanceExpanded: Bool = false,
+         play: (() -> Void)? = nil,
          close: @escaping () -> Void) {
-        self.m = m; self.portrait = portrait; self.background = background; self.close = close
+        self.m = m; self.portrait = portrait; self.background = background; self.play = play; self.close = close
         _values = State(initialValue: m.values)
         _originalValues = State(initialValue: m.values)
         _selected = State(initialValue: selectedControl)
@@ -337,6 +339,10 @@ struct BotwTouchSettingsView: View {
             exporting = true
         } catch { exportError = error.localizedDescription }
     }
+    private func saveLayout(then action: () -> Void) {
+        guard m.saveTouchSettings(values, portrait: portrait) else { saveFailed = true; return }
+        action()
+    }
     private var panel: some View {
         VStack(spacing: 4) {
             HStack(spacing: 6) {
@@ -353,9 +359,14 @@ struct BotwTouchSettingsView: View {
                     Button("Restore this layout") { reset(m.touchSettingsKeys(portrait: portrait)) }
                 }.accessibilityIdentifier("botw.touch.reset")
                 Button("Save") {
-                    if m.saveTouchSettings(values, portrait: portrait) { close() }
-                    else { saveFailed = true }
-                }.buttonStyle(.borderedProminent).accessibilityIdentifier("botw.touch.save")
+                    saveLayout(then: close)
+                }.buttonStyle(.borderedProminent).tint(launcherTint).foregroundStyle(.white)
+                    .accessibilityIdentifier("botw.touch.save")
+                if let play {
+                    Button(LocalizedStringKey(m.isRunning ? "Return to game" : "Start game")) { saveLayout(then: play) }
+                        .buttonStyle(.borderedProminent).tint(launcherTint).foregroundStyle(.white)
+                        .accessibilityIdentifier("botw.touch.play")
+                }
             }.frame(height: 28)
             HStack(spacing: 6) {
                 Picker("Control", selection: $selected) {
@@ -542,7 +553,7 @@ struct BotwTouchSettingsView: View {
         } message: { Text(exportError ?? "") }
         .alert("Unable to save layout", isPresented: $saveFailed) { Button("OK", role: .cancel) {} }
         .preferredColorScheme(.dark)
-        .tint(launcherTint)
+        .tint(launcherControlTint).accentColor(launcherControlTint)
     }
 }
 
