@@ -502,10 +502,24 @@ static void test_botw_button_artwork(DmGamepad *view) {
     g_botw_rune_icon_snapshot.valid=1; g_botw_rune_icon_snapshot.generation=1;
     g_botw_rune_icon_snapshot.width=g_botw_rune_icon_snapshot.height=DM_BOTW_RUNE_ICON_SIDE;
     g_botw_rune_icon_snapshot.stride=DM_BOTW_RUNE_ICON_STRIDE;
+    memset(g_botw_rune_icon_snapshot.rgba,255,sizeof g_botw_rune_icon_snapshot.rgba);
     id fixedLIcon=[view dm_testRuneIconLayer].contents;
     [view botwRuneIconChanged]; [view layoutIfNeeded];
-    CHECK([view dm_testRuneIconLayer].contents==fixedLIcon,
-          "L keeps its packaged icon when the current native rune changes");
+    CHECK([view dm_testRuneIconLayer].contents!=fixedLIcon,
+          "L displays the current native rune by default");
+    id currentLIcon=[view dm_testRuneIconLayer].contents;
+    [view botwRuneIconChanged];
+    CHECK([view dm_testRuneIconLayer].contents==currentLIcon,"an unchanged rune reuses its image");
+    setenv("DM_BOTW_PAD_L_ICON_MODE","1",1); dm_gamepad_refresh_touch_settings(); [view layoutIfNeeded];
+    CHECK([view dm_testRuneIconLayer].contents==fixedLIcon,"fixed icon mode restores the packaged L icon");
+    g_botw_rune_icon_snapshot.generation++;
+    [view botwRuneIconChanged];
+    CHECK([view dm_testRuneIconLayer].contents==fixedLIcon,"rune changes cannot replace a fixed L icon");
+    unsetenv("DM_BOTW_PAD_L_ICON_MODE"); dm_gamepad_refresh_touch_settings(); [view layoutIfNeeded];
+    CHECK([view dm_testRuneIconLayer].contents!=fixedLIcon,"current rune mode takes effect immediately");
+    g_botw_rune_icon_snapshot.valid=0; g_botw_rune_icon_snapshot.generation++;
+    [view botwRuneIconChanged]; [view layoutIfNeeded];
+    CHECK([view dm_testRuneIconLayer].contents==fixedLIcon,"an unavailable current rune falls back to the packaged L icon");
     CAShapeLayer *runeBadge=[view dm_testRuneBadgeLayer];
     CHECK(!runeBadge.hidden && CGColorEqualToColor(runeBadge.fillColor,badge.fillColor) &&
           CGColorEqualToColor([view dm_testRuneBadgeBorder].fillColor,[view dm_testYBadgeBorder].fillColor) &&

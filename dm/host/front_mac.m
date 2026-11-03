@@ -416,20 +416,9 @@ static void preview_draw_botw_glyph(CGPathRef path, CGFloat height, NSColor *col
     CGContextRestoreGState(context); CGPathRelease(path);
 }
 static NSImage *preview_botw_rune_image(const dm_botw_rune_icon_state *snapshot) {
-    if (!snapshot || !snapshot->valid || snapshot->width != DM_BOTW_RUNE_ICON_SIDE ||
-        snapshot->height != DM_BOTW_RUNE_ICON_SIDE || snapshot->stride != DM_BOTW_RUNE_ICON_STRIDE) return nil;
-    CFDataRef data = CFDataCreate(kCFAllocatorDefault, snapshot->rgba, sizeof snapshot->rgba);
-    CGDataProviderRef provider = data ? CGDataProviderCreateWithCFData(data) : NULL;
-    CGColorSpaceRef color = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-    // The provider publishes RGBA with premultiplied alpha.
-    CGImageRef cg = provider && color ? CGImageCreate(snapshot->width, snapshot->height, 8, 32,
-        snapshot->stride, color, kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast, provider, NULL, false,
-        kCGRenderingIntentDefault) : NULL;
+    CGImageRef cg=dm_botw_rune_icon_image(snapshot);
     NSImage *image = cg ? [[NSImage alloc] initWithCGImage:cg size:NSMakeSize(snapshot->width, snapshot->height)] : nil;
     if (cg) CGImageRelease(cg);
-    if (color) CGColorSpaceRelease(color);
-    if (provider) CGDataProviderRelease(provider);
-    if (data) CFRelease(data);
     return image;
 }
 
@@ -591,7 +580,13 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     [self setNeedsDisplay:YES];
 }
 - (void)refreshBotwRuneIcon {
+    if (!_active || _touchLayout.rune_icon_mode) { _runeIcon=nil; _runeIconValid=NO; _runeIconGeneration=0; return; }
+    dm_botw_rune_icon_state snapshot={0};
+    dm_botw_rune_icon_snapshot(&snapshot);
+    if (_runeIconValid && snapshot.valid && snapshot.generation==_runeIconGeneration) return;
+    _runeIconGeneration=snapshot.generation;
     _runeIcon = nil; _runeIconValid = NO;
+    _runeIcon=preview_botw_rune_image(&snapshot); _runeIconValid=_runeIcon!=nil;
 }
 - (void)botwRuneIconChanged { [self refreshBotwRuneIcon]; [self setNeedsDisplay:YES]; }
 - (dm_touchpad_rect)controlArea {
@@ -636,6 +631,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     if (_touchLayout.portrait==portrait) return;
     _touchLayout=_touchProfiles[portrait]; _moveResponse=_moveProfiles[portrait];
     [self cancelInput];
+    [self refreshBotwRuneIcon];
 }
 - (void)reloadBotwTouchSettings {
     if (strcmp(DM_GAME_ID, "01007EF00011E000")) return;
@@ -650,6 +646,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     int portrait = _active && dm_botw_compact_mode(area.width, area.height, insets.left, insets.right);
     _touchLayout = _touchProfiles[portrait];
     _moveResponse = _moveProfiles[portrait];
+    [self refreshBotwRuneIcon];
     [self layoutSettingsButton];
     [self setNeedsDisplay:YES];
 }
@@ -1263,7 +1260,11 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
             [[NSColor colorWithWhite:_touchLayout.fill_gray alpha:_touchLayout.fill_alpha] setFill];
             [[NSColor colorWithWhite:_touchLayout.stroke_gray alpha:_touchLayout.stroke_alpha] setStroke];
             preview_fill_outlined_circle(button,1.5*DM_BOTW_STROKE_WIDTH_SCALE);
-            [self drawButtonIcon:6 center:center radius:radius];
+            if (_runeIconValid) {
+                CGFloat side=radius*1.36;
+                [_runeIcon drawInRect:NSMakeRect(center.x-side*.5,center.y-side*.5,side,side)
+                    fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:_touchLayout.icon_alpha respectFlipped:YES hints:nil];
+            } else [self drawButtonIcon:6 center:center radius:radius];
         } else {
             NSPoint center=preview_from_top(c.x,c.y,h); float radius=_active ? [self layoutRect:keys[i].bit].width*.5f : keys[i].r*u;
             BOOL icon = keys[i].bit == 7 || keys[i].bit == 9;

@@ -103,6 +103,7 @@ struct BotwTouchControl: Identifiable, Hashable {
     func keys(portrait: Bool) -> Set<String> {
         var keys = Set([env("X", portrait: portrait), env("Y", portrait: portrait), env("SIZE", portrait: portrait), option("ANCHOR", portrait: portrait)])
         if id == 6 || id == 16 || id == 17 { keys.insert(option("MODE", portrait: portrait)) }
+        if id == 6 { keys.insert(option("ICON_MODE", portrait: portrait)) }
         if id == 8 { keys.insert(env("HIT", portrait: portrait)) }
         if id == 4 { keys.insert(option("ALPHA", portrait: portrait)) }
         if id == 7 || id == 9 { keys.insert(option("DRAG_MODE", portrait: portrait)) }
@@ -615,6 +616,7 @@ final class LauncherModel: ObservableObject {
             for i in 0..<2 { modes[i] = Int32(number(BotwTouchControl.added[i].option("MODE", portrait: portrait))) }
         }
         result.rune_mode = Int32(number(botwTouchKey("DM_BOTW_PAD_L_MODE", portrait: portrait)))
+        result.rune_icon_mode = Int32(number(botwTouchKey("DM_BOTW_PAD_L_ICON_MODE", portrait: portrait)))
         result.trigger_drag = (Int32(number(botwTouchKey("DM_BOTW_PAD_R_DRAG_MODE", portrait: portrait))),
             Int32(number(botwTouchKey("DM_BOTW_PAD_ZR_DRAG_MODE", portrait: portrait))))
         result.shield_hit_size = Float(number(botwTouchKey("DM_BOTW_PAD_ZL_HIT_PT", portrait: portrait), Double(result.shield_hit_size)))

@@ -20,7 +20,7 @@ enum { DM_BOTW_WEAPON=16, DM_BOTW_SHIELD=17, DM_BOTW_FOOD=18, DM_BOTW_WHISTLE=19
        DM_BOTW_CANCEL=20, DM_BOTW_CONTROL_COUNT=21 };
 typedef struct {
     dm_botw_control_transform control[DM_BOTW_CONTROL_COUNT];
-    int badges, portrait, dpad_visible, added[4], switch_mode[2], rune_mode;
+    int badges, portrait, dpad_visible, added[4], switch_mode[2], rune_mode, rune_icon_mode;
     int trigger_drag[2]; // R, ZR: cancel outside or drag the camera.
     float fill_gray, fill_alpha, stroke_gray, stroke_alpha, icon_alpha;
     float shield_hit_size, stick_alpha;
@@ -121,10 +121,10 @@ static inline int dm_botw_layout_read_for(dm_botw_touch_layout *out,int portrait
     if (!dm_botw_layout_number(key,0,1,&badges) || (badges!=0 && badges!=1)) return 0;
     out->badges=(int)badges;
     const char *names[]={"DPAD_VISIBLE","WEAPON_ENABLED","SHIELD_ENABLED","FOOD_ENABLED","WHISTLE_ENABLED",
-        "WEAPON_MODE","SHIELD_MODE","L_MODE","R_DRAG_MODE","ZR_DRAG_MODE"};
+        "WEAPON_MODE","SHIELD_MODE","L_MODE","R_DRAG_MODE","ZR_DRAG_MODE","L_ICON_MODE"};
     int *options[]={&out->dpad_visible,&out->added[0],&out->added[1],&out->added[2],&out->added[3],
-        &out->switch_mode[0],&out->switch_mode[1],&out->rune_mode,&out->trigger_drag[0],&out->trigger_drag[1]};
-    for (int i=0;i<10;i++) {
+        &out->switch_mode[0],&out->switch_mode[1],&out->rune_mode,&out->trigger_drag[0],&out->trigger_drag[1],&out->rune_icon_mode};
+    for (unsigned i=0;i<sizeof options/sizeof *options;i++) {
         float v=*options[i]; snprintf(key,sizeof key,"%s%s",prefix,names[i]);
         if (!dm_botw_layout_number(key,0,i<5 || i>=8 ? 1 : 2,&v) || v!=floorf(v)) return 0;
         *options[i]=(int)v;

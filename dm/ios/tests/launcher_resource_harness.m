@@ -1,4 +1,6 @@
 // Resource bridges for the isolated production-launcher simulator fixture.
+#include "botw_rune_icon.h"
+int dm_botw_rune_icon_snapshot(dm_botw_rune_icon_state *out) { (void)out; return 0; }
 // It never loads a game; ROM images use the production index validator and
 // graphics packages use the complete production importer and selector.
 #import <Foundation/Foundation.h>

@@ -625,6 +625,7 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
     _botwOn = [UIColor colorWithWhite:dm_botw_layout_fill_gray(&_touchLayout,1) alpha:_touchLayout.fill_alpha];
     _botwLine = [UIColor colorWithWhite:_touchLayout.stroke_gray alpha:_touchLayout.stroke_alpha];
     [self cancelSurfaceInput];
+    [self refreshBotwRuneIcon];
 }
 - (CGFloat)u { CGRect a=[self botwControlArea]; return ([self botwTouchControlsActive] || [self botwMenuDpadActive]) ?
     dm_botw_layout_unit(&_touchLayout,a.size.width,a.size.height) : dm_touchpad_u((float)self.bounds.size.height); }
@@ -848,9 +849,16 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     _label[B_L].hidden = NO;
 }
 - (void)refreshBotwRuneIcon {
+    if (![self botwTouchControlsActive]) { [self clearBotwRuneIcon]; _runeIconGeneration=0; return; }
+    dm_botw_rune_icon_state snapshot={0};
+    if (!_touchLayout.rune_icon_mode) dm_botw_rune_icon_snapshot(&snapshot);
+    if (_runeIconValid && snapshot.valid && snapshot.generation==_runeIconGeneration) return;
+    _runeIconGeneration=snapshot.generation;
     [self clearBotwRuneIcon];
-    if (![self botwTouchControlsActive]) return;
-    _runeIconLayer.contents = (__bridge id)_runeDefaultIcon.CGImage;
+    CGImageRef image=dm_botw_rune_icon_image(&snapshot);
+    _runeIconLayer.contents = (__bridge id)(image ?: _runeDefaultIcon.CGImage);
+    _runeIconValid=image!=NULL;
+    if (image) CGImageRelease(image);
     _runeIconLayer.hidden = NO;
     _runeBadge.hidden = _runeBadgeLabel.hidden = !_touchLayout.badges;
     _label[B_L].hidden = YES;
@@ -1617,22 +1625,6 @@ static void placeLabel(CATextLayer *t, CGPoint c, CGFloat fs) {
     t.frame = CGRectMake(c.x - w / 2, c.y - h / 2, w, h);
     CFRelease(f);
 }
-static CGImageRef botwRuneImage(const dm_botw_rune_icon_state *snapshot) {
-    if (!snapshot || !snapshot->valid || snapshot->width != DM_BOTW_RUNE_ICON_SIDE ||
-        snapshot->height != DM_BOTW_RUNE_ICON_SIDE || snapshot->stride != DM_BOTW_RUNE_ICON_STRIDE) return NULL;
-    CFDataRef data = CFDataCreate(kCFAllocatorDefault, snapshot->rgba, sizeof snapshot->rgba);
-    CGDataProviderRef provider = data ? CGDataProviderCreateWithCFData(data) : NULL;
-    CGColorSpaceRef color = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-    // The provider publishes RGBA with premultiplied alpha.
-    CGImageRef image = provider && color ? CGImageCreate(snapshot->width, snapshot->height, 8, 32,
-        snapshot->stride, color, kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast, provider, NULL, false,
-        kCGRenderingIntentDefault) : NULL;
-    if (color) CGColorSpaceRelease(color);
-    if (provider) CGDataProviderRelease(provider);
-    if (data) CFRelease(data);
-    return image;
-}
-
 static void layerDisplayScale(CALayer *layer, CGFloat scale) {
     layer.contentsScale=scale;
     for (CALayer *child in layer.sublayers) layerDisplayScale(child,scale);

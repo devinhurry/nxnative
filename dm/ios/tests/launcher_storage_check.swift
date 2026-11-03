@@ -3,6 +3,9 @@
 import Foundation
 import CoreGraphics
 
+@_cdecl("dm_botw_rune_icon_snapshot")
+func mockRuneIconSnapshot(_ state: UnsafeMutableRawPointer?) -> Int32 { 0 }
+
 @_cdecl("dm_launcher_grab_game_frame")
 func launcherGrabGameFrame(_ callback: @convention(block) (CGImage?) -> Void) { callback(nil) }
 #if DM_HOST_UI
@@ -146,6 +149,7 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
         draft["DM_BOTW_PAD_A_X_PT"] = "15.300"
         draft["DM_BOTW_PAD_WEAPON_ENABLED"] = "1"
         draft["DM_BOTW_PAD_WEAPON_MODE"] = "2"
+        draft["DM_BOTW_PAD_L_ICON_MODE"] = "1"
         draft["DM_BOTW_PAD_DPAD_VISIBLE"] = "0"
         draft["DM_BOTW_PORTRAIT_PAD_B_Y_PT"] = "100.000"
         expect(editor.values["DM_BOTW_PAD_A_X_PT"] != "15.300" && editorDefaults.string(forKey: "launcher.DM_BOTW_PAD_A_X_PT") == nil,
@@ -154,6 +158,10 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
                "copying editor parameters exports the draft rather than the applied layout")
         expect(editor.saveTouchSettings(draft, portrait: false), "Save accepts a complete valid layout draft")
         let savedEditor = LauncherModel(file.settings, defaults: editorDefaults)
+        expect(savedEditor.touchLayout(portrait: false).rune_icon_mode == 1 && savedEditor.touchLayout(portrait: true).rune_icon_mode == 0 &&
+               BotwTouchControl.all.first { $0.id == 6 }!.keys.contains("DM_BOTW_PAD_L_ICON_MODE"),
+               "L icon choice saves independently per bank and defaults to the current rune")
+        expect(savedEditor.touchSettingsExport.contains("DM_BOTW_PAD_L_ICON_MODE=1"), "layout export includes L icon display choice")
         expect(savedEditor.values["DM_BOTW_PAD_WEAPON_ENABLED"] == "1" && savedEditor.values["DM_BOTW_PAD_WEAPON_MODE"] == "2" &&
                savedEditor.values["DM_BOTW_PAD_DPAD_VISIBLE"] == "0" && savedEditor.values["DM_BOTW_PORTRAIT_PAD_WEAPON_ENABLED"] == "0",
                "added buttons, switch modes and D-pad visibility save only in the edited bank")

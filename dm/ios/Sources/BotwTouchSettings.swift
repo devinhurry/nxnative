@@ -251,6 +251,7 @@ struct BotwTouchSettingsView: View {
     @State private var document: BotwTouchExportFile?
     @State private var exportError: String?
     @State private var showingAppearance = false
+    @State private var runeIcon: Image?
     @State private var panelCollapsed = false
     @State private var controlRegion = CGRect(x: 0, y: 0, width: 1, height: 1)
     @State private var panelInsets = EdgeInsets()
@@ -496,7 +497,7 @@ struct BotwTouchSettingsView: View {
                 ForEach(controls) { control in
                     let r = rect(control, in: area.size)
                     BotwControlPreview(control: control, m: m, values: $values, selected: $selected,
-                        rect: r, area: area.size, layout: layout, portrait: portrait)
+                        rect: r, area: area.size, layout: layout, portrait: portrait, runeIcon: runeIcon)
                         .frame(width: r.width, height: r.height)
                         .position(x: area.minX + r.midX, y: area.minY + r.midY)
                         .zIndex(selected.id == control.id ? 1 : 0)
@@ -532,13 +533,21 @@ struct BotwTouchSettingsView: View {
             }
         }
         .ignoresSafeArea()
-        #if os(macOS)
         .onAppear {
+            #if os(macOS)
             if ProcessInfo.processInfo.environment["DM_TEST_BOTW_SEATED"] == "1" {
                 controlRegion = CGRect(x: 0, y: 0.51, width: 1, height: 0.49)
             }
+            #endif
+            #if os(iOS) || DM_HOST_UI
+            if m.isRunning {
+                var snapshot = dm_botw_rune_icon_state()
+                if dm_botw_rune_icon_snapshot(&snapshot) != 0, let image = dm_botw_rune_icon_image(&snapshot) {
+                    runeIcon = Image(decorative: image, scale: 1)
+                }
+            }
+            #endif
         }
-        #endif
         .onChange(of: values) { _, _ in
             if !controls.contains(selected) { selected = BotwTouchControl.all[4] }
         }
@@ -639,6 +648,8 @@ private struct BotwTouchArtwork: View {
     let size: CGSize
     let badges: Bool
     var appearance: dm_botw_touch_layout = dm_botw_layout_defaults()
+    var runeIcon: Image? = nil
+    private var currentRune: Bool { control == 6 && appearance.rune_icon_mode == 0 && runeIcon != nil }
     private var center: CGPoint { CGPoint(x: size.width / 2, y: size.height / 2) }
     private var glyph: Color { Color(red: 226 / 255, green: 222 / 255, blue: 211 / 255).opacity(Double(appearance.icon_alpha)) }
     private var outline: Color { Color(white: Double(appearance.stroke_gray)).opacity(Double(appearance.stroke_alpha)) }
@@ -691,8 +702,8 @@ private struct BotwTouchArtwork: View {
                 if let border = dm_botw_outer_border_path(disk, 1.5 * CGFloat(DM_BOTW_STROKE_WIDTH_SCALE)) {
                     Path(border).fill(outline)
                 }
-                if let icon = Self.icons[control] {
-                    icon.resizable().scaledToFit().frame(width: size.width*0.5, height: size.height*0.5)
+                if let icon = currentRune ? runeIcon : Self.icons[control] {
+                    icon.resizable().scaledToFit().frame(width: size.width * (currentRune ? 0.68 : 0.5), height: size.height * (currentRune ? 0.68 : 0.5))
                         .opacity(Double(appearance.icon_alpha))
                         .position(center)
                 }
@@ -719,6 +730,7 @@ private struct BotwControlPreview: View {
     let area: CGSize
     let layout: dm_botw_touch_layout
     let portrait: Bool
+    let runeIcon: Image?
     @State private var dragRect: CGRect?
     @State private var scaleOrigin: Double?
     private var gold: Color { Color(red: 0.94, green: 0.88, blue: 0.70) }
@@ -731,7 +743,7 @@ private struct BotwControlPreview: View {
     }
     var body: some View {
         ZStack {
-            BotwTouchArtwork(control: control.id, size: rect.size, badges: badges, appearance: layout)
+            BotwTouchArtwork(control: control.id, size: rect.size, badges: badges, appearance: layout, runeIcon: runeIcon)
             if selected.id == control.id { RoundedRectangle(cornerRadius: 8).stroke(gold, style: StrokeStyle(lineWidth: 2, dash: [4,3])).padding(-3) }
         }
         .overlay {

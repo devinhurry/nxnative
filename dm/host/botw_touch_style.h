@@ -6,6 +6,23 @@
 #include <math.h>
 #include <stdlib.h>
 #include "botw_touch_layout.h"
+#include "botw_rune_icon.h"
+
+// All touch frontends display the same premultiplied native rune snapshot.
+static inline CGImageRef CF_RETURNS_RETAINED dm_botw_rune_icon_image(const dm_botw_rune_icon_state *snapshot) {
+    if (!snapshot || !snapshot->valid || snapshot->width != DM_BOTW_RUNE_ICON_SIDE ||
+        snapshot->height != DM_BOTW_RUNE_ICON_SIDE || snapshot->stride != DM_BOTW_RUNE_ICON_STRIDE) return NULL;
+    CFDataRef data = CFDataCreate(kCFAllocatorDefault, snapshot->rgba, sizeof snapshot->rgba);
+    CGDataProviderRef provider = data ? CGDataProviderCreateWithCFData(data) : NULL;
+    CGColorSpaceRef color = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGImageRef image = provider && color ? CGImageCreate(snapshot->width, snapshot->height, 8, 32,
+        snapshot->stride, color, kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast, provider, NULL, false,
+        kCGRenderingIntentDefault) : NULL;
+    if (color) CGColorSpaceRelease(color);
+    if (provider) CGDataProviderRelease(provider);
+    if (data) CFRelease(data);
+    return image;
+}
 
 #define DM_BOTW_STROKE_WIDTH_SCALE 1.2
 #define DM_BOTW_STICK_RING_WIDTH (1.5 * DM_BOTW_STROKE_WIDTH_SCALE)

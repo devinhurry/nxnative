@@ -71,6 +71,11 @@ int main(void) {
     assert(dm_botw_layout_read_for(&layout,0));
     assert(dm_botw_layout_control_visible(&layout,12) && !dm_botw_layout_control_visible(&layout,16));
     for (int compact=0;compact<2;compact++) {
+        const char *icon=compact ? "DM_BOTW_PORTRAIT_PAD_L_ICON_MODE" : "DM_BOTW_PAD_L_ICON_MODE";
+        dm_botw_touch_layout saved;
+        assert(dm_botw_layout_read_for(&saved,compact) && saved.rune_icon_mode==0);
+        setenv(icon,"1",1); assert(dm_botw_layout_read_for(&saved,compact) && saved.rune_icon_mode==1);
+        setenv(icon,"2",1); assert(!dm_botw_layout_read_for(&saved,compact)); unsetenv(icon);
         dm_botw_touch_layout editor=dm_botw_layout_defaults_for(compact);
         assert(dm_botw_layout_control_visible(&editor,DM_BOTW_CANCEL));
         editor.trigger_drag[0]=1;

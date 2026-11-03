@@ -847,6 +847,14 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Check:** inspect the generated and built plists, and compile the production Objective-C and Swift sources. Physical-device startup from portrait and landscape remains to be checked.
 - **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game).
 
+### L follows the selected BOTW rune
+
+- **Symptom:** changing the selected rune leaves the touch L button showing its packaged static icon.
+- **Cause:** UIKit and Mac touch preview stopped consuming the existing native rune snapshots, although the HUD/NVN capture and change notifications remained active.
+- **Fix:** restore snapshot-driven rendering in both frontends, sharing the premultiplied RGBA image conversion with the layout editor. Each layout bank has `L_ICON_MODE`: `0` (default) shows the current rune, and `1` keeps the fixed button icon. Invalid or unavailable snapshots fall back to that fixed icon. The option applies live and participates in per-control reset, saved presets and layout export/import. The native capture path is unchanged.
+- **Check:** native rune snapshot tests, normal/compact preference validation, live setting application, persistence/export and production UI compilation. The UIKit fixture also checks generation reuse, fixed mode and fallback.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game).
+
 ### The touch layout editor hides its cancel control
 
 - **Symptom:** Cancel is missing from the layout canvas and control picker, including when R or ZR uses camera dragging.
