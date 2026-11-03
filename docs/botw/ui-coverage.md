@@ -3,9 +3,9 @@
 This workflow finds UI resources and native screens without depending on a player
 to discover every missing button. It does not equate an asset, a known screen
 prefix, or an emitted input with a successful interaction. The current manual
-acceptance record remains [Menu touch progress](botw-menu-touch-progress.md).
+acceptance record remains [Menu touch progress](touch-progress.md)).
 
-The [implementation checklist](botw-touch-implementation.md) is the separate
+The [implementation checklist](touch-implementation.md)) is the separate
 record of every classified layout and required screen/state/action. It names
 the code for each implemented interaction and keeps missing/partial work
 independent of unverified or unavailable game states. Its source is

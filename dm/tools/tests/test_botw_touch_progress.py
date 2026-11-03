@@ -76,6 +76,7 @@ class ProgressTests(unittest.TestCase):
         data = json.loads(progress.INVENTORY.read_text())
         self.assertEqual(progress.validate(data, require_complete=True), [])
         self.assertEqual(progress.OUT.read_text(), progress.page(data))
+        self.assertEqual(progress.RESOURCES_OUT.read_text(), progress.resource_page(data))
 
 
 if __name__ == '__main__': unittest.main()

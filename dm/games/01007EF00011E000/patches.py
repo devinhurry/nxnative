@@ -225,35 +225,29 @@ def validate_main(ctx):
         0xb0006da8, 0x9137e108, 0xf9002e7f, 0xa902fe7f, 0xf9000268,
         0xa903fe7f, 0xa904fe7f, 0xf9400bf3, 0xa8c27bfd, 0xd65f03c0,
     ), 'BOTW cursor constructor changed; revalidate initialized manager and epilogue scratch liveness'
-    assert tuple(word(o) for o in range(0xe39c08, 0xe39c20, 4)) == (
-        0xa9bd7bfd, 0xf9000bf5, 0xa9024ff4, 0x910003fd, 0xaa0003f4, 0x9105e000,
-    ), 'BOTW inventory transition-flag setter changed; revalidate native category request staging'
-    assert tuple(word(o) for o in range(0xe3b9f0, 0xe3b9fc, 4)) == (
-        0xb9768c08, 0x35000048, 0xd65f03c0,
-    ), 'BOTW inventory page-commit entry changed; revalidate native category commit sequence'
-    assert tuple(word(o) for o in range(0xe3ddcc, 0xe3ddcc + 0x20, 4)) == (
-        0xa9be7bfd, 0xa9014ff4, 0x910003fd, 0xb9763808,
-        0x2a0103f4, 0xaa0003f3, 0x3100051f, 0x54000220,
-    ), 'BOTW native inventory navigation/update entry changed; revalidate zero-delta category refresh'
-    # Touch refreshes with the pending-page flag set, then commits last.
-    # Navigation reads that pending page, its zero delta does not enter the
-    # page-distance loop, and commit clears the transition after native focus.
-    assert tuple(word(o) for o in range(0xe3ddec, 0xe3de10, 4)) == (
-        0xb9768e69, 0x5286cb88, 0x5286cc0a, 0x8b080268, 0x8b0a026a, 0x7100013f,
-        0x9a8a0108, 0xb9400108, 0x0b348100,
-    ), 'BOTW inventory navigation pending-page choice changed; revalidate refresh before commit'
-    assert tuple(word(o) for o in range(0xe3d430, 0xe3d444, 4)) == (
-        0x6b1502ff, 0x52800028, 0x5a88c519, 0x54000161, 0xb9366277,
-    ), 'BOTW inventory zero-delta staging changed; revalidate immediate category completion'
-    assert tuple(word(o) for o in range(0xe3e228, 0xe3e240, 4)) == (
-        0xaa1303e0, 0x52800021, 0x97ffee73, 0xb9766260, 0xb97a1274, 0x9400cb91,
-    ), 'BOTW inventory refresh transition request changed; commit must finish after refresh'
-    assert tuple(word(o) for o in range(0xe3ba80, 0xe3bacc, 4)) == (
-        0x52800028, 0xaa1303e0, 0x390ee288, 0xb9766268, 0xb9365e68, 0x97fffd38,
-        0xb9765e61, 0xaa1303e0, 0xb9766662, 0x940009f8, 0x5286cc88, 0x12800009,
-        0x7900029f, 0xf8286a69, 0xaa1303e0, 0xa9414ff4, 0x2a1f03e1, 0xa8c27bfd,
-        0x17fff84d,
-    ), 'BOTW inventory commit focus/transition completion changed; revalidate direct category taps'
+    # The touch category change runs the game's own sequence: both page
+    # fields move to the category's first page, the three item lists are
+    # re-laid out while keeping the carousel slot the page already occupied,
+    # and the current category follows. The relayout entry and the
+    # current-category writer are build-gated.
+    assert tuple(word(o) for o in range(0xe3af74, 0xe3af94, 4)) == (
+        0x6db923e9, 0xa9017bfd, 0xa9026ffc, 0xa90367fa,
+        0xa9045ff8, 0xa90557f6, 0xa9064ff4, 0x910043fd,
+    ), 'BOTW inventory list relayout entry changed; revalidate native category relayout'
+    assert tuple(word(o) for o in range(0xe3b20c, 0xe3b240, 4)) == (
+        0xa9bd7bfd, 0xf9000bf5, 0xa9024ff4, 0x910003fd, 0xaa0003f4, 0x2a0103e0,
+        0x2a0103f3, 0x9400d796, 0x5286d208, 0xb93a1280, 0x8b080295, 0xb9770a88,
+        0xaa1503e0,
+    ), 'BOTW inventory current-category writer changed; revalidate screen+0x3a10 update'
+    assert tuple(word(o) for o in range(0xe3f924, 0xe3f950, 4)) == (
+        0xf95b1408, 0xb5000048, 0xd65f03c0, 0xd10103ff,
+        0xa9017bfd, 0xa90257f6, 0xa9034ff4, 0x910043fd,
+        0x5286cf28, 0xaa0003f3, 0x8b080016,
+    ), 'BOTW inventory selection resolver changed; revalidate immediate category item refresh'
+    assert tuple(word(o) for o in range(0xe3faa4, 0xe3fac4, 4)) == (
+        0xf9400100, 0x97fe1de8, 0x37f800c0, 0x2a0003e2,
+        0xf95b1660, 0xb9765e61, 0x97fd65fc, 0xf91b2660,
+    ), 'BOTW inventory selection item lookup changed; revalidate screen+0x3648 refresh'
     assert tuple(word(o) for o in range(0xd6f034, 0xd6f054, 4)) == (
         0xd101c3ff, 0x6d0123e9, 0xa9027bfd, 0xa90367fa,
         0xa9045ff8, 0xa90557f6, 0xa9064ff4, 0x910083fd,

@@ -100,5 +100,5 @@ are `shader-build.log` and `regress-static/report.md` in the evidence folder.
 
 The later main integration and memory-transfer setting received a current-source
 Mac gameplay check with frame generation off; see the
-[overlay follow-up](../dm/games/01007EF00011E000/README.md#render-pass-cost-audit-2026-11-01).
+[overlay follow-up](../dm/games/01007EF00011E000/notes/performance.md#render-pass-cost-audit-2026-11-01).
 That check adds no frame-generation or performance acceptance claim.
