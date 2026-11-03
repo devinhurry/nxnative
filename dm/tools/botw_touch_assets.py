@@ -76,7 +76,7 @@ def masks(data):
 
 def png(width, height, alpha):
     def chunk(tag, data): return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', zlib.crc32(tag + data))
-    rows = b''.join(b'\0' + b''.join(bytes((226, 222, 211, a * 4 // 5)) for a in alpha[y * width:(y + 1) * width]) for y in range(height))
+    rows = b''.join(b'\0' + b''.join(bytes((226, 222, 211, a)) for a in alpha[y * width:(y + 1) * width]) for y in range(height))
     return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b'')
 
 

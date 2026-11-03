@@ -24,6 +24,10 @@ void dm_launcher_settings_pause(int on) {
 static int known_key(const char *key) {
     static const char *const keys[] = {
         "DM_MOTION_SOURCE",
+        "DM_BOTW_PAD_FILL_GRAY", "DM_BOTW_PAD_FILL_ALPHA", "DM_BOTW_PAD_STROKE_GRAY",
+        "DM_BOTW_PAD_STROKE_ALPHA", "DM_BOTW_PAD_ICON_ALPHA",
+        "DM_BOTW_PORTRAIT_PAD_FILL_GRAY", "DM_BOTW_PORTRAIT_PAD_FILL_ALPHA", "DM_BOTW_PORTRAIT_PAD_STROKE_GRAY",
+        "DM_BOTW_PORTRAIT_PAD_STROKE_ALPHA", "DM_BOTW_PORTRAIT_PAD_ICON_ALPHA",
         "DM_BOTW_PAD_A_ANCHOR",
         "DM_BOTW_PAD_B_ANCHOR",
         "DM_BOTW_PAD_X_ANCHOR",
@@ -163,6 +167,7 @@ static int value_valid(const char *key, const char *value) {
     if (!strcmp(key, "DM_RUMBLE_MIN")) return parse_number(value, &v) && v >= 0 && v <= .9f;
     if (!botw_key(key)) return strlen(value) < 128 && strspn(value, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") == strlen(value);
     if (!parse_number(value, &v)) return 0;
+    if (strstr(key, "_GRAY") || strstr(key, "_ALPHA")) return v >= 0 && v <= 1;
     if (strstr(key, "MOVE_DEADZONE")) return v >= 0 && v <= .3f;
     if (strstr(key, "MOVE_CURVE")) return v >= .3f && v <= 2.f;
     if (strstr(key, "MOVE_FULL")) return v >= .35f && v <= 1.f;

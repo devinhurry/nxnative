@@ -239,6 +239,19 @@ static void test_configurable_stick(void) {
 
 static void test_custom_layout(void) {
     dm_botw_touch_layout layout; assert(dm_botw_layout_read(&layout));
+    nearf(layout.fill_gray,.35f,.0001f); nearf(layout.fill_alpha,.2f,.0001f);
+    nearf(layout.stroke_gray,.52f,.0001f); nearf(layout.stroke_alpha,.4f,.0001f);
+    nearf(layout.icon_alpha,1,.0001f);
+    const char *appearance[]={"FILL_GRAY","FILL_ALPHA","STROKE_GRAY","STROKE_ALPHA","ICON_ALPHA"};
+    float *fields[]={&layout.fill_gray,&layout.fill_alpha,&layout.stroke_gray,&layout.stroke_alpha,&layout.icon_alpha};
+    for (int portrait=0;portrait<2;portrait++) for (int i=0;i<5;i++) {
+        char key[80]; snprintf(key,sizeof key,"DM_BOTW_%sPAD_%s",portrait ? "PORTRAIT_" : "",appearance[i]);
+        setenv(key,"0.63",1); assert(dm_botw_layout_read_for(&layout,portrait)); nearf(*fields[i],.63f,.0001f);
+        setenv(key,"1.01",1); assert(!dm_botw_layout_read_for(&layout,portrait));
+        setenv(key,"nan",1); assert(!dm_botw_layout_read_for(&layout,portrait));
+        unsetenv(key);
+    }
+    assert(dm_botw_layout_read(&layout));
     assert(!layout.badges);
     setenv("DM_BOTW_PAD_BADGES","1",1); assert(dm_botw_layout_read(&layout) && layout.badges);
     setenv("DM_BOTW_PAD_BADGES","0.5",1); assert(!dm_botw_layout_read(&layout));

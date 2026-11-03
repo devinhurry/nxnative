@@ -5,11 +5,8 @@
 #include <CoreGraphics/CoreGraphics.h>
 #include <math.h>
 #include <stdlib.h>
+#include "botw_touch_layout.h"
 
-#define DM_BOTW_BUTTON_GRAY .35
-#define DM_BOTW_BUTTON_ALPHA .20
-#define DM_BOTW_STROKE_GRAY .52
-#define DM_BOTW_STROKE_ALPHA .40
 #define DM_BOTW_STROKE_WIDTH_SCALE 1.2
 #define DM_BOTW_STICK_RING_WIDTH (1.5 * DM_BOTW_STROKE_WIDTH_SCALE)
 #define DM_BOTW_STICK_GRAPH_ALPHA .15

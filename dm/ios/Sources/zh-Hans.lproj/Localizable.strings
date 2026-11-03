@@ -152,6 +152,13 @@
 "Reset" = "\U91cd\U7f6e";
 "Restore this layout" = "\U6062\U590d\U5f53\U524d\U5e03\U5c40\U9ed8\U8ba4\U503c";
 "Layout options" = "\U5e03\U5c40\U9009\U9879";
+"Global opacity" = "\U5168\U5C40\U900F\U660E\U5EA6\U8C03\U6574";
+"Border gray" = "\U8FB9\U6846\U7070\U5EA6";
+"Border opacity" = "\U8FB9\U6846\U4E0D\U900F\U660E\U5EA6";
+"Background gray" = "\U80CC\U666F\U7070\U5EA6";
+"Background opacity" = "\U80CC\U666F\U4E0D\U900F\U660E\U5EA6";
+"Icon opacity" = "\U56FE\U6807\U4E0D\U900F\U660E\U5EA6";
+"Applies to every round button in this layout." = "\U5E94\U7528\U4E8E\U6B64\U5E03\U5C40\U7684\U6240\U6709\U5706\U5F62\U6309\U94AE\U3002";
 "Unable to save layout" = "\U65e0\U6cd5\U4fdd\U5b58\U5e03\U5c40";
 
 "Importing…" = "正在导入…";
