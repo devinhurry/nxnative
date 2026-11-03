@@ -11,6 +11,11 @@ import DmTouchPad
 
 private final class LandscapeLauncherController<Content: View>: UIHostingController<Content> {
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask { touchEditorOrientations ?? .landscape }
+    override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation {
+        let current = view.window?.windowScene?.interfaceOrientation ?? .unknown
+        if current != .unknown && supportedInterfaceOrientations.contains(UIInterfaceOrientationMask(rawValue: 1 << current.rawValue)) { return current }
+        return supportedInterfaceOrientations == .portrait ? .portrait : .landscapeRight
+    }
 }
 
 private var touchEditorOrientations: UIInterfaceOrientationMask?

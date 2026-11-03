@@ -22,6 +22,7 @@
         "label": {"type": "string"},
         "note": {"description": "The line under the label; empty for most settings.", "type": "string"},
         "default": {"description": "The tested default for this app's platform, with profile defaults resolved.", "type": "string"},
+        "phone_default": {"description": "Optional iPhone default on an Apple A-series Pro GPU of at least this generation (or a later A-series GPU). Saved and launch choices still take priority.", "type": "object", "required": ["generation", "value"], "properties": {"generation": {"type": "integer", "minimum": 1}, "value": {"type": "string"}}},
         "options": {"description": "choice: [value, label] pairs.", "type": "array", "items": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 2}},
         "min": {"description": "range: the lowest value.", "type": "number"},
         "max": {"description": "range: the highest value.", "type": "number"},

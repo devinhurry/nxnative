@@ -126,6 +126,9 @@ NSUInteger dm_touch_editor_orientations(void);
 UIInterfaceOrientationMask front_ios_orientations(UIWindow *window) {
     UIInterfaceOrientationMask editor=dm_touch_editor_orientations();
     if (editor) return editor;
+    // Match the root controller while the launcher is being presented. Saved
+    // portrait play preferences apply only after the game view exists.
+    if (!g_root.game) return UIInterfaceOrientationMaskLandscape;
     CGSize size=window.bounds.size; UIEdgeInsets safe=window.safeAreaInsets;
     return !strcmp(DM_GAME_ID,"01007EF00011E000") && dm_botw_portrait_allowed(size.width,size.height,safe.left,safe.right) ?
         UIInterfaceOrientationMaskLandscape | UIInterfaceOrientationMaskPortrait : UIInterfaceOrientationMaskLandscape;
@@ -231,7 +234,11 @@ static void game_settings_done(void) { dm_gamepad_settings_done(); }
     if (self.game && !strcmp(DM_GAME_ID,"01007EF00011E000")) [self setNeedsUpdateOfSupportedInterfaceOrientations];
 }
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    return self.game ? front_ios_orientations(self.view.window) : UIInterfaceOrientationMaskLandscape;
+    return front_ios_orientations(self.view.window);
+}
+- (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
+    UIInterfaceOrientation current=self.view.window.windowScene.interfaceOrientation;
+    return UIInterfaceOrientationIsLandscape(current) ? current : UIInterfaceOrientationLandscapeRight;
 }
 @end
 UIViewController *front_ios_root(void) { return [DmRootVC new]; }

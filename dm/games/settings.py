@@ -124,6 +124,19 @@ def build(gid, patched, control):
             s.update(on=on_off[0], off=on_off[1], default=on_off[0] if s['default'] == '1' else on_off[1])   # the default as the value the variable takes
         else: sys.exit(f'settings.tsv:{n}: unknown kind {kind}')
         out.append(s)
+    phone_defaults = {}
+    if phone := g.get('phone_defaults', ''):
+        gpu, *choices = phone.split()
+        match = re.fullmatch(r'A([1-9]\d*)Pro', gpu)
+        if not match or not choices: sys.exit(f'{g.id}: phone_defaults is A<generation>Pro DM_VARIABLE=value ...')
+        for choice in choices:
+            key, eq, val = choice.partition('=')
+            if not eq or key not in table or table[key] is None or val not in table[key] or key in phone_defaults:
+                sys.exit(f'{g.id}: invalid phone_defaults choice: {choice}')
+            phone_defaults[key] = {'generation': int(match[1]), 'value': val}
+        if platform == 'ios':
+            for row in out:
+                if row['env'] in phone_defaults: row['phone_default'] = phone_defaults[row['env']]
     return {'schema': SCHEMA, 'game': g.id, 'settings': out}
 
 

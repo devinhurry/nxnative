@@ -62,8 +62,8 @@ static inline dm_botw_control_anchor dm_botw_layout_anchor(int id,int portrait) 
         [4]={60.4f,54.5f,123.2f}, [6]={205.7f,193.7f,57.6f},
         [7]={34.3f,250.1f,57.2f}, [8]={35,225,154},
         [9]={130.2f,250.5f,57.2f}, [12]={246.1f,50,96},
-        [16]={320,160,52}, [17]={390,160,52}, [18]={460,160,52},
-        [19]={530,160,52}, [20]={390,94,52}
+        [16]={370,4,52}, [17]={440,4,52}, [18]={510,4,52},
+        [19]={580,4,52}, [20]={390,94,52}
     };
     static const dm_botw_control_anchor compact[DM_BOTW_CONTROL_COUNT]={
         [0]={22.1f,42.4f,43.9f}, [1]={96.7f,42.4f,43.9f},
@@ -71,8 +71,8 @@ static inline dm_botw_control_anchor dm_botw_layout_anchor(int id,int portrait) 
         [4]={27.6f,102.5f,111.7f}, [6]={10,44,46.2f},
         [7]={18.1f,250.6f,51.9f}, [8]={3.6f,214.5f,139.7f},
         [9]={18.1f,191.5f,51.9f}, [12]={71.2f,26.6f,81.1f},
-        [16]={154,270,44}, [17]={206,270,44}, [18]={154,218,44},
-        [19]={206,218,44}, [20]={154,166,44}
+        [16]={154,56,44}, [17]={204,56,44}, [18]={154,4,44},
+        [19]={204,4,44}, [20]={154,166,44}
     };
     return id>=0 && id<DM_BOTW_CONTROL_COUNT ? (portrait ? compact[id] : normal[id]) : (dm_botw_control_anchor){0};
 }
@@ -169,7 +169,7 @@ static inline dm_touchpad_rect dm_botw_layout_canvas(float width,float height) {
 }
 static inline dm_touchpad_rect dm_botw_layout_cancel(const dm_botw_touch_layout *layout,dm_touchpad_rect canvas,float top) {
     dm_botw_control_transform t=layout->control[DM_BOTW_CANCEL];
-    float y=canvas.y+canvas.height*(top>=0 ? top : .25f)-t.size+38+t.y;
+    float y=canvas.y+canvas.height*(top>=0 ? top : .25f)-t.size+188+t.y;
     return (dm_touchpad_rect){canvas.x+(canvas.width-t.size)*.5f+t.x,fmaxf(0,y),t.size,t.size};
 }
 static inline dm_touchpad_rect dm_botw_layout_control(const dm_botw_touch_layout *layout,int id,
