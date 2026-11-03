@@ -388,17 +388,17 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
         });
         _controls = [CALayer layer]; [self.layer addSublayer:_controls];
         _menuDpad = shape(self.layer); _menuDpad.hidden = YES;
-        _menuDpad.fillColor = [UIColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:.8].CGColor;
+        _menuDpad.fillColor = [UIColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:1].CGColor;
         _menuDpad.strokeColor = nil; _menuDpad.shadowOpacity = 0;
         _ring = shape(_controls); _ring.fillColor = k_ringFill.CGColor;
         _knob = shape(_controls);
         _stickDirection = shape(_controls); _stickDirection.hidden = YES;
-        _stickDirection.fillColor = [UIColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:.8].CGColor;
+        _stickDirection.fillColor = [UIColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:1].CGColor;
         _stickDirection.strokeColor = nil; _stickDirection.shadowOpacity = 0;
         _shieldRing = shape(_controls); _shieldRing.fillColor = nil;
         _shieldGraph = shape(_controls); _shieldDirection = shape(_controls);
         for (CAShapeLayer *glyph in @[_shieldGraph, _shieldDirection]) {
-            glyph.fillColor = [UIColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:.8].CGColor;
+            glyph.fillColor = [UIColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:1].CGColor;
             glyph.strokeColor = nil; glyph.shadowOpacity = 0;
         }
         _cancelRing = shape(_controls); _cancelRing.fillColor = nil; _cancelRing.strokeColor = [UIColor colorWithRed:.94 green:.88 blue:.70 alpha:.8].CGColor; _cancelRing.hidden = YES;
@@ -631,6 +631,11 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
 static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPointMake(right ? CGRectGetMaxX(s) - dx : CGRectGetMinX(s) + dx, y); }
 - (CGRect)botwLayoutRect:(int)control {
     UIEdgeInsets i = [self botwControlInsets]; float canvas[4],region[4]; CGRect area=[self botwControlArea];
+    if (control==DM_BOTW_CANCEL && !_touchLayout.control[control].anchor) {
+        dm_aspect_touch_rect(self.bounds.size.width,self.bounds.size.height,canvas);
+        dm_touchpad_rect r=dm_botw_layout_cancel(&_touchLayout,(dm_touchpad_rect){canvas[0],canvas[1],canvas[2],canvas[3]},dm_botw_touch_quick_select_top());
+        return CGRectMake(r.x,r.y,r.width,r.height);
+    }
     if (dm_aspect_region(1,region)) {
         dm_touchpad_rect a={area.origin.x,area.origin.y,area.size.width,area.size.height};
         if (control==B_PLUS || control==B_MINUS) {
@@ -1662,8 +1667,8 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
             uint64_t owner=[_owner objectForKey:touch].unsignedLongLongValue;
             if ((owner&0xff)==C_BOTW_ADDED && (owner>>8)==control) { pressed=YES; break; }
         }
-        _extraKey[i].fillColor=(pressed ? _botwOn : _botwIdle).CGColor;
-        _extraBorder[i].fillColor=_botwLine.CGColor;
+        _extraKey[i].fillColor=i==4 ? NULL : (pressed ? _botwOn : _botwIdle).CGColor;
+        _extraBorder[i].fillColor=i==4 ? NULL : _botwLine.CGColor;
         _extraIcon[i].opacity=_touchLayout.icon_alpha;
         CGRect r=[self botwLayoutRect:control];
         setPath(_extraKey[i],CGPathCreateWithEllipseInRect(r,NULL));
@@ -1678,7 +1683,7 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
     }
     if (!_extraCancel) {
         _extraCancel=shape(_controls); _extraCancel.strokeColor=nil; _extraCancel.shadowOpacity=0;
-        _extraCancel.fillColor=[UIColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:1].CGColor;
+        _extraCancel.fillColor=UIColor.systemRedColor.CGColor;
     }
     _extraCancel.opacity=_touchLayout.icon_alpha;
     _extraCancel.hidden=_extraKey[4].hidden;
@@ -1927,7 +1932,7 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
             _label[b].foregroundColor = UIColor.whiteColor.CGColor;
         }
         if (botw && b >= B_LEFT && b <= B_DOWN) {
-            _key[b].fillColor = [UIColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:(on ? 1 : .8)*_touchLayout.icon_alpha].CGColor;
+            _key[b].fillColor = [UIColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:_touchLayout.icon_alpha].CGColor;
             _key[b].strokeColor = nil;
         }
         if (b == B_PLUS || b == B_MINUS) _label[b].hidden = botw;
@@ -1944,8 +1949,10 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
     }
     if (botw) _label[B_Y].foregroundColor = [UIColor colorWithRed:.94 green:.88 blue:.70 alpha:1].CGColor;
     _runeIconLayer.opacity = botw ? _touchLayout.icon_alpha : 1;
-    for (CALayer *glyph in @[_shieldGraph, _shieldDirection, _stickDirection, _menuDpad])
+    for (CALayer *glyph in @[_shieldGraph, _shieldDirection])
         glyph.opacity = botw ? _touchLayout.icon_alpha : 1;
+    _stickDirection.opacity = botw ? _touchLayout.stick_alpha : 1;
+    _menuDpad.opacity = (botw || [self botwMenuDpadActive]) ? _touchLayout.icon_alpha : 1;
     CAShapeLayer *shapes[] = {_ring, _knob, _shieldRing, _runeBadge, _cancelRing};
     for (int i = 0; i < sizeof shapes / sizeof *shapes; i++) shapes[i].shadowOpacity = botw ? 0 : .2;
     _swap.fillColor = (_swapHeld ? k_on : k_idle).CGColor; _swapLabel.foregroundColor = (_swapHeld ? k_textOn : k_text).CGColor;
@@ -1956,7 +1963,7 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
     }
     _knob.position = botw ? h : CGPointMake(h.x+o.x,h.y+o.y);
     _knob.fillColor = botw ? NULL : (_stick[0] ? pressed : idle).CGColor;
-    CGColorRef faint = [UIColor colorWithWhite:1 alpha:DM_BOTW_STICK_GRAPH_ALPHA * (botw ? _touchLayout.icon_alpha : 1)].CGColor;
+    CGColorRef faint = [UIColor colorWithWhite:1 alpha:botw ? _touchLayout.stick_alpha : DM_BOTW_STICK_GRAPH_ALPHA].CGColor;
     _knob.strokeColor = botw ? faint : line.CGColor;
     CAShapeLayer *arrows = (CAShapeLayer *)_knob.sublayers.firstObject;
     arrows.strokeColor = botw ? NULL : line.CGColor; arrows.fillColor = botw ? faint : NULL;

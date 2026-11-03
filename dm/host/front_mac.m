@@ -601,6 +601,8 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
 }
 - (dm_touchpad_rect)layoutRect:(int)control {
     float canvas[4]; dm_aspect_touch_rect(self.bounds.size.width,self.bounds.size.height,canvas);
+    if (control==DM_BOTW_CANCEL && !_touchLayout.control[control].anchor)
+        return dm_botw_layout_cancel(&_touchLayout,(dm_touchpad_rect){canvas[0],canvas[1],canvas[2],canvas[3]},dm_botw_touch_quick_select_top());
     NSEdgeInsets i=preview_safe_insets();
     float region[4];
     if (dm_aspect_region(1,region)) {
@@ -1166,21 +1168,22 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     if (_menuMode && !_cameraPadVisible && !preview_seated() && !_settingsShortcutVisible) {
         if (_touchLayout.dpad_visible && dm_botw_touch_menu_dpad_visible()) {
             dm_touchpad_point d=self.dpadCenter;
-            NSColor *color=[NSColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:.8];
+            NSColor *color=[NSColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:_touchLayout.icon_alpha];
             for (int b=12;b<16;b++) preview_draw_botw_glyph(dm_botw_dpad_key_path(CGPointMake(d.x,d.y),self.dpadRadius,b),h,color);
         }
         return;
     }
     dm_touchpad_point sh = _owner == PREVIEW_STICK ? preview_pad_point((float)_stickCenter.x,(float)_stickCenter.y) : [self stickHome]; NSPoint ring = preview_from_top(sh.x,sh.y,h);
-    NSColor *glyphColor=[NSColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:.8*_touchLayout.icon_alpha];
+    NSColor *glyphColor=[NSColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:_touchLayout.icon_alpha];
     if (_owner==PREVIEW_STICK) {
         CGFloat r=self.stickRadius;
         [[NSColor colorWithWhite:_touchLayout.stroke_gray alpha:_touchLayout.stroke_alpha] setStroke];
         NSBezierPath *outer=[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(ring.x-r,ring.y-r,2*r,2*r)];
         outer.lineWidth=DM_BOTW_STICK_RING_WIDTH*_moveResponse.size; [outer stroke];
-        preview_draw_botw_glyph(dm_botw_stick_direction_path(CGPointMake(sh.x,sh.y),CGPointMake(_last.x,_last.y),r,u*_moveResponse.size),h,glyphColor);
+        preview_draw_botw_glyph(dm_botw_stick_direction_path(CGPointMake(sh.x,sh.y),CGPointMake(_last.x,_last.y),r,u*_moveResponse.size),h,
+            [NSColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:_touchLayout.stick_alpha]);
     }
-    NSColor *faint=[NSColor colorWithWhite:1 alpha:DM_BOTW_STICK_GRAPH_ALPHA*_touchLayout.icon_alpha]; [faint setStroke];
+    NSColor *faint=[NSColor colorWithWhite:1 alpha:_touchLayout.stick_alpha]; [faint setStroke];
     CGFloat kr=DM_TP_KNOB_R*u*_moveResponse.size;
     NSBezierPath *center=[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(ring.x-kr,ring.y-kr,2*kr,2*kr)];
     center.lineWidth=1.5; [center stroke];
@@ -1188,9 +1191,9 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     for (int control=16;control<=20;control++) {
         if (_menuMode || !(control==20 ? dm_botw_touch_switch_cancel_visible() : dm_botw_layout_control_visible(&_touchLayout,control))) continue;
         dm_touchpad_rect r=[self layoutRect:control]; NSPoint at=preview_from_top(r.x+r.width*.5f,r.y+r.height*.5f,h);
-        [self drawCircle:at radius:r.width*.5f fill:(_owner==PREVIEW_ADDED && _button==control) ? .48 : .15 label:@""];
+        if (control!=20) [self drawCircle:at radius:r.width*.5f fill:(_owner==PREVIEW_ADDED && _button==control) ? .48 : .15 label:@""];
         if (control==20) preview_draw_botw_glyph(dm_botw_switch_cancel_path(CGPointMake(at.x,h-at.y),r.width),h,
-            [NSColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:_touchLayout.icon_alpha]);
+            [NSColor colorWithSRGBRed:1 green:.23 blue:.19 alpha:_touchLayout.icon_alpha]);
         else [self drawButtonIcon:dm_botw_touch_bow_active() && control<18 ? control+5 : control center:at radius:r.width*.5f];
     }
     dm_touchpad_point fc = [self faceCenter];

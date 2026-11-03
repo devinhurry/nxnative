@@ -239,9 +239,9 @@ static void test_configurable_stick(void) {
 
 static void test_custom_layout(void) {
     dm_botw_touch_layout layout; assert(dm_botw_layout_read(&layout));
-    nearf(layout.fill_gray,.35f,.0001f); nearf(layout.fill_alpha,.2f,.0001f);
-    nearf(layout.stroke_gray,.52f,.0001f); nearf(layout.stroke_alpha,.4f,.0001f);
-    nearf(layout.icon_alpha,1,.0001f);
+    nearf(layout.fill_gray,.35f,.0001f); nearf(layout.fill_alpha,.14f,.0001f);
+    nearf(layout.stroke_gray,.57f,.0001f); nearf(layout.stroke_alpha,.3f,.0001f);
+    nearf(layout.icon_alpha,.9f,.0001f);
     for (int portrait=0;portrait<2;portrait++) {
         char hit[80],size[80];
         snprintf(hit,sizeof hit,"DM_BOTW_%sPAD_ZL_HIT_PT",portrait ? "PORTRAIT_" : "");

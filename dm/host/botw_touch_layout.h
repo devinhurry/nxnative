@@ -6,10 +6,11 @@
 #include <string.h>
 
 #define DM_BOTW_BUTTON_GRAY .35
-#define DM_BOTW_BUTTON_ALPHA .20
-#define DM_BOTW_STROKE_GRAY .52
-#define DM_BOTW_STROKE_ALPHA .40
-#define DM_BOTW_ICON_ALPHA 1.0
+#define DM_BOTW_BUTTON_ALPHA .14
+#define DM_BOTW_STROKE_GRAY .57
+#define DM_BOTW_STROKE_ALPHA .30
+#define DM_BOTW_ICON_ALPHA .90
+#define DM_BOTW_STICK_ALPHA .15
 
 // Default anchors retain the original base-relative offsets. Explicit anchors
 // store actual side and bottom edge distances in x/y, independent of defaults.
@@ -21,7 +22,7 @@ typedef struct {
     dm_botw_control_transform control[DM_BOTW_CONTROL_COUNT];
     int badges, portrait, dpad_visible, added[4], switch_mode[2], rune_mode;
     float fill_gray, fill_alpha, stroke_gray, stroke_alpha, icon_alpha;
-    float shield_hit_size;
+    float shield_hit_size, stick_alpha;
 } dm_botw_touch_layout;
 typedef struct { float side, bottom, size; } dm_botw_control_anchor;
 
@@ -77,7 +78,8 @@ static inline dm_botw_control_anchor dm_botw_layout_anchor(int id,int portrait) 
 static inline dm_botw_touch_layout dm_botw_layout_defaults_for(int portrait) {
     dm_botw_touch_layout layout={.portrait=portrait,.dpad_visible=1,
         .fill_gray=DM_BOTW_BUTTON_GRAY,.fill_alpha=DM_BOTW_BUTTON_ALPHA,
-        .stroke_gray=DM_BOTW_STROKE_GRAY,.stroke_alpha=DM_BOTW_STROKE_ALPHA,.icon_alpha=DM_BOTW_ICON_ALPHA};
+        .stroke_gray=DM_BOTW_STROKE_GRAY,.stroke_alpha=DM_BOTW_STROKE_ALPHA,.icon_alpha=DM_BOTW_ICON_ALPHA,
+        .stick_alpha=DM_BOTW_STICK_ALPHA};
     for (int i=0;i<DM_BOTW_CONTROL_COUNT;i++) layout.control[i].size=dm_botw_layout_anchor(i,portrait).size;
     layout.shield_hit_size=layout.control[8].size*DM_TP_STICK_GRAB;
     return layout;
@@ -126,9 +128,9 @@ static inline int dm_botw_layout_read_for(dm_botw_touch_layout *out,int portrait
         if (!dm_botw_layout_number(key,0,i<5 ? 1 : 2,&v) || v!=floorf(v)) return 0;
         *options[i]=(int)v;
     }
-    const char *appearance[]={"FILL_GRAY","FILL_ALPHA","STROKE_GRAY","STROKE_ALPHA","ICON_ALPHA"};
-    float *colors[]={&out->fill_gray,&out->fill_alpha,&out->stroke_gray,&out->stroke_alpha,&out->icon_alpha};
-    for (int i=0;i<5;i++) {
+    const char *appearance[]={"FILL_GRAY","FILL_ALPHA","STROKE_GRAY","STROKE_ALPHA","ICON_ALPHA","STICK_ALPHA"};
+    float *colors[]={&out->fill_gray,&out->fill_alpha,&out->stroke_gray,&out->stroke_alpha,&out->icon_alpha,&out->stick_alpha};
+    for (int i=0;i<6;i++) {
         snprintf(key,sizeof key,"%s%s",prefix,appearance[i]);
         if (!dm_botw_layout_number(key,0,1,colors[i])) return 0;
     }
@@ -164,6 +166,11 @@ static inline dm_touchpad_rect dm_botw_layout_canvas(float width,float height) {
     float w=fminf(width,height*16.f/9),h=w*9.f/16;
     return (dm_touchpad_rect){(width-w)*.5f,(height-h)*.5f,w,h};
 }
+static inline dm_touchpad_rect dm_botw_layout_cancel(const dm_botw_touch_layout *layout,dm_touchpad_rect canvas,float top) {
+    dm_botw_control_transform t=layout->control[DM_BOTW_CANCEL];
+    float y=canvas.y+canvas.height*(top>=0 ? top : .25f)-t.size-12+t.y;
+    return (dm_touchpad_rect){canvas.x+(canvas.width-t.size)*.5f+t.x,fmaxf(0,y),t.size,t.size};
+}
 static inline dm_touchpad_rect dm_botw_layout_control(const dm_botw_touch_layout *layout,int id,
         float width,float height,float left,float top,float right,float bottom,dm_touchpad_rect canvas) {
     if (id==10 || id==11) {
@@ -184,6 +191,7 @@ static inline dm_touchpad_rect dm_botw_layout_control(const dm_botw_touch_layout
         return (dm_touchpad_rect){t.anchor==DM_BOTW_ANCHOR_RIGHT ? width-side-t.size : side,
             height-edge_bottom-t.size,t.size,t.size};
     }
+    if (id==DM_BOTW_CANCEL) return dm_botw_layout_cancel(layout,canvas,-1);
     int at_right=id<4 || id==7 || id==9;
     // Normal left margins contract below 800pt, retaining at least 80%.
     // Only the base margin responds to width; user offsets stay in points.

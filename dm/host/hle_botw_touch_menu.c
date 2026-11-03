@@ -117,6 +117,7 @@ static int g_presented_menu;
 static int g_presented_gameplay;
 static int g_presented_loadout;
 static int g_presented_quick_select;
+static float g_presented_quick_top=-1;
 static int g_presented_bow;
 static int g_open_category = -1, g_open_phase;
 static uint64_t g_open_frame, g_open_tab_page;
@@ -3123,6 +3124,30 @@ static int selector_quick_select_visible(uintptr_t root) {
     static const char *const path[] = {"N_All_00", "N_ShortCutPos_00", "N_Cut_00", "N_ShortCutAll_00"};
     return selector_hud_path_visible(root, path, sizeof path / sizeof *path);
 }
+static float selector_quick_select_top(uintptr_t root) {
+    static const char *const path[]={"N_All_00","N_ShortCutPos_00","N_Cut_00","N_ShortCutAll_00"};
+    uintptr_t stack[256]; int count=0,visited=0;
+    uintptr_t pane=selector_hud_path_pane(root,path,sizeof path/sizeof *path);
+    if (pane) stack[count++]=pane;
+    float top=1;
+    while (count && visited++<256) {
+        pane=stack[--count];
+        if (!selector_range(pane,PANE_NAME+24) || !pane_chain_visible((uint8_t *)pane) ||
+            !pane_chain_alpha_visible((uint8_t *)pane)) continue;
+        float m[6],w,h,r[4];
+        if (pane_affine((uint8_t *)pane,m,&w,&h)) {
+            native_rect_from_pane((uint8_t *)pane,m[2],m[5],r);
+            if (rect_intersects_canvas(r) && r[1]>=0 && r[3]<.35f) top=fminf(top,r[1]);
+        }
+        uintptr_t sentinel=pane+0x20,link=selector_read_ptr(pane,0x28);
+        for (int n=0;link && link!=sentinel && n<64 && count<256;n++) {
+            uintptr_t child=link>=8 ? link-8 : 0;
+            if (!child || selector_read_ptr(child,PANE_PARENT)!=pane) break;
+            stack[count++]=child; link=selector_read_ptr(child,0x10);
+        }
+    }
+    return top<1 ? top : -1;
+}
 
 static uintptr_t selector_scope_guide_bar(uintptr_t root) {
     static const char *const path[] = {"N_All_00", "Pa_CameraPointer_00", "N_InOut_02",
@@ -3180,6 +3205,7 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
     uintptr_t flags = selector_read_ptr(registry, 0x40);
     int auditing = g_ui_audit && dm_botw_touch_hud_active();
     int presented = 0, gameplay = 0, loadout = 0, quick_select = 0, bow = 0;
+    float quick_top=-1;
     uintptr_t presented_root = 0;
     uintptr_t gameplay_root = 0;
     char presented_name[64] = {0};
@@ -3213,6 +3239,7 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
                 static const char *const bow_path[] = {"N_All_00","N_MainAll_00","N_Pos_00","N_MainGuideR_01","P_BowIcon_00"};
                 bow |= selector_hud_path_visible(root,bow_path,sizeof bow_path/sizeof *bow_path);
                 quick_select |= mode == 2 && shown >= 0 && input_owned && selector_quick_select_visible(root);
+                if (quick_select) quick_top=selector_quick_select_top(root);
             }
             if (!strcmp(name, "MainScreen_00") && mode == 2 && shown >= 0 &&
                 input_owned && root_visible &&
@@ -3240,13 +3267,14 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
     pthread_mutex_lock(&g_menu_mu);
     int changed = g_presented_menu != presented || g_presented_menu_root != presented_root ||
         g_presented_gameplay != gameplay || g_presented_loadout != loadout ||
-        g_presented_bow != bow || g_presented_quick_select != quick_select;
+        g_presented_bow != bow || g_presented_quick_select != quick_select || fabsf(g_presented_quick_top-quick_top)>.001f;
     g_presented_menu = presented;
     g_presented_menu_root = presented_root;
     g_presented_menu_frame = frame;
     g_presented_gameplay = gameplay;
     g_presented_loadout = loadout;
     g_presented_quick_select = quick_select;
+    g_presented_quick_top = quick_top;
     g_presented_bow = bow;
     g_presented_gameplay_root = gameplay_root;
     pthread_mutex_unlock(&g_menu_mu);
@@ -5832,6 +5860,13 @@ int dm_botw_touch_quick_select_active(void) {
     int active = g_presented_quick_select && frame >= g_presented_menu_frame && frame-g_presented_menu_frame <= 2;
     pthread_mutex_unlock(&g_menu_mu);
     return active;
+}
+float dm_botw_touch_quick_select_top(void) {
+    pthread_mutex_lock(&g_menu_mu);
+    uint64_t frame=menu_render_frame();
+    float top=g_presented_quick_select && frame>=g_presented_menu_frame && frame-g_presented_menu_frame<=2 ? g_presented_quick_top : -1;
+    pthread_mutex_unlock(&g_menu_mu);
+    return top;
 }
 int dm_botw_touch_bow_active(void) {
     pthread_mutex_lock(&g_menu_mu);

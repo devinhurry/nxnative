@@ -30,6 +30,8 @@ int dm_botw_touch_controls_visible(void);
 int dm_botw_touch_loadout_visible(void);
 // The native quick equipment/rune strip is open. Only touch drag changes sign.
 int dm_botw_touch_quick_select_active(void);
+// Fresh top edge of the native quick strip, normalized to the game canvas.
+float dm_botw_touch_quick_select_top(void);
 int dm_botw_touch_bow_active(void);
 // Open Pause inventory and select a native category when its live owner is ready.
 void dm_botw_touch_menu_open_category(int category);
