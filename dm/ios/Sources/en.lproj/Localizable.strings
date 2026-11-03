@@ -311,3 +311,6 @@
 "Drag to cancel" = "Drag to cancel";
 "Drag to look" = "Drag to look";
 "Choose whether dragging cancels the action or moves the camera." = "Choose whether dragging cancels the action or moves the camera.";
+"Collapse" = "Collapse";
+"Expand" = "Expand";
+"Low available memory" = "Low available memory";

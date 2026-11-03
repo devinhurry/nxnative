@@ -1201,6 +1201,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     if (dm_botw_touch_quick_select_active()) {
         if (dm_botw_touch_switch_cancel_visible()) {
             dm_touchpad_rect r=[self layoutRect:DM_BOTW_CANCEL];
+            [self drawCircle:preview_from_top(r.x+r.width*.5f,r.y+r.height*.5f,h) radius:r.width*.5f fill:.15 label:@""];
             preview_draw_botw_glyph(dm_botw_switch_cancel_path(CGPointMake(r.x+r.width*.5f,r.y+r.height*.5f),r.width),h,
                 [NSColor colorWithSRGBRed:1 green:.23 blue:.19 alpha:_touchLayout.icon_alpha]);
         }
@@ -1224,7 +1225,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     for (int control=16;control<=20;control++) {
         if (_menuMode || !(control==20 ? dm_botw_touch_switch_cancel_visible() : dm_botw_layout_control_visible(&_touchLayout,control))) continue;
         dm_touchpad_rect r=[self layoutRect:control]; NSPoint at=preview_from_top(r.x+r.width*.5f,r.y+r.height*.5f,h);
-        if (control!=20) [self drawCircle:at radius:r.width*.5f fill:(_owner==PREVIEW_ADDED && _button==control) ? .48 : .15 label:@""];
+        [self drawCircle:at radius:r.width*.5f fill:(_owner==PREVIEW_ADDED && _button==control) ? .48 : .15 label:@""];
         if (control==20) preview_draw_botw_glyph(dm_botw_switch_cancel_path(CGPointMake(at.x,h-at.y),r.width),h,
             [NSColor colorWithSRGBRed:1 green:.23 blue:.19 alpha:_touchLayout.icon_alpha]);
         else [self drawButtonIcon:dm_botw_touch_bow_active() && control<18 ? control+5 : control center:at radius:r.width*.5f];

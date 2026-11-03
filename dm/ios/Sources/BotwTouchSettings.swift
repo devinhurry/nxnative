@@ -44,22 +44,73 @@ struct BotwTouchSettingsMenu: View {
     }
 }
 
-private struct BotwTouchJSONDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.json] }
-    var data: Data
-    init(data: Data) { self.data = data }
-    init(configuration: ReadConfiguration) throws {
-        guard let data = configuration.file.regularFileContents else { throw BotwTouchFileError.invalid }
-        self.data = data
+private struct BotwTouchExportFile {
+    let url: URL
+    init(data: Data) throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        url = directory.appendingPathComponent("botw-touch-layouts.json")
+        try data.write(to: url, options: .atomic)
     }
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { FileWrapper(regularFileWithContents: data) }
+}
+
+#if os(iOS)
+private struct BotwTouchShareSheet: UIViewControllerRepresentable {
+    let file: BotwTouchExportFile
+    @Binding var presented: Bool
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let controller = UIActivityViewController(activityItems: [file.url], applicationActivities: nil)
+        controller.view.tintColor = UIColor(launcherTint)
+        controller.completionWithItemsHandler = { _, _, _, _ in
+            presented = false
+            try? FileManager.default.removeItem(at: file.url.deletingLastPathComponent())
+        }
+        return controller
+    }
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+#else
+private struct BotwTouchSharePicker: NSViewRepresentable {
+    let file: BotwTouchExportFile?
+    @Binding var presented: Bool
+    final class Coordinator {
+        var scheduled = false
+        var picker: NSSharingServicePicker?
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeNSView(context: Context) -> NSView { NSView() }
+    func updateNSView(_ view: NSView, context: Context) {
+        guard presented, let file, !context.coordinator.scheduled else { return }
+        let coordinator = context.coordinator
+        coordinator.scheduled = true
+        DispatchQueue.main.async {
+            let picker = NSSharingServicePicker(items: [file.url])
+            coordinator.picker = picker
+            picker.show(relativeTo: view.bounds, of: view, preferredEdge: .minY)
+            presented = false
+            coordinator.scheduled = false
+        }
+    }
+}
+#endif
+
+private extension View {
+    @ViewBuilder func touchLayoutSharing(_ file: BotwTouchExportFile?, presented: Binding<Bool>) -> some View {
+        #if os(iOS)
+        sheet(isPresented: presented) {
+            if let file { BotwTouchShareSheet(file: file, presented: presented) }
+        }
+        #else
+        background(BotwTouchSharePicker(file: file, presented: presented).frame(width: 1, height: 1))
+        #endif
+    }
 }
 
 private struct BotwTouchLibraryControls: View {
     @ObservedObject var m: LauncherModel
     @State private var importing = false
     @State private var exporting = false
-    @State private var document: BotwTouchJSONDocument?
+    @State private var document: BotwTouchExportFile?
     @State private var naming = false
     @State private var namingAction = "New layout"
     @State private var name = ""
@@ -98,7 +149,7 @@ private struct BotwTouchLibraryControls: View {
     private func export(all: Bool) {
         do {
             let (normal, compact) = areas()
-            document = BotwTouchJSONDocument(data: try m.exportTouchLayouts(all: all, normalArea: normal, compactArea: compact))
+            document = try BotwTouchExportFile(data: m.exportTouchLayouts(all: all, normalArea: normal, compactArea: compact))
             exporting = true
         } catch { show(error.localizedDescription) }
     }
@@ -144,9 +195,7 @@ private struct BotwTouchLibraryControls: View {
                 show(String(format: NSLocalizedString("Imported %d layouts. Select a layout to use it.", comment: ""), count))
             } catch { if (error as NSError).code != NSUserCancelledError { show(error.localizedDescription) } }
         }
-        .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "botw-touch-layouts") { result in
-            if case .failure(let error) = result, (error as NSError).code != NSUserCancelledError { show(error.localizedDescription) }
-        }
+        .touchLayoutSharing(document, presented: $exporting)
         .alert(LocalizedStringKey(namingAction), isPresented: $naming) {
             TextField("Layout name", text: $name)
             Button("Cancel", role: .cancel) {}
@@ -198,9 +247,10 @@ struct BotwTouchSettingsView: View {
     @State private var confirmingExit = false
     @State private var saveFailed = false
     @State private var exporting = false
-    @State private var document: BotwTouchJSONDocument?
+    @State private var document: BotwTouchExportFile?
     @State private var exportError: String?
     @State private var showingAppearance = false
+    @State private var panelCollapsed = false
     @State private var controlRegion = CGRect(x: 0, y: 0, width: 1, height: 1)
     @State private var panelInsets = EdgeInsets()
     @State private var editorArea = CGSize(width: 932, height: 430)
@@ -282,7 +332,7 @@ struct BotwTouchSettingsView: View {
     }
     private func exportParameters() {
         do {
-            document = BotwTouchJSONDocument(data: try m.exportTouchLayoutDraft(values, portrait: portrait,
+            document = try BotwTouchExportFile(data: m.exportTouchLayoutDraft(values, portrait: portrait,
                 area: .init(width: Double(editorArea.width), height: Double(editorArea.height))))
             exporting = true
         } catch { exportError = error.localizedDescription }
@@ -295,6 +345,8 @@ struct BotwTouchSettingsView: View {
                     .accessibilityIdentifier("botw.touch.exit")
                 Spacer(minLength: 4)
                 Text(LocalizedStringKey(portrait ? "Compact layout" : "Normal layout")).font(.system(size: 13, weight: .semibold))
+                Button { panelCollapsed = true } label: { Label("Collapse", systemImage: "chevron.up") }
+                    .font(.system(size: 10)).accessibilityIdentifier("botw.touch.panel.collapse")
                 Spacer(minLength: 4)
                 Menu("Reset") {
                     Button("Restore this control") { reset(selected.keys(portrait: portrait)) }
@@ -450,8 +502,17 @@ struct BotwTouchSettingsView: View {
             #endif
             .overlay(alignment: .top) {
                 VStack(spacing: 6) {
-                    panel
-                    if showingAppearance { appearancePanel }
+                    if panelCollapsed {
+                        Button { panelCollapsed = false } label: { Label("Expand", systemImage: "chevron.down") }
+                            .font(.system(size: 12)).controlSize(.small)
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .foregroundStyle(.white).environment(\.colorScheme, .dark)
+                            .background(Color(white: 0.08).opacity(0.42), in: Capsule())
+                            .accessibilityIdentifier("botw.touch.panel.expand")
+                    } else {
+                        panel
+                        if showingAppearance { appearancePanel }
+                    }
                 }
                     .padding(.horizontal, max(12, max(max(geometry.safeAreaInsets.leading, geometry.safeAreaInsets.trailing), max(panelInsets.leading, panelInsets.trailing))))
                     .padding(.top, max(12, max(geometry.safeAreaInsets.top, panelInsets.top)))
@@ -475,14 +536,13 @@ struct BotwTouchSettingsView: View {
             Button("Continue editing", role: .cancel) {}
                 .accessibilityIdentifier("botw.touch.continue")
         } message: { Text("Exit without saving your changes?") }
-        .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "botw-touch-layout") { result in
-            if case .failure(let error) = result, (error as NSError).code != NSUserCancelledError { exportError = error.localizedDescription }
-        }
+        .touchLayoutSharing(document, presented: $exporting)
         .alert("Unable to export layout", isPresented: Binding(get: { exportError != nil }, set: { if !$0 { exportError = nil } })) {
             Button("OK", role: .cancel) { exportError = nil }
         } message: { Text(exportError ?? "") }
         .alert("Unable to save layout", isPresented: $saveFailed) { Button("OK", role: .cancel) {} }
         .preferredColorScheme(.dark)
+        .tint(launcherTint)
     }
 }
 
@@ -606,6 +666,11 @@ private struct BotwTouchArtwork: View {
                     Path(key).fill(.white)
                 }
             } else if control == 20 {
+                let disk = CGPath(ellipseIn: CGRect(origin: .zero, size: size), transform: nil)
+                Path(disk).fill(Color(white: Double(appearance.fill_gray)).opacity(Double(appearance.fill_alpha)))
+                if let border = dm_botw_outer_border_path(disk, 1.5 * CGFloat(DM_BOTW_STROKE_WIDTH_SCALE)) {
+                    Path(border).fill(outline)
+                }
                 if let cancel = dm_botw_switch_cancel_path(center, size.width) {
                     Path(cancel).fill(Color.red.opacity(Double(appearance.icon_alpha)))
                 }

@@ -311,3 +311,6 @@
 "Drag to cancel" = "\U62D6\U52A8\U53D6\U6D88";
 "Drag to look" = "\U62D6\U52A8\U8F6C\U89C6\U89D2";
 "Choose whether dragging cancels the action or moves the camera." = "\U9009\U62E9\U62D6\U52A8\U65F6\U53D6\U6D88\U52A8\U4F5C\U6216\U8F6C\U52A8\U89C6\U89D2\U3002";
+"Collapse" = "\U6536\U8D77";
+"Expand" = "\U5C55\U5F00";
+"Low available memory" = "\U53EF\U7528\U5185\U5B58\U4E0D\U8DB3";

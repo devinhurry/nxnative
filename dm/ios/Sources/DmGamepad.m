@@ -1673,10 +1673,11 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
     BOOL bow=dm_botw_touch_bow_active();
     for (int i=0;i<5;i++) {
         if (!_extraKey[i]) {
-            _extraBorder[i]=botwBorder(_controls); _extraKey[i]=shape(_controls);
+            CALayer *parent=i==4 ? self.layer : _controls;
+            _extraBorder[i]=botwBorder(parent); _extraKey[i]=shape(parent);
             _extraKey[i].fillColor=_botwIdle.CGColor; _extraKey[i].strokeColor=nil;
             _extraKey[i].shadowOpacity=0;
-            _extraIcon[i]=[CALayer layer]; [_controls addSublayer:_extraIcon[i]];
+            _extraIcon[i]=[CALayer layer]; [parent addSublayer:_extraIcon[i]];
             _extraIcon[i].contentsGravity=kCAGravityResizeAspect;
         }
         int control=16+i;
@@ -1688,8 +1689,8 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
             uint64_t owner=[_owner objectForKey:touch].unsignedLongLongValue;
             if ((owner&0xff)==C_BOTW_ADDED && (owner>>8)==control) { pressed=YES; break; }
         }
-        _extraKey[i].fillColor=i==4 ? NULL : (pressed ? _botwOn : _botwIdle).CGColor;
-        _extraBorder[i].fillColor=i==4 ? NULL : _botwLine.CGColor;
+        _extraKey[i].fillColor=(pressed ? _botwOn : _botwIdle).CGColor;
+        _extraBorder[i].fillColor=_botwLine.CGColor;
         _extraIcon[i].opacity=_touchLayout.icon_alpha;
         CGRect r=[self botwLayoutRect:control];
         setPath(_extraKey[i],CGPathCreateWithEllipseInRect(r,NULL));
