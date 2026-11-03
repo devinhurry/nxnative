@@ -319,11 +319,15 @@ static unsigned g_test_category_relayout_count;
 static uintptr_t g_test_category_current_screen;
 static int32_t g_test_category_current_page;
 static unsigned g_test_category_current_count;
-static uintptr_t g_test_category_resolve_screen;
-static unsigned g_test_category_resolve_count;
+static uintptr_t g_test_category_select_screen, g_test_category_select_function;
+static unsigned g_test_category_select_count;
+static int32_t g_test_category_select_index;
 static uintptr_t g_test_category_activate_screen;
 static unsigned g_test_category_activate_count;
-static int g_test_category_call_order[4];
+static uintptr_t g_test_category_focus_screen, g_test_category_focus_owner;
+static uintptr_t g_test_category_focus_function;
+static unsigned g_test_category_focus_count;
+static int g_test_category_call_order[5];
 static unsigned g_test_category_call_order_count;
 static uint64_t g_test_menu_time_ns;
 static uintptr_t g_test_equip_screen, g_test_equip_item;
@@ -5350,10 +5354,36 @@ static void selector_inventory_hold_locked(uintptr_t main_base, uintptr_t manage
     }
 }
 
+// The native setter can retain the same BoxCursor entry, suppressing its
+// focus-change callback. Refresh the requested item, or the retained focus,
+// through that callback without entering the game's Sort operation.
+static void selector_refresh_category_item(uintptr_t manager, uintptr_t screen, uintptr_t native_focus) {
+    uintptr_t entry = selector_read_ptr(manager, 0x50);
+    if (!entry) entry = selector_read_ptr(manager, 0x48);
+    if (selector_read_ptr(entry, 0x20) != screen) return;
+    uintptr_t owner = selector_read_ptr(entry, 0x18);
+    if (!owner || !selector_range(owner + 0x44, 4)) return;
+    int32_t id = 0;
+    memcpy(&id, (const void *)(owner + 0x44), 4);
+    if (id < 9 || id >= 69) return;
+#ifdef DM_TEST_HOOKS
+    if (atomic_load_explicit(&g_test_native_ready, memory_order_acquire)) {
+        g_test_category_focus_screen = screen;
+        g_test_category_focus_owner = owner;
+        g_test_category_focus_function = native_focus;
+        g_test_category_focus_count++;
+        g_test_category_call_order[g_test_category_call_order_count++] = 5;
+        return;
+    }
+#endif
+    ((void (*)(uintptr_t, uintptr_t))native_focus)(screen, owner);
+}
+
 static int selector_request_category(uintptr_t manager, uintptr_t pane, int category,
                                      uintptr_t expected_screen_vtable,
                                      uintptr_t native_relayout, uintptr_t native_current_category,
-                                     uintptr_t native_resolve_selection, uintptr_t native_activate) {
+                                     uintptr_t native_select_item, uintptr_t native_activate,
+                                     uintptr_t native_focus) {
     uintptr_t screen = selector_find_category_screen(manager, pane, category, expected_screen_vtable);
     if (!screen) return 0;
     if (!selector_range(screen + 0x368c, 4) || !selector_range(screen + 0x365c, 4) ||
@@ -5377,8 +5407,8 @@ static int selector_request_category(uintptr_t manager, uintptr_t pane, int cate
         return 2;
     }
     if (first_page < 0 || inventory_count <= 0 || first_page >= inventory_count ||
-        !native_relayout || !native_current_category || !native_resolve_selection ||
-        !native_activate) return 0;
+        !native_relayout || !native_current_category || !native_select_item ||
+        !native_activate || !native_focus) return 0;
 
     int consume = 0;
     pthread_mutex_lock(&g_menu_mu);
@@ -5402,10 +5432,10 @@ static int selector_request_category(uintptr_t manager, uintptr_t pane, int cate
     // screen+0x3a30 to the middle slot, so the visible page's item ids move
     // to another range (the base table at main+0x1e2e828 is indexed by that
     // slot), and it never re-derives screen+0x3650, which keeps naming the
-    // previous category's widget. The item card and its action list then
-    // belong to the previous category. Resolve the selection immediately too:
-    // a carousel slot can reuse the already focused entry, so no focus-change
-    // callback will refresh screen+0x3648 or the item card for the new page.
+    // previous category's widget. Select the first item through the native
+    // item setter and refresh its focus callback when the carousel reuses
+    // an entry. e3f924 is Sort, not a selection refresh:
+    // it reorders the bag and displays the "Sorted ..." notification.
     memcpy((void *)(screen + 0x365c), &first_page, 4);
     memcpy((void *)(screen + 0x3660), &first_page, 4);
 #ifdef DM_TEST_HOOKS
@@ -5419,8 +5449,10 @@ static int selector_request_category(uintptr_t manager, uintptr_t pane, int cate
         g_test_category_call_order[g_test_category_call_order_count++] = 2;
         int32_t native_category = category;
         memcpy((void *)(screen + 0x3a10), &native_category, 4);
-        g_test_category_resolve_screen = screen;
-        g_test_category_resolve_count++;
+        g_test_category_select_screen = screen;
+        g_test_category_select_function = native_select_item;
+        g_test_category_select_index = 0;
+        g_test_category_select_count++;
         g_test_category_call_order[g_test_category_call_order_count++] = 3;
         g_test_category_activate_screen = screen;
         g_test_category_activate_count++;
@@ -5430,12 +5462,13 @@ static int selector_request_category(uintptr_t manager, uintptr_t pane, int cate
     {
         ((void (*)(uintptr_t))native_relayout)(screen);
         ((void (*)(uintptr_t, int32_t))native_current_category)(screen, first_page);
-        ((void (*)(uintptr_t))native_resolve_selection)(screen);
+        ((void (*)(uintptr_t, int32_t))native_select_item)(screen, 0);
         // Relayout updates the items but retains each button's old input flag.
         // Finish through the native activation body, even with transition=0:
         // the guarded entry at e39bfc would skip re-enabling newly filled rows.
         ((void (*)(uintptr_t, int32_t))native_activate)(screen, 0);
     }
+    selector_refresh_category_item(manager, screen, native_focus);
     return 1;
 }
 
@@ -5673,11 +5706,12 @@ void dm_botw_touch_menu_selector(const uint64_t *regs) {
         uintptr_t screen_vtable = (uintptr_t)(main->base + 0x1cf9ad8);
         uintptr_t native_relayout = (uintptr_t)(main->base + 0xe3af74);
         uintptr_t native_current_category = (uintptr_t)(main->base + 0xe3b20c);
-        uintptr_t native_resolve_selection = (uintptr_t)(main->base + 0xe3f924);
+        uintptr_t native_select_item = (uintptr_t)(main->base + 0xe3dd14);
         uintptr_t native_activate = (uintptr_t)(main->base + 0xe39c08);
+        uintptr_t native_focus = (uintptr_t)(main->base + 0xe3bacc);
         int result = selector_request_category(manager, pane, index, screen_vtable,
                                                native_relayout, native_current_category,
-                                               native_resolve_selection, native_activate);
+                                               native_select_item, native_activate, native_focus);
         if (result && atomic_load_explicit(&g_trace, memory_order_acquire))
             LOG("BOTW menu selector %s native category=%d pane=%p",
                 result == 1 ? "refreshed" : "already on", index, (void *)pane);

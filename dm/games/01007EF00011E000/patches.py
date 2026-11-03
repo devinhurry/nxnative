@@ -239,15 +239,26 @@ def validate_main(ctx):
         0x2a0103f3, 0x9400d796, 0x5286d208, 0xb93a1280, 0x8b080295, 0xb9770a88,
         0xaa1503e0,
     ), 'BOTW inventory current-category writer changed; revalidate screen+0x3a10 update'
-    assert tuple(word(o) for o in range(0xe3f924, 0xe3f950, 4)) == (
-        0xf95b1408, 0xb5000048, 0xd65f03c0, 0xd10103ff,
-        0xa9017bfd, 0xa90257f6, 0xa9034ff4, 0x910043fd,
-        0x5286cf28, 0xaa0003f3, 0x8b080016,
-    ), 'BOTW inventory selection resolver changed; revalidate immediate category item refresh'
-    assert tuple(word(o) for o in range(0xe3faa4, 0xe3fac4, 4)) == (
-        0xf9400100, 0x97fe1de8, 0x37f800c0, 0x2a0003e2,
-        0xf95b1660, 0xb9765e61, 0x97fd65fc, 0xf91b2660,
-    ), 'BOTW inventory selection item lookup changed; revalidate screen+0x3648 refresh'
+    # Select the first item without invoking Sort (e3f924). The native setter
+    # clears the old item/id and focuses the requested row of the pending page.
+    assert tuple(word(o) for o in range(0xe3dd14, 0xe3dd30, 4)) == (
+        0xa9be7bfd, 0xa9014ff4, 0x910003fd, 0xf9407008,
+        0x2a0103f4, 0xaa0003f3, 0xb4000148,
+    ), 'BOTW inventory item selection entry changed; revalidate category selection without sorting'
+    assert tuple(word(o) for o in range(0xe3dd54, 0xe3dd70, 4)) == (
+        0xb9766261, 0xaa1303e0, 0x2a1403e2, 0xb9366674,
+        0xf91b267f, 0xb936527f, 0x94000146,
+    ), 'BOTW inventory item selection changed; revalidate stale-item reset and native focus'
+    assert tuple(word(o) for o in range(0xe3bacc, 0xe3bae0, 4)) == (
+        0xa9bc7bfd, 0xf9000bf7, 0xa90257f6, 0xa9034ff4, 0x910003fd,
+    ), 'BOTW inventory focus callback entry changed; revalidate category item refresh'
+    assert tuple(word(o) for o in range(0xe3bb14, 0xe3bb28, 4)) == (
+        0xf95b2676, 0xf91b2675, 0x90007fe8, 0x9112e108, 0xb9365274,
+    ), 'BOTW inventory focus callback changed; revalidate item pointer and cursor id'
+    assert tuple(word(o) for o in range(0xe3bb64, 0xe3bb88, 4)) == (
+        0xeb1502df, 0xaa1303e0, 0xf9400bf7, 0xaa1503e1, 0xa9434ff4,
+        0xa94257f6, 0x1a9f07e2, 0xa8c47bfd, 0x17ffe118,
+    ), 'BOTW inventory focus card update changed; revalidate selection refresh without sorting'
     # The unguarded transition-state body re-enables the current page after
     # relayout. The public e39bfc entry skips it when transition is already 0.
     assert tuple(word(o) for o in range(0xe39c08, 0xe39c28, 4)) == (
