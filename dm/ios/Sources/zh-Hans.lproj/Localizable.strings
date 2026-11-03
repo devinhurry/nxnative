@@ -255,7 +255,7 @@
 "Add button" = "\U6DFB\U52A0\U6309\U94AE";
 "Remove button" = "\U79FB\U9664\U6309\U94AE";
 "Button action" = "\U6309\U94AE\U64CD\U4F5C";
-"Button options" = "\U6309\U94AE\U9009\U9879";
+"Button configuration" = "\U6309\U952e\U914d\U7f6e";
 "Native L" = "\U539F\U751F L\UFF08\U77ED\U6309\UFF09";
 "Hold to switch (release to close)" = "\U957F\U6309\U5207\U6362\UFF08\U677E\U624B\U9000\U51FA\UFF09";
 "Hold to switch (cancel to close)" = "\U957F\U6309\U5207\U6362\UFF08\U53D6\U6D88\U6309\U94AE\U9000\U51FA\UFF09";
