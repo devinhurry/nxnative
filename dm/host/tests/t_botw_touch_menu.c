@@ -2682,10 +2682,14 @@ int main(void) {
     g_test_category_relayout_count = g_test_category_current_count = 0;
     g_test_category_relayout_screen = g_test_category_current_screen = 0;
     g_test_category_current_page = -1;
-    g_test_category_resolve_screen = 0;
-    g_test_category_resolve_count = 0;
+    g_test_category_select_screen = g_test_category_select_function = 0;
+    g_test_category_select_count = 0;
+    g_test_category_select_index = -1;
     g_test_category_activate_screen = 0;
     g_test_category_activate_count = 0;
+    g_test_category_focus_screen = g_test_category_focus_owner = 0;
+    g_test_category_focus_function = 0;
+    g_test_category_focus_count = 0;
     g_test_category_call_order_count = 0;
     // The new page may reuse this focused entry; selection still needs resolving.
     put_ptr(selector.manager + 0x48, (uintptr_t)selector.entry);
@@ -2707,13 +2711,20 @@ int main(void) {
     assert(g_test_category_relayout_screen == (uintptr_t)selector.screen);
     assert(g_test_category_current_screen == (uintptr_t)selector.screen);
     assert(g_test_category_current_page == 12);
-    assert(g_test_category_resolve_count == 1);
-    assert(g_test_category_resolve_screen == (uintptr_t)selector.screen);
+    assert(g_test_category_select_count == 1);
+    assert(g_test_category_select_screen == (uintptr_t)selector.screen);
+    assert(g_test_category_select_index == 0);
+    // Reusing the focused entry must select the new item, never run Sort.
+    assert(g_test_category_select_function == (uintptr_t)g_mod[0].base + 0xe3dd14);
     assert(g_test_category_activate_count == 1);
     assert(g_test_category_activate_screen == (uintptr_t)selector.screen);
-    assert(g_test_category_call_order_count == 4 && g_test_category_call_order[0] == 1 &&
+    assert(g_test_category_focus_count == 1);
+    assert(g_test_category_focus_screen == (uintptr_t)selector.screen);
+    assert(g_test_category_focus_owner == (uintptr_t)selector.owner);
+    assert(g_test_category_focus_function == (uintptr_t)g_mod[0].base + 0xe3bacc);
+    assert(g_test_category_call_order_count == 5 && g_test_category_call_order[0] == 1 &&
            g_test_category_call_order[1] == 2 && g_test_category_call_order[2] == 3 &&
-           g_test_category_call_order[3] == 4);
+           g_test_category_call_order[3] == 4 && g_test_category_call_order[4] == 5);
     // Refresh the item card even when the next page reuses the focused entry.
     int32_t staged_page = 0, staged_item = -1, staged_request = 0;
     memcpy(&staged_page, selector.screen + 0x3660, 4);
@@ -2722,7 +2733,7 @@ int main(void) {
     assert(staged_page == 12); // category 5's first page, not category id 5
     memcpy(&current_page, selector.screen + 0x365c, 4);
     assert(current_page == 12); // the current page follows, as in the game's own change
-    assert(staged_item == 7); // the host no longer stages a pending item
+    assert(staged_item == 7); // the native setter owns this; its recorder leaves it unchanged
     assert(staged_request == 0); // the host no longer starts a carousel transition
     int32_t native_category = 0;
     memcpy(&native_category, selector.screen + 0x3a10, 4);
@@ -2737,6 +2748,23 @@ int main(void) {
     transitioning = 0; memcpy(selector.screen + 0x368c, &transitioning, 4);
     tap(.44f, .24f); selector_tick();
     assert(g_test_category_relayout_count == 0 && g_test_category_current_count == 0);
+    assert(g_test_category_select_count == 1 && g_test_category_focus_count == 1);
+
+    // A native selection still in flight takes precedence over old focus.
+    g_test_category_call_order_count = 0;
+    put_ptr(selector.manager + 0x50, (uintptr_t)selector.entry2);
+    int32_t pending_id = 49; memcpy(selector.owner2 + 0x44, &pending_id, 4);
+    selector_refresh_category_item((uintptr_t)selector.manager, (uintptr_t)selector.screen,
+                                   (uintptr_t)g_mod[0].base + 0xe3bacc);
+    assert(g_test_category_focus_count == 2);
+    assert(g_test_category_focus_owner == (uintptr_t)selector.owner2);
+    put_ptr(selector.entry2 + 0x20, 0); // a pending entry from another screen is not refreshed
+    selector_refresh_category_item((uintptr_t)selector.manager, (uintptr_t)selector.screen, 1);
+    assert(g_test_category_focus_count == 2);
+    put_ptr(selector.entry2 + 0x20, (uintptr_t)selector.screen);
+    pending_id = 2; memcpy(selector.owner2 + 0x44, &pending_id, 4); // category, not item
+    selector_refresh_category_item((uintptr_t)selector.manager, (uintptr_t)selector.screen, 1);
+    assert(g_test_category_focus_count == 2);
 
     // Popup geometry hit panes resolve to the selectable N_Cursor sibling
     // under the exact same Pa_Btn row and N_TypeBtn root.
