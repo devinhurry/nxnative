@@ -26,6 +26,14 @@
 
 ## IPA archives
 
+### A new UIKit class prevents launch on an older supported iOS
+
+- **Symptom:** the app exits before the launcher appears. The system report says `DYLD`, `Symbol missing`, and `Symbol not found: _OBJC_CLASS_$_UIViewReservedRegionKind`; `log.txt` has no new crash record because `main()` never ran.
+- **Cause:** the Seated-region helper referenced the new UIKit class directly. A newer SDK compiled this path into a required class import despite its runtime `@available(iOS 27.1, *)` guard. The loader resolves required imports before that guard can run; UIKit on the reported iOS 27.0.1 device does not contain this class. Builds with the older SDK excluded this source path and did not expose the dependency.
+- **Fix:** keep the iOS 26 deployment target and look up the region-kind class by name at runtime. Check both selectors and the returned kind before querying regions. Missing APIs retain the ordinary layout; systems that provide them retain the Seated split. This follows [Apple's optional-symbol rules](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPFrameworks/Concepts/WeakLinking.html).
+- **Check:** `dm/ios/tests/test_touch_surface.py` forces the newer-SDK branch using Objective-C declarations without availability annotations, checks the optimized object's undefined symbols, and runs absent-class, absent-selector, nil-kind, working-Seated and no-region cases. The iOS 26 SDK source checks cover both production callers. Physical-device acceptance remains pending.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game) app 1.9.1, two supplied launch reports from `iPhone19,2` on iOS 27.0.1.
+
 ### A streamed file changes size and the IPA fails its CRC check
 
 - **Symptom:** packing succeeds, but `unzip -t` or Python's `ZipFile.testzip()` reports a bad CRC for a large deflated file.
