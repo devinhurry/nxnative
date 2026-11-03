@@ -125,6 +125,7 @@ static float g_rotate_last_x;
 static int g_presented_menu;
 static int g_presented_gameplay;
 static int g_presented_loadout;
+static int g_presented_vertical_dpad;
 static int g_presented_quick_select;
 static float g_presented_quick_top=-1;
 static uintptr_t g_presented_quick_screen, g_presented_quick_root;
@@ -3165,6 +3166,17 @@ static int selector_loadout_visible(uintptr_t root) {
     static const char *const path[] = {"N_All_00", "N_MainAll_00", "N_Pos_00"};
     return selector_hud_path_visible(root, path, sizeof path / sizeof *path);
 }
+static int selector_vertical_dpad_visible(uintptr_t root) {
+    for (int i = 0; i < GUIDE_SLOTS; i++) {
+        char name[25]; snprintf(name, sizeof name, "Pa_Guide_%02d", i);
+        const char *path[] = {"N_Align_00", name, "N_InOut_00", "T_Icon_00"};
+        uintptr_t icon = selector_hud_path_pane(root, path, sizeof path / sizeof *path);
+        // Read the rendered Smoke guide, never its dormant N_Capture_00 copy.
+        if (icon && pane_chain_visible((uint8_t *)icon) && pane_chain_alpha_visible((uint8_t *)icon) &&
+            pane_text_glyph((uint8_t *)icon) == 0xe065) return 1;
+    }
+    return 0;
+}
 static int selector_quick_select_visible(uintptr_t root) {
     static const char *const path[] = {"N_All_00", "N_ShortCutPos_00", "N_Cut_00", "N_ShortCutAll_00"};
     return selector_hud_path_visible(root, path, sizeof path / sizeof *path);
@@ -3249,7 +3261,7 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
     uintptr_t screens = selector_read_ptr(registry, 0x30);
     uintptr_t flags = selector_read_ptr(registry, 0x40);
     int auditing = g_ui_audit && dm_botw_touch_hud_active();
-    int presented = 0, gameplay = 0, loadout = 0, quick_select = 0, bow = 0;
+    int presented = 0, gameplay = 0, loadout = 0, vertical_dpad = 0, quick_select = 0, bow = 0;
     float quick_top=-1;
     uintptr_t presented_root = 0;
     uintptr_t gameplay_root = 0;
@@ -3280,6 +3292,9 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
             int root_visible = pane_chain_visible((uint8_t *)root);
             if (auditing) ui_audit_screen(i,screen,root,name,registered,shown,mode,input_owned,root_visible,frame);
             if (!registered || !presented_state) continue;
+            // Gameplay guides are passive HUD; their own input flag need not be set.
+            if (!strcmp(name, "SousaGuide_00") && mode == 2 && root_visible)
+                vertical_dpad |= selector_vertical_dpad_visible(root);
             if (!strcmp(name, "MainShortCut_00") && root_visible) {
                 loadout |= selector_loadout_visible(root);
                 static const char *const bow_path[] = {"N_All_00","N_MainAll_00","N_Pos_00","N_MainGuideR_01","P_BowIcon_00"};
@@ -3316,12 +3331,14 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
     pthread_mutex_lock(&g_menu_mu);
     int changed = g_presented_menu != presented || g_presented_menu_root != presented_root ||
         g_presented_gameplay != gameplay || g_presented_loadout != loadout ||
+        g_presented_vertical_dpad != vertical_dpad ||
         g_presented_bow != bow || g_presented_quick_select != quick_select || fabsf(g_presented_quick_top-quick_top)>.001f;
     g_presented_menu = presented;
     g_presented_menu_root = presented_root;
     g_presented_menu_frame = frame;
     g_presented_gameplay = gameplay;
     g_presented_loadout = loadout;
+    g_presented_vertical_dpad = vertical_dpad;
     g_presented_quick_select = quick_select;
     g_presented_quick_top = quick_top;
     g_presented_quick_screen=quick_screen; g_presented_quick_root=quick_root;
@@ -6122,6 +6139,15 @@ int dm_botw_touch_loadout_visible(void) {
     pthread_mutex_unlock(&g_menu_mu);
     return visible;
 }
+int dm_botw_touch_vertical_dpad_active(void) {
+    if (!dm_botw_touch_hud_active()) return 0;
+    pthread_mutex_lock(&g_menu_mu);
+    uint64_t frame = menu_render_frame();
+    int active = g_presented_vertical_dpad && g_presented_gameplay && !g_presented_menu &&
+        !g_presented_quick_select && frame >= g_presented_menu_frame && frame - g_presented_menu_frame <= 2;
+    pthread_mutex_unlock(&g_menu_mu);
+    return active;
+}
 int dm_botw_touch_quick_select_active(void) {
     if (!dm_botw_touch_hud_active()) return 0;
     pthread_mutex_lock(&g_menu_mu);
@@ -7236,6 +7262,7 @@ void dm_botw_touch_menu_reset(void) {
     notify = g_active_notified || g_presented_menu || g_camera_notified_active;
     g_presented_menu = 0; g_presented_menu_frame = 0; g_presented_menu_root = 0;
     g_presented_gameplay = 0; g_presented_gameplay_root = 0; g_presented_loadout = g_presented_quick_select = 0;
+    g_presented_vertical_dpad = 0;
     g_presented_quick_screen=g_presented_quick_root=0; g_presented_quick_top=-1;
     memset(&g_quick_tap,0,sizeof g_quick_tap);
     g_presented_bow=0; g_open_category=-1; g_open_phase=0;

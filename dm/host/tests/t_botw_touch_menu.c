@@ -1795,6 +1795,44 @@ static void test_menu_animation_visibility(void) {
     shortcut_main[0x59]=255; selector.active[1]=0x80;
     selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
     assert(!dm_botw_touch_loadout_visible()); // an allocated but unregistered layout cannot hide the fallback
+    // Magnesis distance uses the rendered vertical D-pad guide. An unused
+    // capture glyph, hidden guide or stale/unregistered screen is not enough.
+    uint8_t *guide_root=fake_pane(90,"RootPane",-1,1280,720,0,0);
+    uint8_t *align=fake_pane(91,"N_Align_00",90,0,0,0,0);
+    uint8_t *guide=fake_pane(92,"Pa_Guide_00",91,0,0,0,0);
+    uint8_t *inout=fake_pane(93,"N_InOut_00",92,0,0,0,0);
+    uint8_t *icon=fake_pane(94,"T_Icon_00",93,32,32,0,0);
+    uint8_t *capture=fake_pane(95,"N_Capture_00",92,0,0,0,0);
+    uint8_t *source=fake_pane(96,"T_Icon_01",95,32,32,0,0);
+    link_child(guide_root,align); link_child(align,guide); link_child(guide,inout);
+    link_child(inout,icon); link_child(guide,capture); link_child(capture,source);
+    uint16_t vertical_glyph=0xe065, ordinary_glyph=0xe040;
+    put_ptr(source+0xe0,(uintptr_t)&vertical_glyph);
+    put_ptr(icon+0xe0,(uintptr_t)&ordinary_glyph);
+    strcpy((char *)selector.map_screen+0xa0,"SousaGuide_00");
+    put_ptr(selector.map_owner+0x18,(uintptr_t)guide_root);
+    selector.map_state[0x38]=0; // the passive gameplay guide does not own input
+    selector.map_screen[0xfe]=2; selector.active[1]=0;
+    selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
+    assert(!dm_botw_touch_vertical_dpad_active());
+    put_ptr(icon+0xe0,(uintptr_t)&vertical_glyph);
+    selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
+    assert(dm_botw_touch_controls_visible() && dm_botw_touch_vertical_dpad_active());
+    inout[0x59]=0;
+    selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
+    assert(!dm_botw_touch_vertical_dpad_active());
+    inout[0x59]=255; selector.active[1]=0x80;
+    selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
+    assert(!dm_botw_touch_vertical_dpad_active());
+    selector.active[1]=0;
+    selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
+    assert(dm_botw_touch_vertical_dpad_active());
+    g_presented_quick_select=1; assert(!dm_botw_touch_vertical_dpad_active());
+    g_presented_quick_select=0; g_presented_menu=1; assert(!dm_botw_touch_vertical_dpad_active());
+    g_presented_menu=0; mock_touch_hud_active=0; assert(!dm_botw_touch_vertical_dpad_active());
+    mock_touch_hud_active=1;
+    dm_botw_touch_menu_test_set_render_frame(8003); assert(!dm_botw_touch_vertical_dpad_active());
+    dm_botw_touch_menu_test_set_render_frame(8000);
     // Corner notifications can enter, remain and leave over the gameplay HUD
     // without becoming a menu. Full tutorials and dialogues still own input.
     selector.active[1] = 0;

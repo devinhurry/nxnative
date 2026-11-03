@@ -156,6 +156,7 @@ static BOOL g_botw_touch_menu_active;
 static BOOL g_botw_touch_menu_presented;
 static BOOL g_botw_gameplay_ready = YES;
 static BOOL g_botw_loadout_visible = YES;
+static BOOL g_botw_vertical_dpad;
 static BOOL g_botw_quick_select;
 static BOOL g_botw_switch_opening;
 static BOOL g_botw_hero_path;
@@ -191,6 +192,7 @@ void dm_botw_touch_switch_cancel(void) {}
 int dm_botw_touch_switch_active(void) { return g_botw_switch_opening; }
 int dm_botw_touch_switch_cancel_visible(void) { return 0; }
 int dm_botw_touch_menu_dpad_visible(void) { return g_botw_hero_path; }
+int dm_botw_touch_vertical_dpad_active(void) { return g_botw_vertical_dpad; }
 int dm_botw_touch_controls_visible(void) {
     if (g_force_controls_hidden || (g_botw_touchhud_available && !g_published_touchhud_active)) return 0;
     return !g_botw_touchhud_available || (g_botw_gameplay_ready && !dm_botw_touch_menu_visible());
@@ -388,6 +390,26 @@ static void test_dpad_art_visibility(DmGamepad *view) {
     g_botw_quick_select=NO;
     g_botw_loadout_visible=YES; [view setNeedsLayout]; [view layoutIfNeeded];
     CHECK([view dm_testDpadArtworkHidden],"native loadout restoration hides the fallback immediately");
+    setenv("DM_BOTW_PAD_DPAD_VISIBLE","0",1);
+    setenv("DM_BOTW_PORTRAIT_PAD_DPAD_VISIBLE","0",1);
+    [view refreshTouchSettings];
+    g_botw_vertical_dpad=YES; [view setNeedsLayout]; [view layoutIfNeeded];
+    CHECK([view dm_testButtonLayer:12].hidden && [view dm_testButtonLayer:14].hidden &&
+          ![view dm_testButtonLayer:13].hidden && ![view dm_testButtonLayer:15].hidden,
+          "a hidden D-pad temporarily exposes only Magnesis Up/Down even with the native loadout shown");
+    CGRect up=CGPathGetPathBoundingBox([view dm_testButtonLayer:13].path);
+    FakeTouch *magnet=touch(CGRectGetMidX(up),CGRectGetMidY(up)); began(view,magnet);
+    CHECK((g_buttons & (DM_BTN_LEFT|DM_BTN_UP|DM_BTN_RIGHT|DM_BTN_DOWN))==DM_BTN_UP,
+          "the temporary Magnesis Up key accepts touch without horizontal directions");
+    g_botw_vertical_dpad=NO; [view dm_testRefreshTouchHudMode]; [view layoutIfNeeded];
+    CHECK([view dm_testDpadArtworkHidden] && !(g_buttons & DM_BTN_UP),
+          "leaving Magnesis hides and releases a still-held temporary direction");
+    ended(view,magnet,magnet.point.x,magnet.point.y);
+    g_botw_vertical_dpad=YES; g_botw_quick_select=YES; [view setNeedsLayout]; [view layoutIfNeeded];
+    CHECK([view dm_testDpadArtworkHidden],"the quick strip also suppresses temporary Magnesis directions");
+    g_botw_vertical_dpad=g_botw_quick_select=NO;
+    unsetenv("DM_BOTW_PAD_DPAD_VISIBLE"); unsetenv("DM_BOTW_PORTRAIT_PAD_DPAD_VISIBLE");
+    [view refreshTouchSettings]; [view layoutIfNeeded];
     CHECK([view dm_testSwapHidden] && ![view dm_testInSwap:CGPointMake(view.bounds.size.width*.5,20)],
           "BOTW touch removes both the visible layout toggle and its hit area");
     [view dm_testNextLayout];
