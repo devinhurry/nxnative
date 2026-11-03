@@ -4,12 +4,12 @@ Updated: 2026-10-31 (Asia/Shanghai).
 
 This is the acceptance tracker. Update it after each verified feature or new failure. `HANDOFF.md` is historical context, not the current status.
 
-The [implementation checklist](botw-touch-implementation.md) tracks the complete
+The [implementation checklist]](touch-implementation.md)) tracks the complete
 resource disposition and required screen/state/action groups separately. A missing
 save can block verification; it does not defer implementation. Edit its JSON
 inventory and regenerate it with `python3 dm/tools/botw_touch_progress.py`.
 
-The [UI inventory and regression workflow](botw-ui-coverage.md) generates resource,
+The [UI inventory and regression workflow](ui-coverage.md)) generates resource,
 native-screen and individual-target coverage reports. Keep its pending states
 separate from the acceptance results below.
 
@@ -48,7 +48,7 @@ separate from the acceptance results below.
   complete this acceptance. Shader regression remains blocked by the compiler pin.
 
 Implementation, Apple API references and the exact validation boundary are in the
-[game note](../dm/games/01007EF00011E000/README.md#rendering). Evidence is in
+[game note](../../dm/games/01007EF00011E000/notes/rendering.md#rendering). Evidence is in
 `duo-adaptation-20261031/` in the game's external work folder. Implementation was
 developed on `codex/botw-duo-adaptation` before integration into main.
 
@@ -69,7 +69,7 @@ developed on `codex/botw-duo-adaptation` before integration into main.
 - [ ] Physical Duo folding, background transition, rotation and gyro acceptance
   with the actual iOS 27.1 SDK. Shader regression still has the compiler-pin block.
 
-Details and test limits are in the [game note](../dm/games/01007EF00011E000/README.md#rendering).
+Details and test limits are in the [game note](../../dm/games/01007EF00011E000/notes/rendering.md#rendering).
 Evidence is in `seated-reflection-20261101/` in the game's external work folder.
 
 ### Narrow displays and optional portrait controls (2026-10-31)
@@ -109,14 +109,14 @@ map edges. Physical iPhone appearance remains pending; evidence is in
 - [ ] Physical iPhone: orientation changes, notch/home-indicator spacing and
   portrait gyro feel. Native/simulator checks do not complete device acceptance.
 
-The [game note](../dm/games/01007EF00011E000/README.md#rendering) records the
+The [game note](../../dm/games/01007EF00011E000/notes/rendering.md#rendering) records the
 implementation and validation boundary. The current Mac host runs with prepared
 chain `715bb867230c` shaders. Full shader regression is blocked by the local
 Metal compiler version, independently of the passing native/GPU/UI checks.
 
 ### Camera drag below face buttons (2026-10-31)
 
-The [game note](../dm/games/01007EF00011E000/README.md#direct-categories-and-gameplay-hud-prompts)
+The [game note](../../dm/games/01007EF00011E000/notes/touch.md#direct-categories-and-gameplay-hud-prompts)
 records removal of the invisible whole-cluster touch capture in BOTW gameplay.
 The UIKit regression covers drag begin/move/end from two blank points below Y
 and an actual Y press, alongside the existing Camera/Scope, button sliding,
@@ -127,7 +127,7 @@ Mac and iPhone frontend source compilation passes. Evidence is in
 
 ### Compendium target size and shoulder defaults (2026-10-31)
 
-The [game note](../dm/games/01007EF00011E000/README.md#direct-categories-and-gameplay-hud-prompts)
+The [game note](../../dm/games/01007EF00011E000/notes/touch.md#direct-categories-and-gameplay-hud-prompts)
 records larger Compendium category cells and exchanged default R/ZR positions.
 The focused menu regression selects a category outside the original glyph and
 checks that neighboring cells do not overlap; geometry and 18 launcher
@@ -154,7 +154,7 @@ game runs the recorded host snapshot with these touch changes and retained graph
 screenshots and native logs in `01007EF00011E000-work/touch-menu-fixes-20261030/`.
 The full current shader regression stops on the baseline's existing Metal
 compiler mismatch, before gameplay comparison; physical iPhone acceptance is
-pending. [Native cause and contracts](../dm/games/01007EF00011E000/README.md#direct-categories-and-gameplay-hud-prompts).
+pending. [Native cause and contracts](../../dm/games/01007EF00011E000/notes/touch.md#direct-categories-and-gameplay-hud-prompts).
 
 ### Inventory category crash on iPhone (2026-10-30)
 
@@ -163,7 +163,7 @@ refresh. Fixed the shared observation callback stack handling, preserving the
 native category selection path and the original stack guard. A CPU test with
 the current production gate code reproduces the original abort and passes after
 the fix, including nested callbacks, register/stack preservation and cleanup.
-iPhone gameplay acceptance remains pending. [Cause and validation](reference/threads.md#guest-calls-made-by-observation-callbacks).
+iPhone gameplay acceptance remains pending. [Cause and validation](../reference/threads.md#guest-calls-made-by-observation-callbacks).
 
 ### Camera framing with the gamepad visible (2026-10-30)
 
@@ -171,7 +171,7 @@ Fixed the shared AppCamera pointer adapter to use the existing relative-look
 entry. Mac gameplay verifies horizontal, vertical and reverse framing, small
 repeated moves, and camera exit/re-entry while virtual controls remain usable.
 Native lifecycle tests and the 188-file iOS compile check pass; iPhone acceptance
-is pending. [Cause, evidence and graphics validation boundary](../dm/games/01007EF00011E000/README.md#appcamera-touch-gestures).
+is pending. [Cause, evidence and graphics validation boundary](../../dm/games/01007EF00011E000/notes/touch.md#appcamera-touch-gestures).
 
 ### Album swipe and Camera control follow-up (2026-10-30)
 
@@ -206,7 +206,7 @@ Camera-area double-tap still emits R3 without a haptic. Face/shoulder presses
 and the ZL shield-stick grip retain feedback; other games keep their stick
 feedback. The focused `haptic-silent-manual-pad/` run records these checks.
 
-The [implementation checklist](botw-touch-implementation.md) now includes the
+The [implementation checklist]](touch-implementation.md)) now includes the
 Camera coexistence requirement. Evidence is in
 `ui-implementation-20261030/album-regression-current/` and
 `ui-coverage-20261030/camera-footer-harness-final/`. The native run uses current
@@ -222,7 +222,7 @@ Mac milestones refer to their recorded runtime evidence. The latest 2026-10-30 r
 
 ### Implementation inventory completion (2026-10-30)
 
-The [implementation checklist](botw-touch-implementation.md) now classifies all
+The [implementation checklist]](touch-implementation.md)) now classifies all
 339 layouts from the supplied base/update and both DLCs: 89 top-level layouts
 and 250 reusable components. Its 52 screen/state/action groups contain 47
 implemented interactions and five explicitly noninteractive groups. There are
@@ -236,7 +236,7 @@ hit panes, pickup/challenge guide ownership, complete 24-byte pane names, and
 AppCamera actions and gestures. Camera framing consumes each drag movement once;
 a stationary finger stops turning. Pinch drives native D-pad zoom; a parallel
 two-finger drag drives selfie poses, with a held third finger for native ZL
-poses. The [game note](../dm/games/01007EF00011E000/README.md#appcamera-touch-gestures)
+poses. The [game note](../../dm/games/01007EF00011E000/notes/touch.md#appcamera-touch-gestures)
 documents the Mac equivalents. Native controls keep their existing owners.
 
 Choice-less waits and controller-service waits block gameplay controls without
@@ -288,7 +288,7 @@ source builds above are separate evidence.
 | Non-modal gameplay tips | Code corrected; user acceptance pending | The shared screen classification excludes `MessageTipsRunTime_00` and `MessageTipsPauseMenu_00` from modal visibility and touch-menu routing. Headshot/shield-surf corner notifications should keep the gamepad visible; centered tutorials still hide it. The user will verify these events in-game. |
 | Item pickup controls and backup right stick | Mac gameplay and native/UIKit checks passed; physical iPhone pending | `before-mushroom` reproduces the Sunshroom notification hiding the pad. `PickUpWin_00` now uses the passive TIP policy, and Npad samples distinguish ordinary virtual sticks from relative gestures. The fixed Mac run retains the pad and turns the camera with native right-stick input. Original save hashes are unchanged. Evidence: `pickup-controls-20261031/`; current host and iPhone input-file compilation pass, while the scoped full regression is blocked by the existing Metal compiler mismatch. |
 | Quest notifications and climb/slip tips | Native/resource checks passed; climbing Mac verified; quest event and iPhone pending | `ChallengeWin_00` shares the passive TIP policy with pickups; native tests reject its real Plus guide and retain controls across notification lifecycle states. Slippery-climbing and shield-surf texts belong to the already passive `MessageTipsRunTime_00` screen. Normal Mac climbing retains the pad beside Jump/Let go. The Impa replay did not produce a quest update. Evidence: `pickup-controls-20261031/quest-controls-fix-20261031/`; scoped full regression remains blocked by the Metal compiler mismatch. |
-| First start with a completely empty save | Mac verified | The constructor observation retains the native cursor manager before its registry exists. Link waking up restores controls without visiting Title or opening a menu. See the [game note](../dm/games/01007EF00011E000/README.md#what-it-needs) for the cause. |
+| First start with a completely empty save | Mac verified | The constructor observation retains the native cursor manager before its registry exists. Link waking up restores controls without visiting Title or opening a menu. See the [game note](../../dm/games/01007EF00011E000/README.md#what-it-needs) for the cause. |
 | Map drag | Mac verified; iPhone pending | Replaced held-stick velocity with native position updates. Horizontal/vertical displacement follows the finger, holding still does not drift, release stops, reverse drag restores the map. Uses the inverse rendered transform for zoom/rotation. |
 | Map pinch zoom | UIKit and Mac backend verified; physical iPhone pending | Two-finger spread/contraction and release reach the host. Zoom now crosses the native stick-direction threshold; the old 20% spread produced only 3200, below 16384. Injecting the same host ratios into the Mac runtime visibly zooms in and back out. Uses the game's native zoom levels. |
 | Gameplay controls flashing during menu actions/slides | Mac state trace and UIKit checks passed; iPhone gameplay pending | Menu presentation is separate from clickable-target availability. L/R slides and item popup/cancel kept controls hidden: 12 frontend queries, zero false answers, including 6 with no clickable targets. Closing restored controls. Observe native screen lifecycle and root visibility each UI frame; retained map/rune children cannot outlive their AppHome owner. |
@@ -332,7 +332,7 @@ source builds above are separate evidence.
 
 | Minimap restoration after menus/dialogue | Native/Mac flow and UIKit callback-order regression verified; physical iPhone retest pending | Viewport geometry establishes its own hit region without waiting for hidden siblings. UIKit retains restored bounds arriving before its menu mode closes, rather than dropping the host's only changed-bounds publication. Both callback orders restore map taps and hide Minus; actual native invalidation still leaves Minus available for hidden maps. Evidence: `ios-map-return-20261030/`, four failing checks before the fix and zero UIKit failures after it; production iPhone arm64 compilation passed. |
 | Missing-loadout D-pad | Native registry and UIKit verified | Gameplay without the native equipment group shows larger pale round direction keys, with the existing locked direction actions. Native loadout restoration hides the fallback. |
-| Loading projected background | Mac verified | Fullscreen stretch keeps the animated texture and panel in the same native coordinates. The 21:10 wipe and stable cream phase have no extra right-edge fringe; foreground text remains centered. See the [rendering finding](reference/rendering.md#projected-fullscreen-fills-keep-texture-and-clip-coordinates-together). |
+| Loading projected background | Mac verified | Fullscreen stretch keeps the animated texture and panel in the same native coordinates. The 21:10 wipe and stable cream phase have no extra right-edge fringe; foreground text remains centered. See the [rendering finding](../reference/rendering.md#projected-fullscreen-fills-keep-texture-and-clip-coordinates-together). |
 | iPhone heart edge padding | Native geometry and Mac layout verified; hardware pending | Top hearts retain native corner padding against the display edge, plus 2 frontend points, without the whole landscape safe inset. |
 | Right HUD / Plus edge padding | Native geometry and Mac layout verified; physical iPhone pending | The visible Plus cross's right spacing equals the first heart's left spacing. The map/environment cluster follows it while retaining the 8-point map-to-button gap. Input mode does not determine display edge padding; both landscape inset arrangements and explicit aspect bars are covered. Evidence: `touch-top-right-inset-20261030/` and `touch-hud-interactions-20261030/`. |
 | Minimap flash after Inventory | Mac frame sequence verified; physical iPhone pending | The return animation's native blur copied the old 16:9 framebuffer rectangle after the map had moved. Its replayed capture now follows the map projection, excluding adjacent temperature/noise graphics. Same-frame canvas/clip checks leave other captures unchanged. Eight recorded return frames are clean; 168 graphics checks pass. Evidence: `minimap-album-compendium-20261030/`, `probe-contact.png` before and `fixed-contact.png` after. |
@@ -420,7 +420,7 @@ Coverage includes disabled categories, stale observations, canceled/replaced req
 
 Current source: `python3 scripts/run_mac.py --game /path/to/game-folder --test --touch-preview --windowed`.
 
-Fixed prepared build: use `--release` instead. Test is the default; it writes its own host, rewritten modules and test record under `<ID>-work/mac-test/`, reuses matching shaders, and prepares required shader changes through the existing builder. Release uses the fixed record generated by a Mac-only build, including the actual compiled source identity and matching resource tables. Older records need regeneration. Both modes preserve explicit `DM_SAVE`; `--save-copy` protects a supplied original save. See [Development](development.md#run-a-game-in-the-mac-host).
+Fixed prepared build: use `--release` instead. Test is the default; it writes its own host, rewritten modules and test record under `<ID>-work/mac-test/`, reuses matching shaders, and prepares required shader changes through the existing builder. Release uses the fixed record generated by a Mac-only build, including the actual compiled source identity and matching resource tables. Older records need regeneration. Both modes preserve explicit `DM_SAVE`; `--save-copy` protects a supplied original save. See [Development](../development.md#run-a-game-in-the-mac-host).
 
 Historical runtime registrations in the evidence below refer to their recorded snapshots, not the current source checkout. Their former quick-launch option has been removed without an alias.
 
@@ -503,7 +503,7 @@ External evidence: `01007EF00011E000-work/inventory-touch-20261025/run19/` and `
 
 - Run19 closes the inventory regression: every available category, Equip/Eat/details, both category carousel arrows, model rotation by dragging, and the recipe Close prompt passed. `run-complete.log`, `preview-rotated.png`, `recipe-prompts.txt` and `rotate-geometry.txt` retain the observations. Rotation stops on release and uses only the native preview's live Rotate guide.
 - Run19 map checks cover the complete Sheikah Sensor text target, OFF/Shrine choices, creating/selecting/deleting a stamp, rune slots, shrine Travel/Cancel and Cancel. Long footer text is bounded by neighboring glyph edges. Map taps follow the native model point after recentering; live map ownership survives cursorless header/prompt updates. `unit-map-final.log` passed; `ios-final/details.log` reports zero failures in 27 look sessions.
-- Run20 found and resolved the black Mac title/scene: [Shader package records match profile keys](reference/shaders.md#shader-package-records-match-profile-keys). The full correct-package build produced 19,592 successful shaders for chain `07b0ea547435`, plus matching `c1_full.tsv` and `cb_extent.tsv`. Normal startup prepared all 15,767 pipeline pairs without failure. `shader-guard-complete-arm64.log`, `wrong-package-rejected.txt`, `final-startup-prebuild.log` and `final-runtime.log` retain the build and gameplay evidence.
+- Run20 found and resolved the black Mac title/scene: [Shader package records match profile keys](../reference/shaders.md#shader-package-records-match-profile-keys). The full correct-package build produced 19,592 successful shaders for chain `07b0ea547435`, plus matching `c1_full.tsv` and `cb_extent.tsv`. Normal startup prepared all 15,767 pipeline pairs without failure. `shader-guard-complete-arm64.log`, `wrong-package-rejected.txt`, `final-startup-prebuild.log` and `final-runtime.log` retain the build and gameplay evidence.
 - Dialogue taps use the rendered `W_Base_00` / `W_SysBase_00` background under the live Message owner, together with its optional continuation arrow. Text reveal still goes through the native A handler. A focused choice blocks continuation, and late background observations cannot clear the choice's targets. `unit-dialogue-choice-final.log` passes hidden-parent, stale-owner, outside-window, controller-off and choice-publication checks.
 - Actual Beedle tests tapped blank left padding to reach the choices, tapped the background without confirming a choice, selected Good-bye directly, then tapped the farewell text to return to gameplay. `dialogue-whole-before.png`, `dialogue-background-advanced-choices.png` and `dialogue-text-exit-gameplay.png` record this. Domidak/Prissen's conversation also passed continuation across speakers and direct branch selection. Tasseren's stable introduction, service choices and no-horse registration response passed whole-window touch; `stable-no-horse.png` establishes why the registration detail/naming pages remain unavailable.
 - `gameover-before.png`, `gameover-quit-confirm.png` and `gameover-continue-gameplay.png` record Quit, its Cancel and Continue/reload on the disposable save. Native GameOver/Fade ownership hides controls until the gameplay HUD returns.
@@ -515,23 +515,23 @@ The ordinary pad colors and shadows stay unchanged. The existing active BOTW tou
 
 `run21/ios-style/details.log` reports zero failures, including exact colors, image loading/size, badge hit routing and restoration of ordinary defaults in controller and non-BOTW modes. `botw-buttons.png` is the rendered UIKit preview. Mac and iOS packaging include the optional profile artwork; Mac touch preview uses the same color constants and PNG. No physical iPhone build was installed.
 
-The subsequent color revision and ZL artwork are checked in `run23/ios-shield/`: zero failures in the UIKit harness, including a fixed touch-down center, a direction arrow on the ring perimeter, preserved shield/movement input and return to idle on release. Its PNGs show the current colors and idle/drag appearance; run21 records the earlier palette. See the [game note](../dm/games/01007EF00011E000/README.md#what-it-needs) for the ZL artwork source and behavior.
+The subsequent color revision and ZL artwork are checked in `run23/ios-shield/`: zero failures in the UIKit harness, including a fixed touch-down center, a direction arrow on the ring perimeter, preserved shield/movement input and return to idle on release. Its PNGs show the current colors and idle/drag appearance; run21 records the earlier palette. See the [game note](../../dm/games/01007EF00011E000/README.md#what-it-needs) for the ZL artwork source and behavior.
 
-The movement-stick, threshold-feedback, circular +/- spacing and L badge revision is recorded in the same [game note](../dm/games/01007EF00011E000/README.md#what-it-needs). `run24/ios-final/` has zero failures in 31 look sessions, with `botw-buttons.png` and `botw-left-drag.png` for idle/drag rendering. `run24/geometry.log` and `hud.log` pass the shared layout and native map/environment alignment checks. `mac-left-stick.log` belongs to the updated gameplay window; Plus opens inventory and Back restores the new artwork. Physical iPhone haptic feel remains pending. The verified host is registered for the recorded Mac runtime.
+The movement-stick, threshold-feedback, circular +/- spacing and L badge revision is recorded in the same [game note](../../dm/games/01007EF00011E000/README.md#what-it-needs). `run24/ios-final/` has zero failures in 31 look sessions, with `botw-buttons.png` and `botw-left-drag.png` for idle/drag rendering. `run24/geometry.log` and `hud.log` pass the shared layout and native map/environment alignment checks. `mac-left-stick.log` belongs to the updated gameplay window; Plus opens inventory and Back restores the new artwork. Physical iPhone haptic feel remains pending. The verified host is registered for the recorded Mac runtime.
 
-The exterior-only button-border revision is documented in the [game note](../dm/games/01007EF00011E000/README.md#what-it-needs). `run25/ios-border/` records zero failures in 31 look sessions and its rendered `botw-buttons.png`; `run25/mac-borders.log` belongs to the matching Mac preview.
+The exterior-only button-border revision is documented in the [game note](../../dm/games/01007EF00011E000/README.md#what-it-needs). `run25/ios-border/` records zero failures in 31 look sessions and its rendered `botw-buttons.png`; `run25/mac-borders.log` belongs to the matching Mac preview.
 
 The subsequent plain +/- and direction-cursor revision is checked in `run26/ios-style/`: zero failures in 31 look sessions, including controller/non-BOTW restoration. Plus and Minus retain their hit areas but draw only white glyphs. Movement and ZL direction arrows meet the outside edge of the ring. The historical movement sprint stacked two outward-facing arrows; `botw-left-drag.png` records that appearance. The sprint gesture and its feedback were removed in the later movement-response revision below.
 
-The same run closes the Sell-grid horizontal-paging regression; see the [game note](../dm/games/01007EF00011E000/README.md#what-it-needs) for the cause and fix. `sell-swipe-next.png`, `sell-swipe-previous.png`, `sell-quantity-blocks-paging.png` and `sell-paging-evidence.txt` record actual Mac pointer checks. `menu-unit.log` passes direction/release, live geometry, hidden/stale/other-owner rejection and quantity-modal checks. `mac-final.log` is the current preview, and `quick-check.log` checks its registered launch manifest.
+The same run closes the Sell-grid horizontal-paging regression; see the [game note](../../dm/games/01007EF00011E000/README.md#what-it-needs) for the cause and fix. `sell-swipe-next.png`, `sell-swipe-previous.png`, `sell-quantity-blocks-paging.png` and `sell-paging-evidence.txt` record actual Mac pointer checks. `menu-unit.log` passes direction/release, live geometry, hidden/stale/other-owner rejection and quantity-modal checks. `mac-final.log` is the current preview, and `quick-check.log` checks its registered launch manifest.
 
 ## First-acquisition item prompt (2026-10-27)
 
 External evidence: `01007EF00011E000-work/inventory-touch-20261025/run27/`.
-See the [game note](../dm/games/01007EF00011E000/README.md#what-it-needs) for the layout mismatch and shared continuation fix. `new-item-click-blocked.png`, `new-item-before.txt` and `new-item-pane-tree.txt` record the reproduction. The user walked to the chest and verified the rebuilt runtime; `mac-body.log` and `new-item-runtime-evidence.txt` record the card-body tap, native A and return to gameplay. `menu-unit.log` passes the added card/arrow and ownership checks alongside previous menu regressions. `source-save-verification.txt` confirms the three supplied save files are unchanged. No physical iPhone build was installed.
+See the [game note](../../dm/games/01007EF00011E000/README.md#what-it-needs) for the layout mismatch and shared continuation fix. `new-item-click-blocked.png`, `new-item-before.txt` and `new-item-pane-tree.txt` record the reproduction. The user walked to the chest and verified the rebuilt runtime; `mac-body.log` and `new-item-runtime-evidence.txt` record the card-body tap, native A and return to gameplay. `menu-unit.log` passes the added card/arrow and ownership checks alongside previous menu regressions. `source-save-verification.txt` confirms the three supplied save files are unchanged. No physical iPhone build was installed.
 
 The subsequent BOTW movement/ZL size and deadzone adjustment is recorded in the
-[game note](../dm/games/01007EF00011E000/README.md#what-it-needs).
+[game note](../../dm/games/01007EF00011E000/README.md#what-it-needs).
 `run28/geometry.log` and `build.log` pass; `run28/ios-final/details.log` reports
 zero failures in 31 look sessions, including both sticks at 390/540-point
 viewport heights and unchanged controller/other-game defaults. The updated
@@ -541,7 +541,7 @@ its previous executable until restarted. Physical iPhone feel remains untested.
 ## Shrine prompts, Sell categories and L3 timing (2026-10-27)
 
 External evidence: `01007EF00011E000-work/inventory-touch-20261025/run29/`.
-See the [game note](../dm/games/01007EF00011E000/README.md#what-it-needs) for the
+See the [game note](../../dm/games/01007EF00011E000/README.md#what-it-needs) for the
 native layouts, category bindings and Skip input ownership. `mac-shrine-fixed.log`,
 `tutorial-touch-evidence.txt` and `tutorial-body-before.png` / `tutorial-body-after.png`
 record the blank tutorial-body tap and native A. `mac-shop-fixed.log`,
@@ -569,7 +569,7 @@ scales with the circle diameter at 12%. Native HUD relocation and both
 frontends share the anchor constants. Minus appears below Plus with an 8-point
 gap when the map is absent; ordinary gamepads keep their existing layout.
 
-See the [game note](../dm/games/01007EF00011E000/README.md#what-it-needs) for
+See the [game note](../../dm/games/01007EF00011E000/README.md#what-it-needs) for
 the shrine visibility cause. Alpha-zero map ancestors invalidate map hit
 ownership while preserving the environment HUD's existing placement. Completing
 a Slate interaction clears its consumed-tap guard when gameplay resumes.
@@ -640,7 +640,7 @@ Corrected 21:10 Mac acceptance (`mac-shop-fixed.log`):
 ## Movement response and sprint removal (2026-10-28)
 
 The stronger short-drag response and removal of overshoot sprint are recorded
-in the [game note](../dm/games/01007EF00011E000/README.md#what-it-needs).
+in the [game note](../../dm/games/01007EF00011E000/README.md#what-it-needs).
 `inventory-touch-20261025/run33/native-input.log` covers direction, neutral/full
 endpoints, ordinary B preservation and R/ZR cancellation. `ios-input/` reports
 zero failures in 31 look sessions, including short/tall layouts, linear ZL,
