@@ -29,6 +29,8 @@ No `tex_flush_upload` (a minute's boot saw it flush 32 CPU-filled textures with 
 
 ## Found on this game
 
+- **Resolved in tools (2026-11-03):** [Generated shader-table timestamps publish duplicate graphics packages](../../../docs/reference/packing.md#generated-shader-table-timestamps-publish-duplicate-graphics-packages). The extra v7 differed from v6 only in two table-header times. Both corrected generators preserved the restored v6 bytes on real BOTW outputs; packaging verified all 78,018 runtime files and reused v6. The rebuilt unsigned 1.9.1 IPA reports `Graphics [REUSED v6]` and authorizes v6's exact package ID. Evidence and the existing lint/game-regression blockers are recorded in `graphics-timestamp-fix/validation.md` in the game's work folder; physical iPhone acceptance remains pending.
+
 - **Resolved startup orientation policy:** [The iOS launcher briefly rotates through portrait](../../../docs/reference/services.md#the-ios-launcher-briefly-rotates-through-portrait).
 
 - **Resolved, 2026-11-03:** [Plain C builds import Objective-C touch artwork](../../../docs/reference/packing.md#plain-c-builds-import-objective-c-touch-artwork): the unsigned iOS build exposed Foundation to C through `DmTouchPad`. Artwork now requires Objective-C in its own submodule; C, Objective-C and Swift import checks pass.

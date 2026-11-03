@@ -122,6 +122,34 @@ class Tables(Base):
 
 
 class TableTools(unittest.TestCase):
+    def test_table_generation_preserves_published_bytes_and_new_outputs_are_reproducible(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); lib = root / 'b-0123456789ab'; lib.mkdir()
+            (lib / 'inputs.tsv').write_text('game\tfixture\ninputs\taaaaaaaaaaaa\n')
+            key = '00112233aabbccdd'
+            (lib / f'{key}_b.metal').write_text('fragment float4 main0(constant cb& fp_c1) { int _5 = in.v; return (fp_c1)._m0[_5]; }\n')
+            (lib / f'{key}_b.json').write_text(json.dumps({'bindings': [{'kind': 'cbuf', 'reg': 0, 'msl_name': 'fp_c1'}]}))
+            for tool, table in (('c1_guard.py', 'c1_full.tsv'), ('cb_extent.py', 'cb_extent.tsv')):
+                with self.subTest(tool=tool):
+                    path = root / table
+                    def run(tool=tool, path=path):
+                        result = subprocess.run([sys.executable, REPO / 'dm/gfx/tools' / tool, lib, path], capture_output=True, text=True)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                    run()
+                    generated = path.read_bytes()
+                    self.assertEqual(generated.splitlines()[0], b'# chain b-0123456789ab inputs aaaaaaaaaaaa generated')
+                    published = generated.replace(b' generated\n', b' 2026-11-01T21:36:26+08:00\n', 1)
+                    path.write_bytes(published); os.utime(path, ns=(1_000_000_000, 1_000_000_000))
+                    run()
+                    self.assertEqual(path.read_bytes(), published)
+                    self.assertEqual(path.stat().st_mtime_ns, 1_000_000_000)
+                    path.write_bytes(published + b'stale data\n')
+                    run(); self.assertEqual(path.read_bytes(), generated)
+                    path.unlink()
+                    run(); self.assertEqual(path.read_bytes(), generated)
+                    path.write_bytes(published.replace(b'aaaaaaaaaaaa', b'bbbbbbbbbbbb', 1))
+                    run(); self.assertEqual(path.read_bytes(), generated)
+
     def test_appledouble_files_are_not_shaders(self):   # macOS writes a binary ._<name> beside each file on an exFAT / FAT drive; c1_guard.py read ._<key>_b.metal as UTF-8 and stopped
         lib = Path(tempfile.mkdtemp()) / 'b-0123456789ab'; lib.mkdir(); self.addCleanup(shutil.rmtree, lib.parent)
         key = '00112233aabbccdd'
