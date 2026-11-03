@@ -1,4 +1,6 @@
 module DmTouchPad {
+    header "touchpad_geometry.h"
+    header "botw_stick_settings.h"
     header "botw_touch_layout.h"
     header "memory_mode.h"
     header "launcher_settings.h"
