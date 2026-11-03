@@ -8,6 +8,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdarg.h>
+#include <time.h>
 
 enum { PANE_PARENT = 0x18, PANE_FLAGS = 0x58, PANE_MATRIX = 0x70, PANE_NAME = 0xb8,
        INVENTORY_PAGE_COUNT = 3, GUIDE_SLOTS = 6,
@@ -112,6 +113,13 @@ static pthread_mutex_t g_menu_mu = PTHREAD_MUTEX_INITIALIZER;
 static dm_botw_touch_menu_view g_view;
 static int g_view_valid, g_pointer_down, g_pointer_dragged;
 static int g_pointer_rotate;
+static struct {
+    uintptr_t pane, item;
+    uint64_t started_ns;
+} g_item_press;
+static int g_target_equip;
+static uintptr_t g_target_equip_item;
+enum { INVENTORY_MENU_HOLD_NS = 150000000 };
 static float g_rotate_last_x;
 static int g_presented_menu;
 static int g_presented_gameplay;
@@ -249,6 +257,7 @@ static uintptr_t g_map_prompt_owner_screen, g_map_prompt_owner_root;
 static void menu_clear_queue_locked(void);
 static void menu_clear_target_locked(void);
 static void menu_advance_target_serial_locked(void);
+static void menu_inventory_target_locked(int slot, int confirm, int equip);
 static int selector_message_prompt_view(uintptr_t manager, uint64_t frame,
                                         dm_botw_touch_menu_view *view);
 static int selector_cursorless_prompt_view(uintptr_t manager, uint64_t frame,
@@ -302,8 +311,13 @@ static int32_t g_test_category_current_page;
 static unsigned g_test_category_current_count;
 static uintptr_t g_test_category_resolve_screen;
 static unsigned g_test_category_resolve_count;
-static int g_test_category_call_order[3];
+static uintptr_t g_test_category_activate_screen;
+static unsigned g_test_category_activate_count;
+static int g_test_category_call_order[4];
 static unsigned g_test_category_call_order_count;
+static uint64_t g_test_menu_time_ns;
+static uintptr_t g_test_equip_screen, g_test_equip_item;
+static unsigned g_test_equip_count;
 static _Atomic int g_test_generic_selector;
 static _Atomic uintptr_t g_test_native_screen_name_getter;
 static uintptr_t g_test_native_group_getter, g_test_native_screen_shown;
@@ -317,6 +331,15 @@ static uintptr_t g_test_list_category_setter;
 static uintptr_t g_test_list_category_jump;
 #endif
 static _Atomic int g_map_setter_signature_reported;
+
+static uint64_t menu_time_ns(void) {
+#ifdef DM_TEST_HOOKS
+    if (g_test_menu_time_ns) return g_test_menu_time_ns;
+#endif
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec;
+}
 
 static void pane_name(const uint8_t *pane, char out[25]) {
     memcpy(out, pane + PANE_NAME, 24);
@@ -5167,10 +5190,78 @@ static uintptr_t selector_find_category_screen(uintptr_t manager, uintptr_t targ
     return 0;
 }
 
+// Read only the native item acknowledged by this inventory cursor entry.
+// The item type is independent of the tab: bows and arrows share a tab.
+static uintptr_t selector_inventory_item(uintptr_t main_base, uintptr_t entry) {
+    uintptr_t screen = selector_read_ptr(entry, 0x20);
+    uintptr_t owner = selector_read_ptr(entry, 0x18);
+    if (!screen || !owner || selector_read_ptr(screen, 0) != main_base + 0x1cf9ad8 ||
+        !selector_range(owner + 0x44, 4) || !selector_range(screen + 0x368c, 4)) return 0;
+    int32_t id = 0, selected = 0, transition = 0;
+    memcpy(&id, (const void *)(owner + 0x44), 4);
+    memcpy(&selected, (const void *)(screen + 0x3650), 4);
+    memcpy(&transition, (const void *)(screen + 0x368c), 4);
+    if (id < 9 || id >= 69 || selected != id || transition) return 0;
+    uintptr_t item = selector_read_ptr(screen, 0x3648);
+    if (!selector_range(item, 0x28) || !((const uint8_t *)item)[0x25]) return 0;
+    return item;
+}
+
+static int selector_equipment_item(uintptr_t item) {
+    int32_t type = -1;
+    if (item) memcpy(&type, (const void *)(item + 0x18), 4);
+    return type >= 0 && type <= 3; // sword, bow, arrow, shield; not armor or food
+}
+
+// OBS37 is on the guest UI thread. Use the same equip=true action as the
+// native Equip menu row (main+0xe40c10), including its UI and player updates.
+static void selector_equip_item(uintptr_t main_base, uintptr_t screen, uintptr_t item) {
+    int32_t value = 0;
+    memcpy(&value, (const void *)(item + 0x20), 4);
+    if (((const uint8_t *)item)[0x24] || value <= 0) return;
+#ifdef DM_TEST_HOOKS
+    if (atomic_load_explicit(&g_test_native_ready, memory_order_acquire)) {
+        g_test_equip_screen = screen;
+        g_test_equip_item = item;
+        g_test_equip_count++;
+        ((uint8_t *)item)[0x24] = 1;
+        return;
+    }
+#endif
+    ((void (*)(uintptr_t, int)) (main_base + 0xe3f378))(screen, 1);
+    if (atomic_load_explicit(&g_trace, memory_order_acquire))
+        LOG("BOTW menu directly equipped item=%p screen=%p", (void *)item, (void *)screen);
+}
+
+static void selector_inventory_hold_locked(uintptr_t main_base, uintptr_t manager, uint64_t frame) {
+    if (!g_pointer_down || g_pointer_dragged || !g_item_press.pane ||
+        !menu_active_locked(frame) || g_view.generic_mode || g_view.popup_visible ||
+        g_pointer_page_key != g_view.page_key || g_pointer_popup_key != g_view.popup_key) return;
+    uintptr_t entry = selector_find_entry(manager, g_item_press.pane, 0);
+    if (!entry || selector_read_ptr(manager, 0x48) != entry) return;
+    uintptr_t item = selector_inventory_item(main_base, entry);
+    if (!item) return;
+    if (g_item_press.item && g_item_press.item != item) {
+        menu_clear_queue_locked();
+        return;
+    }
+    g_item_press.item = item;
+    if (!selector_equipment_item(item) ||
+        menu_time_ns() - g_item_press.started_ns < INVENTORY_MENU_HOLD_NS) return;
+    for (int i = 0; i < g_view.slot_count; i++) if (g_view.slot_panes[i] == g_item_press.pane) {
+        menu_inventory_target_locked(i, 1, 0);
+        // The menu owns the press from this point; lifting cannot equip or
+        // activate a newly appeared popup row a second time.
+        g_pointer_down = 0;
+        memset(&g_item_press, 0, sizeof g_item_press);
+        return;
+    }
+}
+
 static int selector_request_category(uintptr_t manager, uintptr_t pane, int category,
                                      uintptr_t expected_screen_vtable,
                                      uintptr_t native_relayout, uintptr_t native_current_category,
-                                     uintptr_t native_resolve_selection) {
+                                     uintptr_t native_resolve_selection, uintptr_t native_activate) {
     uintptr_t screen = selector_find_category_screen(manager, pane, category, expected_screen_vtable);
     if (!screen) return 0;
     if (!selector_range(screen + 0x368c, 4) || !selector_range(screen + 0x365c, 4) ||
@@ -5194,7 +5285,8 @@ static int selector_request_category(uintptr_t manager, uintptr_t pane, int cate
         return 2;
     }
     if (first_page < 0 || inventory_count <= 0 || first_page >= inventory_count ||
-        !native_relayout || !native_current_category || !native_resolve_selection) return 0;
+        !native_relayout || !native_current_category || !native_resolve_selection ||
+        !native_activate) return 0;
 
     int consume = 0;
     pthread_mutex_lock(&g_menu_mu);
@@ -5238,12 +5330,19 @@ static int selector_request_category(uintptr_t manager, uintptr_t pane, int cate
         g_test_category_resolve_screen = screen;
         g_test_category_resolve_count++;
         g_test_category_call_order[g_test_category_call_order_count++] = 3;
+        g_test_category_activate_screen = screen;
+        g_test_category_activate_count++;
+        g_test_category_call_order[g_test_category_call_order_count++] = 4;
     } else
 #endif
     {
         ((void (*)(uintptr_t))native_relayout)(screen);
         ((void (*)(uintptr_t, int32_t))native_current_category)(screen, first_page);
         ((void (*)(uintptr_t))native_resolve_selection)(screen);
+        // Relayout updates the items but retains each button's old input flag.
+        // Finish through the native activation body, even with transition=0:
+        // the guarded entry at e39bfc would skip re-enabling newly filled rows.
+        ((void (*)(uintptr_t, int32_t))native_activate)(screen, 0);
     }
     return 1;
 }
@@ -5452,6 +5551,7 @@ void dm_botw_touch_menu_selector(const uint64_t *regs) {
     }
 
     pthread_mutex_lock(&g_menu_mu);
+    selector_inventory_hold_locked((uintptr_t)main->base, manager, frame);
     if (g_open_category >= 0 && menu_active_locked(frame) && !g_view.generic_mode &&
         g_view.inventory_visible && !g_view.popup_visible) {
         for (int i=0;i<g_view.category_count;i++) if (g_view.category_ids[i]==g_open_category && g_view.category_panes[i]) {
@@ -5482,9 +5582,10 @@ void dm_botw_touch_menu_selector(const uint64_t *regs) {
         uintptr_t native_relayout = (uintptr_t)(main->base + 0xe3af74);
         uintptr_t native_current_category = (uintptr_t)(main->base + 0xe3b20c);
         uintptr_t native_resolve_selection = (uintptr_t)(main->base + 0xe3f924);
+        uintptr_t native_activate = (uintptr_t)(main->base + 0xe39c08);
         int result = selector_request_category(manager, pane, index, screen_vtable,
                                                native_relayout, native_current_category,
-                                               native_resolve_selection);
+                                               native_resolve_selection, native_activate);
         if (result && atomic_load_explicit(&g_trace, memory_order_acquire))
             LOG("BOTW menu selector %s native category=%d pane=%p",
                 result == 1 ? "refreshed" : "already on", index, (void *)pane);
@@ -5519,11 +5620,23 @@ void dm_botw_touch_menu_selector(const uint64_t *regs) {
     }
     uintptr_t focused = selector_read_ptr(manager, 0x48);
     if (focused == entry) {
+        uintptr_t item = selector_inventory_item((uintptr_t)main->base, entry);
         pthread_mutex_lock(&g_menu_mu);
         int newly_focused = !g_selector_ready;
         if (g_target_valid && g_target_pane == pane && g_selector_manager == manager) {
             g_requested_entry = entry;
             g_selector_ready = 1;
+            if (g_target_equip) {
+                if (!item || (g_target_equip_item && item != g_target_equip_item)) {
+                    menu_clear_queue_locked();
+                } else if (selector_equipment_item(item)) {
+                    uintptr_t screen = selector_read_ptr(entry, 0x20);
+                    menu_clear_queue_locked();
+                    pthread_mutex_unlock(&g_menu_mu);
+                    selector_equip_item((uintptr_t)main->base, screen, item);
+                    return;
+                } else g_target_equip = 0;
+            }
         }
         pthread_mutex_unlock(&g_menu_mu);
         if (newly_focused && atomic_load_explicit(&g_trace, memory_order_acquire))
@@ -5553,6 +5666,7 @@ static void camera_clear_locked(void);
 static void menu_clear_queue_locked(void) {
     g_pointer_down = g_pointer_dragged = 0;
     g_pointer_rotate = 0;
+    memset(&g_item_press, 0, sizeof g_item_press);
     camera_clear_locked();
     g_map_prompt_down = g_map_prompt_back = 0;
     g_map_prompt_button = 0;
@@ -5568,6 +5682,7 @@ static void menu_clear_queue_locked(void) {
 static void menu_clear_target_locked(void) {
     menu_advance_target_serial_locked();
     g_target_valid = g_target_popup = g_confirm_pending = 0;
+    g_target_equip = 0; g_target_equip_item = 0;
     g_target_button_bits = 0;
     g_target_axis = 0;
     g_target_category = g_target_generic = g_selector_ready = 0;
@@ -5581,6 +5696,19 @@ static void menu_clear_target_locked(void) {
     g_requested_entry = g_selector_manager = 0;
     g_target_page_key = g_target_popup_key = 0;
     memset(&g_list_selection, 0, sizeof g_list_selection);
+}
+
+static void menu_inventory_target_locked(int slot, int confirm, int equip) {
+    uintptr_t item = g_item_press.item;
+    menu_clear_target_locked();
+    g_target_valid = 1; g_target_index = slot;
+    g_target_pane = g_view.slot_panes[slot];
+    g_target_page_key = g_view.page_key; g_target_popup_key = g_view.popup_key;
+    g_target_center[0] = g_view.slots[slot][0] + g_view.slots[slot][2] * .5f;
+    g_target_center[1] = g_view.slots[slot][1] + g_view.slots[slot][3] * .5f;
+    g_confirm_pending = confirm; g_target_equip = equip;
+    g_target_equip_item = equip ? item : 0;
+    g_last_apply_valid = 0;
 }
 
 static void menu_advance_target_serial_locked(void) {
@@ -6341,6 +6469,14 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
         g_rotate_last_x = x;
         g_pointer_page_key = g_view.page_key;
         g_pointer_popup_key = g_view.popup_key;
+        if (!g_view.generic_mode && !g_view.popup_visible && !g_pointer_rotate) {
+            int slot = hit_slots(x, y, &g_view);
+            if (slot >= 0 && g_view.slot_panes[slot]) {
+                g_item_press.pane = g_view.slot_panes[slot];
+                g_item_press.started_ns = menu_time_ns();
+                menu_inventory_target_locked(slot, 0, 0);
+            }
+        }
         pthread_mutex_unlock(&g_menu_mu);
         return;
     }
@@ -6586,16 +6722,11 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
     } else {
         target = hit_slots(x, y, &g_view);
         if (target >= 0 && g_view.slot_panes[target]) {
-            g_target_popup = 0; g_target_index = target; g_target_valid = 1;
-            g_target_generic = 0;
-            g_target_pane = g_view.slot_panes[target];
-            g_target_category = g_selector_ready = 0; g_requested_entry = 0;
-            g_target_page_key = g_view.page_key; g_target_popup_key = g_view.popup_key;
-            g_target_center[0] = g_view.slots[target][0] + g_view.slots[target][2] * .5f;
-            g_target_center[1] = g_view.slots[target][1] + g_view.slots[target][3] * .5f;
-            // A drag selects the destination only. A tap selects and opens
-            // the game's native item-action popup after the cursor arrives.
-            g_confirm_pending = !g_pointer_dragged;
+            int short_press = !g_pointer_dragged && g_item_press.pane == g_view.slot_panes[target] &&
+                menu_time_ns() - g_item_press.started_ns < INVENTORY_MENU_HOLD_NS;
+            // Equipment taps use the native Equip action after focus arrives.
+            // Other items and long presses keep the native item menu.
+            menu_inventory_target_locked(target, !g_pointer_dragged, short_press);
         } else if (!g_pointer_dragged && g_view.back_valid && point_in_rect(x, y, g_view.back)) {
             g_target_valid = 1; g_target_popup = 0; g_target_index = -1;
             g_target_page_key = g_view.page_key; g_target_popup_key = g_view.popup_key;
@@ -6914,7 +7045,9 @@ int dm_botw_touch_menu_apply(uint64_t *buttons, int32_t axes[4], uint64_t frame)
             return live_adjuster;
         }
         if (g_target_category || !g_confirm_pending) {
-            menu_clear_queue_locked();
+            if (g_pointer_down && g_item_press.pane == g_target_pane)
+                menu_clear_target_locked(); // keep timing a held inventory item after focus
+            else menu_clear_queue_locked();
         } else if (!(*buttons & DM_BTN_A)) {
             emit = DM_BTN_A;
             menu_clear_queue_locked();

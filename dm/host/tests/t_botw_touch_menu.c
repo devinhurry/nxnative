@@ -196,6 +196,7 @@ typedef struct {
     uint8_t manager[0x80], control[0x100], model[0x60], registry[0xb40];
     uint8_t active[3], screen[0x3b20], state[0x80];
     uint8_t entry[0x40], entry2[0x40], owner[0x100], owner2[0x100], pane[0x100];
+    uint8_t item[0x28];
     uint8_t map_screen[0x4000], map_state[0x80], map_entry[0x40], map_owner[0x100];
     uint8_t apphome_screen[0x100], apphome_state[0x80], apphome_wrapper[0x40];
     uint8_t mapview[0x900], map_model[0x3900], map_cursor_object[0x3bc0];
@@ -311,6 +312,14 @@ static void init_selector_fixture(void) {
     g_mod[0].base = &fake_main_base;
     g_mod[0].loaded = 1;
     put_ptr(selector.manager, (uintptr_t)(g_mod[0].base + 0x1d0cdf8));
+    put_ptr(selector.screen, (uintptr_t)(g_mod[0].base + 0x1cf9ad8));
+    put_ptr(selector.screen + 0x3648, (uintptr_t)selector.item);
+    int32_t selected_id = 29, item_type = 8, item_value = 1;
+    memcpy(selector.screen + 0x3650, &selected_id, 4);
+    memcpy(selector.owner + 0x44, &selected_id, 4);
+    memcpy(selector.item + 0x18, &item_type, 4);
+    memcpy(selector.item + 0x20, &item_value, 4);
+    selector.item[0x25] = 1;
     put_ptr(selector.manager + 0x20, (uintptr_t)selector.control);
     put_ptr(selector.control + 0x80, (uintptr_t)selector.model);
     put_ptr(selector.model + 0x28, (uintptr_t)selector.registry);
@@ -342,6 +351,84 @@ static void selector_tick(void) {
     uint64_t regs[31] = {0};
     regs[0] = (uintptr_t)selector.manager;
     dm_botw_touch_menu_selector(regs);
+}
+
+static void inventory_press_fixture(int32_t type) {
+    dm_botw_touch_menu_reset();
+    init_selector_fixture();
+    init_inventory();
+    view.slot_count = 1;
+    view.slot_panes[0] = (uintptr_t)selector.pane;
+    memcpy(selector.item + 0x18, &type, 4);
+    put_ptr(selector.manager + 0x48, (uintptr_t)selector.entry);
+    g_test_equip_count = 0;
+    g_test_menu_time_ns = 1000000000;
+    publish(10);
+}
+
+static void test_inventory_equipment_press(void) {
+    const float x = .23f, y = .24f;
+    // The item type, not its tab, distinguishes all four equipment kinds.
+    for (int32_t type = 0; type <= 9; type++) {
+        inventory_press_fixture(type);
+        dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, x, y);
+        g_test_menu_time_ns += INVENTORY_MENU_HOLD_NS - 1;
+        dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, x, y);
+        selector_tick();
+        if (type <= 3) {
+            assert(g_test_equip_count == 1 && selector.item[0x24]);
+            assert(g_test_equip_screen == (uintptr_t)selector.screen);
+            assert(g_test_equip_item == (uintptr_t)selector.item);
+            assert(!sample(10)); // no popup or synthetic A on a direct equip
+        } else {
+            assert(!g_test_equip_count && !selector.item[0x24]);
+            assert(sample(10) == DM_BTN_A); // armor, food and other items keep their menu
+        }
+    }
+    inventory_press_fixture(1);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, x, y);
+    selector_tick();
+    assert(!sample(10) && g_pointer_down); // focus does not consume the held gesture
+    g_test_menu_time_ns += INVENTORY_MENU_HOLD_NS - 1;
+    selector_tick();
+    assert(!g_confirm_pending && !g_test_equip_count);
+    g_test_menu_time_ns++;
+    selector_tick();
+    assert(sample(10) == DM_BTN_A && !g_pointer_down && !g_test_equip_count);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, x, y);
+    assert(sample(11) == 0 && !g_test_equip_count); // lifting after the menu does nothing
+
+    for (int disabled = 0; disabled < 2; disabled++) {
+        inventory_press_fixture(0);
+        if (disabled) memset(selector.item + 0x20, 0, 4); // broken/empty equipment
+        else selector.item[0x24] = 1; // equip is idempotent, never an Unequip toggle
+        tap(x, y); selector_tick();
+        assert(!g_test_equip_count && !sample(10));
+    }
+    inventory_press_fixture(2);
+    put_ptr(selector.manager + 0x48, 0);
+    tap(x, y); selector_tick();
+    assert(!g_test_equip_count && !sample(10));
+    put_ptr(selector.manager + 0x48, (uintptr_t)selector.entry);
+    selector_tick();
+    assert(g_test_equip_count == 1 && !sample(11)); // wait for native focus
+
+    inventory_press_fixture(3);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, x, y);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_CANCEL, x, y);
+    g_test_menu_time_ns += INVENTORY_MENU_HOLD_NS;
+    selector_tick();
+    assert(!g_test_equip_count && !sample(10));
+    inventory_press_fixture(0);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, x, y);
+    view.page_key++;
+    publish(10);
+    g_test_menu_time_ns += INVENTORY_MENU_HOLD_NS;
+    selector_tick();
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, x, y);
+    assert(!g_test_equip_count && !sample(10));
+    g_test_menu_time_ns = 0;
+    dm_botw_touch_menu_reset();
 }
 
 static void expect_no_virtual_input(uint64_t frame) {
@@ -2425,6 +2512,7 @@ int main(void) {
     assert(!map_inverse_point(singular_map, 0, 0, &map_x, &map_y));
 
     uint16_t native_back_glyph = 0xe041;
+    test_inventory_equipment_press();
     test_selector_pointer_ranges();
     const float back_text[4] = {.40f, .48f, .12f, .04f};
     const float back_icon[4] = {.46f, .46f, .04f, .08f};
@@ -2525,6 +2613,8 @@ int main(void) {
     g_test_category_current_page = -1;
     g_test_category_resolve_screen = 0;
     g_test_category_resolve_count = 0;
+    g_test_category_activate_screen = 0;
+    g_test_category_activate_count = 0;
     g_test_category_call_order_count = 0;
     // The new page may reuse this focused entry; selection still needs resolving.
     put_ptr(selector.manager + 0x48, (uintptr_t)selector.entry);
@@ -2548,8 +2638,11 @@ int main(void) {
     assert(g_test_category_current_page == 12);
     assert(g_test_category_resolve_count == 1);
     assert(g_test_category_resolve_screen == (uintptr_t)selector.screen);
-    assert(g_test_category_call_order_count == 3 && g_test_category_call_order[0] == 1 &&
-           g_test_category_call_order[1] == 2 && g_test_category_call_order[2] == 3);
+    assert(g_test_category_activate_count == 1);
+    assert(g_test_category_activate_screen == (uintptr_t)selector.screen);
+    assert(g_test_category_call_order_count == 4 && g_test_category_call_order[0] == 1 &&
+           g_test_category_call_order[1] == 2 && g_test_category_call_order[2] == 3 &&
+           g_test_category_call_order[3] == 4);
     // Refresh the item card even when the next page reuses the focused entry.
     int32_t staged_page = 0, staged_item = -1, staged_request = 0;
     memcpy(&staged_page, selector.screen + 0x3660, 4);
