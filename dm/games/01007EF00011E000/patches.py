@@ -248,6 +248,37 @@ def validate_main(ctx):
         0xf9400100, 0x97fe1de8, 0x37f800c0, 0x2a0003e2,
         0xf95b1660, 0xb9765e61, 0x97fd65fc, 0xf91b2660,
     ), 'BOTW inventory selection item lookup changed; revalidate screen+0x3648 refresh'
+    # The unguarded transition-state body re-enables the current page after
+    # relayout. The public e39bfc entry skips it when transition is already 0.
+    assert tuple(word(o) for o in range(0xe39c08, 0xe39c28, 4)) == (
+        0xa9bd7bfd, 0xf9000bf5, 0xa9024ff4, 0x910003fd,
+        0xaa0003f4, 0x9105e000, 0x2a0103f3, 0x94172766,
+    ), 'BOTW inventory page activation entry changed; revalidate category input refresh'
+    assert tuple(word(o) for o in range(0xe39c78, 0xe39c88, 4)) == (
+        0x7100027f, 0x1a9f17e1, 0x97fe34f0, 0xb9368e93,
+    ), 'BOTW inventory page activation changed; revalidate native button eligibility'
+    # Equipment short taps call the native Equip action with equip=true;
+    # long presses keep the normal item menu. Validate the entry, its native
+    # caller and the item type/availability/equipped fields the host reads.
+    assert tuple(word(o) for o in range(0xe3f378, 0xe3f398, 4)) == (
+        0xd10203ff, 0xa9027bfd, 0xa9036ffc, 0xa90467fa,
+        0xa9055ff8, 0xa90657f6, 0xa9074ff4, 0x910083fd,
+    ), 'BOTW inventory equipment action changed; revalidate direct equipment taps'
+    assert tuple(word(o) for o in range(0xe40c04, 0xe40c1c, 4)) == (
+        0xaa1303e0, 0x2a1f03e1, 0x14000003, 0xaa1303e0, 0x52800021, 0x97fff9d8,
+    ), 'BOTW inventory Equip/Remove dispatch changed; revalidate equip=true'
+    assert tuple(word(o) for o in range(0xe3bae0, 0xe3baf0, 4)) == (
+        0xb9404434, 0x51002688, 0x7100ed1f, 0x540000c9,
+    ), 'BOTW inventory cursor id changed; revalidate acknowledged equipment selection'
+    assert tuple(word(o) for o in range(0xe3f450, 0xe3f45c, 4)) == (
+        0xf95b2668, 0xf946ad29, 0xb9401919,
+    ), 'BOTW inventory selected item/type changed; revalidate equipment eligibility'
+    assert tuple(word(o) for o in range(0xe3401c, 0xe3402c, 4)) == (
+        0xb4000301, 0x39409428, 0xaa0103f6, 0x340002a8,
+    ), 'BOTW inventory item availability changed; revalidate direct equipment taps'
+    assert tuple(word(o) for o in range(0xe3ea20, 0xe3ea30, 4)) == (
+        0xf95b2668, 0x2a0003f6, 0x39409108, 0x350003a8,
+    ), 'BOTW inventory equipped flag changed; revalidate idempotent equipment taps'
     assert tuple(word(o) for o in range(0xd6f034, 0xd6f054, 4)) == (
         0xd101c3ff, 0x6d0123e9, 0xa9027bfd, 0xa90367fa,
         0xa9045ff8, 0xa90557f6, 0xa9064ff4, 0x910083fd,

@@ -542,7 +542,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - render scale stub (the launcher offers DM_RENDER_SCALE)
   - launcher capabilities: DYNAMIC_RESOLUTION
   - host [hle_botw_touch_actions.c:13](../../dm/host/hle_botw_touch_actions.c#L13): build check
-  - host [hle_botw_touch_menu.c:20](../../dm/host/hle_botw_touch_menu.c#L20): build check
+  - host [hle_botw_touch_menu.c:22](../../dm/host/hle_botw_touch_menu.c#L22): build check
   - host [hle_botw_touchhud.c:17](../../dm/host/hle_botw_touchhud.c#L17): build check
 
 ### The Legend of Zelda: Link's Awakening
