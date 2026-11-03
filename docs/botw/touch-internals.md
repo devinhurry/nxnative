@@ -97,9 +97,10 @@ setter. An initial attempt wrote category ids there; live testing disproved that
 and the write was removed.
 
 `screen+0x3650` is written by the game's focus handler (`main+0xe3bacc`, `main+0xe3bb24`) and
-by the re-resolve routine below. The reverse direction, id → item, is `main+0xe3f37c`: the id
-range picks the list, then **that list's current page** (`main+0xe3f418`) gives the page, and
-the row is `id - list+0x134`. The page a list shows is therefore part of an item's identity.
+by the re-resolve routine below. The focus handler maps an id to a list and calls
+`main+0xdc7248` to obtain its item row; the list's `+0x130` is the page passed to
+`main+0xd992ac(manager, page, row)` (`main+0xe3bb88` .. `main+0xe3bc18`). The page a list
+shows is therefore part of an item's identity.
 
 `main+0xe3f924(screen)` is the game's "the layout changed, re-derive the selection" routine.
 One branch of the screen's update calls it when a selection exists and no transition is in
@@ -151,23 +152,65 @@ The switch now runs the game's own sequence, in the game's order:
 4. `main+0xe3f924(screen)` — resolve selection immediately for the new page. The routine
    refreshes the item pointer at `screen+0x3648` through `main+0xd992ac` and passes it to
    the native item-card update at `main+0xe33fe4` (`main+0xe3faa4` .. `main+0xe3fb14`).
+5. `main+0xe39c08(screen, 0)` — activate the rebuilt current page's native buttons.
+   This is the unguarded body of the transition-state setter; its public entry at
+   `main+0xe39bfc` would return immediately because the transition is already zero.
+
+Relayout updates row contents and visibility but keeps the buttons' prior input flags.
+Switching from shields to bows reproduced a visible arrow with `owner+0x3a = 0x202f`,
+missing the selectable `0x10` bit. Both touch and controller Down then ignored it. The
+activation body calls `main+0xdc7040(current_list, true)`, which applies native button
+eligibility to all 20 rows. This restores newly filled rows without enabling empty cells
+or writing cursor flags directly.
 
 `main+0xe3ddcc` and `main+0xe3b9f0` are the wrong tools for a category change: the first is
 a page mover guarded by `screen+0x3638`, the second forces the carousel slot. The host does
 not stage a pending item either: the game's own select call clears `screen+0x3650` and
 re-derives it, and staging it by hand left the two out of step.
 
-The new native addresses (`main+0xe3af74`, `main+0xe3b20c`, `main+0xe3f924`) and the
+The native addresses (`main+0xe3af74`, `main+0xe3b20c`, `main+0xe3f924`, `main+0xe39c08`) and the
 selection resolver's item lookup are
 checked in the profile's `validate_main` with their exact instruction bytes, like every
 other build-gated address.
 
+## Equipment taps and the 150 ms item menu
+
+Only swords, bows, arrows and shields use direct equipment taps. Their native `PouchItem`
+types are 0, 1, 2 and 3 at `item+0x18`; arrows share the Bow category but remain a separate
+item type. Armor and other item types retain the normal menu. The public
+[BOTW decompilation](https://github.com/zeldaret/botw/blob/master/src/Game/UI/uiPauseMenuDataMgr.h)
+documents these types; the 1.9.0 instructions and offsets are checked independently.
+
+Touch-down requests native focus without A. A release before 150 ms calls
+`main+0xe3f378(screen, true)` on the guest UI thread after the native cursor has acknowledged
+the entry. This is the game's Equip action (`main+0xe40c10` .. `main+0xe40c18`), including
+the native data-manager, player, list and item-card updates. Its `false` argument removes
+equipment and must never be used for a short tap. Already-equipped items and items with
+zero durability/count stay unchanged.
+
+The host checks the screen vtable, the owner's item id at `owner+0x44`, the screen's
+acknowledged id at `screen+0x3650`, and the live item pointer at `screen+0x3648` before
+dispatch. `item+0x24` is the equipped flag and `+0x25` is inventory membership. The native
+entry, Equip/Remove caller, id range and item-field instructions are build-checked in
+`validate_main`.
+
+A stationary press reaching 150 ms uses the existing native A/menu path while the finger
+is still down. Time comes from `CLOCK_MONOTONIC`, independently of game frames. Once the
+menu is requested, the press is consumed so release cannot equip or choose a popup action.
+Dragging, cancellation, stale page/popup ownership and changed selected items invalidate
+the pending action.
+The game ignores A on an already-equipped arrow stack; long press preserves that native
+behavior rather than creating an action menu the game does not offer.
+
 ## The tests, and what they miss
 
-`dm/host/tests/t_botw_touch_menu.c` covers the inventory category flow (the block around
-line 2494). It asserts the staged pages, the call order of the two native calls
-(`re-lay out the lists → current category → resolve selection`), the skip while a transition is in flight, and
+`dm/host/tests/t_botw_touch_menu.c` covers the inventory category flow. It asserts the
+staged pages, the native call order
+(`re-lay out the lists → current category → resolve selection → activate buttons`), the skip while a transition is in flight, and
 that the current category follows the switch.
+Equipment checks cover all ten item types, release just below 150 ms, opening the menu
+at exactly 150 ms while held, no duplicate on release, already-equipped and depleted items,
+delayed native focus, cancellation and changed page ownership.
 
 `DM_TEST_HOOKS` replaces native calls with recorders, so this test verifies the host's
 contract and cannot prove what the game shows. Live acceptance must switch between food
