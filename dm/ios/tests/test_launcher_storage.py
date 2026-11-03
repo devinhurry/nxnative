@@ -23,8 +23,10 @@ class LauncherStorageTests(unittest.TestCase):
             c.write_text('#include "launcher_settings.h"\n#include "memory_mode.h"\n'
                          'int check(void) { return dm_low_memory_default(0); }\n')
             objc = tmp / 'module.m'
-            objc.write_text('@import DmTouchPad;\nvoid check(void) {\n'
+            objc.write_text('#include "botw_touch_style.h"\n#include "touchpad_geometry.h"\n'
+                            '#include "botw_stick_settings.h"\n#include "botw_touch_layout.h"\nvoid check(void) {\n'
                             'NSString *icon = dm_botw_touch_button_icon_path(0); (void)icon;\n'
+                            'dm_touchpad_stick_response response; (void)dm_botw_stick_settings_read(&response);\n'
                             'CGPathRef p = dm_botw_switch_cancel_path(CGPointZero, 52); CGPathRelease(p);\n}\n')
             swift = tmp / 'module.swift'
             swift.write_text('import DmTouchPad\nimport CoreGraphics\nfunc check() {\n'
@@ -49,6 +51,17 @@ class LauncherStorageTests(unittest.TestCase):
                                              '-sdk', probe.stdout.strip(), *common, '-module-cache-path', str(cache), str(swift)],
                                             capture_output=True, text=True, timeout=60)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                if sdk == 'iphoneos':
+                    profile = tmp / 'profile'
+                    profile.mkdir()
+                    subprocess.run([sys.executable, str(REPO / 'dm/games/game.py'), 'header', '01007EF00011E000',
+                                    str(profile / 'game_profile.h')], check=True, capture_output=True, text=True)
+                    for name in ('DmGamepad.m', 'front_ios.m'):
+                        with self.subTest(sdk=sdk, source=name):
+                            result = subprocess.run([*clang, '-fobjc-arc', '-fblocks', '-I', str(profile),
+                                                     '-I', str(REPO / 'dm/gfx/nvn'), str(REPO / 'dm/ios/Sources' / name)],
+                                                    capture_output=True, text=True, timeout=60)
+                            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_only_changed_choices_are_stored(self):
         with tempfile.TemporaryDirectory() as tmp:
