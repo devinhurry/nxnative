@@ -97,16 +97,18 @@ setter. An initial attempt wrote category ids there; live testing disproved that
 and the write was removed.
 
 `screen+0x3650` is written by the game's focus handler (`main+0xe3bacc`, `main+0xe3bb24`) and
-by the re-resolve routine below. The focus handler maps an id to a list and calls
+by the Sort routine below. The focus handler maps an id to a list and calls
 `main+0xdc7248` to obtain its item row; the list's `+0x130` is the page passed to
 `main+0xd992ac(manager, page, row)` (`main+0xe3bb88` .. `main+0xe3bc18`). The page a list
 shows is therefore part of an item's identity.
 
-`main+0xe3f924(screen)` is the game's "the layout changed, re-derive the selection" routine.
-One branch of the screen's update calls it when a selection exists and no transition is in
-flight (`main+0xe40614` .. `main+0xe40648`): it re-reads the category from the current page, sets the
-tab selection, re-lays out the lists and recomputes `screen+0x3650` as
-`base(slot) + row` (`main+0xe3f9d4` .. `main+0xe3fa00`).
+**`main+0xe3f924(screen)` is Sort, not a selection-refresh routine.** The earlier
+classification on this page was wrong. The game's Sort-input branch calls it at
+`main+0xe40648`. It sorts through `main+0xd980a0(manager, category, 0)` at
+`main+0xe3f988`, then displays "Sorted ... Inventory" through
+`main+0xe8a170(category, 0)` at `main+0xe3fa2c`. Its later selection and item-card
+updates are part of sorting; they do not make the whole function safe for a category tap.
+Mac probes on three category taps recorded three calls to each of those entry points.
 
 ## What the host did, and why it was wrong
 
@@ -122,10 +124,9 @@ native_commit(screen);                                // main+0xe3b9f0
 
 The old sequence omits the complete native selection refresh:
 
-**The "refresh" does nothing.** `main+0xe3ddcc` is a *page* mover inside the current
-category. Its first check compares `category(page + delta)` against `screen+0x3638` and
-returns early on a mismatch (`main+0xe3de10` .. `main+0xe3de28`). The host never updates
-`screen+0x3638`, so the check fails and the call is a no-op.
+**The "refresh" is a page mover.** `main+0xe3ddcc` moves pages inside the permitted
+category; a zero page delta does not request another category. When a category restriction
+is active, its check also rejects a different category (`main+0xe3de10` .. `main+0xe3de28`).
 
 **The "commit" forces the carousel.** `main+0xe3b9f0` sets `screen+0x3a30 = 1`
 (`main+0xe3ba88`) before re-laying out the lists (`main+0xe3af74` at `main+0xe3ba94`), so the
@@ -149,12 +150,24 @@ The switch now runs the game's own sequence, in the game's order:
 1. write **both** `screen+0x3660` and `screen+0x365c` with the category's first page;
 2. `main+0xe3af74(screen)` — re-lay out the lists, keeping `screen+0x3a30`;
 3. `main+0xe3b20c(screen, page)` — update `screen+0x3a10` and the per-category widgets;
-4. `main+0xe3f924(screen)` — resolve selection immediately for the new page. The routine
-   refreshes the item pointer at `screen+0x3648` through `main+0xd992ac` and passes it to
-   the native item-card update at `main+0xe33fe4` (`main+0xe3faa4` .. `main+0xe3fb14`).
+4. `main+0xe3dd14(screen, 0)` — select the first item through the native item setter.
+   It clears the old item pointer and selected id, records row zero for the pending page,
+   and calls `main+0xe3e284` to request its focus.
 5. `main+0xe39c08(screen, 0)` — activate the rebuilt current page's native buttons.
    This is the unguarded body of the transition-state setter; its public entry at
    `main+0xe39bfc` would return immediately because the transition is already zero.
+6. `main+0xe3bacc(screen, owner)` — refresh the selected item's native focus callback.
+   Use the pending BoxCursor entry (`manager+0x50`), or its retained current entry
+   (`manager+0x48`) when no request is pending. Require the entry to belong to this
+   screen and its owner's id to be in the native item range `9..68`. The callback resolves
+   that list's item and updates its card through `main+0xe33fe4`; it never sorts or emits
+   a notification.
+
+The explicit callback is necessary. A setter-only Mac check retained the same BoxCursor
+entry, so the game skipped the focus-change callback and left `screen+0x3648` and
+`screen+0x3650` zero after the setter cleared them. Replaying the callback for the selected
+native owner handles that case without taking the Sort path. The `selection-only/`
+diagnostic under `01007EF00011E000-work/category-no-sort-20261103/` records it.
 
 Relayout updates row contents and visibility but keeps the buttons' prior input flags.
 Switching from shields to bows reproduced a visible arrow with `owner+0x3a = 0x202f`,
@@ -165,11 +178,11 @@ or writing cursor flags directly.
 
 `main+0xe3ddcc` and `main+0xe3b9f0` are the wrong tools for a category change: the first is
 a page mover guarded by `screen+0x3638`, the second forces the carousel slot. The host does
-not stage a pending item either: the game's own select call clears `screen+0x3650` and
-re-derives it, and staging it by hand left the two out of step.
+not write a pending item by hand either: the native item setter owns `screen+0x3664`,
+clears the stale item/id and requests the new focus together.
 
-The native addresses (`main+0xe3af74`, `main+0xe3b20c`, `main+0xe3f924`, `main+0xe39c08`) and the
-selection resolver's item lookup are
+The native addresses (`main+0xe3af74`, `main+0xe3b20c`, `main+0xe3dd14`, `main+0xe39c08`,
+`main+0xe3bacc`), the item setter's stale-item reset and the focus callback's item/card writes are
 checked in the profile's `validate_main` with their exact instruction bytes, like every
 other build-gated address.
 
@@ -206,8 +219,12 @@ behavior rather than creating an action menu the game does not offer.
 
 `dm/host/tests/t_botw_touch_menu.c` covers the inventory category flow. It asserts the
 staged pages, the native call order
-(`re-lay out the lists → current category → resolve selection → activate buttons`), the skip while a transition is in flight, and
+(`re-lay out the lists → current category → select first item → activate buttons → refresh selected item`), the skip while a transition is in flight, and
 that the current category follows the switch.
+It checks the native item-setter address and row-zero argument explicitly, so routing a
+category through the Sort entry cannot pass under a misleading "refresh" name.
+It also covers retained focus, pending focus taking precedence, a foreign-screen request
+and non-item cursor ids.
 Equipment checks cover all ten item types, release just below 150 ms, opening the menu
 at exactly 150 ms while held, no duplicate on release, already-equipped and depleted items,
 delayed native focus, cancellation and changed page ownership.
