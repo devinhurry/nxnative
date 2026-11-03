@@ -244,6 +244,9 @@ int dm_opmode(void);   // hle_oe.c: 0 = handheld
 - (int)extraAt:(CGPoint)point;
 - (void)layoutExtraButtons;
 - (BOOL)botwMenuDpadActive;
+- (uint64_t)botwDpadMask;
+- (BOOL)dpadOwnsPoint:(CGPoint)p;
+- (void)refreshDpadArtwork;
 - (CGRect)botwControlArea;
 - (UIEdgeInsets)botwControlInsets;
 - (void)setBotwMapRectValid:(BOOL)valid x:(CGFloat)x y:(CGFloat)y width:(CGFloat)width height:(CGFloat)height;
@@ -513,8 +516,7 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
     [self refreshBotwRuneIcon];
     _key[B_MINUS].hidden = _tap || (botwActive && _botwMapValid);
     _leftStickDoubleTap.enabled = botwActive && !_botwMenuMode;
-    BOOL hideDpadArt = ([self botwTouchControlsActive] && (dm_botw_touch_loadout_visible() || dm_botw_touch_quick_select_active() || dm_botw_touch_switch_active() || !_touchLayout.dpad_visible)) || _padOff;
-    _key[B_LEFT].hidden = _key[B_UP].hidden = _key[B_RIGHT].hidden = _key[B_DOWN].hidden = _tap || !_full || hideDpadArt;
+    [self refreshDpadArtwork];
     _ring.hidden = _tap || (botwActive && !_stick[0]); _knob.hidden = _tap;
     _stickDirection.hidden = YES;
     _swapLabel.string = _tap ? @"Tap" : _full ? @"3D" : @"2D";
@@ -556,7 +558,6 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
     }
     BOOL botwActive = [self botwTouchControlsActive];
     if (!botwActive) _botwLookTapPending = NO;
-    BOOL hideDpadArt = (botwActive && (dm_botw_touch_loadout_visible() || dm_botw_touch_quick_select_active() || dm_botw_touch_switch_active() || !_touchLayout.dpad_visible)) || _padOff;
     _key[B_ZL].hidden = _tap || botwActive;
     _shieldGraph.hidden = !botwActive;
     _shieldRing.hidden = !botwActive || !(_shieldTouch || _shieldLatched);
@@ -566,7 +567,7 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
     [self refreshBotwRuneIcon];
     _key[B_MINUS].hidden = _tap || (botwActive && _botwMapValid);
     _leftStickDoubleTap.enabled = botwActive;
-    _key[B_LEFT].hidden = _key[B_UP].hidden = _key[B_RIGHT].hidden = _key[B_DOWN].hidden = _tap || !_full || hideDpadArt;
+    [self refreshDpadArtwork];
     _swap.hidden = botwTouchHudSupported() || _manualMenuPad;
     [self publishTouchHudForController:atomic_load(&g_any_controller_connected)];
     [self refreshBotwTouchMenuMode];
@@ -718,6 +719,32 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
         (!_botwMenuMode || _botwCameraPadVisible || botwSeated()) && !atomic_load(&g_any_controller_connected);
 }
 - (BOOL)botwMenuDpadActive { return _touchLayout.dpad_visible && !botwSeated() && botwTouchHudSupported() && _full && !_tap && !_padOff && _botwMenuMode && !_manualMenuPad && !atomic_load(&g_any_controller_connected) && dm_botw_touch_menu_dpad_visible(); }
+- (uint64_t)botwDpadMask {
+    if (![self botwTouchControlsActive]) return DM_BTN_LEFT | DM_BTN_UP | DM_BTN_RIGHT | DM_BTN_DOWN;
+    if (dm_botw_touch_quick_select_active() || dm_botw_touch_switch_active()) return 0;
+    return dm_botw_layout_dpad_mask(&_touchLayout, dm_botw_touch_vertical_dpad_active());
+}
+- (BOOL)dpadOwnsPoint:(CGPoint)p {
+    return self.botwDpadMask && dist(p, self.dpadCenter) <= self.dpadR * K_DPAD_GRAB &&
+        (![self botwTouchControlsActive] || _touchLayout.dpad_visible || [self dpadAt:p]);
+}
+- (void)refreshDpadArtwork {
+    BOOL botw = [self botwTouchControlsActive];
+    uint64_t mask = self.botwDpadMask;
+    if (botw && !_touchLayout.dpad_visible) {
+        BOOL released = NO;
+        for (UITouch *t in _owner.keyEnumerator.allObjects) {
+            uint64_t owner = [_owner objectForKey:t].unsignedLongLongValue;
+            if ((owner & 0xff) == C_DPAD && ((owner >> 8) & ~mask)) {
+                [_owner removeObjectForKey:t]; released = YES;
+                dm_input_cancel_virtual_latch(owner >> 8);
+            }
+        }
+        if (released) [self recompute];
+    }
+    if (_tap || !_full || _padOff || (botw && _touchLayout.dpad_visible && dm_botw_touch_loadout_visible())) mask = 0;
+    for (int b = B_LEFT; b <= B_DOWN; b++) _key[b].hidden = !(mask & (1ull << b));
+}
 
 - (void)sendBotwMenuPointer:(int)phase point:(CGPoint)p {
     if (phase == DM_BOTW_MENU_CANCEL) {
@@ -956,8 +983,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     return -1;
 }
 - (BOOL)compactDpadOwnsPoint:(CGPoint)p {
-    return [self botwTouchControlsActive] && _touchLayout.dpad_visible && _touchLayout.portrait && _full &&
-        dist(p,self.dpadCenter) <= self.dpadR*K_DPAD_GRAB;
+    return [self botwTouchControlsActive] && _touchLayout.portrait && _full && [self dpadOwnsPoint:p];
 }
 - (BOOL)leftStickOwnsPoint:(CGPoint)p {
     if ([self botwTouchControlsActive] && dm_botw_touch_quick_select_active()) return NO;
@@ -970,7 +996,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     int kind = C_NONE;
     CGFloat f = dist(p, self.faceCenter) / (self.faceGap + self.faceR * 1.6);
     if ([self faceAt:p] && f <= best) { best = f; kind = C_FACE; }
-    if (_full && (![self botwTouchControlsActive] || _touchLayout.dpad_visible)) {
+    if (_full && [self dpadOwnsPoint:p]) {
         CGFloat d = dist(p, self.dpadCenter) / (self.dpadR * K_DPAD_GRAB);
         if (d < best) { best = d; kind = C_DPAD; }
     }
@@ -1044,7 +1070,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
 }
 - (uint64_t)dpadAt:(CGPoint)p {   // 8 directions: 45° each, diagonals press two keys; a small centre circle counts as none
     CGPoint c = self.dpadCenter;
-    return dm_touchpad_dpad_buttons((float)p.x, (float)p.y, (float)c.x, (float)c.y, (float)self.dpadR);
+    return dm_touchpad_dpad_buttons((float)p.x, (float)p.y, (float)c.x, (float)c.y, (float)self.dpadR) & self.botwDpadMask;
 }
 - (CGPoint)knobOffset:(int)i {   // knob offset from the stick centre (clamped to the stick radius)
     if (!_stick[i]) return CGPointZero;
@@ -1355,7 +1381,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
             CGFloat f = dist(p, self.faceCenter) / (self.faceGap + self.faceR * 1.6);
             if (f <= best) { best = f; kind = C_FACE; }
         }
-        if (_full && (![self botwTouchControlsActive] || _touchLayout.dpad_visible)) { CGFloat d = dist(p, self.dpadCenter) / (self.dpadR * K_DPAD_GRAB); if (d < best) { best = d; kind = C_DPAD; } }
+        if (_full && [self dpadOwnsPoint:p]) { CGFloat d = dist(p, self.dpadCenter) / (self.dpadR * K_DPAD_GRAB); if (d < best) { best = d; kind = C_DPAD; } }
         // Compact Rune owns its grab region before the floating movement stick.
         if (kind != C_FACE && [self compactDpadOwnsPoint:p]) { best = 0; kind = C_DPAD; }
         if (!_stick[0]) { CGFloat sl = dist(p, self.stickHome) / ([self stickR:0] * K_STICK_GRAB); if (sl < best) { best = sl; kind = C_STICK; } }
@@ -1823,8 +1849,7 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
             setPath(_buttonBadgeBorder[b], dm_botw_outer_border_path(_buttonBadge[b].path, _buttonBadge[b].lineWidth));
         setPath(_runeBadgeBorder, dm_botw_outer_border_path(_runeBadge.path, _runeBadge.lineWidth));
     }
-    BOOL hideDpadArt = (botw && (dm_botw_touch_loadout_visible() || dm_botw_touch_quick_select_active() || dm_botw_touch_switch_active() || !_touchLayout.dpad_visible)) || _padOff;
-    _key[B_LEFT].hidden = _key[B_UP].hidden = _key[B_RIGHT].hidden = _key[B_DOWN].hidden = _tap || !_full || hideDpadArt;
+    [self refreshDpadArtwork];
     [CATransaction commit];
     [self publishTouchHudForController:atomic_load(&g_any_controller_connected)];
     [self refresh];

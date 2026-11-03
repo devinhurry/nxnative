@@ -77,6 +77,12 @@ int main(void) {
         setenv(icon,"1",1); assert(dm_botw_layout_read_for(&saved,compact) && saved.rune_icon_mode==1);
         setenv(icon,"2",1); assert(!dm_botw_layout_read_for(&saved,compact)); unsetenv(icon);
         dm_botw_touch_layout editor=dm_botw_layout_defaults_for(compact);
+        uint64_t directions=DM_BTN_LEFT|DM_BTN_UP|DM_BTN_RIGHT|DM_BTN_DOWN;
+        assert(dm_botw_layout_dpad_mask(&editor,0)==directions);
+        assert(dm_botw_layout_dpad_mask(&editor,1)==directions);
+        editor.dpad_visible=0;
+        assert(!dm_botw_layout_dpad_mask(&editor,0));
+        assert(dm_botw_layout_dpad_mask(&editor,1)==(DM_BTN_UP|DM_BTN_DOWN));
         assert(dm_botw_layout_control_visible(&editor,DM_BOTW_CANCEL));
         editor.trigger_drag[0]=1;
         assert(dm_botw_layout_control_visible(&editor,DM_BOTW_CANCEL));

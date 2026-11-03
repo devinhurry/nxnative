@@ -28,6 +28,8 @@ int dm_botw_touch_controls_visible(void);
 
 // The native equipment/rune group can fade independently of gameplay controls.
 int dm_botw_touch_loadout_visible(void);
+// A live gameplay Up/Down guide (Magnesis distance) overrides a hidden D-pad.
+int dm_botw_touch_vertical_dpad_active(void);
 // The native quick equipment/rune strip is open. Only touch drag changes sign.
 int dm_botw_touch_quick_select_active(void);
 // Tap a live quick-strip item. Native selection is acknowledged before closing.

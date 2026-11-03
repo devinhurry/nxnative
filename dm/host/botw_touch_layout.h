@@ -140,6 +140,10 @@ static inline int dm_botw_layout_read_for(dm_botw_touch_layout *out,int portrait
 static inline float dm_botw_layout_fill_gray(const dm_botw_touch_layout *layout,int pressed) {
     return fminf(1,layout->fill_gray+(pressed ? .05f : 0));
 }
+static inline uint64_t dm_botw_layout_dpad_mask(const dm_botw_touch_layout *layout, int vertical_required) {
+    return layout->dpad_visible ? DM_BTN_LEFT | DM_BTN_UP | DM_BTN_RIGHT | DM_BTN_DOWN :
+        vertical_required ? DM_BTN_UP | DM_BTN_DOWN : 0;
+}
 static inline int dm_botw_layout_control_visible(const dm_botw_touch_layout *layout,int id) {
     if (id==12) return layout->dpad_visible;
     if (id>=16 && id<20) return layout->added[id-16];

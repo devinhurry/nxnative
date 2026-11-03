@@ -638,6 +638,24 @@ input has consumed the final selection sample. Hiding D-pad leaves touch mode
 active while bypassing only `N_MainAll_00` translation/scaling, so a fresh
 native matrix restores the authored loadout position and size.
 
+### Magnesis directions with a hidden D-pad
+
+Implemented (2026-11-03): hiding the D-pad no longer removes the directions
+required by Magnesis. The existing exact-build screen observer reads the
+rendered `SousaGuide_00/N_Align_00/Pa_Guide_*/N_InOut_00/T_Icon_00` vertical
+direction glyph (`E065`), excluding the private capture copy. A fresh gameplay
+presentation temporarily enables only Up/Down in both touch frontends; menus,
+quick switching and controller handoff retain their visibility rules. Ordinary
+and compact layouts keep their saved hidden flag and native loadout position.
+The same direction mask controls artwork and touch ownership, and leaving the
+operation releases any held temporary direction. Native presentation and layout
+checks cover hidden guides, stale frames, quick switching and both layout banks.
+Production iOS/Mac compilation checks pass; the added UIKit gesture check compiles
+but was not run. The BOTW game regression stopped during shader preparation:
+the local Metal compiler is `32023.883`, while the chain requires `32023.922`.
+Retry gameplay checks with the matching toolchain; physical iPhone acceptance
+remains pending.
+
 **Quick-strip touch correction (2026-11-03).** MainShortCut's horizontal
 widget is independent of the focused BoxCursor menu entries. Routing every
 quick-strip finger through the generic menu pointer intercepted the working
