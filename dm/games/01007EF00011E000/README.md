@@ -29,6 +29,8 @@ No `tex_flush_upload` (a minute's boot saw it flush 32 CPU-filled textures with 
 
 ## Found on this game
 
+- **Resolved in code; physical iPhone acceptance pending:** [A new UIKit class prevents launch on an older supported iOS](../../../docs/reference/packing.md#a-new-uikit-class-prevents-launch-on-an-older-supported-ios).
+
 - **Implemented; physical iPhone acceptance pending:** [Magnesis directions with a hidden D-pad](notes/touch.md#magnesis-directions-with-a-hidden-d-pad).
 
 - **Current-rune L icon restored:** [L follows the selected BOTW rune](../../../docs/reference/services.md#l-follows-the-selected-botw-rune).

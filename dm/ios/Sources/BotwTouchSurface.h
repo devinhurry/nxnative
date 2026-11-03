@@ -7,7 +7,14 @@
 static inline CGRect dm_botw_touch_division(UIView *view) {
 #if defined(__IPHONE_27_1) && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_27_1
     if (@available(iOS 27.1, *)) {
-        for (UIViewReservedRegion *region in [view reservedRegionsOfKind:[UIViewReservedRegionKind divisionRegionKind]]) {
+        // A direct class reference can become a required dyld import even
+        // inside @available. Keep iOS 26+ launchable without this newer class.
+        Class kindClass = NSClassFromString(@"UIViewReservedRegionKind");
+        if (![kindClass respondsToSelector:@selector(divisionRegionKind)] ||
+            ![view respondsToSelector:@selector(reservedRegionsOfKind:)]) return CGRectNull;
+        id kind = [kindClass divisionRegionKind];
+        if (!kind) return CGRectNull;
+        for (UIViewReservedRegion *region in [view reservedRegionsOfKind:kind]) {
             dm_touchpad_rect picture, controls;
             CGRect r = region.frame, b = view.bounds;
             if (dm_touchpad_seated_split((dm_touchpad_rect){b.origin.x,b.origin.y,b.size.width,b.size.height},
