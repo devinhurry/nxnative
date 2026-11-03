@@ -637,6 +637,8 @@ release or explicit Cancel. Tap equipment selection releases only after native
 input has consumed the final selection sample. Hiding D-pad leaves touch mode
 active while bypassing only `N_MainAll_00` translation/scaling, so a fresh
 native matrix restores the authored loadout position and size.
+When D-pad relocation is enabled, both frontends move the loadout target 30pt
+upward before HUD normalization, independently of screen size and button scale.
 
 ### Magnesis directions with a hidden D-pad
 

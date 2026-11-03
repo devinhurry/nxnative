@@ -543,7 +543,7 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
     }
     if (dm_aspect_hud_y_scale()<1) dm_aspect_hud_rect(self.bounds.size.width,self.bounds.size.height,rect);
     float x = (float)((c.x - rect[0]) / rect[2]);
-    float y = (float)((c.y - rect[1]) / rect[3]);
+    float y = (float)((c.y + DM_BOTW_LOADOUT_Y_OFFSET_PT - rect[1]) / rect[3]);
     float scale=dm_botw_layout_hud_scale(dm_botw_layout_scale(&_touchLayout,B_LEFT),rect[3],dm_aspect_hud_y_scale()*dm_aspect_hud_gain());
     dm_botw_touch_hud_publish(1, x, y, scale);
 }
