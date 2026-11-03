@@ -3,9 +3,25 @@ import Foundation
 import Combine
 import CoreGraphics
 import DmTouchPad
+#if os(iOS)
+import UIKit
+import Metal
+#endif
 
 struct Setting: Decodable, Identifiable {
-    let env, kind, label, note, def: String
+    let env, kind, label, note: String
+    var def: String
+    let phoneDefault: PhoneDefault?
+    struct PhoneDefault: Decodable {
+        let generation: Int
+        let value: String
+        func matches(_ gpu: String?) -> Bool {
+            let words = (gpu ?? "").split(separator: " ")
+            guard words.count >= 3, words[0] == "Apple", words[1].first == "A",
+                  let number = Int(words[1].dropFirst()) else { return false }
+            return number > generation || (number == generation && words[2] == "Pro")
+        }
+    }
     let section: String?   // heading on the settings screen; absent in older bundles
     let needs: String?     // "<VAR>=<value>": a sub-setting, drawn only while that setting has that value
     let level: String?     // "basic": shown first (the Mac window's Basic settings); any other or none: Advanced settings. The iPhone keeps one list
@@ -39,7 +55,7 @@ struct Setting: Decodable, Identifiable {
         default: return true
         }
     }
-    enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", section, needs, level, base, options, min, max, step, format, on, off }
+    enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", phoneDefault = "phone_default", section, needs, level, base, options, min, max, step, format, on, off }
 }
 struct SettingsFile: Decodable { let settings: [Setting] }
 
@@ -227,10 +243,23 @@ final class LauncherModel: ObservableObject {
     private var automaticLowMemoryValue = "0"
     private var lowMemoryOverride: String?
 
+    static var phoneGPUName: String? {
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .phone { return MTLCreateSystemDefaultDevice()?.name }
+        #endif
+        return nil
+    }
+
     init(_ settings: [Setting], defaults: UserDefaults = .standard,
-         availableMemory: @escaping () -> UInt64 = { dm_low_memory_available() }) {
+         availableMemory: @escaping () -> UInt64 = { dm_low_memory_available() },
+         phoneGPUName: String? = LauncherModel.phoneGPUName) {
         self.defaults = defaults
         self.availableMemory = availableMemory
+        let settings = settings.map { row -> Setting in
+            var row = row
+            if let preset = row.phoneDefault, preset.matches(phoneGPUName), row.accepts(preset.value) { row.def = preset.value }
+            return row
+        }
         self.settings = settings
         let env = ProcessInfo.processInfo.environment
         fromLaunch = Set((env["DM_ENV_LAUNCH_KEYS"] ?? "").split(separator: " ").map(String.init))
@@ -791,8 +820,10 @@ final class LauncherModel: ObservableObject {
     func applySaved() {
         for s in settings where !fixed.contains(s.env) {
             let v = values[s.env] ?? s.def
-            if s.env == Self.lowMemoryKey || !s.isDefault(v) {
-                let origin = s.env == Self.lowMemoryKey ? (lowMemoryOverride == nil ? "automatic" : "manual") : "saved choice"
+            // Device defaults can differ from the compiled profile even when no
+            // choices were saved and the startup screen is skipped.
+            if s.env == Self.lowMemoryKey || s.phoneDefault != nil || !s.isDefault(v) {
+                let origin = s.env == Self.lowMemoryKey ? (lowMemoryOverride == nil ? "automatic" : "manual") : (s.isDefault(v) ? "default" : "saved choice")
                 setenv(s.env, v, 1); fputs("launcher: \(s.env)=\(v) (\(origin))\n", stderr)
             }
         }

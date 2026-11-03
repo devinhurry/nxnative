@@ -303,7 +303,7 @@ static void test_portrait_layout(void) {
         {720,1000,.9f},{744,1133,.93f},{768,1024,.96f},{800,1100,1},{1024,1366,1},
         {932,430,1},{795,540.25f,.99375f},{795,1100,.99375f}};
     const float insets[][4]={{0,0,0,0},{62,0,62,34},{0,59,0,34},{20,24,21,20}};
-    const int controls[]={0,1,2,3,4,6,7,8,9,12};
+    const int controls[]={0,1,2,3,4,6,7,8,9,12,16,17,18,19};
     for (int compact=0;compact<2;compact++) {
         dm_botw_touch_layout layout=dm_botw_layout_defaults_for(compact);
         for (unsigned c=0;c<sizeof controls/sizeof *controls;c++) {
@@ -333,6 +333,18 @@ static void test_portrait_layout(void) {
     }
     // Insets still affect +/- and compact-profile selection, not control positions.
     dm_botw_touch_layout layout=dm_botw_layout_defaults();
+    const float added_sizes[][2]={{568,320},{669,455.5f},{669,951},{932,430},{1024,1366}};
+    for (unsigned i=0;i<sizeof added_sizes/sizeof *added_sizes;i++) {
+        float w=added_sizes[i][0],h=added_sizes[i][1];
+        dm_touchpad_rect c=dm_botw_layout_canvas(w,h),previous={0};
+        dm_touchpad_rect pad=dm_botw_layout_control(&layout,12,w,h,0,0,0,0,c);
+        for (int id=16;id<20;id++) {
+            dm_touchpad_rect r=dm_botw_layout_control(&layout,id,w,h,0,0,0,0,c);
+            assert(r.x>=pad.x+pad.width && r.x+r.width<=w);
+            if (id>16) assert(r.x>=previous.x+previous.width);
+            nearf(h-r.y-r.height,4,.001f); previous=r;
+        }
+    }
     dm_touchpad_rect duo=dm_botw_layout_canvas(669,951);
     dm_touchpad_rect stick=dm_botw_layout_control(&layout,4,669,951,0,0,0,0,duo);
     dm_touchpad_rect shield=dm_botw_layout_control(&layout,8,669,951,0,0,0,0,duo);

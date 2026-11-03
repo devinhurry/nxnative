@@ -34,11 +34,34 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
                AboutSection.localBuildTime("2026-07-01T05:00:00Z", timeZone: utc), "About respects daylight saving time")
         expect(AboutSection.localBuildTime("unknown") == "unknown", "About preserves missing build-time metadata")
         let file = try! JSONDecoder().decode(SettingsFile.self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])))
+        let phoneSuite = "nxnative.phone-default-test." + UUID().uuidString
+        let phoneDefaults = UserDefaults(suiteName: phoneSuite)!
+        defer { phoneDefaults.removePersistentDomain(forName: phoneSuite) }
+        for (gpu, fast) in [(nil, false), ("Apple A19 Pro GPU", false), ("Apple A20 GPU", false),
+                            ("Apple A20 Pro GPU", true), ("Apple A21 GPU", true), ("Apple M4 Pro", false)] as [(String?, Bool)] {
+            let phone = LauncherModel(file.settings, defaults: phoneDefaults, phoneGPUName: gpu)
+            expect(phone.values["DM_FPS_TARGET"] == (fast ? "60" : "30") && phone.values["DM_OPMODE"] == (fast ? "1" : "0"),
+                   "phone defaults follow the profile's GPU threshold: \(gpu ?? "not a phone")")
+            expect(phone.values["DM_FRAMEGEN"] == "0" && phone.values["DM_RENDER_SCALE"] == "1.0" && !phone.changed,
+                   "device defaults do not enable interpolation or change render scale")
+        }
+        let phone = LauncherModel(file.settings, defaults: phoneDefaults, phoneGPUName: "Apple A20 Pro GPU")
+        phone.applySaved()
+        expect(String(cString: getenv("DM_FPS_TARGET")) == "60" && String(cString: getenv("DM_OPMODE")) == "1" &&
+               phoneDefaults.string(forKey: "launcher.DM_FPS_TARGET") == nil, "skipping the launcher applies device defaults without saving them")
+        phone.values["DM_FPS_TARGET"] = "30"; phone.values["DM_OPMODE"] = "0"; phone.apply()
+        let savedPhone = LauncherModel(file.settings, defaults: phoneDefaults, phoneGPUName: "Apple A20 Pro GPU")
+        expect(savedPhone.values["DM_FPS_TARGET"] == "30" && savedPhone.values["DM_OPMODE"] == "0", "saved manual choices override capable-phone defaults")
+        savedPhone.reset(); savedPhone.apply()
+        expect(savedPhone.values["DM_FPS_TARGET"] == "60" && savedPhone.values["DM_OPMODE"] == "1" &&
+               phoneDefaults.string(forKey: "launcher.DM_FPS_TARGET") == nil, "reset restores device defaults and removes overrides")
+        unsetenv("DM_FPS_TARGET"); unsetenv("DM_OPMODE")
+        let customFPS = file.settings.first { $0.env == "DM_FPS_TARGET" }!.def == "30" ? "60" : "30"
         let suite = "nxnative.launcher-test." + UUID().uuidString
         let d = UserDefaults(suiteName: suite)!
         defer { d.removePersistentDomain(forName: suite) }
         d.set("1", forKey: "launcher.DM_PRESENT_SNAP")   // stored by the old launcher, equal to the default
-        d.set("30", forKey: "launcher.DM_FPS_TARGET")    // a changed game setting
+        d.set(customFPS, forKey: "launcher.DM_FPS_TARGET")    // a changed game setting
         d.set("0", forKey: "launcher.DM_PSO_MTL4")       // a changed performance setting
         d.set("1", forKey: "launcher.DM_FPS_HOLD")       // a value the toggle does not take (on / off): the default
         setenv("DM_ENV_FILE_KEYS", "DM_METAL_HUD", 1); setenv("DM_METAL_HUD", "1", 1)   // set by Documents/env.txt
@@ -56,7 +79,7 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
         expect(["nan", "inf", "-inf", "0.49", "1.01", "invalid", "0x1p-1", "0X1", " 0.75"].allSatisfy { !scale.accepts($0) } && scale.accepts("0.5") && scale.accepts("1.00"), "saved ranges reject nonfinite, out-of-range, hex and padded values, as launcher.c does")
         d.set("nan", forKey: "launcher.DM_RENDER_SCALE")
         expect(LauncherModel(file.settings, defaults: d).values["DM_RENDER_SCALE"] == scale.def, "an invalid saved range loads the default")
-        expect(m.values["DM_FPS_TARGET"] == "30" && m.values["DM_PSO_MTL4"] == "0" && m.values["DM_FPS_HOLD"] == "on" && m.values["DM_METAL_HUD"] == "1", "stored choices and the env file are read")
+        expect(m.values["DM_FPS_TARGET"] == customFPS && m.values["DM_PSO_MTL4"] == "0" && m.values["DM_FPS_HOLD"] == "on" && m.values["DM_METAL_HUD"] == "1", "stored choices and the env file are read")
         expect(m.changed, "Reset is offered with changed settings")
         let stick = m.touchStickResponse!
         expect(stick.deadzone == 0.07 && stick.curve == 0.3 && stick.full == 0.71 && stick.size == 123.2, "touch stick starts at its point diameter and current movement defaults")
@@ -75,7 +98,7 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
         m.apply()
         expect(d.string(forKey: "launcher.DM_PRESENT_SNAP") == nil, "a value equal to the default is not stored (and an old one is dropped)")
         expect(d.string(forKey: "launcher.DM_RENDER_SCALE") == nil && d.string(forKey: "launcher.DM_OPMODE") == nil && d.string(forKey: "launcher.DM_FPS_HOLD") == nil, "defaults are not stored")
-        expect(d.string(forKey: "launcher.DM_FPS_TARGET") == "30" && d.string(forKey: "launcher.DM_PSO_MTL4") == "0", "changed choices are stored")
+        expect(d.string(forKey: "launcher.DM_FPS_TARGET") == customFPS && d.string(forKey: "launcher.DM_PSO_MTL4") == "0", "changed choices are stored")
         expect(d.string(forKey: "launcher.DM_THERMAL_CAP") == "1" && String(cString: getenv("DM_THERMAL_CAP")) == "1", "Play saves and applies the optional thermal cap")
         expect(d.string(forKey: "launcher.DM_METAL_HUD") == nil && String(cString: getenv("DM_METAL_HUD")) == "1", "the env file's value is kept and not stored")
         expect(String(cString: getenv("DM_PSO_MTL4")) == "0" && String(cString: getenv("DM_PRESENT_SNAP")) == "1" && String(cString: getenv("DM_FPS_HOLD")) == "on", "the environment gets every value")
@@ -86,12 +109,12 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
         expect(!file.settings.contains { $0.env.hasPrefix("DM_BOTW_PAD_PLUS") || $0.env.hasPrefix("DM_BOTW_PAD_MINUS") }, "plus and minus remain fixed")
         reopened.reset(keys: TouchStickResponse.keys)
         expect(!reopened.touchStickChanged && reopened.values["DM_BOTW_MOVE_DEADZONE"] == "0.070" && reopened.values["DM_BOTW_PAD_STICK_SIZE_PT"] == "123.200", "left-stick reset restores its response and point diameter")
-        expect(reopened.values["DM_FPS_TARGET"] == "30" && d.string(forKey: "launcher.DM_PSO_MTL4") == "0", "left-stick reset preserves unrelated game and performance choices")
+        expect(reopened.values["DM_FPS_TARGET"] == customFPS && d.string(forKey: "launcher.DM_PSO_MTL4") == "0", "left-stick reset preserves unrelated game and performance choices")
         reopened.values["DM_BOTW_PAD_R_Y_PT"] = "40.000"
         reopened.reset(keys: BotwTouchControl.all[0].keys)
         expect(reopened.values["DM_BOTW_PAD_A_X_PT"] == "0.000" && reopened.values["DM_BOTW_PAD_B_SIZE_PT"] == "72.000" && reopened.values["DM_BOTW_PAD_R_Y_PT"] == "40.000", "restoring A leaves B and R unchanged")
         reopened.reset(keys: reopened.touchSettingsKeys)
-        expect(reopened.values["DM_BOTW_PAD_R_Y_PT"] == "0.000" && reopened.values["DM_FPS_TARGET"] == "30", "restore all touch defaults leaves frame rate alone")
+        expect(reopened.values["DM_BOTW_PAD_R_Y_PT"] == "0.000" && reopened.values["DM_FPS_TARGET"] == customFPS, "restore all touch defaults leaves frame rate alone")
         let portraitSuite = suite + ".portrait"
         let portraitDefaults = UserDefaults(suiteName: portraitSuite)!
         defer { portraitDefaults.removePersistentDomain(forName: portraitSuite) }
@@ -167,7 +190,7 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
         setenv("DM_ENV_FILE_KEYS", "DM_METAL_HUD", 1)
         m.reset()
         expect(m.values["DM_PSO_MTL4"] == "1" && m.values["DM_FPS_TARGET"] == file.settings.first { $0.env == "DM_FPS_TARGET" }!.def, "Reset shows the defaults")
-        expect(d.string(forKey: "launcher.DM_PSO_MTL4") == "0" && d.string(forKey: "launcher.DM_FPS_TARGET") == "30", "Reset alone forgets nothing: Quit after it keeps the choices")
+        expect(d.string(forKey: "launcher.DM_PSO_MTL4") == "0" && d.string(forKey: "launcher.DM_FPS_TARGET") == customFPS, "Reset alone forgets nothing: Quit after it keeps the choices")
         expect(m.values["DM_METAL_HUD"] == "1" && !m.changed, "Reset leaves the env file's value; nothing left to reset")
         m.apply()
         expect(d.string(forKey: "launcher.DM_PSO_MTL4") == nil && d.string(forKey: "launcher.DM_FPS_TARGET") == nil, "Play after Reset forgets the choices")
@@ -191,7 +214,7 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
         let plain = LauncherModel(file.settings, defaults: d)
         expect(plain.values["DM_FPS_TARGET"] == fps.def, "DM_SAVED_CHOICES=0 starts from the defaults")
         plain.applySaved()
-        expect(getenv("DM_FPS_TARGET") == nil, "DM_SAVED_CHOICES=0: nothing saved goes into the environment")
+        expect(String(cString: getenv("DM_FPS_TARGET")) == fps.def, "DM_SAVED_CHOICES=0: skipping the screen applies the device default")
         plain.apply()
         expect(String(cString: getenv("DM_FPS_TARGET")) == fps.def && d.string(forKey: "launcher.DM_FPS_TARGET") == "30", "DM_SAVED_CHOICES=0: Play uses the screen's values and leaves the saved choices")
         plain.reset()
@@ -499,7 +522,7 @@ private func checkTouchLayoutPresets(_ settings: [Setting]) -> Int {
         let actualAreaFile = try JSONDecoder().decode(BotwTouchLayoutsFile.self, from: actualAreaExport)
         expect(actualAreaFile.layouts.count == 2 && actualAreaFile.layouts.allSatisfy {
             $0.normal?.controls["L"]?.anchor == .left && $0.normal?.controls["L"]?.side == 164.56 &&
-            $0.compact?.controls["WHISTLE"]?.anchor == .right && $0.compact?.controls["WHISTLE"]?.side == 70
+            $0.compact?.controls["WHISTLE"]?.anchor == .right && $0.compact?.controls["WHISTLE"]?.side == 72
         }, "all exported presets use the supplied source panes even before opening the editor, including normal L at 164.56pt on a 430pt pane")
         expect(exportAreaDefaults.data(forKey: "launcher.botwTouchLayouts") == beforeAreaExport &&
                unopened.selectedTouchLayoutID == beforeAreaSelection && beforeAreaLayouts.allSatisfy { before in

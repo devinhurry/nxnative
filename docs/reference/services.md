@@ -839,6 +839,14 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Check:** the UIKit fixture now gates gameplay visibility on published touch HUD state, matching the native dependency. Repeated scene refreshes must preserve the open pad and Settings; the second gesture, a real menu transition and controller connection still clear them through their existing owners.
 - **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game).
 
+### The iOS launcher briefly rotates through portrait
+
+- **Symptom:** the startup launcher appears landscape, flashes into portrait, then returns to landscape, including with compact portrait play disabled.
+- **Cause:** the root controller allowed only landscape before game creation, while the app delegate already evaluated the game's portrait policy. The presented SwiftUI controller also inherited a presentation orientation instead of explicitly choosing an allowed landscape orientation.
+- **Fix:** app and root use the same landscape-only policy until the game view exists. The launcher's hosting controller explicitly prefers the current allowed orientation, falling back to landscape right. Explicit touch-editor orientation overrides still apply first; gameplay keeps its portrait policy.
+- **Check:** production Objective-C and Swift compile checks cover the policy owners. Physical-device startup from portrait and landscape remains to be checked.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game).
+
 ### In-game launcher settings use the runtime state owners
 
 - **Symptom:** changes made from an in-game settings sheet appear saved but do not affect controls, frame rate, rendering size or rumble until relaunch; the game keeps advancing behind the settings page.

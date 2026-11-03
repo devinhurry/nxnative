@@ -16,6 +16,9 @@ ipa	ZeldaBreathOfTheWild.ipa
 app_category	public.app-category.adventure-games
 # the virtual gamepad starts in the 3D layout (D-pad, right stick, L3 / R3): the right stick turns the camera
 pad_layout	full
+# Startup defaults; capable phones can opt into the ordinary docked preset.
+op_mode	handheld
+phone_defaults	A20Pro DM_FPS_TARGET=60 DM_OPMODE=1
 
 # ---- Graphics ----
 # Native aspect: 3D follows the display; font and layout draws retain their proportions in a centered 16:9 region. DM_ASPECT=0 disables it.
@@ -42,10 +45,10 @@ camera_look	cd57b23fa4bbad65803d9788c01821ee:0xd5801c:0x128:0x1e93890:0x3c:60
 # The frame-interval controller (60 fps cuts in patches.py) and dynamic resolution read the GPU time between the frame's two timestamp reports: each report takes its segment's GPU start / end
 gpu_timestamps	segment
 # 60 fps (30 on the Switch): the host decides each frame's step in whole vsyncs and holds the frame that long (rewriter stubs at setWaitVsyncInterval and VFR::updateInterval,
-# patches.py FRAME_STEP); 30 when 60 does not hold, game time = real time. DM_FPS_TARGET=30 (Documents/env.txt on the iPhone) saves power; 0 runs the game's own
+# patches.py FRAME_STEP); 30 when 60 does not hold, game time = real time. The default 30 fps saves power; 0 runs the game's own
 # interval controller (with the 60 fps cuts, which also serve while the game's VFR override is set)
-fps_target	60
-# Tested defaults for this game (iPhone 17 Pro Max, iOS 27.0.1, docked, 60 fps target; GitHub issues #142 / #159): present snapshots keep the GPU from idling between frames,
+fps_target	30
+# Tested performance settings (iPhone 17 Pro Max, iOS 27.0.1, docked, 60 fps target; GitHub issues #142 / #159): present snapshots keep the GPU from idling between frames,
 # which iOS's clock governor reads as headroom (30 fps without them, a steady 60 for 300 s with them and the encode thread); render pipelines through MTL4Compiler give the
 # pipeline archive, the prepare step and the hybrid pipelines on the iPhone too (5,100 prewarm lines prepared in 0.28 s at start instead of compiling on first use)
 present_snap	on

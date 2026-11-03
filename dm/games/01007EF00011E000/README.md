@@ -16,7 +16,7 @@ This page keeps the profile summary, the findings this game hosts and what is st
 
 | Setting | Where | Why |
 |---|---|---|
-| Frame step, `fps_target 60` | [`patches.py`](patches.py) `FRAME_STEP` (`main` `cd57b23f…`), [`game.tsv`](game.tsv) | 60 fps at normal speed; see [Frame rate](notes/performance.md#frame-rate) |
+| Frame step, `fps_target 30` | [`patches.py`](patches.py) `FRAME_STEP` (`main` `cd57b23f…`), [`game.tsv`](game.tsv) | 30 fps handheld by default; capable iPhones default to docked 60 fps; see [Frame rate](notes/performance.md#frame-rate) |
 | Interval controller floor 2 → 1 (five cuts) and GPU-time path (two cuts) | `patches.py` `CUTS` | the game's own controller at `DM_FPS_TARGET=0` and while its VFR override holds; see [The game's own interval controller](notes/performance.md#the-games-own-interval-controller) |
 | Render scale stubs | `patches.py` `frame_step` (`main+0x1266880`, `main+0x126686c`) | `DM_RENDER_SCALE`; see [Render scale](notes/performance.md#render-scale) |
 | `gpu_timestamps segment` | `game.tsv` | the interval controller and the dynamic resolution read the GPU time between the frame's two timestamp reports |
@@ -28,6 +28,8 @@ This page keeps the profile summary, the findings this game hosts and what is st
 No `tex_flush_upload` (a minute's boot saw it flush 32 CPU-filled textures with data, and it needs none).
 
 ## Found on this game
+
+- **Resolved startup orientation policy:** [The iOS launcher briefly rotates through portrait](../../../docs/reference/services.md#the-ios-launcher-briefly-rotates-through-portrait).
 
 - **Resolved, 2026-11-03:** [Plain C builds import Objective-C touch artwork](../../../docs/reference/packing.md#plain-c-builds-import-objective-c-touch-artwork): the unsigned iOS build exposed Foundation to C through `DmTouchPad`. Artwork now requires Objective-C in its own submodule; C, Objective-C and Swift import checks pass.
 

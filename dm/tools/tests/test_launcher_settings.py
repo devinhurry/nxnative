@@ -27,6 +27,16 @@ def build(gid, api, platform=None, fixups=''):
 
 
 class LauncherSettingsTests(unittest.TestCase):
+    def test_botw_device_defaults_preserve_the_ordinary_render_settings(self):
+        ios = build(BOTW, 'nvn', 'ios', fixups='# FPS_STATE_OFF\t0x4000\n')
+        mac = build(BOTW, 'nvn', 'mac', fixups='# FPS_STATE_OFF\t0x4000\n')
+        for key, base, phone in [('DM_FPS_TARGET', '30', '60'), ('DM_OPMODE', '0', '1')]:
+            self.assertEqual(ios[key]['default'], base)
+            self.assertEqual(mac[key]['default'], base)
+            self.assertEqual(ios[key]['phone_default'], {'generation': 20, 'value': phone})
+            self.assertNotIn('phone_default', mac[key])
+        self.assertEqual(ios['DM_FRAMEGEN']['default'], '0')
+
     def test_portrait_touch_profile_is_opt_in_and_botw_only(self):
         for platform in ('mac', 'ios'):
             rows = build(BOTW, 'nvn', platform)
@@ -94,7 +104,7 @@ class LauncherSettingsTests(unittest.TestCase):
         self.assertEqual(botw['DM_PSO_MTL4']['default'], '1')   # pso_mtl4 on
         self.assertEqual((wonder['DM_PRESENT_SNAP']['default'], wonder['DM_PSO_MTL4']['default']), ('0', '0'))
         self.assertEqual((botw['DM_PSO_PREBUILD']['default'], botw['DM_NVN_ENC_THREAD']['default'], botw['DM_METAL_HUD']['default']), ('1', '1', '0'))   # the host's iOS defaults
-        self.assertEqual(list(dict.fromkeys(s['section'] for s in botw.values())), ['Game', 'General', 'Controls', 'Touch left stick', 'Touch layout', 'Performance'])
+        self.assertEqual(list(dict.fromkeys(s['section'] for s in botw.values())), ['Game', 'Controls', 'Touch left stick', 'Touch layout', 'Performance'])
         self.assertNotIn('DM_FPS_HOLD', wonder)   # no frame step, as the Frame rate row
         self.assertIn('first start', botw['DM_PSO_PREBUILD']['note'])   # it runs once in the prepare step, before the first frame
 
@@ -145,6 +155,10 @@ class LauncherSettingsTests(unittest.TestCase):
         for control in ('WEAPON', 'SHIELD', 'L'):
             expected[f'DM_BOTW_PAD_{control}_MODE'] = '0'
         expected['DM_BOTW_PAD_DPAD_VISIBLE'] = '1'
+        for field, value in [('ZL_HIT_PT', '215.600'), ('STROKE_GRAY', '0.570'), ('STROKE_ALPHA', '0.300'),
+                             ('FILL_GRAY', '0.350'), ('FILL_ALPHA', '0.140'), ('ICON_ALPHA', '0.900'),
+                             ('STICK_ALPHA', '0.150'), ('R_DRAG_MODE', '0'), ('ZR_DRAG_MODE', '0')]:
+            expected[f'DM_BOTW_PAD_{field}'] = value
         for platform in ('mac', 'ios'):
             botw = build(BOTW, 'nvn', platform)
             self.assertEqual({key: row['default'] for key, row in botw.items() if key.startswith('DM_BOTW_PAD_')}, expected)
