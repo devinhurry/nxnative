@@ -221,6 +221,7 @@ enum BotwTouchFileError: Error, LocalizedError {
 }
 
 final class LauncherModel: ObservableObject {
+    static let languageKey = "DM_LANG"
     static let lowMemoryKey = "DM_LOW_MEMORY"
     static let lowMemoryNotice = "Low-memory mode is enabled to help keep the game running. Performance may be affected."
     let settings: [Setting]
@@ -242,6 +243,7 @@ final class LauncherModel: ObservableObject {
     private let availableMemory: () -> UInt64
     private var automaticLowMemoryValue = "0"
     private var lowMemoryOverride: String?
+    private var hasLanguageOverride = false
 
     static var phoneGPUName: String? {
         #if os(iOS)
@@ -252,12 +254,19 @@ final class LauncherModel: ObservableObject {
 
     init(_ settings: [Setting], defaults: UserDefaults = .standard,
          availableMemory: @escaping () -> UInt64 = { dm_low_memory_available() },
-         phoneGPUName: String? = LauncherModel.phoneGPUName) {
+         phoneGPUName: String? = LauncherModel.phoneGPUName,
+         preferredLanguages: [String] = Locale.preferredLanguages) {
         self.defaults = defaults
         self.availableMemory = availableMemory
         let settings = settings.map { row -> Setting in
             var row = row
             if let preset = row.phoneDefault, preset.matches(phoneGPUName), row.accepts(preset.value) { row.def = preset.value }
+            if row.env == Self.languageKey {
+                let supported = row.options?.compactMap(\.first) ?? []
+                // Match the game's languages, independently of the launcher's translations.
+                // The packed language is the fallback after all user preferences.
+                row.def = Bundle.preferredLocalizations(from: supported, forPreferences: preferredLanguages + [row.def]).first ?? row.def
+            }
             return row
         }
         self.settings = settings
@@ -277,7 +286,9 @@ final class LauncherModel: ObservableObject {
         for s in settings {
             if fixed.contains(s.env), let v = env[s.env] { values[s.env] = v; continue }
             let saved = ignoreSaved ? nil : (defaults.object(forKey: "launcher." + s.env) as? String ?? legacyPoints[s.env])   // accept only strings, as launcher.c does
-            values[s.env] = saved.flatMap { s.accepts($0) ? $0 : nil } ?? defaultValue(s)
+            let choice = saved.flatMap { s.accepts($0) ? $0 : nil }
+            if s.env == Self.languageKey { hasLanguageOverride = choice != nil }
+            values[s.env] = choice ?? defaultValue(s)
         }
         for portrait in [false, true] {
             let hit = botwTouchKey("DM_BOTW_PAD_ZL_HIT_PT", portrait: portrait)
@@ -315,12 +326,16 @@ final class LauncherModel: ObservableObject {
         automaticLowMemoryValue = value; values[Self.lowMemoryKey] = value
     }
 
-    // Automatic defaults are never saved. An explicit On or Off is remembered
-    // immediately, including a choice equal to this launch's automatic value.
+    // Automatic defaults are never saved. Explicit memory and language choices
+    // are remembered even when they equal this launch's automatic value.
     func setValue(_ v: String, for s: Setting) {
         guard lockingKey(s) == nil, s.accepts(v) else { return }
         if s.env == Self.lowMemoryKey {
             lowMemoryOverride = v
+            if !ignoreSaved { defaults.set(v, forKey: "launcher." + s.env) }
+        }
+        if s.env == Self.languageKey {
+            hasLanguageOverride = true
             if !ignoreSaved { defaults.set(v, forKey: "launcher." + s.env) }
         }
         var next = values
@@ -370,6 +385,8 @@ final class LauncherModel: ObservableObject {
         if s.env == Self.lowMemoryKey {
             if let choice = lowMemoryOverride { defaults.set(choice, forKey: "launcher." + s.env) }
             else { defaults.removeObject(forKey: "launcher." + s.env) }
+        } else if s.env == Self.languageKey && hasLanguageOverride {
+            defaults.set(value, forKey: "launcher." + s.env)
         } else if s.env.hasSuffix("_ZL_HIT_PT") {
             // Keep the migrated reach even at its default; artwork can resize later.
             defaults.set(value, forKey: "launcher." + s.env)
@@ -775,9 +792,9 @@ final class LauncherModel: ObservableObject {
 
     var changed: Bool {
         settings.contains { s in
-            !fixed.contains(s.env) && (s.env == Self.lowMemoryKey
-                ? lowMemoryOverride != nil || values[s.env] != automaticLowMemoryValue
-                : !s.isDefault(values[s.env] ?? s.def))
+            guard !fixed.contains(s.env) else { return false }
+            if s.env == Self.lowMemoryKey { return lowMemoryOverride != nil || values[s.env] != automaticLowMemoryValue }
+            return (s.env == Self.languageKey && hasLanguageOverride) || !s.isDefault(values[s.env] ?? s.def)
         }
     }
 
@@ -788,6 +805,7 @@ final class LauncherModel: ObservableObject {
            keys?.contains(Self.lowMemoryKey) ?? true {
             automaticLowMemoryValue = memoryDefault(); lowMemoryOverride = nil
         }
+        if !fixed.contains(Self.languageKey), keys?.contains(Self.languageKey) ?? true { hasLanguageOverride = false }
         var next = values
         for s in settings where !fixed.contains(s.env) && (keys?.contains(s.env) ?? true) {
             next[s.env] = defaultValue(s)
@@ -799,8 +817,8 @@ final class LauncherModel: ObservableObject {
     }
 
     // Before the game starts: every setting not set by an env file goes into the environment (DM_LANG replaces the packed language main.m set as a default). Only a choice that
-    // differs from the game's default is stored. The memory switch instead keeps
-    // only its explicit manual override; the automatic selection is never saved.
+    // differs from the game's default is stored. Memory and language keep explicit
+    // manual overrides even at the automatic value; automatic choices are never saved.
     func apply() {
         for s in settings {
             let v = values[s.env] ?? s.def
@@ -822,7 +840,7 @@ final class LauncherModel: ObservableObject {
             let v = values[s.env] ?? s.def
             // Device defaults can differ from the compiled profile even when no
             // choices were saved and the startup screen is skipped.
-            if s.env == Self.lowMemoryKey || s.phoneDefault != nil || !s.isDefault(v) {
+            if s.env == Self.languageKey || s.env == Self.lowMemoryKey || s.phoneDefault != nil || !s.isDefault(v) {
                 let origin = s.env == Self.lowMemoryKey ? (lowMemoryOverride == nil ? "automatic" : "manual") : (s.isDefault(v) ? "default" : "saved choice")
                 setenv(s.env, v, 1); fputs("launcher: \(s.env)=\(v) (\(origin))\n", stderr)
             }

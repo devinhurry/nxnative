@@ -188,7 +188,9 @@ int main(int argc, char **argv) {
     int window = !(getenv("DM_LAUNCHER") && !strcmp(getenv("DM_LAUNCHER"), "0"));
     for (int i = 1; i < argc; i++) if (!strcmp(argv[i], "--no-launcher")) window = 0;
     if (!window) fprintf(stderr, "launcher: no settings window (DM_LAUNCHER=0 or --no-launcher)\n");
-    int shown = window ? dm_mac_launcher() : 2;
+    // Resolve device defaults through the shared model even when no window is shown.
+    if (!window) setenv("DM_LAUNCHER", "0", 1);
+    int shown = dm_mac_launcher();
     // The child host also offers startup settings for direct development runs.
     // This app's launcher has already handled that step (including opting out).
     setenv("DM_LAUNCHER", "0", 1);
