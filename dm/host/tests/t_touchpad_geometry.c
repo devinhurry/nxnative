@@ -242,6 +242,24 @@ static void test_custom_layout(void) {
     nearf(layout.fill_gray,.35f,.0001f); nearf(layout.fill_alpha,.2f,.0001f);
     nearf(layout.stroke_gray,.52f,.0001f); nearf(layout.stroke_alpha,.4f,.0001f);
     nearf(layout.icon_alpha,1,.0001f);
+    for (int portrait=0;portrait<2;portrait++) {
+        char hit[80],size[80];
+        snprintf(hit,sizeof hit,"DM_BOTW_%sPAD_ZL_HIT_PT",portrait ? "PORTRAIT_" : "");
+        snprintf(size,sizeof size,"DM_BOTW_%sPAD_ZL_SIZE_PT",portrait ? "PORTRAIT_" : "");
+        assert(dm_botw_layout_read_for(&layout,portrait));
+        nearf(layout.shield_hit_size,layout.control[8].size*DM_TP_STICK_GRAB,.001f);
+        setenv(size,"100",1); assert(dm_botw_layout_read_for(&layout,portrait));
+        nearf(layout.shield_hit_size,140,.001f);
+        setenv(hit,"80",1); assert(dm_botw_layout_read_for(&layout,portrait));
+        nearf(layout.shield_hit_size,80,.001f); nearf(layout.control[8].size,100,.001f);
+        setenv(size,"200",1); assert(dm_botw_layout_read_for(&layout,portrait));
+        nearf(layout.shield_hit_size,80,.001f); nearf(layout.control[8].size,200,.001f);
+        const char *bad[]={"19.9","480.1","nan","inf"};
+        for (unsigned i=0;i<sizeof bad/sizeof *bad;i++) {
+            setenv(hit,bad[i],1); assert(!dm_botw_layout_read_for(&layout,portrait));
+        }
+        unsetenv(hit); unsetenv(size);
+    }
     const char *appearance[]={"FILL_GRAY","FILL_ALPHA","STROKE_GRAY","STROKE_ALPHA","ICON_ALPHA"};
     float *fields[]={&layout.fill_gray,&layout.fill_alpha,&layout.stroke_gray,&layout.stroke_alpha,&layout.icon_alpha};
     for (int portrait=0;portrait<2;portrait++) for (int i=0;i<5;i++) {

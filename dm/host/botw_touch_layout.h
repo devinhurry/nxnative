@@ -21,6 +21,7 @@ typedef struct {
     dm_botw_control_transform control[DM_BOTW_CONTROL_COUNT];
     int badges, portrait, dpad_visible, added[4], switch_mode[2], rune_mode;
     float fill_gray, fill_alpha, stroke_gray, stroke_alpha, icon_alpha;
+    float shield_hit_size;
 } dm_botw_touch_layout;
 typedef struct { float side, bottom, size; } dm_botw_control_anchor;
 
@@ -78,6 +79,7 @@ static inline dm_botw_touch_layout dm_botw_layout_defaults_for(int portrait) {
         .fill_gray=DM_BOTW_BUTTON_GRAY,.fill_alpha=DM_BOTW_BUTTON_ALPHA,
         .stroke_gray=DM_BOTW_STROKE_GRAY,.stroke_alpha=DM_BOTW_STROKE_ALPHA,.icon_alpha=DM_BOTW_ICON_ALPHA};
     for (int i=0;i<DM_BOTW_CONTROL_COUNT;i++) layout.control[i].size=dm_botw_layout_anchor(i,portrait).size;
+    layout.shield_hit_size=layout.control[8].size*DM_TP_STICK_GRAB;
     return layout;
 }
 static inline dm_botw_touch_layout dm_botw_layout_defaults(void) {
@@ -108,7 +110,11 @@ static inline int dm_botw_layout_read_for(dm_botw_touch_layout *out,int portrait
         out->control[i].anchor=(int)anchor;
         if (anchor && (out->control[i].x<0 || out->control[i].y<0)) return 0;
     }
-    float badges=0; char key[64]; snprintf(key,sizeof key,"%sBADGES",prefix);
+    // Older layouts derive their initial grab diameter once from the artwork.
+    out->shield_hit_size=out->control[8].size*DM_TP_STICK_GRAB;
+    char key[64]; snprintf(key,sizeof key,"%sZL_HIT_PT",prefix);
+    if (!dm_botw_layout_number(key,20,480,&out->shield_hit_size)) return 0;
+    float badges=0; snprintf(key,sizeof key,"%sBADGES",prefix);
     if (!dm_botw_layout_number(key,0,1,&badges) || (badges!=0 && badges!=1)) return 0;
     out->badges=(int)badges;
     const char *names[]={"DPAD_VISIBLE","WEAPON_ENABLED","SHIELD_ENABLED","FOOD_ENABLED","WHISTLE_ENABLED",

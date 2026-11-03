@@ -87,6 +87,15 @@ int main(void) {
         assert(dm_launcher_setting_apply("DM_BOTW_PAD_B_SIZE_PT", "nan") == -1 && touch_refresh_count == 7);
         assert(dm_launcher_setting_is_live("DM_BOTW_PAD_FACE_X") == -1);
         const char *appearance[]={"FILL_GRAY","FILL_ALPHA","STROKE_GRAY","STROKE_ALPHA","ICON_ALPHA"};
+        for (int portrait=0;portrait<2;portrait++) {
+            const char *key=portrait ? "DM_BOTW_PORTRAIT_PAD_ZL_HIT_PT" : "DM_BOTW_PAD_ZL_HIT_PT";
+            assert(dm_launcher_setting_is_live(key)==1);
+            assert(dm_launcher_setting_apply(key,"80")==1 && !strcmp(getenv(key),"80"));
+            assert(dm_launcher_setting_apply(key,"19.9")==-1 && !strcmp(getenv(key),"80"));
+            assert(dm_launcher_setting_apply(key,"480.1")==-1);
+            assert(dm_launcher_setting_apply(key,"nan")==-1);
+            unsetenv(key);
+        }
         for (int portrait=0;portrait<2;portrait++) for (int i=0;i<5;i++) {
             char key[80]; snprintf(key,sizeof key,"DM_BOTW_%sPAD_%s",portrait ? "PORTRAIT_" : "",appearance[i]);
             assert(dm_launcher_setting_is_live(key)==1);

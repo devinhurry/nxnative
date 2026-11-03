@@ -915,7 +915,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
 - (int)btnAt:(CGPoint)p {   // locked keys (tested on touch-down only, then locked)
     CGFloat u = self.u;
     if ([self botwTouchControlsActive] && dist(p, [self runeButtonCenter]) <= [self dropR:B_L] * 1.45) return B_L;
-    if ([self botwTouchControlsActive] && dist(p, self.shieldHome) <= self.shieldR * 1.35) return B_ZL;
+    if ([self botwTouchControlsActive] && dist(p, self.shieldHome) <= _touchLayout.shield_hit_size * .5) return B_ZL;
     if ([self botwTouchControlsActive]) {
         CGRect r = [self pillRect:B_PLUS];
         if (dist(p, CGPointMake(CGRectGetMidX(r), CGRectGetMidY(r))) <= r.size.width*.5) return B_PLUS;
@@ -923,6 +923,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     for (int i = 0; i < (int)(sizeof k_btns / sizeof *k_btns); i++) { int b = k_btns[i];
         if (fullOnly(b) && !_full) continue;
         if ([self botwTouchControlsActive] && b == B_L) continue;
+        if ([self botwTouchControlsActive] && b == B_ZL) continue;
         if ([self botwTouchControlsActive] && b == B_PLUS) continue;
         if ([self botwTouchControlsActive] && (b == B_R || b == B_ZR) && (_botwCancelLatched & (1ull << b))) continue;
         if ([self botwTouchControlsActive] && b == B_LS) continue;
@@ -948,7 +949,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
 - (BOOL)leftStickOwnsPoint:(CGPoint)p {
     if ([self extraAt:p]>=0) return NO;
     if (![self botwTouchControlsActive] || _tap || [self btnAt:p] >= 0 || [self inSwap:p]) return NO;
-    if (dist(p,self.shieldHome) <= self.shieldR*K_STICK_GRAB) return NO;
+    if (dist(p,self.shieldHome) <= _touchLayout.shield_hit_size*.5) return NO;
     if ([self compactDpadOwnsPoint:p]) return NO;
     if (_touchLayout.portrait && [self faceAt:p]) return NO;
     CGFloat best = 1;
@@ -1280,7 +1281,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
             [_owner setObject:@(C_BOTW_ADDED | (uint64_t)B_L<<8) forKey:t];
             dm_botw_touch_button_begin(B_L,_touchLayout.rune_mode); continue;
         }
-        if ([self botwTouchControlsActive] && hit != B_L && !_shieldTouch && dist(p, self.shieldHome) <= self.shieldR * K_STICK_GRAB) {
+        if ([self botwTouchControlsActive] && hit != B_L && !_shieldTouch && dist(p, self.shieldHome) <= _touchLayout.shield_hit_size * .5) {
             _botwLookTapPending = NO; _shieldTouch = _leftAxisTouch = t; _shieldNow = _shieldOrigin = p;
             _shieldDownTime = t.timestamp; _shieldDragged = NO;
             _shieldTapUnlatches = _shieldLatched; _shieldLatched = NO;
