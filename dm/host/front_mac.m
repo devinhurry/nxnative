@@ -1374,7 +1374,7 @@ static void preview_refresh(void) {
     dm_touchpad_point d = [g_preview_view dpadCenter];
     dm_botw_touch_hud_keep_native_loadout([g_preview_view keepNativeLoadout]);
     if (active && rect[2] > 0 && rect[3] > 0)
-        dm_botw_touch_hud_publish(1, (d.x-rect[0])/rect[2], (d.y-rect[1])/rect[3],
+        dm_botw_touch_hud_publish(1, (d.x-rect[0])/rect[2], (d.y+DM_BOTW_LOADOUT_Y_OFFSET_PT-rect[1])/rect[3],
             dm_botw_layout_hud_scale([g_preview_view layoutScale:12],rect[3],dm_aspect_hud_y_scale()*dm_aspect_hud_gain()));
     else dm_botw_touch_hud_publish(0,0,0,1);
 }

@@ -11,6 +11,8 @@
 #define DM_BOTW_STROKE_ALPHA .30
 #define DM_BOTW_ICON_ALPHA .90
 #define DM_BOTW_STICK_ALPHA .15
+// Apply the loadout alignment correction in points before HUD normalization.
+#define DM_BOTW_LOADOUT_Y_OFFSET_PT (-30.0f)
 
 // Default anchors retain the original base-relative offsets. Explicit anchors
 // store actual side and bottom edge distances in x/y, independent of defaults.
