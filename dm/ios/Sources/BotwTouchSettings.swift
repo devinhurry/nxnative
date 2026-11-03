@@ -268,7 +268,7 @@ struct BotwTouchSettingsView: View {
     }
     private func controlOption(_ row: Setting) -> some View {
         Picker(LocalizedStringKey(row.env == selected.option("MODE", portrait: portrait) ? "Button action" : row.env.hasSuffix("_DRAG_MODE") ? "Drag action" : row.label),
-               selection: Binding(get: { values[row.env] ?? row.def }, set: { values[row.env] = $0 })) {
+               selection: Binding(get: { values[row.env] ?? row.def }, set: { m.setTouchValue($0, for: row.env, in: &values) })) {
             if row.env == selected.option("MODE", portrait: portrait) {
                 if selected.id == 6 {
                     Text("Native L").tag("0")
@@ -393,9 +393,9 @@ struct BotwTouchSettingsView: View {
                 }
                 Spacer(minLength: 0)
                 Menu {
-                    ForEach((BotwTouchControl.added + [BotwTouchControl.all.last!]).filter { !controls.contains($0) }) { control in
+                    ForEach((BotwTouchControl.added + [BotwTouchControl.all.last!, .cancel]).filter { !controls.contains($0) }) { control in
                         Button(LocalizedStringKey(control.label)) {
-                            values[control.visibilityKey(portrait: portrait)] = "1"
+                            m.setTouchValue("1", for: control.visibilityKey(portrait: portrait), in: &values)
                             selected = control
                         }.disabled(m.fixed.contains(control.visibilityKey(portrait: portrait)))
                     }

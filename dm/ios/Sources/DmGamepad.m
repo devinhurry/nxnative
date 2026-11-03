@@ -1679,7 +1679,8 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
     if (![self botwTouchControlsActive] || _botwMenuMode || _padOff) return -1;
     for (int id=DM_BOTW_CANCEL;id>=DM_BOTW_WEAPON;id--) {
         if (dm_botw_touch_quick_select_active() && id!=DM_BOTW_CANCEL) continue;
-        BOOL visible=id==DM_BOTW_CANCEL ? dm_botw_touch_switch_cancel_visible() : dm_botw_layout_control_visible(&_touchLayout,id);
+        BOOL visible=dm_botw_layout_control_visible(&_touchLayout,id) &&
+            (id!=DM_BOTW_CANCEL || dm_botw_touch_switch_cancel_visible());
         if (!visible) continue;
         CGRect r=[self botwLayoutRect:id];
         if (dist(p,CGPointMake(CGRectGetMidX(r),CGRectGetMidY(r)))<=r.size.width*.55) return id;
@@ -1699,7 +1700,8 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
             _extraIcon[i].contentsGravity=kCAGravityResizeAspect;
         }
         int control=16+i;
-        BOOL visible=active && (i==4 ? dm_botw_touch_switch_cancel_visible() : dm_botw_layout_control_visible(&_touchLayout,control));
+        BOOL visible=active && dm_botw_layout_control_visible(&_touchLayout,control) &&
+            (control!=DM_BOTW_CANCEL || dm_botw_touch_switch_cancel_visible());
         _extraKey[i].hidden=_extraBorder[i].hidden=_extraIcon[i].hidden=!visible;
         if (!visible) continue;
         BOOL pressed=NO;

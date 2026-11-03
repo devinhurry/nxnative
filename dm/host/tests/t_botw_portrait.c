@@ -84,16 +84,22 @@ int main(void) {
         assert(!dm_botw_layout_dpad_mask(&editor,0));
         assert(dm_botw_layout_dpad_mask(&editor,1)==(DM_BTN_UP|DM_BTN_DOWN));
         assert(dm_botw_layout_control_visible(&editor,DM_BOTW_CANCEL));
+        editor.cancel_enabled=0;
+        assert(!dm_botw_layout_control_visible(&editor,DM_BOTW_CANCEL));
         editor.trigger_drag[0]=1;
-        assert(dm_botw_layout_control_visible(&editor,DM_BOTW_CANCEL));
+        assert(!dm_botw_layout_control_visible(&editor,DM_BOTW_CANCEL));
         editor.trigger_drag[0]=0; editor.trigger_drag[1]=1;
+        assert(!dm_botw_layout_control_visible(&editor,DM_BOTW_CANCEL));
+        editor.cancel_enabled=1;
         assert(dm_botw_layout_control_visible(&editor,DM_BOTW_CANCEL));
     }
     setenv("DM_BOTW_PAD_WEAPON_ENABLED","1",1); setenv("DM_BOTW_PAD_WEAPON_MODE","2",1);
+    setenv("DM_BOTW_PAD_CANCEL_ENABLED","0",1);
     setenv("DM_BOTW_PAD_DPAD_VISIBLE","0",1);
     assert(dm_botw_layout_read_for(&layout,0) && layout.switch_mode[0]==2);
-    assert(!dm_botw_layout_control_visible(&layout,12) && dm_botw_layout_control_visible(&layout,16) && dm_botw_layout_control_visible(&layout,20));
+    assert(!dm_botw_layout_control_visible(&layout,12) && dm_botw_layout_control_visible(&layout,16) && !dm_botw_layout_control_visible(&layout,20));
     assert(dm_botw_layout_read_for(&layout,1) && !layout.added[0] && layout.dpad_visible);
+    assert(dm_botw_layout_control_visible(&layout,20));
     setenv("DM_BOTW_PAD_WEAPON_MODE","1.5",1); assert(!dm_botw_layout_read_for(&layout,0));
     puts("BOTW portrait rotation and cross-screen edge anchors passed");
     return 0;

@@ -24,6 +24,7 @@ void dm_launcher_settings_pause(int on) {
 static int known_key(const char *key) {
     static const char *const keys[] = {
         "DM_MOTION_SOURCE",
+        "DM_BOTW_PAD_CANCEL_ENABLED", "DM_BOTW_PORTRAIT_PAD_CANCEL_ENABLED",
         "DM_BOTW_PAD_ZL_HIT_PT", "DM_BOTW_PORTRAIT_PAD_ZL_HIT_PT",
         "DM_BOTW_PAD_STICK_ALPHA", "DM_BOTW_PORTRAIT_PAD_STICK_ALPHA",
         "DM_BOTW_PAD_R_DRAG_MODE", "DM_BOTW_PAD_ZR_DRAG_MODE",

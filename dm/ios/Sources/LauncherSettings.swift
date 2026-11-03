@@ -94,7 +94,7 @@ struct BotwTouchControl: Identifiable, Hashable {
     func option(_ field: String, portrait: Bool) -> String {
         botwTouchKey("DM_BOTW_PAD_\(key)_\(field)", portrait: portrait)
     }
-    var removable: Bool { id == 12 || (16...19).contains(id) }
+    var removable: Bool { id == 12 || (16...20).contains(id) }
     func visibilityKey(portrait: Bool) -> String { option(id == 12 ? "VISIBLE" : "ENABLED", portrait: portrait) }
     func env(_ field: String, portrait: Bool = false) -> String {
         botwTouchKey("DM_BOTW_PAD_\(key)_\(field)_PT", portrait: portrait)
@@ -340,13 +340,36 @@ final class LauncherModel: ObservableObject {
             if !ignoreSaved { defaults.set(v, forKey: "launcher." + s.env) }
         }
         var next = values
-        next[s.env] = v
+        setTouchValue(v, for: s.env, in: &next)
         if s.env == "DM_FPS_TARGET", frameGenerationEnabled { next["DM_FRAMEGEN"] = v }
         if s.env == "DM_FRAMEGEN", v != "0" {
             if fixed.contains("DM_FPS_TARGET") { next[s.env] = values["DM_FPS_TARGET"] ?? v }
             else { next["DM_FPS_TARGET"] = v }
         }
         values = next
+    }
+
+    // Add Cancel only on a user configuration change, never while loading or
+    // rendering a layout: an explicit removal must survive saving and import.
+    func setTouchValue(_ value: String, for key: String, in draft: inout [String: String]) {
+        let previous = draft[key] ?? settings.first(where: { $0.env == key })?.def
+        draft[key] = value
+        guard previous != value else { return }
+        for portrait in [false, true] {
+            let cancel = BotwTouchControl.cancel.visibilityKey(portrait: portrait)
+            guard !fixed.contains(cancel) else { continue }
+            let sticky = ["L", "WEAPON", "SHIELD"].contains {
+                key == botwTouchKey("DM_BOTW_PAD_\($0)_MODE", portrait: portrait)
+            } && value == "2"
+            let camera = ["R", "ZR"].contains {
+                key == botwTouchKey("DM_BOTW_PAD_\($0)_DRAG_MODE", portrait: portrait)
+            } && value == "1"
+            let addedSticky = BotwTouchControl.added.prefix(2).contains {
+                key == $0.visibilityKey(portrait: portrait) && value == "1" &&
+                    draft[$0.option("MODE", portrait: portrait)] == "2"
+            }
+            if sticky || camera || addedSticky { draft[cancel] = "1" }
+        }
     }
 
     var frameGenerationEnabled: Bool {
@@ -607,6 +630,7 @@ final class LauncherModel: ObservableObject {
         }
         result.badges = Int32(number(botwTouchKey("DM_BOTW_PAD_BADGES", portrait: portrait)))
         result.dpad_visible = Int32(number(botwTouchKey("DM_BOTW_PAD_DPAD_VISIBLE", portrait: portrait), 1))
+        result.cancel_enabled = Int32(number(BotwTouchControl.cancel.visibilityKey(portrait: portrait), 1))
         withUnsafeMutableBytes(of: &result.added) { bytes in
             let flags = bytes.bindMemory(to: Int32.self)
             for (i, control) in BotwTouchControl.added.enumerated() { flags[i] = Int32(number(control.visibilityKey(portrait: portrait))) }
