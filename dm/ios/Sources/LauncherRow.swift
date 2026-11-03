@@ -3,6 +3,8 @@
 import SwiftUI
 import DmTouchPad
 
+let launcherTint = Color(red: 66.0 / 255, green: 102.0 / 255, blue: 134.0 / 255)
+
 func withGameSettingsBackground(_ complete: @escaping (Image?) -> Void) {
     var delivered = false
     let finish: (Image?) -> Void = { image in
@@ -150,55 +152,25 @@ struct LauncherDashboard: View {
                             .accessibilityIdentifier("startup.botw.creator")
                         }
                         playButton.disabled(importBusy || checkingResources || !romReady || !shadersReady)
-                        HStack(spacing: 8) {
-                            if let onImportROM {
-                                if romReady {
-                                    Label("ROM imported", systemImage: "checkmark.circle.fill")
-                                        .foregroundStyle(.green)
-                                        .accessibilityIdentifier("startup.import.rom.ready")
-                                } else {
+                        if !romReady || !shadersReady {
+                            HStack(spacing: 8) {
+                                if !romReady, let onImportROM {
                                     Button("Import ROM", action: onImportROM)
                                         .accessibilityIdentifier("startup.import.rom")
                                         .buttonStyle(.bordered).disabled(importBusy || checkingResources)
                                 }
-                            }
-                            if let onImportShaders {
-                                if shadersReady {
-                                    Label("Graphics imported", systemImage: "checkmark.circle.fill")
-                                        .foregroundStyle(.green)
-                                        .accessibilityIdentifier("startup.import.shaders.ready")
-                                } else {
+                                if !shadersReady, let onImportShaders {
                                     Button("Import graphics", action: onImportShaders)
                                         .accessibilityIdentifier("startup.import.shaders")
                                         .buttonStyle(.bordered).disabled(importBusy || checkingResources)
                                 }
                             }
-                        }
-                        if let onRefresh {
-                            Button(action: onRefresh) {
-                                Label {
-                                    Text("Refresh")
-                                } icon: {
-                                    Image(systemName: "arrow.clockwise")
-                                        .opacity(checkingResources ? 0 : 1)
-                                        .overlay {
-                                            if checkingResources { ProgressView().controlSize(.mini) }
-                                        }
-                                        .accessibilityHidden(true)
-                                }
+                            if importBusy {
+                                ProgressView(value: importProgress)
+                                Text("Importing…").font(.caption).foregroundStyle(.secondary)
+                            } else if checkingResources && onRefresh == nil {
+                                ProgressView().controlSize(.small)
                             }
-                            .accessibilityIdentifier("startup.resources.refresh")
-                            .buttonStyle(.bordered).disabled(importBusy || checkingResources)
-                        }
-                        if importBusy {
-                            ProgressView(value: importProgress)
-                            Text("Importing…").font(.caption).foregroundStyle(.secondary)
-                        } else if checkingResources && onRefresh == nil {
-                            ProgressView().controlSize(.small)
-                        } else if let resourceStatus {
-                            Text(resourceStatus).font(.caption).foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-                                .accessibilityIdentifier("startup.resources.status")
                         }
                         if model.lowMemoryEnabled {
                             Text(LocalizedStringKey(LauncherModel.lowMemoryNotice))
@@ -213,22 +185,58 @@ struct LauncherDashboard: View {
                 .frame(width: geometry.size.width * 0.38, height: geometry.size.height)
                 VStack(spacing: 0) {
                     HStack {
-                        Text("Status").font(.headline)
+                        if let language = model.settings.first(where: { $0.env == "DM_LANG" }) {
+                            Picker("Game language", selection: model.binding(language)) {
+                                ForEach(language.options ?? [], id: \.[0]) { Text(LocalizedStringKey($0[1])).tag($0[0]) }
+                            }.pickerStyle(.menu).labelsHidden()
+                                .disabled(model.lockingKey(language) != nil)
+                                .accessibilityLabel("Game language")
+                                .accessibilityIdentifier("launcher.language")
+                        }
                         Spacer()
                         Button(action: onSettings) { Label("Settings", systemImage: "gearshape") }
                             .accessibilityIdentifier("launcher.settings")
                     }.padding(.horizontal, 16).padding(.vertical, 10)
                     List {
-                        Section("Resources") {
-                            LabeledContent("ROMFS", value: romReady ? NSLocalizedString("Ready", comment: "Resource status") : NSLocalizedString("Not imported", comment: "Resource status"))
+                        Section {
+                            LabeledContent("ROMFS") { readiness(romReady) }
                                 .accessibilityIdentifier("startup.status.romfs")
-                            LabeledContent("DLC", value: dlcCount > 0 ? String(format: NSLocalizedString("%d available", comment: "DLC count"), dlcCount) : NSLocalizedString("Not present", comment: "DLC status"))
+                            LabeledContent("DLC") {
+                                HStack {
+                                    Text(dlcCount > 0 ? String(format: NSLocalizedString("%d available", comment: "DLC count"), dlcCount) : NSLocalizedString("Not present", comment: "DLC status"))
+                                    readiness(dlcCount > 0)
+                                }
+                            }
                                 .accessibilityIdentifier("startup.status.dlc")
-                            LabeledContent("Graphics package", value: shadersReady ? NSLocalizedString("Ready", comment: "Resource status") : NSLocalizedString("Not imported", comment: "Resource status"))
+                            LabeledContent("Graphics package") { readiness(shadersReady) }
                                 .accessibilityIdentifier("startup.status.graphics")
+                        } header: {
+                            HStack {
+                                Text("Resources")
+                                Spacer()
+                                if let onRefresh {
+                                    Button(action: onRefresh) { Image(systemName: "arrow.clockwise") }
+                                        .buttonStyle(.borderless).disabled(importBusy || checkingResources)
+                                        .accessibilityLabel("Refresh").accessibilityIdentifier("startup.resources.refresh")
+                                }
+                                if checkingResources { ProgressView().controlSize(.mini) }
+                            }
+                        } footer: {
+                            if let resourceStatus {
+                                Text(resourceStatus).font(.caption).foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("startup.resources.status")
+                            }
                         }
                         Section {
-                            LabeledContent("Memory available", value: memoryBytes > 0 ? ByteCountFormatter.string(fromByteCount: Int64(memoryBytes), countStyle: .memory) : NSLocalizedString("Unavailable", comment: "Resource status"))
+                            LabeledContent("Memory available") {
+                                HStack {
+                                    if memoryBytes > 0 && memoryBytes < dm_low_memory_threshold() {
+                                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+                                            .accessibilityLabel("Low available memory")
+                                    }
+                                    Text(memoryBytes > 0 ? ByteCountFormatter.string(fromByteCount: Int64(memoryBytes), countStyle: .memory) : NSLocalizedString("Unavailable", comment: "Resource status"))
+                                }
+                            }
                         }
                         AboutSection(graphicsVersion: graphicsVersion, graphicsMetal: graphicsCompiler, buildInfo: buildInfo)
                     }
@@ -251,6 +259,13 @@ struct LauncherDashboard: View {
             Text("Touch UI cannot cover every game screen. If a button does not respond, double-tap with three fingers to temporarily show the virtual gamepad and continue. Please report the issue to the developer.")
         }
         .preferredColorScheme(.dark)
+        .tint(launcherTint).accentColor(launcherTint)
+    }
+
+    private func readiness(_ ready: Bool) -> some View {
+        Image(systemName: ready ? "checkmark.circle.fill" : "xmark.circle.fill")
+            .foregroundStyle(ready ? Color.green : Color.red)
+            .accessibilityLabel(Text(LocalizedStringKey(ready ? "Ready" : "Not imported")))
     }
 
     @ViewBuilder
@@ -309,12 +324,12 @@ struct LauncherSettingsPage: View {
                     Spacer(minLength: 0)
                     if section == selection { Image(systemName: "chevron.right").font(.caption) }
                 }
-                .foregroundStyle(section == selection ? Color.accentColor : Color.primary)
+                .foregroundStyle(section == selection ? launcherTint : Color.primary)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("settings.section." + section)
-            .listRowBackground(section == selection ? Color.accentColor.opacity(0.12) : Color.clear)
+            .listRowBackground(section == selection ? launcherTint.opacity(0.12) : Color.clear)
         }
         #endif
     }
@@ -383,6 +398,7 @@ struct LauncherSettingsPage: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("launcher.settings.page")
         .preferredColorScheme(.dark)
+        .tint(launcherTint).accentColor(launcherTint)
     }
 }
 
