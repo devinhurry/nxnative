@@ -169,7 +169,7 @@ static inline dm_touchpad_rect dm_botw_layout_canvas(float width,float height) {
 }
 static inline dm_touchpad_rect dm_botw_layout_cancel(const dm_botw_touch_layout *layout,dm_touchpad_rect canvas,float top) {
     dm_botw_control_transform t=layout->control[DM_BOTW_CANCEL];
-    float y=canvas.y+canvas.height*(top>=0 ? top : .25f)-t.size-12+t.y;
+    float y=canvas.y+canvas.height*(top>=0 ? top : .25f)-t.size+38+t.y;
     return (dm_touchpad_rect){canvas.x+(canvas.width-t.size)*.5f+t.x,fmaxf(0,y),t.size,t.size};
 }
 static inline dm_touchpad_rect dm_botw_layout_control(const dm_botw_touch_layout *layout,int id,

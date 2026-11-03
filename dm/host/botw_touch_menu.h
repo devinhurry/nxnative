@@ -30,6 +30,8 @@ int dm_botw_touch_controls_visible(void);
 int dm_botw_touch_loadout_visible(void);
 // The native quick equipment/rune strip is open. Only touch drag changes sign.
 int dm_botw_touch_quick_select_active(void);
+// Tap a live quick-strip item. Native selection is acknowledged before closing.
+void dm_botw_touch_quick_select_tap(float x, float y);
 // Fresh top edge of the native quick strip, normalized to the game canvas.
 float dm_botw_touch_quick_select_top(void);
 int dm_botw_touch_bow_active(void);
@@ -110,7 +112,6 @@ typedef struct {
     float inventory_arrows[2][4]; // Live previous/next carousel arrows.
     int map_visible;
     int scope_visible; // MainScreen's live telescope guide bar, alongside gameplay controls.
-    int quick_select; // MainShortCut's live buttons; keep the opening direction held.
     int hero_path;
     int popup_visible;
     int cursor_valid;

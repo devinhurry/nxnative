@@ -19,6 +19,7 @@ static int touch_mode_active(void);
 static int g_switch_control=-1, g_switch_sticky, g_switch_started, g_rune_mode;
 static uint64_t g_switch_bit, g_pulse_bits, g_pulse_frame=UINT64_MAX;
 static uint64_t g_aim_triggers;
+static uint64_t g_suppressed_virtual_switch;
 static double g_rune_down;
 static double action_time(void) {
     struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t);
@@ -68,6 +69,19 @@ void dm_botw_touch_switch_cancel(void) {
     if (aim&DM_BTN_R) dm_botw_touch_cancel_trigger(DM_BTN_R);
     if (aim&DM_BTN_ZR) dm_botw_touch_cancel_trigger(DM_BTN_ZR);
     front_botw_touch_action_changed();
+}
+void dm_botw_touch_switch_selected(void) {
+    pthread_mutex_lock(&g_actions_mu);
+    g_suppressed_virtual_switch=DM_BTN_UP|DM_BTN_LEFT|DM_BTN_RIGHT;
+    g_switch_control=-1; g_switch_bit=0; g_switch_sticky=g_switch_started=0;
+    pthread_mutex_unlock(&g_actions_mu);
+    front_botw_touch_action_changed();
+}
+int dm_botw_touch_switch_active(void) {
+    pthread_mutex_lock(&g_actions_mu);
+    int active=g_switch_control>=0 && g_switch_started;
+    pthread_mutex_unlock(&g_actions_mu);
+    return active;
 }
 int dm_botw_touch_switch_cancel_visible(void) {
     pthread_mutex_lock(&g_actions_mu);
@@ -138,7 +152,7 @@ void dm_botw_touch_actions_reset(void) {
     g_suppressed_virtual_triggers = 0;
     g_switch_control=-1; g_switch_sticky=g_switch_started=g_rune_mode=0;
     g_switch_bit=g_pulse_bits=0; g_pulse_frame=UINT64_MAX;
-    g_aim_triggers=0;
+    g_aim_triggers=g_suppressed_virtual_switch=0;
     pthread_mutex_unlock(&g_actions_mu);
 }
 
@@ -147,6 +161,8 @@ void dm_botw_touch_actions_apply(uint64_t *other_buttons, uint64_t *virtual_butt
     if (!touch_mode_active()) return;
     int notify = 0;
     pthread_mutex_lock(&g_actions_mu);
+    g_suppressed_virtual_switch &= *virtual_buttons;
+    *virtual_buttons &= ~g_suppressed_virtual_switch;
     if (g_switch_control>=0 && ((*other_buttons|*virtual_buttons)&DM_BTN_B)) {
         pulse_locked(DM_BTN_B|g_switch_bit);
         g_switch_control=-1; g_switch_bit=0; g_switch_sticky=0; notify=1;

@@ -170,7 +170,7 @@ static inline int dm_touchpad_look_dragged(float down_x, float down_y,
 static inline int dm_touchpad_look_tap(float duration, int dragged) {
     return !dragged && duration >= 0.0f && duration <= DM_TP_LOOK_TAP_MAX_SECONDS;
 }
-// Scope double taps exclude a fixed 100 pt disk around visible controls on the
+// Scope double taps exclude a fixed 100 pt radius around visible controls on the
 // right half, plus the full button bounds when a control is larger. Dragging
 // remains independent of this tap-only test.
 static inline int dm_touchpad_scope_button_excludes_tap(dm_touchpad_rect button,
@@ -179,7 +179,7 @@ static inline int dm_touchpad_scope_button_excludes_tap(dm_touchpad_rect button,
     float cx=button.x+button.width*.5f, cy=button.y+button.height*.5f;
     if (cx < middle_x) return 0;
     float dx=x-cx, dy=y-cy;
-    return dx*dx+dy*dy <= 50*50 ||
+    return dx*dx+dy*dy <= 100*100 ||
         (x >= button.x && x <= button.x+button.width &&
          y >= button.y && y <= button.y+button.height);
 }

@@ -62,6 +62,20 @@ int main(void) {
     dm_botw_touch_actions_apply(&test_buttons,&test_virtual,4); assert(test_buttons==DM_BTN_UP);
     dm_botw_touch_button_end(6,0); assert(dm_botw_touch_switch_cancel_visible());
     dm_botw_touch_switch_cancel(); assert(!dm_botw_touch_switch_cancel_visible());
+    for (int control=6;control<=17;control+=control==6 ? 10 : 1) {
+        dm_botw_touch_actions_reset(); dm_botw_touch_button_begin(control,2); g_rune_down-=1;
+        test_buttons=0; test_virtual=0;
+        dm_botw_touch_actions_apply(&test_buttons,&test_virtual,15);
+        assert(dm_botw_touch_switch_active());
+        dm_botw_touch_switch_selected();
+        test_buttons=0; test_virtual=DM_BTN_UP|DM_BTN_LEFT|DM_BTN_RIGHT;
+        dm_botw_touch_actions_apply(&test_buttons,&test_virtual,16);
+        assert(!test_buttons && !test_virtual && !dm_botw_touch_switch_active());
+        dm_botw_touch_button_end(control,0);
+        test_buttons=0; test_virtual=0; dm_botw_touch_actions_apply(&test_buttons,&test_virtual,17);
+        test_virtual=DM_BTN_RIGHT; dm_botw_touch_actions_apply(&test_buttons,&test_virtual,18);
+        assert(test_virtual==DM_BTN_RIGHT); // a later direction press can reopen the strip
+    }
     for (uint64_t trigger=DM_BTN_R;trigger<=DM_BTN_ZR;trigger<<=1) {
         if (trigger!=DM_BTN_R && trigger!=DM_BTN_ZR) continue;
         dm_botw_touch_actions_reset(); test_buttons=0; test_virtual=trigger;

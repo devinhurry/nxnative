@@ -3,6 +3,7 @@
 #include "hle.h"
 #include "front.h"
 #include "botw_touch_menu.h"
+#include "botw_touch_actions.h"
 #include "dm_input.h"
 #include <math.h>
 #include <pthread.h>
@@ -118,6 +119,14 @@ static int g_presented_gameplay;
 static int g_presented_loadout;
 static int g_presented_quick_select;
 static float g_presented_quick_top=-1;
+static uintptr_t g_presented_quick_screen, g_presented_quick_root;
+typedef struct {
+    uintptr_t screen, root, widget;
+    uint64_t serial, issued_frame;
+    float x, y;
+    int pending, issued, index;
+} botw_quick_tap_t;
+static botw_quick_tap_t g_quick_tap;
 static int g_presented_bow;
 static int g_open_category = -1, g_open_phase;
 static uint64_t g_open_frame, g_open_tab_page;
@@ -284,6 +293,7 @@ static int selector_unfocused_view_for_manager(uintptr_t manager, uint64_t frame
                                                dm_botw_touch_menu_view *view);
 static int scope_owner_live_locked(uint64_t frame);
 static void selector_list_widget_observe(const uint64_t *regs);
+static void selector_service_quick_tap(module_t *main,uint64_t frame);
 static int selector_list_widget_vtable_matches(uintptr_t main_base, uintptr_t vtable,
                                                uintptr_t update);
 static int selector_list_widget_supported(uintptr_t main_base, uintptr_t widget,
@@ -315,6 +325,7 @@ static uintptr_t g_test_list_widget_index_resolver, g_test_list_widget_descripto
 static uintptr_t g_test_list_widget_setter;
 static uintptr_t g_test_list_category_setter;
 static uintptr_t g_test_list_category_jump;
+static uintptr_t g_test_quick_select_resolver;
 #endif
 static _Atomic int g_map_setter_signature_reported;
 
@@ -2415,7 +2426,6 @@ static int menu_view_has_visible_region(const dm_botw_touch_menu_view *view) {
 }
 
 static int menu_active_locked(uint64_t frame) {
-    if (g_view.quick_select && (!g_presented_quick_select || frame<g_presented_menu_frame || frame-g_presented_menu_frame>2)) return 0;
     if (!g_view_valid || !menu_view_fresh_locked(frame) ||
         !menu_view_has_visible_region(&g_view) ||
         (g_view.scope_visible && !scope_owner_live_locked(frame)))
@@ -2819,8 +2829,8 @@ static int selector_trace_list_widget_receiver(uintptr_t widget) {
     return admitted;
 }
 
-// OBS38 is a passive type-specific receiver cache. It runs at the shared
-// native list-widget update entry and never calls back into game code.
+// OBS38 observes native list owners. A queued quick-strip tap is consumed on
+// its own widget update because gameplay has no focused BoxCursor entry.
 static void selector_list_widget_observe(const uint64_t *regs) {
     if (!regs || !atomic_load_explicit(&g_selector_hook_installed, memory_order_acquire) ||
         !dm_botw_touch_hud_active() || strcmp(DM_GAME_ID, "01007EF00011E000") ||
@@ -2867,6 +2877,15 @@ static void selector_list_widget_observe(const uint64_t *regs) {
     changed = slot->widget != widget || slot->current != current || slot->wanted != wanted;
     *slot = (botw_list_widget_observation_t){widget, frame, current, wanted};
     pthread_mutex_unlock(&g_list_widget_observations_mu);
+    pthread_mutex_lock(&g_menu_mu);
+    int quick_pending=g_quick_tap.pending && g_quick_tap.screen==selector_read_ptr(widget,0x60);
+    pthread_mutex_unlock(&g_menu_mu);
+    if (quick_pending) {
+        for (int i=0;i<g_nmod;i++)
+            if (!strcmp(g_mod[i].name,"main") && g_mod[i].loaded) {
+                selector_service_quick_tap(&g_mod[i],frame); break;
+            }
+    }
     if (changed && atomic_load_explicit(&g_trace, memory_order_acquire))
         LOG("BOTW list widget observe frame=%llu class=%p widget=%p current=%d wanted=%d",
             (unsigned long long)frame, (void *)vtable, (void *)widget, current, wanted);
@@ -3207,6 +3226,7 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
     float quick_top=-1;
     uintptr_t presented_root = 0;
     uintptr_t gameplay_root = 0;
+    uintptr_t quick_screen = 0, quick_root = 0;
     char presented_name[64] = {0};
     if (count && count <= 256 && selector_range(screens, count * sizeof(uintptr_t)) &&
         selector_range(flags, count)) {
@@ -3237,8 +3257,11 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
                 loadout |= selector_loadout_visible(root);
                 static const char *const bow_path[] = {"N_All_00","N_MainAll_00","N_Pos_00","N_MainGuideR_01","P_BowIcon_00"};
                 bow |= selector_hud_path_visible(root,bow_path,sizeof bow_path/sizeof *bow_path);
-                quick_select |= mode == 2 && shown >= 0 && input_owned && selector_quick_select_visible(root);
-                if (quick_select) quick_top=selector_quick_select_top(root);
+                quick_select |= selector_quick_select_visible(root);
+                if (quick_select) {
+                    quick_top=selector_quick_select_top(root);
+                    quick_screen=screen; quick_root=root;
+                }
             }
             if (!strcmp(name, "MainScreen_00") && mode == 2 && shown >= 0 &&
                 input_owned && root_visible &&
@@ -3274,6 +3297,9 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
     g_presented_loadout = loadout;
     g_presented_quick_select = quick_select;
     g_presented_quick_top = quick_top;
+    g_presented_quick_screen=quick_screen; g_presented_quick_root=quick_root;
+    if (!quick_select || (g_quick_tap.pending &&
+        (g_quick_tap.screen!=quick_screen || g_quick_tap.root!=quick_root))) g_quick_tap.pending=0;
     g_presented_bow = bow;
     g_presented_gameplay_root = gameplay_root;
     pthread_mutex_unlock(&g_menu_mu);
@@ -3568,6 +3594,91 @@ static int selector_list_category_setter(uintptr_t *out, int immediate) {
         return 1;
     }
     return 0;
+}
+
+// MainShortCut owns a one-row paged widget, independently of BoxCursor focus.
+// Select its actual visible item through the same native immediate page setter
+// as the other lists, then release the opening hold after the UI consumes it.
+static void selector_service_quick_tap(module_t *main,uint64_t frame) {
+    botw_quick_tap_t request;
+    pthread_mutex_lock(&g_menu_mu);
+    request=g_quick_tap;
+    int live=request.pending && g_presented_quick_select && !g_presented_menu &&
+        request.screen==g_presented_quick_screen && request.root==g_presented_quick_root &&
+        frame>=g_presented_menu_frame && frame-g_presented_menu_frame<=2;
+    pthread_mutex_unlock(&g_menu_mu);
+    if (!live || !main || strcmp(dm_main_build(),BOTW_BUILD) ||
+        !selector_range(request.screen,0x38e5) || !selector_quick_select_visible(request.root)) return;
+    uintptr_t widget=selector_read_ptr(request.screen,0x37a8);
+    uintptr_t update=(uintptr_t)main->base+BOTW_LIST_WIDGET_UPDATE;
+    int screen_class=selector_read_ptr(request.screen,0)==(uintptr_t)main->base+0x1cf51d8;
+#ifdef DM_TEST_HOOKS
+    if (g_test_list_widget_override) { update=g_test_list_widget_update; screen_class=1; }
+#endif
+    if (!screen_class || !selector_list_widget_supported((uintptr_t)main->base,widget,update) ||
+        selector_read_ptr(widget,0x60)!=request.screen) return;
+    if (request.issued) {
+        int32_t current=-1,selected=-1,mapped=-1;
+        memcpy(&current,(const void *)(widget+0x2dc),sizeof current);
+        memcpy(&selected,(const void *)(request.screen+0x387c),sizeof selected);
+        memcpy(&mapped,(const void *)(request.screen+0x3884+request.index*4),sizeof mapped);
+        if (request.widget!=widget || current!=request.index || selected!=mapped || frame<=request.issued_frame) return;
+        pthread_mutex_lock(&g_menu_mu);
+        int accept=g_quick_tap.pending && g_quick_tap.serial==request.serial;
+        if (accept) g_quick_tap.pending=0;
+        pthread_mutex_unlock(&g_menu_mu);
+        if (accept) dm_botw_touch_switch_selected();
+        return;
+    }
+    uintptr_t index_resolver=0,resolve=0,jump=0;
+    if (!selector_list_widget_resolvers(&index_resolver,&resolve) ||
+        !selector_list_category_setter(&jump,1)) return;
+    // The page setter moves the list; MainShortCut's own selection callback
+    // also resolves its item/rune ID and description before native acceptance.
+    uintptr_t select=(uintptr_t)main->base+0xe2785c;
+    static const uint8_t select_signature[24]={
+        0xfd,0x7b,0xbe,0xa9,0xf3,0x0b,0x00,0xf9,0xfd,0x03,0x00,0x91,
+        0x3f,0x50,0x00,0x71,0xa8,0x00,0x00,0x54,0x08,0x38,0x77,0xb9
+    };
+    int select_valid=selector_loaded_module_range(select,sizeof select_signature) &&
+        !memcmp((const void *)select,select_signature,sizeof select_signature);
+#ifdef DM_TEST_HOOKS
+    if (g_test_quick_select_resolver) { select=g_test_quick_select_resolver; select_valid=1; }
+#endif
+    if (!select_valid) return;
+    int selected=-1;
+    // The native shortcut mapping has 21 slots, including Unequip.
+    for (int i=0;i<21;i++) {
+        uintptr_t descriptor=((uintptr_t (*)(uintptr_t,uint32_t))resolve)(widget,(uint32_t)i);
+        // HUD cells have no BoxCursor entry at descriptor+0x28. Their
+        // UniteButton owns B_Hit directly at +0x58, including cloned cells.
+        uintptr_t button=selector_read_ptr(descriptor,0x10);
+        uintptr_t hit=selector_read_ptr(button,0x58),root=0;
+        char name[25];
+        if (!selector_pane_name(hit,name) || strcmp(name,"B_Hit_00") ||
+            !selector_ancestor_named(hit,"N_ShortCutAll_00") ||
+            !selector_pane_visible_alpha(hit,&root) || root!=request.root) continue;
+        float matrix[6],w,h,rect[4];
+        if (!pane_affine((uint8_t *)hit,matrix,&w,&h)) continue;
+        native_rect_from_pane((uint8_t *)hit,matrix[2],matrix[5],rect);
+        if (!rect_intersects_canvas(rect) || !point_in_rect(request.x,request.y,rect)) continue;
+        if (selected>=0) return; // Overlapping animated cells do not identify one item.
+        selected=i;
+    }
+    pthread_mutex_lock(&g_menu_mu);
+    int owns=g_quick_tap.pending && g_quick_tap.serial==request.serial;
+    if (owns) {
+        g_quick_tap.pending=selected>=0;
+        g_quick_tap.issued=1; g_quick_tap.issued_frame=frame;
+        g_quick_tap.widget=widget; g_quick_tap.index=selected;
+    }
+    pthread_mutex_unlock(&g_menu_mu);
+    if (owns && selected>=0) {
+        ((int (*)(uintptr_t,int32_t,int32_t,int32_t))jump)(widget,selected,0,1);
+        ((void (*)(uintptr_t,uint32_t))select)(request.screen,(uint32_t)selected);
+        if (atomic_load_explicit(&g_trace,memory_order_acquire))
+            LOG("BOTW quick selection frame=%llu widget=%p index=%d",(unsigned long long)frame,(void *)widget,selected);
+    }
 }
 
 // Consume category touches on the guest UI thread, with no host lock held
@@ -4190,18 +4301,6 @@ static void selector_grid_carousel_to_view(dm_botw_touch_menu_view *view, uint64
     }
 }
 
-static void selector_quick_targets_to_view(dm_botw_touch_menu_view *view) {
-    int count=0;
-    for (int i=0;i<view->generic_count;i++) {
-        dm_botw_touch_menu_target target=view->generic_targets[i];
-        if (!selector_ancestor_named(target.pane,"N_ShortCutAll_00")) continue;
-        target.focus_only=1;
-        view->generic_targets[count++]=target;
-    }
-    view->generic_count=count;
-    view->quick_select=1;
-    view->back_valid=view->footer_action_count=0;
-}
 static void selector_publish_generic_view(uintptr_t manager, uintptr_t screen, int group,
                                           int input_active, uintptr_t native_screen_shown,
                                           uintptr_t native_group_getter,
@@ -4215,20 +4314,17 @@ static void selector_publish_generic_view(uintptr_t manager, uintptr_t screen, i
     view.page_key = view.generic_key = ((uint64_t)(screen >> 4) ^ ((uint64_t)(uint32_t)group << 48));
     char screen_name[64] = {0};
     int has_screen_name = selector_screen_name(screen, screen_name);
-    int quick=has_screen_name && !strcmp(screen_name,"MainShortCut_00") && dm_botw_touch_quick_select_active();
-    int pointer_screen = has_screen_name && (selector_pointer_screen_name(screen_name) || quick);
+    int pointer_screen = has_screen_name && selector_pointer_screen_name(screen_name);
     uintptr_t focused = selector_read_ptr(manager, 0x48);
     uintptr_t focused_owner = selector_read_ptr(focused, 0x18);
     uintptr_t focused_pane = selector_read_ptr(focused_owner, 0x60);
     selector_pane_visible_alpha(focused_pane, &view.generic_root);
-    if (quick) view.generic_root=selector_read_ptr(selector_read_ptr(screen,0x30),0x18);
     view.generic_key ^= (uint64_t)view.generic_root << 1;
     view.page_key = view.generic_key;
     if (!(pointer_screen && input_active && screen && view.generic_root && view.generic_key &&
           selector_find_generic_targets(manager, screen, group, view.generic_root, native_screen_shown,
                                         native_group_getter, &view) > 0))
         view.generic_count = 0;
-    if (quick) selector_quick_targets_to_view(&view);
     selector_value_adjusters_to_view(&view);
     selector_grid_carousel_to_view(&view, frame);
     // The map is a separate full-screen native surface with its own stick
@@ -4256,7 +4352,7 @@ static void selector_publish_generic_view(uintptr_t manager, uintptr_t screen, i
     int pause_screen = !strcmp(screen_name, "PauseMenu_00");
     // Back is optional on native menus. Prefer prompts in the focused root;
     // only PauseMenu has the proven separate PauseMenuInfo footer fallback.
-    if (pointer_screen && !quick && view.generic_mode && view.generic_root) {
+    if (pointer_screen && view.generic_mode && view.generic_root) {
         if (generic_back_prompt_snapshot(view.generic_root, frame, view.back))
             view.back_valid = 1;
         generic_action_prompts_to_view(view.generic_root, frame, &view);
@@ -4533,8 +4629,7 @@ static int selector_cursorless_prompt_view(uintptr_t manager, uint64_t frame,
         if (!selector_screen_name(screen, name)) continue;
         int control_guide = !strcmp(name, "SousaGuide_00");
         int scope = !strcmp(name, "MainScreen_00");
-        int quick=!strcmp(name,"MainShortCut_00") && dm_botw_touch_quick_select_active();
-        if ((!selector_pointer_screen_name(name) && !control_guide && !scope && !quick) ||
+        if ((!selector_pointer_screen_name(name) && !control_guide && !scope) ||
             selector_apphome_page_screen_name(name) || !strcmp(name, "AppSystemWindow_00")) continue;
         if (control_guide) {
             // Apparatus Cancel belongs to this prompt-only operation screen.
@@ -4568,10 +4663,7 @@ static int selector_cursorless_prompt_view(uintptr_t manager, uint64_t frame,
         candidate.generic_group = skip ? -1 : group;
         candidate.page_key = candidate.generic_key = ((uint64_t)(screen >> 4) ^
             ((uint64_t)root << 1) ^ ((uint64_t)(uint32_t)candidate.generic_group << 48));
-        if (quick) {
-            selector_find_generic_targets(manager,screen,group,root,shown,group_getter,&candidate);
-            selector_quick_targets_to_view(&candidate);
-        } else if (scope) {
+        if (scope) {
             selector_scope_prompts_to_view(root, &candidate);
         } else if (skip) {
             float rect[4];
@@ -5832,7 +5924,7 @@ int dm_botw_touch_menu_visible(void) {
     if (hud_active) {
         pthread_mutex_lock(&g_menu_mu);
         frame = menu_render_frame();
-        active = menu_active_locked(frame) && !g_view.scope_visible && !g_view.quick_select;
+        active = menu_active_locked(frame) && !g_view.scope_visible;
         presented_frame = g_presented_menu_frame;
         presented = atomic_load_explicit(&g_selector_hook_installed, memory_order_acquire) &&
             g_presented_menu && frame >= presented_frame && frame - presented_frame <= 2;
@@ -5856,7 +5948,7 @@ int dm_botw_touch_controls_visible(void) {
     int visible = atomic_load_explicit(&g_selector_hook_installed, memory_order_acquire) &&
         g_presented_gameplay && frame >= g_presented_menu_frame &&
         frame - g_presented_menu_frame <= 2 && !g_presented_menu &&
-        (!menu_active_locked(frame) || scope_owner_live_locked(frame) || g_view.quick_select);
+        (!menu_active_locked(frame) || scope_owner_live_locked(frame));
     pthread_mutex_unlock(&g_menu_mu);
     return visible;
 }
@@ -5875,6 +5967,18 @@ int dm_botw_touch_quick_select_active(void) {
     int active = g_presented_quick_select && frame >= g_presented_menu_frame && frame-g_presented_menu_frame <= 2;
     pthread_mutex_unlock(&g_menu_mu);
     return active;
+}
+void dm_botw_touch_quick_select_tap(float x,float y) {
+    if (!dm_botw_touch_hud_active() || !isfinite(x) || !isfinite(y) || x<0 || x>1 || y<0 || y>1) return;
+    pthread_mutex_lock(&g_menu_mu);
+    uint64_t frame=menu_render_frame();
+    if (g_presented_quick_select && g_presented_quick_screen && g_presented_quick_root &&
+        frame>=g_presented_menu_frame && frame-g_presented_menu_frame<=2) {
+        uint64_t serial=g_quick_tap.serial+1;
+        g_quick_tap=(botw_quick_tap_t){.screen=g_presented_quick_screen,.root=g_presented_quick_root,
+            .serial=serial,.x=x,.y=y,.pending=1,.index=-1};
+    }
+    pthread_mutex_unlock(&g_menu_mu);
 }
 float dm_botw_touch_quick_select_top(void) {
     pthread_mutex_lock(&g_menu_mu);
@@ -6965,6 +7069,8 @@ void dm_botw_touch_menu_reset(void) {
     notify = g_active_notified || g_presented_menu || g_camera_notified_active;
     g_presented_menu = 0; g_presented_menu_frame = 0; g_presented_menu_root = 0;
     g_presented_gameplay = 0; g_presented_gameplay_root = 0; g_presented_loadout = g_presented_quick_select = 0;
+    g_presented_quick_screen=g_presented_quick_root=0; g_presented_quick_top=-1;
+    memset(&g_quick_tap,0,sizeof g_quick_tap);
     g_presented_bow=0; g_open_category=-1; g_open_phase=0;
     g_open_tab_frame=UINT64_MAX;
     atomic_store_explicit(&g_presentation_observed_frame, UINT64_MAX, memory_order_release);
