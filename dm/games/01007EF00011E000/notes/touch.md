@@ -644,7 +644,7 @@ testing and artwork, while gameplay state decides when an added button appears.
 Choosing sticky equipment/rune switching or R/ZR camera dragging adds Cancel
 once. A later manual removal survives saving, reopening and layout import;
 rendering or retaining the same action choice does not add it again.
-When D-pad relocation is enabled, both frontends move the loadout target 15pt
+When D-pad relocation is enabled, both frontends move the loadout target 14pt
 upward before HUD normalization, independently of screen size and button scale.
 
 ### Magnesis directions with a hidden D-pad
