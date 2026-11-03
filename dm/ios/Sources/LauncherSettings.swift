@@ -88,6 +88,7 @@ struct BotwTouchControl: Identifiable, Hashable {
         var keys = Set([env("X", portrait: portrait), env("Y", portrait: portrait), env("SIZE", portrait: portrait), option("ANCHOR", portrait: portrait)])
         if id == 6 || id == 16 || id == 17 { keys.insert(option("MODE", portrait: portrait)) }
         if id == 8 { keys.insert(env("HIT", portrait: portrait)) }
+        if id == 4 { keys.insert(option("ALPHA", portrait: portrait)) }
         return keys
     }
 
@@ -573,6 +574,7 @@ final class LauncherModel: ObservableObject {
         result.stroke_gray = Float(number(botwTouchKey("DM_BOTW_PAD_STROKE_GRAY", portrait: portrait), Double(result.stroke_gray)))
         result.stroke_alpha = Float(number(botwTouchKey("DM_BOTW_PAD_STROKE_ALPHA", portrait: portrait), Double(result.stroke_alpha)))
         result.icon_alpha = Float(number(botwTouchKey("DM_BOTW_PAD_ICON_ALPHA", portrait: portrait), Double(result.icon_alpha)))
+        result.stick_alpha = Float(number(botwTouchKey("DM_BOTW_PAD_STICK_ALPHA", portrait: portrait), Double(result.stick_alpha)))
         return result
     }
     private func portableBank(_ saved: BotwSavedTouchLayout, portrait: Bool) -> BotwPortableBank {

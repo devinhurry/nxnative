@@ -280,9 +280,10 @@ struct LauncherSettingsPage: View {
     #endif
 
     private var sections: [String] {
-        var result = m.sections.filter { !LauncherModel.isTouchSection($0) }
+        var result = m.sections.filter { !LauncherModel.isTouchSection($0) && $0 != "General" }
         if m.touchStickResponse != nil && !result.contains("Controls") { result.insert("Controls", at: min(2, result.count)) }
         result.append("Cloud saves")
+        result.append("General")
         return result
     }
 

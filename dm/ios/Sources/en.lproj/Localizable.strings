@@ -299,3 +299,7 @@
 "Touch diameter" = "Touch diameter";
 "Shield stick: Touch diameter" = "Shield stick: Touch diameter";
 "Touch diameter in pt, independent of artwork size." = "Touch diameter in pt, independent of artwork size.";
+"General" = "General";
+"Opacity" = "Opacity";
+"Left-stick opacity" = "Left-stick opacity";
+"Independent of global icon opacity." = "Independent of global icon opacity.";

@@ -88,10 +88,10 @@ static inline NSString *dm_botw_touch_button_icon_path(int button) {
 
 static inline CGPathRef CF_RETURNS_RETAINED dm_botw_switch_cancel_path(CGPoint center, CGFloat size) {
     CGMutablePathRef path=CGPathCreateMutable();
-    CGFloat d=size*.14;
+    CGFloat d=size*.22;
     CGPathMoveToPoint(path,NULL,center.x-d,center.y-d); CGPathAddLineToPoint(path,NULL,center.x+d,center.y+d);
     CGPathMoveToPoint(path,NULL,center.x+d,center.y-d); CGPathAddLineToPoint(path,NULL,center.x-d,center.y+d);
-    CGPathRef glyph=CGPathCreateCopyByStrokingPath(path,NULL,size*.045,kCGLineCapRound,kCGLineJoinRound,0);
+    CGPathRef glyph=CGPathCreateCopyByStrokingPath(path,NULL,size*.07,kCGLineCapRound,kCGLineJoinRound,0);
     CGPathRelease(path); return glyph;
 }
 

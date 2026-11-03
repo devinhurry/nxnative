@@ -9,7 +9,7 @@
 #             <ios>|<mac> selects the platform's default before resolving a profile macro or build variable
 #   shown     always; DM_GAME_<NAME>!=<value> or ==<value>; fixups:<KEY>: main's rewriter table has that key (a stub in the game's build, patch_nso.py); languages>1; gfxapi:<API>: the packer's GFXAPI;
 #             platform:<ios | mac>: the app's platform (SETTINGS_PLATFORM, ios when unset), for a switch only that platform's front end reads
-#   section   Game, Controls, Touch left stick or Performance: a heading on the single settings screen. Rows appear in table order within each section
+#   section   Game, Controls, Touch left stick, Touch layout, Performance or General. Rows appear in table order within each section
 #             Reset to tested defaults clears all launcher choices; values fixed by an env file stay
 #   label, note  the setting's name and the line under it (may be empty; only for a setting with a cost: latency, memory, heat)
 #   meta      optional, key=value pairs separated by ; (settings.py META lists the keys; docs/frontends.md, The settings list, describes them):
@@ -22,7 +22,7 @@ DM_RENDER_SCALE	range	0.5:1.0:0.05	1.0	fixups:RENDER_SCALE	Game	Render scale		le
 DM_OPMODE	choice	1=Docked,0=Handheld	DM_GAME_OPMODE	always	Game	Console mode		level=basic
 DM_PRESENT_UPSCALE	choice	off=Standard,scene=Scene MetalFX,metalfx=Full-screen MetalFX	off	DM_GAME_SCENE_UPSCALE_PS!=	Game	Upscaling	Scene MetalFX (experimental) scales 3D only; Full-screen MetalFX also scales text and UI. Uses more GPU time and can increase heat.
 DM_PRESENT_UPSCALE	choice	off=Standard,metalfx=Full-screen MetalFX	off	DM_GAME_SCENE_UPSCALE_PS==	Game	Upscaling	Uses more GPU time and can increase heat.
-DM_LANG	choice	languages	build:DM_LANG	languages>1	Game	Game language		level=basic
+DM_LANG	choice	languages	build:DM_LANG	languages>1	General	Game language		level=basic
 DM_FULLSCREEN	choice	0=Window,1=Fullscreen	0	platform:mac	Game	Display mode		level=basic
 DM_SHOW_FPS	toggle	-	build:DM_SHOW_FPS	platform:ios	Game	Frame-rate counter
 DM_TOUCH_HAPTICS	toggle	-	1	platform:ios	Controls	Touch feedback
@@ -75,11 +75,12 @@ DM_BOTW_PAD_DPAD_Y_PT	range	-10000:10000:0.5	0.000	DM_GAME_ID==01007EF00011E000	
 DM_BOTW_PAD_DPAD_SIZE_PT	range	20:240:0.5	96.000	DM_GAME_ID==01007EF00011E000	Touch layout	D-pad: Size	Offsets and diameters are in pt; edge margins do not depend on safe areas.	format=number
 DM_BOTW_PAD_DPAD_ANCHOR	choice	0=Default,1=Left,2=Right	0	DM_GAME_ID==01007EF00011E000	Touch layout	D-pad: Anchor	Explicit anchors use side and bottom edge distances in pt.
 DM_BOTW_PAD_BADGES	toggle	-	0	DM_GAME_ID==01007EF00011E000	Touch layout	Corner button labels	Shows the small letter circles on L, R, ZR and XYAB.
-DM_BOTW_PAD_STROKE_GRAY	range	0:1:0.01	0.520	DM_GAME_ID==01007EF00011E000	Touch layout	Border gray	Applies to every round button in this layout.
-DM_BOTW_PAD_STROKE_ALPHA	range	0:1:0.01	0.400	DM_GAME_ID==01007EF00011E000	Touch layout	Border opacity	Applies to every round button in this layout.
+DM_BOTW_PAD_STROKE_GRAY	range	0:1:0.01	0.570	DM_GAME_ID==01007EF00011E000	Touch layout	Border gray	Applies to every round button in this layout.
+DM_BOTW_PAD_STROKE_ALPHA	range	0:1:0.01	0.300	DM_GAME_ID==01007EF00011E000	Touch layout	Border opacity	Applies to every round button in this layout.
 DM_BOTW_PAD_FILL_GRAY	range	0:1:0.01	0.350	DM_GAME_ID==01007EF00011E000	Touch layout	Background gray	Applies to every round button in this layout.
-DM_BOTW_PAD_FILL_ALPHA	range	0:1:0.01	0.200	DM_GAME_ID==01007EF00011E000	Touch layout	Background opacity	Applies to every round button in this layout.
-DM_BOTW_PAD_ICON_ALPHA	range	0:1:0.01	1.000	DM_GAME_ID==01007EF00011E000	Touch layout	Icon opacity	Applies to every round button in this layout.
+DM_BOTW_PAD_FILL_ALPHA	range	0:1:0.01	0.140	DM_GAME_ID==01007EF00011E000	Touch layout	Background opacity	Applies to every round button in this layout.
+DM_BOTW_PAD_ICON_ALPHA	range	0:1:0.01	0.900	DM_GAME_ID==01007EF00011E000	Touch layout	Icon opacity	Applies to every round button in this layout.
+DM_BOTW_PAD_STICK_ALPHA	range	0:1:0.01	0.150	DM_GAME_ID==01007EF00011E000	Touch layout	Left-stick opacity	Independent of global icon opacity.
 DM_BOTW_PORTRAIT	toggle	-	0	DM_GAME_ID==01007EF00011E000	Touch layout	Enable compact portrait mode	Allows portrait rotation below 600pt of window width. Wider portrait windows are always supported and keep the normal layout.
 DM_BOTW_PORTRAIT_MOVE_DEADZONE	range	0:0.3:0.01	0.070	DM_GAME_ID==01007EF00011E000	Touch left stick	Deadzone	Ignores small movements near the touch-down point.
 DM_BOTW_PORTRAIT_MOVE_CURVE	range	0.3:2:0.05	0.300	DM_GAME_ID==01007EF00011E000	Touch left stick	Response curve	Lower values make short drags stronger. 1.00 is linear.	format=number
@@ -126,11 +127,12 @@ DM_BOTW_PORTRAIT_PAD_DPAD_Y_PT	range	-10000:10000:0.5	0.000	DM_GAME_ID==01007EF0
 DM_BOTW_PORTRAIT_PAD_DPAD_SIZE_PT	range	20:240:0.5	81.100	DM_GAME_ID==01007EF00011E000	Touch layout	D-pad: Size	Offsets and diameters are in pt; edge margins do not depend on safe areas.	format=number
 DM_BOTW_PORTRAIT_PAD_DPAD_ANCHOR	choice	0=Default,1=Left,2=Right	0	DM_GAME_ID==01007EF00011E000	Touch layout	D-pad: Anchor	Explicit anchors use side and bottom edge distances in pt.
 DM_BOTW_PORTRAIT_PAD_BADGES	toggle	-	0	DM_GAME_ID==01007EF00011E000	Touch layout	Corner button labels	Shows the small letter circles on L, R, ZR and XYAB.
-DM_BOTW_PORTRAIT_PAD_STROKE_GRAY	range	0:1:0.01	0.520	DM_GAME_ID==01007EF00011E000	Touch layout	Border gray	Applies to every round button in this layout.
-DM_BOTW_PORTRAIT_PAD_STROKE_ALPHA	range	0:1:0.01	0.400	DM_GAME_ID==01007EF00011E000	Touch layout	Border opacity	Applies to every round button in this layout.
+DM_BOTW_PORTRAIT_PAD_STROKE_GRAY	range	0:1:0.01	0.570	DM_GAME_ID==01007EF00011E000	Touch layout	Border gray	Applies to every round button in this layout.
+DM_BOTW_PORTRAIT_PAD_STROKE_ALPHA	range	0:1:0.01	0.300	DM_GAME_ID==01007EF00011E000	Touch layout	Border opacity	Applies to every round button in this layout.
 DM_BOTW_PORTRAIT_PAD_FILL_GRAY	range	0:1:0.01	0.350	DM_GAME_ID==01007EF00011E000	Touch layout	Background gray	Applies to every round button in this layout.
-DM_BOTW_PORTRAIT_PAD_FILL_ALPHA	range	0:1:0.01	0.200	DM_GAME_ID==01007EF00011E000	Touch layout	Background opacity	Applies to every round button in this layout.
-DM_BOTW_PORTRAIT_PAD_ICON_ALPHA	range	0:1:0.01	1.000	DM_GAME_ID==01007EF00011E000	Touch layout	Icon opacity	Applies to every round button in this layout.
+DM_BOTW_PORTRAIT_PAD_FILL_ALPHA	range	0:1:0.01	0.140	DM_GAME_ID==01007EF00011E000	Touch layout	Background opacity	Applies to every round button in this layout.
+DM_BOTW_PORTRAIT_PAD_ICON_ALPHA	range	0:1:0.01	0.900	DM_GAME_ID==01007EF00011E000	Touch layout	Icon opacity	Applies to every round button in this layout.
+DM_BOTW_PORTRAIT_PAD_STICK_ALPHA	range	0:1:0.01	0.150	DM_GAME_ID==01007EF00011E000	Touch layout	Left-stick opacity	Independent of global icon opacity.
 DM_LOW_MEMORY	toggle	-	0	DM_GAME_ID==01007EF00011E000	Performance	Experimental low-memory mode	May reduce memory use at the cost of more storage activity and pauses in new scenes. Applies when you press Play.
 DM_NVN_PASS_REUSE	toggle	-	1	gfxapi:nvn	Performance	Memory transfer optimization	Reduces GPU image reads and writes. Turn off if rendering errors appear. Applies when you press Play.
 DM_NVN_FB_SNAP	toggle	0/1	0	gfxapi:nvn	Performance	Skip feedback snapshots (experimental)	May reduce GPU copies but can cause rendering errors. Applies when you press Play.

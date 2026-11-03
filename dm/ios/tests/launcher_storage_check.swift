@@ -201,8 +201,8 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
         let mac = try! JSONDecoder().decode(SettingsFile.self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[2])))
         setenv("DM_ENV_FILE_KEYS", "", 1); unsetenv("DM_FULLSCREEN"); unsetenv("DM_OPMODE")
         let mm = LauncherModel(mac.settings, defaults: d)
-        expect(mm.sections(basic: true) == ["Game", "Controls"] && mm.sections(basic: false) == ["Game", "Controls", "Touch left stick", "Touch layout", "Performance"], "Basic and Advanced keep the list's sections")
-        expect(mm.rows(in: "Game", basic: true).map(\.env) == ["DM_FPS_TARGET", "DM_FRAMEGEN", "DM_RENDER_SCALE", "DM_OPMODE", "DM_LANG", "DM_FULLSCREEN"], "Basic rows in the list's order")
+        expect(mm.sections(basic: true) == ["Game", "General", "Controls"] && mm.sections(basic: false) == ["Game", "Controls", "Touch left stick", "Touch layout", "Performance"], "Basic and Advanced keep the list's sections")
+        expect(mm.rows(in: "Game", basic: true).map(\.env) == ["DM_FPS_TARGET", "DM_FRAMEGEN", "DM_RENDER_SCALE", "DM_OPMODE", "DM_FULLSCREEN"] && mm.rows(in: "General", basic: true).map(\.env) == ["DM_LANG"], "language is separated from graphics in General")
         expect(!file.settings.contains { $0.env == "DM_FULLSCREEN" } && mm.values["DM_FULLSCREEN"] == "0", "Display mode is the Mac's, Window by default")
         mm.values["DM_FULLSCREEN"] = "1"; mm.apply()
         expect(String(cString: getenv("DM_FULLSCREEN")) == "1" && d.string(forKey: "launcher.DM_FULLSCREEN") == "1", "Fullscreen goes into the environment and is saved")
@@ -539,7 +539,7 @@ private func checkTouchLayoutPresets(_ settings: [Setting]) -> Int {
                "resizing shield artwork does not change its saved touch diameter")
         expect(abs(targetConfig.fill_gray - 0.63) < 0.0001 && abs(targetConfig.fill_alpha - 0.47) < 0.0001 &&
                abs(targetConfig.stroke_gray - 0.74) < 0.0001 && abs(targetConfig.stroke_alpha - 0.58) < 0.0001 &&
-               abs(targetConfig.icon_alpha - 0.81) < 0.0001 && target.touchLayout(portrait: true).icon_alpha == 1,
+               abs(targetConfig.icon_alpha - 0.81) < 0.0001 && abs(target.touchLayout(portrait: true).icon_alpha - 0.9) < 0.0001,
                "global appearance survives save, duplicate, export and import without changing the other bank")
         let sourceRect = dm_botw_layout_control(&sourceConfig, 6, 900, 430, 0, 0, 0, 0, dm_botw_layout_canvas(900, 430))
         let targetRect = dm_botw_layout_control(&targetConfig, 6, 430, 300, 0, 0, 0, 0, dm_botw_layout_canvas(430, 300))

@@ -318,6 +318,7 @@ struct BotwTouchSettingsView: View {
                     } label: { Image(systemName: "ellipsis.circle").accessibilityLabel("Button options") }
                     .accessibilityIdentifier("botw.touch.control.options")
                 }
+                Spacer(minLength: 0)
                 Menu {
                     ForEach((BotwTouchControl.added + [BotwTouchControl.all.last!]).filter { !controls.contains($0) }) { control in
                         Button(LocalizedStringKey(control.label)) {
@@ -325,10 +326,9 @@ struct BotwTouchSettingsView: View {
                             selected = control
                         }.disabled(m.fixed.contains(control.visibilityKey(portrait: portrait)))
                     }
-                } label: { Image(systemName: "plus.circle").accessibilityLabel("Add button") }
+                } label: { Image(systemName: "plus.circle").font(.system(size: 22)).frame(width: 30, height: 26).accessibilityLabel("Add button") }
                 .menuIndicator(.hidden).fixedSize()
                 .accessibilityIdentifier("botw.touch.add")
-                if controlOptions.count != 1 { Spacer(minLength: 0) }
                 Menu {
                     Button("Global opacity") { showingAppearance.toggle() }
                         .accessibilityIdentifier("botw.touch.appearance.toggle")
@@ -341,7 +341,7 @@ struct BotwTouchSettingsView: View {
                     Button(action: exportParameters) {
                         Label("Export JSON", systemImage: "square.and.arrow.up")
                     }.accessibilityIdentifier("botw.touch.export")
-                } label: { Image(systemName: "ellipsis.circle").accessibilityLabel("Layout options") }
+                } label: { Image(systemName: "ellipsis.circle").font(.system(size: 22)).frame(width: 30, height: 26).accessibilityLabel("Layout options") }
                 .menuIndicator(.hidden).fixedSize()
                 .accessibilityIdentifier("botw.touch.options")
             }.frame(height: 26)
@@ -352,6 +352,9 @@ struct BotwTouchSettingsView: View {
                 if selected.id == 8, let row = m.settings.first(where: { $0.env == selected.env("HIT", portrait: portrait) }) {
                     BotwLayoutSlider(row: row, values: $values, locked: m.fixed.contains(row.env), label: "Touch diameter")
                 }
+                if selected.id == 4, let row = m.settings.first(where: { $0.env == selected.option("ALPHA", portrait: portrait) }) {
+                    BotwLayoutSlider(row: row, values: $values, locked: m.fixed.contains(row.env), label: "Opacity")
+                }
             }.frame(height: 22)
         }
         .font(.system(size: 12))
@@ -359,9 +362,11 @@ struct BotwTouchSettingsView: View {
         .lineLimit(1)
         .minimumScaleFactor(0.8)
         .padding(8)
-        .frame(maxWidth: 520)
+        .frame(maxWidth: 480)
         .frame(height: 104)
-        .background(Color(white: 0.08).opacity(0.82), in: RoundedRectangle(cornerRadius: 12))
+        .foregroundStyle(.white)
+        .environment(\.colorScheme, .dark)
+        .background(Color(white: 0.08).opacity(0.42), in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.15), lineWidth: 0.5))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("botw.touch.panel")
@@ -393,8 +398,10 @@ struct BotwTouchSettingsView: View {
             }
         }
         .font(.system(size: 11)).controlSize(.mini).lineLimit(1).minimumScaleFactor(0.8)
-        .padding(8).frame(maxWidth: 520)
-        .background(Color(white: 0.08).opacity(0.82), in: RoundedRectangle(cornerRadius: 12))
+        .padding(8).frame(maxWidth: 480)
+        .foregroundStyle(.white)
+        .environment(\.colorScheme, .dark)
+        .background(Color(white: 0.08).opacity(0.42), in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.15), lineWidth: 0.5))
         .accessibilityIdentifier("botw.touch.appearance")
     }
@@ -546,7 +553,7 @@ private struct BotwLayoutSlider: View {
             Text(LocalizedStringKey(label))
             Slider(value: binding, in: (row.min ?? 0)...(row.max ?? 1), step: row.step ?? 0.01)
                 .accessibilityLabel(Text(LocalizedStringKey(label))).accessibilityIdentifier(row.env)
-            Text(String(format: "%.1f pt", binding.wrappedValue)).monospacedDigit().foregroundStyle(.secondary)
+            Text(row.formattedValue(String(binding.wrappedValue))).monospacedDigit().foregroundStyle(.secondary)
                 .fixedSize()
         }.disabled(locked)
     }
@@ -560,7 +567,7 @@ private struct BotwTouchArtwork: View {
     let badges: Bool
     var appearance: dm_botw_touch_layout = dm_botw_layout_defaults()
     private var center: CGPoint { CGPoint(x: size.width / 2, y: size.height / 2) }
-    private var glyph: Color { Color(red: 226 / 255, green: 222 / 255, blue: 211 / 255).opacity(0.8 * Double(appearance.icon_alpha)) }
+    private var glyph: Color { Color(red: 226 / 255, green: 222 / 255, blue: 211 / 255).opacity(Double(appearance.icon_alpha)) }
     private var outline: Color { Color(white: Double(appearance.stroke_gray)).opacity(Double(appearance.stroke_alpha)) }
     private var gold: Color { Color(red: 0.94, green: 0.88, blue: 0.70) }
     private static let icons: [Int: Image] = {
@@ -581,9 +588,9 @@ private struct BotwTouchArtwork: View {
                 let unit = size.width / 154
                 let radius = CGFloat(DM_TP_KNOB_R) * unit
                 Path(ellipseIn: CGRect(x: center.x-radius, y: center.y-radius, width: radius*2, height: radius*2))
-                    .stroke(Color.white.opacity(DM_BOTW_STICK_GRAPH_ALPHA * Double(appearance.icon_alpha)), lineWidth: 1.5)
+                    .stroke(Color.white.opacity(Double(appearance.stick_alpha)), lineWidth: 1.5)
                 if let arrows = dm_botw_four_arrows_path(center, 17*unit, 12*unit) {
-                    Path(arrows).fill(Color.white.opacity(DM_BOTW_STICK_GRAPH_ALPHA * Double(appearance.icon_alpha)))
+                    Path(arrows).fill(Color.white.opacity(Double(appearance.stick_alpha)))
                 }
             } else if control == 8 {
                 if let shield = dm_botw_shield_graph_path(center, size.width / 154) { Path(shield).fill(glyph) }
@@ -596,6 +603,10 @@ private struct BotwTouchArtwork: View {
                 if let key = dm_botw_menu_key_path(center, size.width * CGFloat(DM_TP_BOTW_MENU_GLYPH_SIZE / DM_TP_BOTW_MENU_SIZE), size.width, control == 10 ? 1 : 0) {
                     Path(key).fill(.white)
                 }
+            } else if control == 20 {
+                if let cancel = dm_botw_switch_cancel_path(center, size.width) {
+                    Path(cancel).fill(Color.red.opacity(Double(appearance.icon_alpha)))
+                }
             } else {
                 let disk = CGPath(ellipseIn: CGRect(origin: .zero, size: size), transform: nil)
                 Path(disk).fill(Color(white: Double(appearance.fill_gray)).opacity(Double(appearance.fill_alpha)))
@@ -606,9 +617,6 @@ private struct BotwTouchArtwork: View {
                     icon.resizable().scaledToFit().frame(width: size.width*0.5, height: size.height*0.5)
                         .opacity(Double(appearance.icon_alpha))
                         .position(center)
-                }
-                if control == 20, let cancel = dm_botw_switch_cancel_path(center, size.width) {
-                    Path(cancel).fill(Color(red: 226 / 255, green: 222 / 255, blue: 211 / 255).opacity(Double(appearance.icon_alpha)))
                 }
                 if badges && control < 16 {
                     let rect = dm_botw_button_badge_rect(center, size.width / 2)

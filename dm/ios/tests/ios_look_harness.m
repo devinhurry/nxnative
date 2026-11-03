@@ -179,6 +179,7 @@ int dm_botw_touch_menu_active(void) { return g_botw_touch_menu_active; }
 int dm_botw_touch_menu_visible(void) { return (g_botw_touch_menu_active && !g_botw_scope_active) || g_botw_touch_menu_presented; }
 int dm_botw_touch_loadout_visible(void) { return g_botw_loadout_visible; }
 int dm_botw_touch_quick_select_active(void) { return g_botw_quick_select; }
+float dm_botw_touch_quick_select_top(void) { return -1; }
 int dm_botw_touch_bow_active(void) { return 0; }
 void dm_botw_touch_hud_keep_native_loadout(int keep) { (void)keep; }
 void dm_botw_touch_button_begin(int control,int mode) { (void)control; (void)mode; }
@@ -423,8 +424,8 @@ static void test_botw_button_artwork(DmGamepad *view) {
           "R and ZR have the same default diameter");
     CALayer *icon = [view dm_testYIconLayer]; CAShapeLayer *badge = [view dm_testYBadge];
     CGRect button = CGPathGetBoundingBox(y.path), circle = CGPathGetBoundingBox(badge.path);
-    CHECK(gray_matches(y.fillColor,.35,.20) && !y.strokeColor &&
-          gray_matches([view dm_testButtonBorder:3].fillColor,.52,.40) && y.shadowOpacity == 0,
+    CHECK(gray_matches(y.fillColor,DM_BOTW_BUTTON_GRAY,DM_BOTW_BUTTON_ALPHA) && !y.strokeColor &&
+          gray_matches([view dm_testButtonBorder:3].fillColor,DM_BOTW_STROKE_GRAY,DM_BOTW_STROKE_ALPHA) && y.shadowOpacity == 0,
           "BOTW overrides the button fill, outline and shadow without changing ordinary defaults");
     CHECK(!icon.hidden && icon.contents && fabs(icon.frame.size.width-button.size.width*.5)<.01 &&
           fabs(icon.frame.size.height-button.size.height*.5)<.01,
