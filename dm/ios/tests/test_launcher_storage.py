@@ -16,6 +16,40 @@ import settings
 
 @unittest.skipUnless(sys.platform == 'darwin' and shutil.which('xcrun'), 'needs the macOS Swift toolchain')
 class LauncherStorageTests(unittest.TestCase):
+    def test_shared_module_supports_c_objc_and_swift(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            tmp = Path(temporary)
+            c = tmp / 'module.c'
+            c.write_text('#include "launcher_settings.h"\n#include "memory_mode.h"\n'
+                         'int check(void) { return dm_low_memory_default(0); }\n')
+            objc = tmp / 'module.m'
+            objc.write_text('@import DmTouchPad;\nvoid check(void) {\n'
+                            'NSString *icon = dm_botw_touch_button_icon_path(0); (void)icon;\n'
+                            'CGPathRef p = dm_botw_switch_cancel_path(CGPointZero, 52); CGPathRelease(p);\n}\n')
+            swift = tmp / 'module.swift'
+            swift.write_text('import DmTouchPad\nimport CoreGraphics\nfunc check() {\n'
+                             '_ = dm_botw_touch_button_icon_path(0)\n'
+                             '_ = dm_botw_layout_defaults()\n}\n')
+            for sdk, target in (('macosx', 'arm64-apple-macos26.0'), ('iphoneos', 'arm64-apple-ios26.0')):
+                probe = subprocess.run(['xcrun', '--sdk', sdk, '--show-sdk-path'], capture_output=True, text=True)
+                if probe.returncode:
+                    if sdk == 'iphoneos':
+                        continue   # Command Line Tools alone have no device SDK.
+                    self.fail(probe.stderr)
+                cache = tmp / sdk
+                common = ['-target', target, '-I', str(REPO / 'dm/host')]
+                clang = ['xcrun', '--sdk', sdk, 'clang', '-isysroot', probe.stdout.strip(), *common,
+                         '-fmodules', '-fimplicit-module-maps', f'-fmodules-cache-path={cache}', '-fsyntax-only']
+                for language, flags, source in (('C', ['-std=gnu11'], c), ('Objective-C', ['-fobjc-arc'], objc)):
+                    with self.subTest(sdk=sdk, language=language):
+                        result = subprocess.run([*clang, *flags, str(source)], capture_output=True, text=True, timeout=60)
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                with self.subTest(sdk=sdk, language='Swift'):
+                    result = subprocess.run(['xcrun', '--sdk', sdk, 'swiftc', '-typecheck', '-swift-version', '5',
+                                             '-sdk', probe.stdout.strip(), *common, '-module-cache-path', str(cache), str(swift)],
+                                            capture_output=True, text=True, timeout=60)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_only_changed_choices_are_stored(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
