@@ -847,6 +847,14 @@ Most service calls can be found before they crash, before the first boot or the 
 - **Check:** inspect the generated and built plists, and compile the production Objective-C and Swift sources. Physical-device startup from portrait and landscape remains to be checked.
 - **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game).
 
+### The touch layout editor hides its cancel control
+
+- **Symptom:** Cancel is missing from the layout canvas and control picker, including when R or ZR uses camera dragging.
+- **Cause:** layout visibility required a sticky rune or equipment shortcut, even though ordinary R/ZR aiming also uses the cancel control.
+- **Fix:** Cancel is always available for layout editing. Both touch frontends retain their separate gameplay-state visibility, so the button appears while a sticky switch, bow aim or throw needs cancellation; it stays hidden during idle play. No additional saved enable switch is needed.
+- **Check:** normal/compact layout availability, R/ZR camera-drag settings, and the existing trigger cancellation sequencing tests.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game).
+
 ### In-game launcher settings use the runtime state owners
 
 - **Symptom:** changes made from an in-game settings sheet appear saved but do not affect controls, frame rate, rendering size or rumble until relaunch; the game keeps advancing behind the settings page.

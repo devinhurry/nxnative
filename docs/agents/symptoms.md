@@ -263,6 +263,7 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 - harmless on the build it was written for, silent memory corruption on any other. → [Code inherited from another title at fixed addresses](../reference/services.md#code-inherited-from-another-title-at-fixed-addresses)
 - the three-finger double tap shows the full virtual gamepad and Settings, then they immediately disappear during gameplay. → [Temporary BOTW gamepad disappears immediately in gameplay](../reference/services.md#temporary-botw-gamepad-disappears-immediately-in-gameplay)
 - the startup launcher appears landscape, flashes into portrait, then returns to landscape, including with compact portrait play disabled. → [The iOS launcher briefly rotates through portrait](../reference/services.md#the-ios-launcher-briefly-rotates-through-portrait)
+- Cancel is missing from the layout canvas and control picker, including when R or ZR uses camera dragging. → [The touch layout editor hides its cancel control](../reference/services.md#the-touch-layout-editor-hides-its-cancel-control)
 - changes made from an in-game settings sheet appear saved but do not affect controls, frame rate, rendering size or rumble until relaunch; the game keeps advancing behind the settings page. → [In-game launcher settings use the runtime state owners](../reference/services.md#in-game-launcher-settings-use-the-runtime-state-owners)
 
 ## Movies
