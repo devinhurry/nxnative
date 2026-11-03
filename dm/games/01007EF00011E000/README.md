@@ -1719,6 +1719,8 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 
 ## Found on this game
 
+- **Resolved, 2026-11-03:** [Plain C builds import Objective-C touch artwork](../../../docs/reference/packing.md#plain-c-builds-import-objective-c-touch-artwork): the unsigned iOS build exposed Foundation to C through `DmTouchPad`. Artwork now requires Objective-C in its own submodule; C, Objective-C and Swift import checks pass.
+
 - Resolved retained graphics directories after a successful import. Publication precedes old-version cleanup, and cleanup failures leave the new package selected and usable. See [graphics version cleanup](../../../docs/reference/packing.md#imported-graphics-versions-accumulate-in-documents) for the mechanism and Foundation fixtures. Physical iPhone acceptance remains pending.
 
 - Resolved duplicate graphics releases after renderer-only source changes. The v4 and v6 inventories contain the same 78,018 runtime files and compiler records. Packaging now verifies equal outputs and authorizes the exact reused package ID in the new IPA. Mechanism and validation are in [source-only changes publishing duplicate graphics ZIPs](../../../docs/reference/packing.md#source-only-changes-publish-duplicate-graphics-zips). Physical iPhone acceptance remains pending.
