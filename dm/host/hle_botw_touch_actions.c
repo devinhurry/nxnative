@@ -18,6 +18,7 @@ static _Atomic int g_actions_test_ready;
 static int touch_mode_active(void);
 static int g_switch_control=-1, g_switch_sticky, g_switch_started, g_rune_mode;
 static uint64_t g_switch_bit, g_pulse_bits, g_pulse_frame=UINT64_MAX;
+static uint64_t g_aim_triggers;
 static double g_rune_down;
 static double action_time(void) {
     struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t);
@@ -59,14 +60,18 @@ void dm_botw_touch_button_end(int control,int cancelled) {
 }
 void dm_botw_touch_switch_cancel(void) {
     pthread_mutex_lock(&g_actions_mu);
+    uint64_t aim=g_aim_triggers;
     if (g_switch_control>=0) pulse_locked(DM_BTN_B|g_switch_bit);
     g_switch_control=-1; g_switch_bit=0; g_switch_sticky=0;
+    g_aim_triggers=0;
     pthread_mutex_unlock(&g_actions_mu);
+    if (aim&DM_BTN_R) dm_botw_touch_cancel_trigger(DM_BTN_R);
+    if (aim&DM_BTN_ZR) dm_botw_touch_cancel_trigger(DM_BTN_ZR);
     front_botw_touch_action_changed();
 }
 int dm_botw_touch_switch_cancel_visible(void) {
     pthread_mutex_lock(&g_actions_mu);
-    int visible=g_switch_sticky && g_switch_started;
+    int visible=(g_switch_sticky && g_switch_started) || g_aim_triggers;
     pthread_mutex_unlock(&g_actions_mu);
     return visible;
 }
@@ -133,6 +138,7 @@ void dm_botw_touch_actions_reset(void) {
     g_suppressed_virtual_triggers = 0;
     g_switch_control=-1; g_switch_sticky=g_switch_started=g_rune_mode=0;
     g_switch_bit=g_pulse_bits=0; g_pulse_frame=UINT64_MAX;
+    g_aim_triggers=0;
     pthread_mutex_unlock(&g_actions_mu);
 }
 
@@ -159,6 +165,8 @@ void dm_botw_touch_actions_apply(uint64_t *other_buttons, uint64_t *virtual_butt
     // releases; physical buttons and the independent virtual edge latch remain.
     g_suppressed_virtual_triggers &= *virtual_buttons;
     *virtual_buttons &= ~g_suppressed_virtual_triggers;
+    uint64_t aim=*virtual_buttons & (DM_BTN_R|DM_BTN_ZR) & ~g_cancel_pending;
+    if (g_aim_triggers!=aim) { g_aim_triggers=aim; notify=1; }
     if (g_cancel_phase == CANCEL_REQUESTED) {
         g_cancel_frame = frame;
         g_cancel_phase = CANCEL_WAIT_FRAME;

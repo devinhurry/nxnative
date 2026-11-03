@@ -62,6 +62,22 @@ int main(void) {
     dm_botw_touch_actions_apply(&test_buttons,&test_virtual,4); assert(test_buttons==DM_BTN_UP);
     dm_botw_touch_button_end(6,0); assert(dm_botw_touch_switch_cancel_visible());
     dm_botw_touch_switch_cancel(); assert(!dm_botw_touch_switch_cancel_visible());
+    for (uint64_t trigger=DM_BTN_R;trigger<=DM_BTN_ZR;trigger<<=1) {
+        if (trigger!=DM_BTN_R && trigger!=DM_BTN_ZR) continue;
+        dm_botw_touch_actions_reset(); test_buttons=0; test_virtual=trigger;
+        dm_botw_touch_actions_apply(&test_buttons,&test_virtual,20);
+        assert(dm_botw_touch_switch_cancel_visible());
+        dm_botw_touch_switch_cancel();
+        test_buttons=0; test_virtual=trigger;
+        dm_botw_touch_actions_apply(&test_buttons,&test_virtual,21);
+        assert((test_buttons& (DM_BTN_B|trigger))==(DM_BTN_B|trigger));
+        test_buttons=0; test_virtual=trigger;
+        dm_botw_touch_actions_apply(&test_buttons,&test_virtual,22);
+        assert(dm_botw_touch_cancel_complete(trigger));
+        test_buttons=0; test_virtual=trigger;
+        dm_botw_touch_actions_apply(&test_buttons,&test_virtual,23);
+        assert(!test_virtual && !dm_botw_touch_switch_cancel_visible());
+    }
     dm_botw_touch_actions_reset();
     g_action_notifications=0;
     uint64_t other = 0, virtual = 0;

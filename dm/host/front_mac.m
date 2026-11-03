@@ -830,6 +830,10 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         else dm_botw_touch_button_begin(extra,extra<18 ? _touchLayout.switch_mode[extra-16] : 0);
         [self setNeedsDisplay:YES]; return;
     }
+    if (_active && dm_botw_touch_quick_select_active()) {
+        _owner=PREVIEW_MENU; _menuPointerActive=YES;
+        [self sendBotwMenuPointer:DM_BOTW_MENU_BEGIN point:p]; return;
+    }
     BOOL stickHit = [self leftStickOwnsTop:p];
     if (!stickHit) _stickTapEnd = 0;
     _stickTapGap = _stickTapEnd > 0 ? e.timestamp - _stickTapEnd : INFINITY;
@@ -847,7 +851,14 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
             _lookTapPending = NO; _owner = PREVIEW_SHIELD; _shieldOrigin = NSMakePoint(p.x,p.y); _held |= DM_BTN_ZL; [self updateShield:p]; return;
         }
     }
-    if (b >= 0) { _lookTapPending = NO; _owner = PREVIEW_BUTTON; _button = b; _held |= 1ull << b; [self publishButtons]; return; }
+    if (b >= 0) {
+        _lookTapPending = NO; _owner = PREVIEW_BUTTON; _button = b; _held |= 1ull << b;
+        if (_active && (b==7 || b==9) && _touchLayout.trigger_drag[b==9]) {
+            _lookCenter=NSMakePoint(p.x,p.y); g_mouse_rx=g_mouse_ry=0;
+            dm_look_input(DM_LOOK_BEGIN,0,0);
+        }
+        [self publishButtons]; return;
+    }
     // Match iOS touch-down ownership: nearby face/D-pad/stick controls get first refusal,
     // the floating left stick owns its home region, then the relocated map takes the tap.
     if ([self leftStickOwnsTop:p]) { _lookTapPending = NO; _owner = PREVIEW_STICK; _stickCenter = NSMakePoint(p.x,p.y); [self updateStick:p]; return; }
@@ -913,6 +924,15 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     else if (_owner == PREVIEW_STICK) [self updateStick:p];
     else if (_owner == PREVIEW_SHIELD) [self updateShield:p];
     else if (_owner == PREVIEW_BUTTON && (_button == 7 || _button == 9) && _active) {
+        if (_touchLayout.trigger_drag[_button==9]) {
+            float picture[4]; dm_aspect_region(0,picture);
+            float scale=fminf(self.bounds.size.width*picture[2],self.bounds.size.height*picture[3]);
+            float dx=p.x-_lookCenter.x,dy=p.y-_lookCenter.y,radius=60*self.u,d=hypotf(dx,dy);
+            if (d>radius) _lookCenter=NSMakePoint(p.x-dx*radius/d,p.y-dy*radius/d);
+            dm_touchpad_stick_axis(p.x-_lookCenter.x,p.y-_lookCenter.y,radius,0,&g_mouse_rx,&g_mouse_ry);
+            if (scale>0) dm_look_input(DM_LOOK_MOVE,(p.x-_last.x)/scale,(p.y-_last.y)/scale);
+            [self publishButtons]; _last=NSMakePoint(p.x,p.y); return;
+        }
         dm_touchpad_point c = [self layoutCenter:_button];
         BOOL outside = dm_touchpad_cancel_outside(p.x,p.y,c.x,c.y,DM_TP_CANCEL_RADIUS*self.u*[self layoutScale:_button]);
         const char *feedback = getenv("DM_TOUCH_HAPTICS");
@@ -1055,7 +1075,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         _menuPointerActive=NO; _owner=PREVIEW_NONE; _hasTouch=NO; _held=_cancelPending;
         return;
     }
-    if (_owner == PREVIEW_BUTTON && (_button == 7 || _button == 9) && _active &&
+    if (_owner == PREVIEW_BUTTON && (_button == 7 || _button == 9) && _active && !_touchLayout.trigger_drag[_button==9] &&
         dm_botw_touch_actions_available()) {
         uint64_t bit = 1ull << _button;
         dm_touchpad_point c = [self layoutCenter:_button];
@@ -1064,6 +1084,9 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         }
     }
     if (_owner == PREVIEW_GAME) dm_touch_set(NULL,0);
+    if (_owner==PREVIEW_BUTTON && (_button==7 || _button==9) && _active && _touchLayout.trigger_drag[_button==9]) {
+        dm_look_input(DM_LOOK_END,0,0); g_mouse_rx=g_mouse_ry=0;
+    }
     if (_owner == PREVIEW_STICK) {
         [self updateStick:release]; // include a final move delivered only on release
         if (dm_touchpad_look_tap((float)(e.timestamp-_stickDownTime), _stickUsed)) {
@@ -1112,7 +1135,8 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     _menuPointerActive = _menuMagnifying = _menuScrolling = NO; _menuMagnification = 0; _menuScroll.active = 0;
     dm_botw_trackpad_pose_end(&_menuPose);
     if (_owner == PREVIEW_GAME) dm_touch_set(NULL,0);
-    if (_owner == PREVIEW_LOOK) dm_look_input(DM_LOOK_CANCEL,0,0);
+    if (_owner == PREVIEW_LOOK || (_owner==PREVIEW_BUTTON && (_button==7 || _button==9) && _touchLayout.trigger_drag[_button==9]))
+        dm_look_input(DM_LOOK_CANCEL,0,0);
     if (dm_botw_touch_hud_available()) dm_botw_touch_actions_reset();
     _lookTapPending = NO; _stickTapEnd = 0; _stickTapGap = INFINITY; _stickUsed = NO;
     _owner = PREVIEW_NONE; _hasTouch = NO; _held = 0; _cancelPending = _cancelLatched = 0; _cancelOutside = NO;
@@ -1156,6 +1180,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
 - (int)extraAtTop:(dm_touchpad_point)p {
     if (!_active || _menuMode) return -1;
     for (int control=20;control>=16;control--) {
+        if (dm_botw_touch_quick_select_active() && control!=20) continue;
         if (!(control==20 ? dm_botw_touch_switch_cancel_visible() : dm_botw_layout_control_visible(&_touchLayout,control))) continue;
         dm_touchpad_rect r=[self layoutRect:control];
         if (hypotf(p.x-r.x-r.width*.5f,p.y-r.y-r.height*.5f)<=r.width*.55f) return control;
@@ -1170,6 +1195,14 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
             dm_touchpad_point d=self.dpadCenter;
             NSColor *color=[NSColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:_touchLayout.icon_alpha];
             for (int b=12;b<16;b++) preview_draw_botw_glyph(dm_botw_dpad_key_path(CGPointMake(d.x,d.y),self.dpadRadius,b),h,color);
+        }
+        return;
+    }
+    if (dm_botw_touch_quick_select_active()) {
+        if (dm_botw_touch_switch_cancel_visible()) {
+            dm_touchpad_rect r=[self layoutRect:DM_BOTW_CANCEL];
+            preview_draw_botw_glyph(dm_botw_switch_cancel_path(CGPointMake(r.x+r.width*.5f,r.y+r.height*.5f),r.width),h,
+                [NSColor colorWithSRGBRed:1 green:.23 blue:.19 alpha:_touchLayout.icon_alpha]);
         }
         return;
     }
@@ -1231,7 +1264,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
             [self drawCircle:center radius:radius fill:(_held & (1ull<<keys[i].bit))?.48:.15 label:icon ? @"" : keys[i].name];
             if (icon) [self drawButtonIcon:keys[i].bit center:center radius:radius];
         }
-        if (_active && dm_botw_touch_actions_available() && (keys[i].bit == 9 || keys[i].bit == 7) && _owner == PREVIEW_BUTTON && _button == keys[i].bit) {
+        if (_active && dm_botw_touch_actions_available() && (keys[i].bit == 9 || keys[i].bit == 7) && !_touchLayout.trigger_drag[keys[i].bit==9] && _owner == PREVIEW_BUTTON && _button == keys[i].bit) {
             NSPoint boundary=preview_from_top(c.x,c.y,h);
             [[NSColor colorWithWhite:_touchLayout.stroke_gray alpha:_touchLayout.stroke_alpha] setStroke];
             CGFloat cancelRadius=DM_TP_CANCEL_RADIUS*u*[self layoutScale:keys[i].bit];

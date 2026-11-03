@@ -2417,6 +2417,7 @@ static int menu_view_has_visible_region(const dm_botw_touch_menu_view *view) {
 }
 
 static int menu_active_locked(uint64_t frame) {
+    if (g_view.quick_select && (!g_presented_quick_select || frame<g_presented_menu_frame || frame-g_presented_menu_frame>2)) return 0;
     if (!g_view_valid || !menu_view_fresh_locked(frame) ||
         !menu_view_has_visible_region(&g_view) ||
         (g_view.scope_visible && !scope_owner_live_locked(frame)))
@@ -4191,6 +4192,18 @@ static void selector_grid_carousel_to_view(dm_botw_touch_menu_view *view, uint64
     }
 }
 
+static void selector_quick_targets_to_view(dm_botw_touch_menu_view *view) {
+    int count=0;
+    for (int i=0;i<view->generic_count;i++) {
+        dm_botw_touch_menu_target target=view->generic_targets[i];
+        if (!selector_ancestor_named(target.pane,"N_ShortCutAll_00")) continue;
+        target.focus_only=1;
+        view->generic_targets[count++]=target;
+    }
+    view->generic_count=count;
+    view->quick_select=1;
+    view->back_valid=view->footer_action_count=0;
+}
 static void selector_publish_generic_view(uintptr_t manager, uintptr_t screen, int group,
                                           int input_active, uintptr_t native_screen_shown,
                                           uintptr_t native_group_getter,
@@ -4204,17 +4217,20 @@ static void selector_publish_generic_view(uintptr_t manager, uintptr_t screen, i
     view.page_key = view.generic_key = ((uint64_t)(screen >> 4) ^ ((uint64_t)(uint32_t)group << 48));
     char screen_name[64] = {0};
     int has_screen_name = selector_screen_name(screen, screen_name);
-    int pointer_screen = has_screen_name && selector_pointer_screen_name(screen_name);
+    int quick=has_screen_name && !strcmp(screen_name,"MainShortCut_00") && dm_botw_touch_quick_select_active();
+    int pointer_screen = has_screen_name && (selector_pointer_screen_name(screen_name) || quick);
     uintptr_t focused = selector_read_ptr(manager, 0x48);
     uintptr_t focused_owner = selector_read_ptr(focused, 0x18);
     uintptr_t focused_pane = selector_read_ptr(focused_owner, 0x60);
     selector_pane_visible_alpha(focused_pane, &view.generic_root);
+    if (quick) view.generic_root=selector_read_ptr(selector_read_ptr(screen,0x30),0x18);
     view.generic_key ^= (uint64_t)view.generic_root << 1;
     view.page_key = view.generic_key;
     if (!(pointer_screen && input_active && screen && view.generic_root && view.generic_key &&
           selector_find_generic_targets(manager, screen, group, view.generic_root, native_screen_shown,
                                         native_group_getter, &view) > 0))
         view.generic_count = 0;
+    if (quick) selector_quick_targets_to_view(&view);
     selector_value_adjusters_to_view(&view);
     selector_grid_carousel_to_view(&view, frame);
     // The map is a separate full-screen native surface with its own stick
@@ -4242,7 +4258,7 @@ static void selector_publish_generic_view(uintptr_t manager, uintptr_t screen, i
     int pause_screen = !strcmp(screen_name, "PauseMenu_00");
     // Back is optional on native menus. Prefer prompts in the focused root;
     // only PauseMenu has the proven separate PauseMenuInfo footer fallback.
-    if (pointer_screen && view.generic_mode && view.generic_root) {
+    if (pointer_screen && !quick && view.generic_mode && view.generic_root) {
         if (generic_back_prompt_snapshot(view.generic_root, frame, view.back))
             view.back_valid = 1;
         generic_action_prompts_to_view(view.generic_root, frame, &view);
@@ -4519,7 +4535,8 @@ static int selector_cursorless_prompt_view(uintptr_t manager, uint64_t frame,
         if (!selector_screen_name(screen, name)) continue;
         int control_guide = !strcmp(name, "SousaGuide_00");
         int scope = !strcmp(name, "MainScreen_00");
-        if ((!selector_pointer_screen_name(name) && !control_guide && !scope) ||
+        int quick=!strcmp(name,"MainShortCut_00") && dm_botw_touch_quick_select_active();
+        if ((!selector_pointer_screen_name(name) && !control_guide && !scope && !quick) ||
             selector_apphome_page_screen_name(name) || !strcmp(name, "AppSystemWindow_00")) continue;
         if (control_guide) {
             // Apparatus Cancel belongs to this prompt-only operation screen.
@@ -4553,7 +4570,10 @@ static int selector_cursorless_prompt_view(uintptr_t manager, uint64_t frame,
         candidate.generic_group = skip ? -1 : group;
         candidate.page_key = candidate.generic_key = ((uint64_t)(screen >> 4) ^
             ((uint64_t)root << 1) ^ ((uint64_t)(uint32_t)candidate.generic_group << 48));
-        if (scope) {
+        if (quick) {
+            selector_find_generic_targets(manager,screen,group,root,shown,group_getter,&candidate);
+            selector_quick_targets_to_view(&candidate);
+        } else if (scope) {
             selector_scope_prompts_to_view(root, &candidate);
         } else if (skip) {
             float rect[4];
@@ -4565,7 +4585,7 @@ static int selector_cursorless_prompt_view(uintptr_t manager, uint64_t frame,
             selector_copy_native_prompts(frame, group, screen, root, &candidate);
             selector_paging_prompts(root, frame, &candidate);
         }
-        if (!candidate.back_valid && !candidate.footer_action_count) continue;
+        if (!candidate.back_valid && !candidate.footer_action_count && !candidate.generic_count) continue;
         candidate.prompt_owner_valid = 1; candidate.prompt_owner_screen = screen;
         candidate.prompt_owner_root = root; candidate.prompt_owner_group = candidate.generic_group;
         candidate.prompt_owner_frame = frame;
@@ -5817,7 +5837,7 @@ int dm_botw_touch_menu_visible(void) {
     if (hud_active) {
         pthread_mutex_lock(&g_menu_mu);
         frame = menu_render_frame();
-        active = menu_active_locked(frame) && !g_view.scope_visible;
+        active = menu_active_locked(frame) && !g_view.scope_visible && !g_view.quick_select;
         presented_frame = g_presented_menu_frame;
         presented = atomic_load_explicit(&g_selector_hook_installed, memory_order_acquire) &&
             g_presented_menu && frame >= presented_frame && frame - presented_frame <= 2;
@@ -5841,7 +5861,7 @@ int dm_botw_touch_controls_visible(void) {
     int visible = atomic_load_explicit(&g_selector_hook_installed, memory_order_acquire) &&
         g_presented_gameplay && frame >= g_presented_menu_frame &&
         frame - g_presented_menu_frame <= 2 && !g_presented_menu &&
-        (!menu_active_locked(frame) || scope_owner_live_locked(frame));
+        (!menu_active_locked(frame) || scope_owner_live_locked(frame) || g_view.quick_select);
     pthread_mutex_unlock(&g_menu_mu);
     return visible;
 }
