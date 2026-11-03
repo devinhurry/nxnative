@@ -143,8 +143,8 @@ static inline float dm_botw_layout_fill_gray(const dm_botw_touch_layout *layout,
 static inline int dm_botw_layout_control_visible(const dm_botw_touch_layout *layout,int id) {
     if (id==12) return layout->dpad_visible;
     if (id>=16 && id<20) return layout->added[id-16];
-    if (id==20) return layout->rune_mode==2 ||
-        (layout->added[0] && layout->switch_mode[0]==2) || (layout->added[1] && layout->switch_mode[1]==2);
+    // Cancel is always editable, including R/ZR camera-drag layouts. Both
+    // frontends decide its gameplay visibility from the current action state.
     return dm_botw_control_name(id)!=NULL;
 }
 static inline int dm_botw_layout_read(dm_botw_touch_layout *out) {

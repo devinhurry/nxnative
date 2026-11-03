@@ -70,6 +70,14 @@ int main(void) {
     dm_botw_touch_layout layout;
     assert(dm_botw_layout_read_for(&layout,0));
     assert(dm_botw_layout_control_visible(&layout,12) && !dm_botw_layout_control_visible(&layout,16));
+    for (int compact=0;compact<2;compact++) {
+        dm_botw_touch_layout editor=dm_botw_layout_defaults_for(compact);
+        assert(dm_botw_layout_control_visible(&editor,DM_BOTW_CANCEL));
+        editor.trigger_drag[0]=1;
+        assert(dm_botw_layout_control_visible(&editor,DM_BOTW_CANCEL));
+        editor.trigger_drag[0]=0; editor.trigger_drag[1]=1;
+        assert(dm_botw_layout_control_visible(&editor,DM_BOTW_CANCEL));
+    }
     setenv("DM_BOTW_PAD_WEAPON_ENABLED","1",1); setenv("DM_BOTW_PAD_WEAPON_MODE","2",1);
     setenv("DM_BOTW_PAD_DPAD_VISIBLE","0",1);
     assert(dm_botw_layout_read_for(&layout,0) && layout.switch_mode[0]==2);
