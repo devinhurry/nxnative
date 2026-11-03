@@ -303,3 +303,11 @@
 "Opacity" = "Opacity";
 "Left-stick opacity" = "Left-stick opacity";
 "Independent of global icon opacity." = "Independent of global icon opacity.";
+"Import layout" = "Import layout";
+"Export layout" = "Export layout";
+"Drag action" = "Drag action";
+"R: Drag action" = "R: Drag action";
+"ZR: Drag action" = "ZR: Drag action";
+"Drag to cancel" = "Drag to cancel";
+"Drag to look" = "Drag to look";
+"Choose whether dragging cancels the action or moves the camera." = "Choose whether dragging cancels the action or moves the camera.";

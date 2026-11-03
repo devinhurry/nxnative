@@ -303,3 +303,11 @@
 "Opacity" = "\U4E0D\U900F\U660E\U5EA6";
 "Left-stick opacity" = "\U5DE6\U6447\U6746\U4E0D\U900F\U660E\U5EA6";
 "Independent of global icon opacity." = "\U72EC\U7ACB\U4E8E\U5168\U5C40\U56FE\U6807\U4E0D\U900F\U660E\U5EA6\U3002";
+"Import layout" = "\U5BFC\U5165\U5E03\U5C40";
+"Export layout" = "\U5BFC\U51FA\U5E03\U5C40";
+"Drag action" = "\U62D6\U52A8\U64CD\U4F5C";
+"R: Drag action" = "R\UFF1A\U62D6\U52A8\U64CD\U4F5C";
+"ZR: Drag action" = "ZR\UFF1A\U62D6\U52A8\U64CD\U4F5C";
+"Drag to cancel" = "\U62D6\U52A8\U53D6\U6D88";
+"Drag to look" = "\U62D6\U52A8\U8F6C\U89C6\U89D2";
+"Choose whether dragging cancels the action or moves the camera." = "\U9009\U62E9\U62D6\U52A8\U65F6\U53D6\U6D88\U52A8\U4F5C\U6216\U8F6C\U52A8\U89C6\U89D2\U3002";

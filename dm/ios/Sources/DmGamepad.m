@@ -952,6 +952,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
         dist(p,self.dpadCenter) <= self.dpadR*K_DPAD_GRAB;
 }
 - (BOOL)leftStickOwnsPoint:(CGPoint)p {
+    if ([self botwTouchControlsActive] && dm_botw_touch_quick_select_active()) return NO;
     if ([self extraAt:p]>=0) return NO;
     if (![self botwTouchControlsActive] || _tap || [self btnAt:p] >= 0 || [self inSwap:p]) return NO;
     if (dist(p,self.shieldHome) <= _touchLayout.shield_hit_size*.5) return NO;
@@ -1281,6 +1282,14 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
             else dm_botw_touch_button_begin(extra,extra<18 ? _touchLayout.switch_mode[extra-16] : 0);
             [self emitTouchFeedback]; [self setNeedsLayout]; continue;
         }
+        if ([self botwTouchControlsActive] && dm_botw_touch_quick_select_active()) {
+            if (!_botwMenuTouch) {
+                _botwMenuTouch=t; _botwMenuPointerActive=YES; _botwMenuLast=p;
+                [_owner setObject:@(C_MENU) forKey:t];
+                [self sendBotwMenuPointer:DM_BOTW_MENU_BEGIN point:p];
+            } else [_owner setObject:@(C_MENU_EXTRA) forKey:t];
+            continue;
+        }
         int hit = _tap ? -1 : [self btnAt:p];
         if (hit==B_L && [self botwTouchControlsActive] && _touchLayout.rune_mode) {
             [_owner setObject:@(C_BOTW_ADDED | (uint64_t)B_L<<8) forKey:t];
@@ -1295,6 +1304,11 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         }
         if (hit >= 0) {
             _botwLookTapPending = NO; [_owner setObject:@(C_BTN | (uint64_t)hit << 8) forKey:t];
+            if ([self botwTouchControlsActive] && (hit==B_R || hit==B_ZR) && _touchLayout.trigger_drag[hit==B_ZR]) {
+                [self beginLook:t at:p];
+                [_owner setObject:@(C_BTN | (uint64_t)hit << 8) forKey:t];
+                _botwLookTapPending=NO;
+            }
             if ([self botwTouchControlsActive] && (hit == B_R || hit == B_ZR)) [self setNeedsLayout];
             continue;
         }
@@ -1426,6 +1440,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
             [self setNeedsLayout];
         }
         else if (c == C_BTN && [self botwTouchControlsActive] && ((v >> 8) == B_R || (v >> 8) == B_ZR)) {
+            if (_touchLayout.trigger_drag[(v>>8)==B_ZR]) { [self moveLook:t to:p]; continue; }
             uint64_t bit = 1ull << (v >> 8);
             CGPoint center = [self dropCenter:(int)(v >> 8)];
             BOOL outside = dm_touchpad_cancel_outside(p.x,p.y,center.x,center.y,
@@ -1481,12 +1496,17 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         }
         if ((v & 0xff) == C_LOOK) [self endLook:t at:[t locationInView:self] cancelled:!ended];
         if ((v & 0xff) == C_BTN && [self botwTouchControlsActive] && ((v >> 8) == B_R || (v >> 8) == B_ZR)) {
+            if (_touchLayout.trigger_drag[(v>>8)==B_ZR]) {
+                [self moveLook:t to:[t locationInView:self]];
+                _lookDragged=YES; _botwLookTapPending=NO;
+                [self endLook:t at:[t locationInView:self] cancelled:!ended];
+            }
             // Input can remain held until native cancel acknowledgement, but
             // the guide belongs to the finger and ends on this release.
             [self setNeedsLayout];
             uint64_t bit = 1ull << (v >> 8);
             CGPoint p = [t locationInView:self], center = [self dropCenter:(int)(v >> 8)];
-            if (ended && dm_botw_touch_actions_available() && !((_botwCancelPending | _botwCancelLatched) & bit) &&
+            if (ended && !_touchLayout.trigger_drag[(v>>8)==B_ZR] && dm_botw_touch_actions_available() && !((_botwCancelPending | _botwCancelLatched) & bit) &&
                 dm_touchpad_cancel_outside((float)p.x, (float)p.y, (float)center.x, (float)center.y, DM_TP_CANCEL_RADIUS * self.u * [self botwLayoutScale:(int)(v >> 8)])) {
                 _botwCancelLatched |= bit; _botwCancelPending |= bit; dm_botw_touch_cancel_trigger(bit);
             }
@@ -1640,6 +1660,7 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
 - (int)extraAt:(CGPoint)p {
     if (![self botwTouchControlsActive] || _botwMenuMode || _padOff) return -1;
     for (int id=DM_BOTW_CANCEL;id>=DM_BOTW_WEAPON;id--) {
+        if (dm_botw_touch_quick_select_active() && id!=DM_BOTW_CANCEL) continue;
         BOOL visible=id==DM_BOTW_CANCEL ? dm_botw_touch_switch_cancel_visible() : dm_botw_layout_control_visible(&_touchLayout,id);
         if (!visible) continue;
         CGRect r=[self botwLayoutRect:id];
@@ -1682,7 +1703,7 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
         }
     }
     if (!_extraCancel) {
-        _extraCancel=shape(_controls); _extraCancel.strokeColor=nil; _extraCancel.shadowOpacity=0;
+        _extraCancel=shape(self.layer); _extraCancel.strokeColor=nil; _extraCancel.shadowOpacity=0;
         _extraCancel.fillColor=UIColor.systemRedColor.CGColor;
     }
     _extraCancel.opacity=_touchLayout.icon_alpha;
@@ -1786,7 +1807,9 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
     for (UITouch *t in _owner) {
         uint64_t v=[_owner objectForKey:t].unsignedLongLongValue;
         if ((v&0xff)==C_BTN && ((v>>8)==B_R || (v>>8)==B_ZR)) {
-            int b=(int)(v>>8); if (triggerHeld < 0) triggerHeld=b;
+            int b=(int)(v>>8);
+            if (_touchLayout.trigger_drag[b==B_ZR]) continue;
+            if (triggerHeld < 0) triggerHeld=b;
             CGPoint c=[self dropCenter:b]; CGFloat r=DM_TP_CANCEL_RADIUS*u*[self botwLayoutScale:b];
             CGPathAddEllipseInRect(cancelPath, NULL, CGRectMake(c.x-r,c.y-r,2*r,2*r));
         }
@@ -1907,6 +1930,8 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
 - (void)refresh {   // pressed state → fill, sticks → knob position
     uint64_t all = _faceBits | _dpadBits | _btnBits;
     BOOL botw = [self botwTouchControlsActive];
+    BOOL quick=botw && dm_botw_touch_quick_select_active();
+    _controls.opacity=quick ? 0 : 1;
     UIColor *idle = botw ? _botwIdle : k_idle, *line = botw ? _botwLine : k_line;
     UIColor *pressed = botw ? _botwOn : k_on;
     [CATransaction begin]; [CATransaction setDisableActions:YES];
@@ -1952,7 +1977,7 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
     for (CALayer *glyph in @[_shieldGraph, _shieldDirection])
         glyph.opacity = botw ? _touchLayout.icon_alpha : 1;
     _stickDirection.opacity = botw ? _touchLayout.stick_alpha : 1;
-    _menuDpad.opacity = (botw || [self botwMenuDpadActive]) ? _touchLayout.icon_alpha : 1;
+    _menuDpad.opacity = quick ? 0 : (botw || [self botwMenuDpadActive]) ? _touchLayout.icon_alpha : 1;
     CAShapeLayer *shapes[] = {_ring, _knob, _shieldRing, _runeBadge, _cancelRing};
     for (int i = 0; i < sizeof shapes / sizeof *shapes; i++) shapes[i].shadowOpacity = botw ? 0 : .2;
     _swap.fillColor = (_swapHeld ? k_on : k_idle).CGColor; _swapLabel.foregroundColor = (_swapHeld ? k_textOn : k_text).CGColor;

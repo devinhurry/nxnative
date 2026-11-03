@@ -110,6 +110,7 @@ typedef struct {
     float inventory_arrows[2][4]; // Live previous/next carousel arrows.
     int map_visible;
     int scope_visible; // MainScreen's live telescope guide bar, alongside gameplay controls.
+    int quick_select; // MainShortCut's live buttons; keep the opening direction held.
     int hero_path;
     int popup_visible;
     int cursor_valid;

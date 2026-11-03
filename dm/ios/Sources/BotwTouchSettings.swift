@@ -124,12 +124,14 @@ private struct BotwTouchLibraryControls: View {
                         .disabled(m.touchLayouts.count <= 1)
                 }.accessibilityIdentifier("botw.layouts.manage")
                 Spacer()
-                Button("Import JSON") { importing = true }.accessibilityIdentifier("botw.layouts.import")
-                Menu("Export JSON") {
+                Button { importing = true } label: {
+                    Text("Import layout").frame(minHeight: 32).contentShape(Rectangle())
+                }.buttonStyle(.bordered).accessibilityIdentifier("botw.layouts.import")
+                Menu("Export layout") {
                     Button("Export current layout") { export(all: false) }
                     Button("Export all layouts") { export(all: true) }
                 }.accessibilityIdentifier("botw.layouts.export")
-            }
+            }.buttonStyle(.borderless)
         }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
             do {
@@ -213,7 +215,7 @@ struct BotwTouchSettingsView: View {
         return m.settings.filter { keys.contains($0.env) && $0.kind == "choice" && !$0.env.hasSuffix("_ANCHOR") }
     }
     private func controlOption(_ row: Setting) -> some View {
-        Picker(LocalizedStringKey(row.env.hasSuffix("_MODE") ? "Button action" : row.label),
+        Picker(LocalizedStringKey(row.env == selected.option("MODE", portrait: portrait) ? "Button action" : row.env.hasSuffix("_DRAG_MODE") ? "Drag action" : row.label),
                selection: Binding(get: { values[row.env] ?? row.def }, set: { values[row.env] = $0 })) {
             if row.env == selected.option("MODE", portrait: portrait) {
                 if selected.id == 6 {
@@ -339,7 +341,7 @@ struct BotwTouchSettingsView: View {
                             .disabled(m.fixed.contains(row.env))
                     }
                     Button(action: exportParameters) {
-                        Label("Export JSON", systemImage: "square.and.arrow.up")
+                        Label("Export layout", systemImage: "square.and.arrow.up")
                     }.accessibilityIdentifier("botw.touch.export")
                 } label: { Image(systemName: "ellipsis.circle").font(.system(size: 22)).frame(width: 30, height: 26).accessibilityLabel("Layout options") }
                 .menuIndicator(.hidden).fixedSize()
