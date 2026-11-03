@@ -5,6 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define DM_BOTW_BUTTON_GRAY .35
+#define DM_BOTW_BUTTON_ALPHA .20
+#define DM_BOTW_STROKE_GRAY .52
+#define DM_BOTW_STROKE_ALPHA .40
+#define DM_BOTW_ICON_ALPHA 1.0
+
 // Default anchors retain the original base-relative offsets. Explicit anchors
 // store actual side and bottom edge distances in x/y, independent of defaults.
 enum { DM_BOTW_ANCHOR_DEFAULT=0, DM_BOTW_ANCHOR_LEFT=1, DM_BOTW_ANCHOR_RIGHT=2 };
@@ -14,6 +20,7 @@ enum { DM_BOTW_WEAPON=16, DM_BOTW_SHIELD=17, DM_BOTW_FOOD=18, DM_BOTW_WHISTLE=19
 typedef struct {
     dm_botw_control_transform control[DM_BOTW_CONTROL_COUNT];
     int badges, portrait, dpad_visible, added[4], switch_mode[2], rune_mode;
+    float fill_gray, fill_alpha, stroke_gray, stroke_alpha, icon_alpha;
 } dm_botw_touch_layout;
 typedef struct { float side, bottom, size; } dm_botw_control_anchor;
 
@@ -67,7 +74,9 @@ static inline dm_botw_control_anchor dm_botw_layout_anchor(int id,int portrait) 
     return id>=0 && id<DM_BOTW_CONTROL_COUNT ? (portrait ? compact[id] : normal[id]) : (dm_botw_control_anchor){0};
 }
 static inline dm_botw_touch_layout dm_botw_layout_defaults_for(int portrait) {
-    dm_botw_touch_layout layout={.portrait=portrait,.dpad_visible=1};
+    dm_botw_touch_layout layout={.portrait=portrait,.dpad_visible=1,
+        .fill_gray=DM_BOTW_BUTTON_GRAY,.fill_alpha=DM_BOTW_BUTTON_ALPHA,
+        .stroke_gray=DM_BOTW_STROKE_GRAY,.stroke_alpha=DM_BOTW_STROKE_ALPHA,.icon_alpha=DM_BOTW_ICON_ALPHA};
     for (int i=0;i<DM_BOTW_CONTROL_COUNT;i++) layout.control[i].size=dm_botw_layout_anchor(i,portrait).size;
     return layout;
 }
@@ -111,7 +120,16 @@ static inline int dm_botw_layout_read_for(dm_botw_touch_layout *out,int portrait
         if (!dm_botw_layout_number(key,0,i<5 ? 1 : 2,&v) || v!=floorf(v)) return 0;
         *options[i]=(int)v;
     }
+    const char *appearance[]={"FILL_GRAY","FILL_ALPHA","STROKE_GRAY","STROKE_ALPHA","ICON_ALPHA"};
+    float *colors[]={&out->fill_gray,&out->fill_alpha,&out->stroke_gray,&out->stroke_alpha,&out->icon_alpha};
+    for (int i=0;i<5;i++) {
+        snprintf(key,sizeof key,"%s%s",prefix,appearance[i]);
+        if (!dm_botw_layout_number(key,0,1,colors[i])) return 0;
+    }
     return 1;
+}
+static inline float dm_botw_layout_fill_gray(const dm_botw_touch_layout *layout,int pressed) {
+    return fminf(1,layout->fill_gray+(pressed ? .05f : 0));
 }
 static inline int dm_botw_layout_control_visible(const dm_botw_touch_layout *layout,int id) {
     if (id==12) return layout->dpad_visible;

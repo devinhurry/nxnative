@@ -1126,8 +1126,8 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
 }
 - (void)drawCircle:(NSPoint)c radius:(float)r fill:(float)alpha label:(NSString *)label {
     NSRect rect = NSMakeRect(c.x-r, c.y-r, 2*r, 2*r);
-    [[NSColor colorWithWhite:alpha >= .45 ? .40 : DM_BOTW_BUTTON_GRAY alpha:DM_BOTW_BUTTON_ALPHA] setFill];
-    [[NSColor colorWithWhite:DM_BOTW_STROKE_GRAY alpha:DM_BOTW_STROKE_ALPHA] setStroke];
+    [[NSColor colorWithWhite:dm_botw_layout_fill_gray(&_touchLayout,alpha >= .45) alpha:_touchLayout.fill_alpha] setFill];
+    [[NSColor colorWithWhite:_touchLayout.stroke_gray alpha:_touchLayout.stroke_alpha] setStroke];
     preview_fill_outlined_circle(rect, 1.5*DM_BOTW_STROKE_WIDTH_SCALE);
     if (label.length) {
         NSDictionary *a = @{NSFontAttributeName:[NSFont systemFontOfSize:11 weight:NSFontWeightMedium], NSForegroundColorAttributeName:[NSColor colorWithWhite:1 alpha:.75]};
@@ -1138,7 +1138,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     if (!_buttonIcons[button])
         _buttonIcons[button] = [[NSImage alloc] initWithContentsOfFile:dm_botw_touch_button_icon_path(button)];
     [_buttonIcons[button] drawInRect:NSMakeRect(center.x-radius*.5,center.y-radius*.5,radius,radius)
-        fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
+        fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:_touchLayout.icon_alpha respectFlipped:YES hints:nil];
     if (!_touchLayout.badges || button>=16) return;
     CGFloat h=self.bounds.size.height;
     CGRect top=dm_botw_button_badge_rect(CGPointMake(center.x,h-center.y),radius);
@@ -1172,15 +1172,15 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         return;
     }
     dm_touchpad_point sh = _owner == PREVIEW_STICK ? preview_pad_point((float)_stickCenter.x,(float)_stickCenter.y) : [self stickHome]; NSPoint ring = preview_from_top(sh.x,sh.y,h);
-    NSColor *glyphColor=[NSColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:.8];
+    NSColor *glyphColor=[NSColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:.8*_touchLayout.icon_alpha];
     if (_owner==PREVIEW_STICK) {
         CGFloat r=self.stickRadius;
-        [[NSColor colorWithWhite:DM_BOTW_STROKE_GRAY alpha:DM_BOTW_STROKE_ALPHA] setStroke];
+        [[NSColor colorWithWhite:_touchLayout.stroke_gray alpha:_touchLayout.stroke_alpha] setStroke];
         NSBezierPath *outer=[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(ring.x-r,ring.y-r,2*r,2*r)];
         outer.lineWidth=DM_BOTW_STICK_RING_WIDTH*_moveResponse.size; [outer stroke];
         preview_draw_botw_glyph(dm_botw_stick_direction_path(CGPointMake(sh.x,sh.y),CGPointMake(_last.x,_last.y),r,u*_moveResponse.size),h,glyphColor);
     }
-    NSColor *faint=[NSColor colorWithWhite:1 alpha:DM_BOTW_STICK_GRAPH_ALPHA]; [faint setStroke];
+    NSColor *faint=[NSColor colorWithWhite:1 alpha:DM_BOTW_STICK_GRAPH_ALPHA*_touchLayout.icon_alpha]; [faint setStroke];
     CGFloat kr=DM_TP_KNOB_R*u*_moveResponse.size;
     NSBezierPath *center=[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(ring.x-kr,ring.y-kr,2*kr,2*kr)];
     center.lineWidth=1.5; [center stroke];
@@ -1189,7 +1189,8 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         if (_menuMode || !(control==20 ? dm_botw_touch_switch_cancel_visible() : dm_botw_layout_control_visible(&_touchLayout,control))) continue;
         dm_touchpad_rect r=[self layoutRect:control]; NSPoint at=preview_from_top(r.x+r.width*.5f,r.y+r.height*.5f,h);
         [self drawCircle:at radius:r.width*.5f fill:(_owner==PREVIEW_ADDED && _button==control) ? .48 : .15 label:@""];
-        if (control==20) preview_draw_botw_glyph(dm_botw_switch_cancel_path(CGPointMake(at.x,h-at.y),r.width),h,glyphColor);
+        if (control==20) preview_draw_botw_glyph(dm_botw_switch_cancel_path(CGPointMake(at.x,h-at.y),r.width),h,
+            [NSColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:_touchLayout.icon_alpha]);
         else [self drawButtonIcon:dm_botw_touch_bow_active() && control<18 ? control+5 : control center:at radius:r.width*.5f];
     }
     dm_touchpad_point fc = [self faceCenter];
@@ -1217,8 +1218,8 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         if (_active && keys[i].bit == 6) {
             NSPoint center=preview_from_top(c.x,c.y,h); float radius=_active ? [self layoutRect:keys[i].bit].width*.5f : keys[i].r*u;
             NSRect button=NSMakeRect(center.x-radius,center.y-radius,2*radius,2*radius);
-            [[NSColor colorWithWhite:DM_BOTW_BUTTON_GRAY alpha:DM_BOTW_BUTTON_ALPHA] setFill];
-            [[NSColor colorWithWhite:DM_BOTW_STROKE_GRAY alpha:DM_BOTW_STROKE_ALPHA] setStroke];
+            [[NSColor colorWithWhite:_touchLayout.fill_gray alpha:_touchLayout.fill_alpha] setFill];
+            [[NSColor colorWithWhite:_touchLayout.stroke_gray alpha:_touchLayout.stroke_alpha] setStroke];
             preview_fill_outlined_circle(button,1.5*DM_BOTW_STROKE_WIDTH_SCALE);
             [self drawButtonIcon:6 center:center radius:radius];
         } else {
@@ -1229,7 +1230,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         }
         if (_active && dm_botw_touch_actions_available() && (keys[i].bit == 9 || keys[i].bit == 7) && _owner == PREVIEW_BUTTON && _button == keys[i].bit) {
             NSPoint boundary=preview_from_top(c.x,c.y,h);
-            [[NSColor colorWithWhite:DM_BOTW_STROKE_GRAY alpha:DM_BOTW_STROKE_ALPHA] setStroke];
+            [[NSColor colorWithWhite:_touchLayout.stroke_gray alpha:_touchLayout.stroke_alpha] setStroke];
             CGFloat cancelRadius=DM_TP_CANCEL_RADIUS*u*[self layoutScale:keys[i].bit];
             NSBezierPath *ring=[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(boundary.x-cancelRadius,boundary.y-cancelRadius,2*cancelRadius,2*cancelRadius)];
             ring.lineWidth=1.5*u; [ring stroke];
@@ -1245,7 +1246,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         NSPoint c=preview_from_top(home.x,home.y,h);
         if (_owner==PREVIEW_SHIELD) {
             CGFloat r=self.shieldRadius;
-            [[NSColor colorWithWhite:DM_BOTW_STROKE_GRAY alpha:DM_BOTW_STROKE_ALPHA] setStroke];
+            [[NSColor colorWithWhite:_touchLayout.stroke_gray alpha:_touchLayout.stroke_alpha] setStroke];
             NSBezierPath *ring=[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(c.x-r,c.y-r,2*r,2*r)];
             ring.lineWidth=DM_BOTW_STICK_RING_WIDTH; [ring stroke];
         }
@@ -1268,7 +1269,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         }
         float x=w*.5f+(b==10?1:-1)*DM_TP_PILL_DX*u;
         NSRect r=NSMakeRect(x-DM_TP_PILL_W*u*.5f,h-py-DM_TP_PILL_H*u*.5f,DM_TP_PILL_W*u,DM_TP_PILL_H*u);
-        [[NSColor colorWithWhite:(_held&(1ull<<b))?.40:DM_BOTW_BUTTON_GRAY alpha:DM_BOTW_BUTTON_ALPHA] setFill]; [[NSColor colorWithWhite:DM_BOTW_STROKE_GRAY alpha:DM_BOTW_STROKE_ALPHA] setStroke];
+        [[NSColor colorWithWhite:(_held&(1ull<<b))?.40:DM_BOTW_BUTTON_GRAY alpha:DM_BOTW_BUTTON_ALPHA] setFill]; [[NSColor colorWithWhite:_touchLayout.stroke_gray alpha:_touchLayout.stroke_alpha] setStroke];
         NSBezierPath *p=[NSBezierPath bezierPathWithRoundedRect:r xRadius:7 yRadius:7]; [p fill]; [p stroke];
         NSString *name=b==10?@"+":@"−"; NSDictionary *a=@{NSFontAttributeName:[NSFont systemFontOfSize:11],NSForegroundColorAttributeName:[NSColor colorWithWhite:1 alpha:.75]};
         NSSize s=[name sizeWithAttributes:a]; [name drawAtPoint:NSMakePoint(x-s.width/2,h-py-s.height/2) withAttributes:a];

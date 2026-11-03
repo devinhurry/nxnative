@@ -454,6 +454,9 @@ private func checkTouchLayoutPresets(_ settings: [Setting]) -> Int {
     var draft = source.values
     draft["DM_BOTW_PAD_L_ANCHOR"] = "2"; draft["DM_BOTW_PAD_L_X_PT"] = "20.000"
     draft["DM_BOTW_PAD_L_Y_PT"] = "100.000"; draft["DM_BOTW_PAD_L_SIZE_PT"] = "60.000"
+    draft["DM_BOTW_PAD_FILL_GRAY"] = "0.630"; draft["DM_BOTW_PAD_FILL_ALPHA"] = "0.470"
+    draft["DM_BOTW_PAD_STROKE_GRAY"] = "0.740"; draft["DM_BOTW_PAD_STROKE_ALPHA"] = "0.580"
+    draft["DM_BOTW_PAD_ICON_ALPHA"] = "0.810"
     expect(source.saveTouchSettings(draft, portrait: false), "a default left control can save a right-edge anchor")
     source.rememberTouchArea(.init(width: 900, height: 430), portrait: false)
     source.addTouchLayout(name: "Right hand", copyCurrent: true)
@@ -495,6 +498,9 @@ private func checkTouchLayoutPresets(_ settings: [Setting]) -> Int {
                oneFile.layouts.count == 1 && oneFile.layouts[0].name == "Right hand" && allFile.layouts.count == 3,
                "JSON export includes its schema and game and supports one or all presets")
         let originalL = oneFile.layouts[0].normal?.controls["L"]
+        expect(oneFile.layouts[0].normal?.options["DM_BOTW_PAD_ICON_ALPHA"] == "0.810" &&
+               oneFile.layouts[0].normal?.options["DM_BOTW_PAD_FILL_GRAY"] == "0.630",
+               "portable JSON includes the current layout's global appearance")
         expect(originalL?.anchor == .right && originalL?.side == 20 && originalL?.size == 60,
                "export records L's chosen right anchor and actual point distances")
         expect(try target.importTouchLayouts(one, normalArea: normal, compactArea: compact) == 1,
@@ -508,6 +514,10 @@ private func checkTouchLayoutPresets(_ settings: [Setting]) -> Int {
                "a colliding imported name is renamed and receives an independent ID")
         target.selectTouchLayout(imported.id)
         var sourceConfig = source.touchLayout(portrait: false), targetConfig = target.touchLayout(portrait: false)
+        expect(abs(targetConfig.fill_gray - 0.63) < 0.0001 && abs(targetConfig.fill_alpha - 0.47) < 0.0001 &&
+               abs(targetConfig.stroke_gray - 0.74) < 0.0001 && abs(targetConfig.stroke_alpha - 0.58) < 0.0001 &&
+               abs(targetConfig.icon_alpha - 0.81) < 0.0001 && target.touchLayout(portrait: true).icon_alpha == 1,
+               "global appearance survives save, duplicate, export and import without changing the other bank")
         let sourceRect = dm_botw_layout_control(&sourceConfig, 6, 900, 430, 0, 0, 0, 0, dm_botw_layout_canvas(900, 430))
         let targetRect = dm_botw_layout_control(&targetConfig, 6, 430, 300, 0, 0, 0, 0, dm_botw_layout_canvas(430, 300))
         expect(sourceRect.x + sourceRect.width / 2 == 850 && targetRect.x + targetRect.width / 2 == 380 &&

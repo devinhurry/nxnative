@@ -145,7 +145,7 @@ void dm_botw_touch_actions_apply(uint64_t *other_buttons, uint64_t *virtual_butt
         pulse_locked(DM_BTN_B|g_switch_bit);
         g_switch_control=-1; g_switch_bit=0; g_switch_sticky=0; notify=1;
     }
-    if (g_switch_control==6 && !g_switch_started && action_time()-g_rune_down>=.35) {
+    if (g_switch_control==6 && !g_switch_started && action_time()-g_rune_down>=.20) {
         g_switch_started=1; g_switch_bit=DM_BTN_UP; g_switch_sticky=g_rune_mode==2; notify=1;
     }
     *other_buttons|=g_switch_bit;

@@ -549,6 +549,11 @@ final class LauncherModel: ObservableObject {
             for i in 0..<2 { modes[i] = Int32(number(BotwTouchControl.added[i].option("MODE", portrait: portrait))) }
         }
         result.rune_mode = Int32(number(botwTouchKey("DM_BOTW_PAD_L_MODE", portrait: portrait)))
+        result.fill_gray = Float(number(botwTouchKey("DM_BOTW_PAD_FILL_GRAY", portrait: portrait), Double(result.fill_gray)))
+        result.fill_alpha = Float(number(botwTouchKey("DM_BOTW_PAD_FILL_ALPHA", portrait: portrait), Double(result.fill_alpha)))
+        result.stroke_gray = Float(number(botwTouchKey("DM_BOTW_PAD_STROKE_GRAY", portrait: portrait), Double(result.stroke_gray)))
+        result.stroke_alpha = Float(number(botwTouchKey("DM_BOTW_PAD_STROKE_ALPHA", portrait: portrait), Double(result.stroke_alpha)))
+        result.icon_alpha = Float(number(botwTouchKey("DM_BOTW_PAD_ICON_ALPHA", portrait: portrait), Double(result.icon_alpha)))
         return result
     }
     private func portableBank(_ saved: BotwSavedTouchLayout, portrait: Bool) -> BotwPortableBank {

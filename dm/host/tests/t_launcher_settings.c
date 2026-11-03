@@ -1,6 +1,7 @@
 #include "../hle.h"
 #include "../launcher_settings.h"
 #include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -85,6 +86,16 @@ int main(void) {
         assert(dm_launcher_setting_apply("DM_BOTW_PAD_B_SIZE_PT", "19") == -1 && touch_refresh_count == 7);
         assert(dm_launcher_setting_apply("DM_BOTW_PAD_B_SIZE_PT", "nan") == -1 && touch_refresh_count == 7);
         assert(dm_launcher_setting_is_live("DM_BOTW_PAD_FACE_X") == -1);
+        const char *appearance[]={"FILL_GRAY","FILL_ALPHA","STROKE_GRAY","STROKE_ALPHA","ICON_ALPHA"};
+        for (int portrait=0;portrait<2;portrait++) for (int i=0;i<5;i++) {
+            char key[80]; snprintf(key,sizeof key,"DM_BOTW_%sPAD_%s",portrait ? "PORTRAIT_" : "",appearance[i]);
+            assert(dm_launcher_setting_is_live(key)==1);
+            assert(dm_launcher_setting_apply(key,"0.63")==1 && !strcmp(getenv(key),"0.63"));
+            assert(dm_launcher_setting_apply(key,"1.01")==-1 && !strcmp(getenv(key),"0.63"));
+            assert(dm_launcher_setting_apply(key,"-0.01")==-1);
+            assert(dm_launcher_setting_apply(key,"nan")==-1);
+            unsetenv(key);
+        }
     }
     return 0;
 }

@@ -74,6 +74,11 @@ DM_BOTW_PAD_DPAD_Y_PT	range	-10000:10000:0.5	0.000	DM_GAME_ID==01007EF00011E000	
 DM_BOTW_PAD_DPAD_SIZE_PT	range	20:240:0.5	96.000	DM_GAME_ID==01007EF00011E000	Touch layout	D-pad: Size	Offsets and diameters are in pt; edge margins do not depend on safe areas.	format=number
 DM_BOTW_PAD_DPAD_ANCHOR	choice	0=Default,1=Left,2=Right	0	DM_GAME_ID==01007EF00011E000	Touch layout	D-pad: Anchor	Explicit anchors use side and bottom edge distances in pt.
 DM_BOTW_PAD_BADGES	toggle	-	0	DM_GAME_ID==01007EF00011E000	Touch layout	Corner button labels	Shows the small letter circles on L, R, ZR and XYAB.
+DM_BOTW_PAD_STROKE_GRAY	range	0:1:0.01	0.520	DM_GAME_ID==01007EF00011E000	Touch layout	Border gray	Applies to every round button in this layout.
+DM_BOTW_PAD_STROKE_ALPHA	range	0:1:0.01	0.400	DM_GAME_ID==01007EF00011E000	Touch layout	Border opacity	Applies to every round button in this layout.
+DM_BOTW_PAD_FILL_GRAY	range	0:1:0.01	0.350	DM_GAME_ID==01007EF00011E000	Touch layout	Background gray	Applies to every round button in this layout.
+DM_BOTW_PAD_FILL_ALPHA	range	0:1:0.01	0.200	DM_GAME_ID==01007EF00011E000	Touch layout	Background opacity	Applies to every round button in this layout.
+DM_BOTW_PAD_ICON_ALPHA	range	0:1:0.01	1.000	DM_GAME_ID==01007EF00011E000	Touch layout	Icon opacity	Applies to every round button in this layout.
 DM_BOTW_PORTRAIT	toggle	-	0	DM_GAME_ID==01007EF00011E000	Touch layout	Enable compact portrait mode	Allows portrait rotation below 600pt of window width. Wider portrait windows are always supported and keep the normal layout.
 DM_BOTW_PORTRAIT_MOVE_DEADZONE	range	0:0.3:0.01	0.070	DM_GAME_ID==01007EF00011E000	Touch left stick	Deadzone	Ignores small movements near the touch-down point.
 DM_BOTW_PORTRAIT_MOVE_CURVE	range	0.3:2:0.05	0.300	DM_GAME_ID==01007EF00011E000	Touch left stick	Response curve	Lower values make short drags stronger. 1.00 is linear.	format=number
@@ -119,6 +124,11 @@ DM_BOTW_PORTRAIT_PAD_DPAD_Y_PT	range	-10000:10000:0.5	0.000	DM_GAME_ID==01007EF0
 DM_BOTW_PORTRAIT_PAD_DPAD_SIZE_PT	range	20:240:0.5	81.100	DM_GAME_ID==01007EF00011E000	Touch layout	D-pad: Size	Offsets and diameters are in pt; edge margins do not depend on safe areas.	format=number
 DM_BOTW_PORTRAIT_PAD_DPAD_ANCHOR	choice	0=Default,1=Left,2=Right	0	DM_GAME_ID==01007EF00011E000	Touch layout	D-pad: Anchor	Explicit anchors use side and bottom edge distances in pt.
 DM_BOTW_PORTRAIT_PAD_BADGES	toggle	-	0	DM_GAME_ID==01007EF00011E000	Touch layout	Corner button labels	Shows the small letter circles on L, R, ZR and XYAB.
+DM_BOTW_PORTRAIT_PAD_STROKE_GRAY	range	0:1:0.01	0.520	DM_GAME_ID==01007EF00011E000	Touch layout	Border gray	Applies to every round button in this layout.
+DM_BOTW_PORTRAIT_PAD_STROKE_ALPHA	range	0:1:0.01	0.400	DM_GAME_ID==01007EF00011E000	Touch layout	Border opacity	Applies to every round button in this layout.
+DM_BOTW_PORTRAIT_PAD_FILL_GRAY	range	0:1:0.01	0.350	DM_GAME_ID==01007EF00011E000	Touch layout	Background gray	Applies to every round button in this layout.
+DM_BOTW_PORTRAIT_PAD_FILL_ALPHA	range	0:1:0.01	0.200	DM_GAME_ID==01007EF00011E000	Touch layout	Background opacity	Applies to every round button in this layout.
+DM_BOTW_PORTRAIT_PAD_ICON_ALPHA	range	0:1:0.01	1.000	DM_GAME_ID==01007EF00011E000	Touch layout	Icon opacity	Applies to every round button in this layout.
 DM_LOW_MEMORY	toggle	-	0	DM_GAME_ID==01007EF00011E000	Performance	Experimental low-memory mode	May reduce memory use at the cost of more storage activity and pauses in new scenes. Applies when you press Play.
 DM_NVN_PASS_REUSE	toggle	-	1	gfxapi:nvn	Performance	Memory transfer optimization	Reduces GPU image reads and writes. Turn off if rendering errors appear. Applies when you press Play.
 DM_NVN_FB_SNAP	toggle	0/1	0	gfxapi:nvn	Performance	Skip feedback snapshots (experimental)	May reduce GPU copies but can cause rendering errors. Applies when you press Play.

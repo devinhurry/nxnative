@@ -152,6 +152,13 @@
 "Reset" = "Reset";
 "Restore this layout" = "Restore this layout";
 "Layout options" = "Layout options";
+"Global opacity" = "Global opacity";
+"Border gray" = "Border gray";
+"Border opacity" = "Border opacity";
+"Background gray" = "Background gray";
+"Background opacity" = "Background opacity";
+"Icon opacity" = "Icon opacity";
+"Applies to every round button in this layout." = "Applies to every round button in this layout.";
 "Unable to save layout" = "Unable to save layout";
 
 "Importing…" = "Importing…";
