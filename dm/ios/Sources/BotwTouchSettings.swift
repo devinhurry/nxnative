@@ -60,7 +60,7 @@ private struct BotwTouchShareSheet: UIViewControllerRepresentable {
     @Binding var presented: Bool
     func makeUIViewController(context: Context) -> UIActivityViewController {
         let controller = UIActivityViewController(activityItems: [file.url], applicationActivities: nil)
-        controller.view.tintColor = UIColor(launcherControlTint)
+        controller.view.tintColor = UIColor(launcherTint)
         controller.completionWithItemsHandler = { _, _, _, _ in
             presented = false
             try? FileManager.default.removeItem(at: file.url.deletingLastPathComponent())
@@ -430,6 +430,7 @@ struct BotwTouchSettingsView: View {
         .frame(maxWidth: 480)
         .frame(height: 104)
         .foregroundStyle(.white)
+        .tint(.white).accentColor(.white)
         .environment(\.colorScheme, .dark)
         .background(Color(white: 0.08).opacity(0.42), in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.15), lineWidth: 0.5))
@@ -465,6 +466,7 @@ struct BotwTouchSettingsView: View {
         .font(.system(size: 11)).controlSize(.mini).lineLimit(1).minimumScaleFactor(0.8)
         .padding(8).frame(maxWidth: 480)
         .foregroundStyle(.white)
+        .tint(.white).accentColor(.white)
         .environment(\.colorScheme, .dark)
         .background(Color(white: 0.08).opacity(0.42), in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.15), lineWidth: 0.5))
@@ -509,7 +511,7 @@ struct BotwTouchSettingsView: View {
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("botw.touch.canvas")
             #if os(iOS)
-            .background(BotwTouchAreaReader(region: $controlRegion, insets: $panelInsets, portrait: portrait, running: m.isRunning))
+            .background(BotwTouchAreaReader(region: $controlRegion, insets: $panelInsets, portrait: portrait))
             #endif
             .overlay(alignment: .top) {
                 VStack(spacing: 6) {
@@ -517,7 +519,7 @@ struct BotwTouchSettingsView: View {
                         Button { panelCollapsed = false } label: { Label("Expand", systemImage: "chevron.down") }
                             .font(.system(size: 12)).controlSize(.small)
                             .padding(.horizontal, 10).padding(.vertical, 5)
-                            .foregroundStyle(.white).environment(\.colorScheme, .dark)
+                            .foregroundStyle(.white).tint(.white).accentColor(.white).environment(\.colorScheme, .dark)
                             .background(Color(white: 0.08).opacity(0.42), in: Capsule())
                             .accessibilityIdentifier("botw.touch.panel.expand")
                     } else {
@@ -553,7 +555,7 @@ struct BotwTouchSettingsView: View {
         } message: { Text(exportError ?? "") }
         .alert("Unable to save layout", isPresented: $saveFailed) { Button("OK", role: .cancel) {} }
         .preferredColorScheme(.dark)
-        .tint(launcherControlTint).accentColor(launcherControlTint)
+        .tint(launcherTint).accentColor(launcherTint)
     }
 }
 
@@ -562,12 +564,11 @@ private struct BotwTouchAreaReader: UIViewRepresentable {
     @Binding var region: CGRect
     @Binding var insets: EdgeInsets
     let portrait: Bool
-    let running: Bool
     func makeUIView(context: Context) -> BotwTouchAreaView {
         let view = BotwTouchAreaView()
         view.isUserInteractionEnabled = false
         view.changed = update
-        view.portrait = portrait; view.running = running
+        view.portrait = portrait
         return view
     }
     func updateUIView(_ view: BotwTouchAreaView, context: Context) { view.changed = update }
@@ -580,7 +581,6 @@ private struct BotwTouchAreaReader: UIViewRepresentable {
 private final class BotwTouchAreaView: UIView {
     var changed: ((CGRect, UIEdgeInsets) -> Void)?
     var portrait = false
-    var running = false
     private weak var editorWindow: UIWindow?
     private var previous = CGRect.null
     private var previousInsets = UIEdgeInsets.zero
@@ -590,9 +590,9 @@ private final class BotwTouchAreaView: UIView {
         super.didMoveToWindow()
         if let window {
             editorWindow = window
-            setBotwTouchEditorOrientation(portrait, window: window, running: running)
+            setBotwTouchEditorOrientation(portrait, window: window)
         } else if let editorWindow {
-            setBotwTouchEditorOrientation(nil, window: editorWindow, running: running)
+            setBotwTouchEditorOrientation(nil, window: editorWindow)
         }
         setNeedsUpdateConstraints()
     }

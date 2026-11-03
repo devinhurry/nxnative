@@ -52,7 +52,12 @@ targets:
             UTTypeConformsTo: [public.data]
             UTTypeTagSpecification:
               public.filename-extension: [graphics]
+        # SpringBoard reads this before UIKit's runtime orientation delegates.
+        # Phones opt into portrait through the runtime scene/app policy.
         UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationLandscapeRight
+          - UIInterfaceOrientationLandscapeLeft
+        UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationLandscapeRight
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationPortrait

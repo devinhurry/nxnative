@@ -305,6 +305,10 @@ void front_ios_boot(void) {   // Called by front_ios.m once the window and Metal
 @property (strong, nonatomic) UIWindow *window;
 @end
 @implementation SceneDelegate
+- (UIInterfaceOrientationMask)supportedInterfaceOrientationsForWindowScene:(UIWindowScene *)scene {
+    // Scene-based UIKit queries this instead of the legacy app delegate.
+    return front_ios_orientations(self.window ?: scene.keyWindow);
+}
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)o {
     self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
     self.window.rootViewController = front_ios_root();
