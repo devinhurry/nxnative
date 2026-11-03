@@ -49,6 +49,13 @@
 - **Fix:** after checking hard requirements, the packager compares the complete current output inventory and compiler records with published packages and verifies an equal ZIP's payloads. It reuses the original ZIP and version and records only its exact ID in the new IPA's `equivalent_package_ids`. Import, discovery and installed selection accept that ID while retaining game/build, platform/API, shader-chain, library, minimum-version, OS and integrity checks. The source contract and prepared-project checks remain current. Shader-chain changes still require matching resources. See [compatibility and updates](../graphics-pack.md#compatibility-and-updates).
 - **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game); graphics v4 and v6 have identical 78,018-file inventories and compiler records. Foundation and packaging fixtures cover exact-ID authorization, changed payloads, corruption and hard-requirement rejection. Physical iPhone acceptance remains pending.
 
+### Generated shader-table timestamps publish duplicate graphics packages
+
+- **Symptom:** a rebuild publishes another large graphics package even though every shader library, reflection file, pipeline archive and compiler record is unchanged.
+- **Cause:** `c1_guard.py` and `cb_extent.py` wrote the current time into the first line of their generated tables. The timestamps changed the tables' SHA-256 values and defeated the packager's full-inventory comparison across compatibility series.
+- **Fix:** both generators share a table writer that preserves an existing table's bytes and modification time when its chain/input stamp and computed data are unchanged. New or changed tables use a stable `generated` marker instead of wall-clock time. Package inventory and integrity checks still compare complete files; no timestamp is ignored by the importer or packager. The shader chain and renderer are unchanged.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game). Synthetic generator checks cover byte preservation, fresh reproducibility, changed data and changed proof stamps; the game's note records the real-package recovery and repack.
+
 ### Imported graphics versions accumulate in Documents
 
 - **Symptom:** every graphics update retains another complete version directory and consumes more storage.
