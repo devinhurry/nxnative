@@ -427,7 +427,6 @@ struct AboutSection: View {
 
     var body: some View {
         Section("About") {
-            LabeledContent("Repository", value: info("DMRepository"))
             LabeledContent("Commit", value: Self.shortCommit(info("DMCommit")))
             LabeledContent("Built", value: Self.localBuildTime(info("DMBuildTime")))
             if let version = graphicsVersion { LabeledContent("Graphics package", value: "v" + version) }
