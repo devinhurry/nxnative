@@ -631,7 +631,7 @@ are extracted from the user's `Pack/Bootup.pack!Layout/Common.sblarc` BNTX
 (`Nt_PauseIconL_00/02/05`, `Ds_ShortCutHorseIcon_00`); bow context uses
 `Nt_PauseIconL_01` and `Nt_PauseIcon_08`. The build prepares these masks outside
 the repository. Inventory shortcuts wait for live native category ownership
-and use the validated category refresh and selection resolver below. Equipment
+and use the validated category refresh and native item setter below. Equipment
 switches hold native Right/Left; L's optional long modes hold native Up, with
 release or explicit Cancel. Tap equipment selection releases only after native
 input has consumed the final selection sample. Hiding D-pad leaves touch mode
@@ -674,8 +674,9 @@ animated mode 0. Quest/Sell keep their existing setter.
 
 Inventory runs the game's own category change: both page fields move to the
 category's first page, the three item lists are re-laid out through `0xe3af74`
-and the current category follows through `0xe3b20c`. The native selection resolver
-(`0xe3f924`) then refreshes the selected item and its card in the same call.
+and the current category follows through `0xe3b20c`. The native item setter
+(`0xe3dd14(screen, 0)`) then selects the first item and refreshes its card through
+the native focus callback.
 The native activation body (`0xe39c08(screen, 0)`) also refreshes button
 eligibility after relayout; see the [category sequence](../../../../docs/botw/touch-internals.md#the-fix).
 
@@ -731,6 +732,32 @@ that behavior. Evidence: `01007EF00011E000-work/inventory-equip-20261103/final/`
 Native menu/action tests, 157 HID checks and 40 focused Python tests pass.
 The compiler limitations listed above still apply; the run also retains the
 existing `c1_full.tsv` cache warning.
+
+**Resolved on Mac; physical iPhone acceptance pending: category taps sorted the inventory (2026-11-03).**
+The previous category path called the game's Sort routine under the mistaken
+name "selection resolver". A current-main Mac reproduction showed the sorted
+notification on each Shield/Food/Bow switch, and native probes confirmed the
+sort and notification calls. Category taps now use the native item setter to
+select the first row and refresh its native focus callback while keeping the
+category's item order. The original game's manual Sort path remains intact.
+The [touch internals](../../../../docs/botw/touch-internals.md#how-the-game-selects-an-item)
+record the corrected contracts and the reason the earlier classification was
+wrong. Evidence is in `01007EF00011E000-work/category-no-sort-20261103/`.
+
+The current-checkout Mac test used matching shaders and a copied outdoors save.
+Ten changes among Weapons, Bows and Arrows, Shields and Food added no calls to
+Sort, the category sorter or the sorted notification. Pressing Y once added
+exactly one call to each; further category changes left those counts unchanged.
+The first item and its card matched every category, including a switch from
+the second bow to Food. Food's Eat/Recipe/Cancel menu, bow and shield short-tap
+equip, shield Remove followed by re-equip, the held menu after finger-up and
+arrow selection all passed. The final screenshots, native item dumps and
+`category-results.json` are in `after/`; `before/` retains the reproduction.
+Native menu/action tests, 157 HID checks and 40 focused Python tests pass.
+The BOTW-only regression still stops before comparison at the Metal compiler
+mismatch above. C lint retains the existing LLVM-version findings; Python lint
+also reports the existing main-branch optional-value check in
+`dm/games/settings.py:134`. Neither is a clean full-lint pass.
 
 Compendium category touch cells share inventory's expansion around the native
 glyphs, capped by neighboring category centers and the item-list clip. The native
