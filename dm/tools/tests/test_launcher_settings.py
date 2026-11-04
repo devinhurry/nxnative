@@ -27,6 +27,13 @@ def build(gid, api, platform=None, fixups=''):
 
 
 class LauncherSettingsTests(unittest.TestCase):
+    def test_native_aspect_replaces_the_legacy_picture_choices(self):
+        for platform in ('mac', 'ios'):
+            for env in ('DM_SCREEN_ASPECT', 'DM_PICTURE_FIT'):
+                self.assertNotIn(env, build(BOTW, 'nvn', platform))
+            self.assertIn('DM_SCREEN_ASPECT', build('01006F8002326000', 'nvn', platform))
+        self.assertIn('DM_PICTURE_FIT', build('01006F8002326000', 'nvn', 'ios'))
+
     def test_botw_device_defaults_preserve_the_ordinary_render_settings(self):
         ios = build(BOTW, 'nvn', 'ios', fixups='# FPS_STATE_OFF\t0x4000\n')
         mac = build(BOTW, 'nvn', 'mac', fixups='# FPS_STATE_OFF\t0x4000\n')
@@ -190,7 +197,7 @@ class LauncherSettingsTests(unittest.TestCase):
     def test_iphone_switches_only_on_the_iphone(self):   # the frame-rate counter and touch feedback are the iOS front end's (front_ios.m, DmGamepad.m)
         ios, mac = build(BOTW, 'nvn'), build(BOTW, 'nvn', 'mac')
         self.assertEqual(build(BOTW, 'nvn', 'ios').keys(), ios.keys())   # ios when unset
-        self.assertEqual(set(ios) - set(mac), {'DM_SHOW_FPS', 'DM_TOUCH_HAPTICS', 'DM_PICTURE_FIT'})
+        self.assertEqual(set(ios) - set(mac), {'DM_SHOW_FPS', 'DM_TOUCH_HAPTICS'})
         self.assertIn('DM_RUMBLE', mac); self.assertIn('DM_METAL_HUD', mac)
         self.assertEqual(set(mac) - set(ios), {'DM_FULLSCREEN'})   # the Mac window's Display mode (front_mac.m reads 1 or 0)
         s = mac['DM_FULLSCREEN']

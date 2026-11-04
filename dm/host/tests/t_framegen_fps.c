@@ -22,6 +22,7 @@ static void expect_target(float expected) {
 }
 int main(void) {
     uint8_t state[0xa0]={0}; dm_fps_state=state;
+    unsetenv("DM_ASPECT"); unsetenv("DM_SCREEN_ASPECT");
     setenv("DM_FPS_TARGET","60",1); setenv("DM_OPMODE","1",1); unsetenv("DM_RENDER_SCALE");
     setenv("DM_FRAMEGEN","30",1); supported=0; expect_target(60);
     supported=1; expect_target(*DM_GAME_FRAMEGEN_SCENE?30:60);
@@ -47,6 +48,14 @@ int main(void) {
         if (rate>60) { setenv("DM_FRAMEGEN","30",1); expect_target(rate); setenv("DM_FRAMEGEN","0",1); }
     }
     dm_fps_realtime=0; setenv("DM_FPS_TARGET","45",1); expect_target(0);
+    // A saved legacy screen shape must not change the native-aspect canvas.
+    unsetenv("DM_ASPECT"); setenv("DM_SCREEN_ASPECT","1.43",1); expect_target(0);
+    assert(*(uint32_t *)(state+0x48)==(DM_GAME_ASPECT_NATIVE?0:1344));
+    assert(*(uint32_t *)(state+0x4c)==(DM_GAME_ASPECT_NATIVE?0:896));
+    assert(*(float *)(state+0x58)==(DM_GAME_ASPECT_NATIVE?0:1920.f/1344));
+    // Explicitly disabling native aspect retains the legacy taller canvas.
+    setenv("DM_ASPECT","0",1); expect_target(0);
+    assert(*(uint32_t *)(state+0x48)==1344 && *(uint32_t *)(state+0x4c)==896);
     puts("framegen: unavailable, supported, off, default and handheld FPS state: OK");
     return 0;
 }
