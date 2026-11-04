@@ -202,7 +202,7 @@ struct LauncherDashboard: View {
                             .overlay(RoundedRectangle(cornerRadius: 8).stroke(.secondary.opacity(0.4), lineWidth: 1))
                             .accessibilityIdentifier("startup.botw.creator")
                         }
-                        playButton.disabled(importBusy || checkingResources || !romReady || !shadersReady)
+                        playButton.disabled(importBusy || checkingResources || model.saveOperationBusy || !romReady || !shadersReady)
                         if !romReady || !shadersReady {
                             HStack(spacing: 8) {
                                 if !romReady, let onImportROM {
@@ -330,6 +330,7 @@ struct LauncherDashboard: View {
     }
 
     private func startPlay() {
+        guard !model.saveOperationBusy else { return }
         if model.needsTouchFallbackNotice && shouldShowTouchNotice() { showTouchNotice = true }
         else { onPlay() }
     }
@@ -350,7 +351,7 @@ struct LauncherSettingsPage: View {
     private var sections: [String] {
         var result = m.sections.filter { !LauncherModel.isTouchSection($0) && $0 != "General" }
         if m.touchStickResponse != nil && !result.contains("Controls") { result.insert("Controls", at: min(2, result.count)) }
-        result.append("Cloud saves")
+        result.append("Saves")
         result.append("General")
         return result
     }
@@ -418,11 +419,10 @@ struct LauncherSettingsPage: View {
                             .frame(width: min(220, max(140, geometry.size.width * 0.24)))
                             .accessibilityIdentifier("settings.sections")
                         Divider()
-                        Form {
-                            if selection == "Cloud saves" {
-                                CloudSavesSection().disabled(m.isRunning)
-                                if m.isRunning { Text("Applies next time you start the game.").font(.footnote).foregroundStyle(.secondary) }
-                            } else {
+                        Group {
+                            if selection == "Saves" {
+                                SaveManagementPage(launcher: m)
+                            } else { Form {
                                 if selection == "Controls" && m.touchStickResponse != nil {
                                     BotwTouchSettingsMenu(m: m) { touchPage = $0 }
                                 }
@@ -435,10 +435,10 @@ struct LauncherSettingsPage: View {
                                     }
                                     #endif
                                 }
-                            }
                             Section {
                                 Button("Reset to tested defaults") { m.reset() }.disabled(!m.changed)
                             }
+                            } }
                         }
                         .formStyle(.grouped)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)

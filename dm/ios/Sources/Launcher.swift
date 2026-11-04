@@ -45,6 +45,8 @@ private extension UTType {
 /// Cloud saves: an iCloud Drive folder shared with the Mac app (chosen in its settings window's
 /// Cloud saves too). The host brings the save in from there when the game starts and
 /// sends it there after each save (dm/host/save_sync.h); the folder is a bookmark (CloudSaves.m).
+func configureSaveCloud() { dm_cloud_saves_env() }
+
 struct CloudSavesSection: View {
     @State private var folder: String = ""
     @State private var note: String = ""
@@ -64,6 +66,7 @@ struct CloudSavesSection: View {
                     DocumentPicker(types: [.folder]) { url in
                         picking = false
                         if dm_store_cloud_saves(url) {
+                            configureSaveCloud()
                             note = "Saved. The game uses this folder when you press Play."
                             refresh()
                         } else {
@@ -73,7 +76,7 @@ struct CloudSavesSection: View {
                 }
             if !folder.isEmpty {
                 Button("Turn off cloud saves", role: .destructive) {
-                    dm_clear_cloud_saves(); refresh(); note = ""
+                    dm_clear_cloud_saves(); configureSaveCloud(); refresh(); note = ""
                 }
             }
         } footer: {

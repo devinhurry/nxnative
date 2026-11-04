@@ -1,0 +1,15 @@
+{
+  "format": "hash32",
+  "caption_file": "caption.sav",
+  "image_file": "caption.jpg",
+  "time_lower": 195546944,
+  "time_upper": 1801612287,
+  "location": 1188193974,
+  "district": 4067367426,
+  "deleted": 1836936580,
+  "automatic": 1254838276,
+  "hard_mode": 3843184354,
+  "location_pack": "Pack/Bootup_{lang}.pack",
+  "location_archive": "Message/Msg_{lang}.product.ssarc",
+  "location_member": "StaticMsg/LocationMarker.msbt"
+}

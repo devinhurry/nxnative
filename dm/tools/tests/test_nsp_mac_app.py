@@ -119,8 +119,8 @@ class PackReuse(unittest.TestCase):
             'font/nintendo_ext.ttf': b'font', 'aoc/1/data': b'dlc', 'pso/gpu.mtl4a': b'archive',
             'pso/prebuilt.tsv': b'prebuilt', 'pso/rest_pairs.tsv': b'rest', 'pso/archive.tsv': b'index',
             'env.txt': b'DM_TEST=1', 'split.tsv': b'split', 'icon.jpg': b'jpeg', 'source/launcher.c': b'launcher',
-            'host/romfs_image.h': b'validator', 'host/save_sync.c': b'sync', 'host/save_sync.h': b'sync api', 'host/memory_mode.h': b'memory policy', 'tools/romfs.py': b'reader', 'tools/botw_touch_assets.py': b'category masks', 'tools/botw_ui_audit.py': b'archive reader',
-            'source/Launcher.swift': b'window', 'ios/Sources/LauncherSettings.swift': b'model', 'ios/Sources/LauncherRow.swift': b'rows', 'ios/Sources/BotwTouchSettings.swift': b'touch editor',
+            'host/romfs_image.h': b'validator', 'host/save_sync.c': b'sync', 'host/save_sync.h': b'sync api', 'host/save_manager.m': b'save manager', 'host/save_manager.h': b'save manager api', 'host/memory_mode.h': b'memory policy', 'tools/romfs.py': b'reader', 'tools/botw_touch_assets.py': b'category masks', 'tools/botw_ui_audit.py': b'archive reader', 'tools/save_preview.py': b'preview staging',
+            'source/Launcher.swift': b'window', 'ios/Sources/LauncherSettings.swift': b'model', 'ios/Sources/LauncherRow.swift': b'rows', 'ios/Sources/BotwTouchSettings.swift': b'touch editor', 'ios/Sources/SaveManagement.swift': b'saves page',
             'host/botw_touch_layout.h': b'layout', 'host/botw_touch_style.h': b'artwork', 'host/touchpad_geometry.h': b'geometry', 'host/dm_input.h': b'input', 'host/module.modulemap': b'module',
             'host/aoc_files.h': b'DLC discovery', 'host/launcher_settings.h': b'runtime settings api',
         }
@@ -232,8 +232,8 @@ class PackReuse(unittest.TestCase):
         names = ['dmhost', 'patched/main.patched.bin', 'patched/main.fixups.tsv', 'patched/main.gates.tsv', 'patched/main.cuts.tsv',
                  'patched/main.obs.tsv', 'patched/nro.tsv', 'msl/k.metallib', 'msl/k.json', 'msl/inputs.tsv', 'font/nintendo_ext.ttf',
                  'pso/gpu.mtl4a', 'pso/prebuilt.tsv', 'pso/rest_pairs.tsv', 'pso/archive.tsv', 'env.txt', 'icon.jpg', 'source/launcher.c',
-                 'source/Launcher.swift', 'ios/Sources/LauncherSettings.swift', 'ios/Sources/LauncherRow.swift', 'ios/Sources/BotwTouchSettings.swift', 'host/botw_touch_layout.h', 'host/botw_touch_style.h', 'host/touchpad_geometry.h', 'host/dm_input.h', 'host/module.modulemap',
-                 'host/save_sync.c', 'host/save_sync.h', 'host/memory_mode.h', 'host/aoc_files.h', 'host/launcher_settings.h']   # launcher/settings sources, memory policy and cloud-save code
+                 'source/Launcher.swift', 'ios/Sources/LauncherSettings.swift', 'ios/Sources/LauncherRow.swift', 'ios/Sources/BotwTouchSettings.swift', 'ios/Sources/SaveManagement.swift', 'tools/save_preview.py', 'host/botw_touch_layout.h', 'host/botw_touch_style.h', 'host/touchpad_geometry.h', 'host/dm_input.h', 'host/module.modulemap',
+                 'host/save_sync.c', 'host/save_sync.h', 'host/save_manager.m', 'host/save_manager.h', 'host/memory_mode.h', 'host/aoc_files.h', 'host/launcher_settings.h']   # launcher/settings sources, memory policy and cloud-save code
         names += ['profile/' + n for n in pack_app.TABLES]
         for name in names:
             with self.subTest(name=name):
@@ -293,7 +293,7 @@ class PackReuse(unittest.TestCase):
         self.assertIn(c[c.index('-o') + 1], s)   # launcher.c's object, with its main
         sync = next(c for c in self.commands if Path(c[0]).name == 'clang' and '-o' in c and c[-1].endswith('save_sync.c'))
         self.assertIn(sync[sync.index('-o') + 1], s)   # save_sync.c's object: the launcher sends the save once the host has exited
-        self.assertEqual([Path(x).name for x in s if x.endswith('.swift')], ['Launcher.swift', 'LauncherSettings.swift', 'LauncherRow.swift', 'BotwTouchSettings.swift'])
+        self.assertEqual([Path(x).name for x in s if x.endswith('.swift')], ['Launcher.swift', 'LauncherSettings.swift', 'LauncherRow.swift', 'BotwTouchSettings.swift', 'SaveManagement.swift'])
 
     def test_selected_file_modes_and_file_additions_and_removals_invalidate(self):
         self.pack()
@@ -600,10 +600,12 @@ class App(unittest.TestCase):
         self.assertEqual((r['DM_ROMFS'], r['DM_MSL_DIR'], r['DM_NVN_SHMAP'], r['DM_FONT_DIR'], r['DM_AOC_DIR']),
                          (str(res / 'romfs'), str(res / 'msl'), str(res / 'dm/shader_map.tsv'), str(res / 'dm/font'), str(res / 'aoc')))
         self.assertEqual(r['DM_PSO_BUNDLE'], str(res / 'pso'))   # the pipeline archive made offline, as the iOS app's main.m sets it
-        self.assertEqual((r['DM_SAVE'], r['DM_TEMP'], r['DM_ROOT'], r['cwd']), (str(sup / 'save'), str(sup / 'temp'), str(sup), str(sup)))   # pso_user.tsv goes beside save/
+        self.assertEqual(Path(r['DM_SAVE']).resolve(), (sup / 'saves/default/save').resolve())
+        self.assertEqual((r['DM_TEMP'], r['DM_ROOT'], r['cwd']), (str(sup / 'temp'), str(sup), str(sup)))
         self.assertEqual((r['DM_WINDOW'], r['DM_AUDIO'], r['DM_LANG']), ('1', '1', 'ja'))   # the caller's DM_LANG wins over the packed language
         self.assertEqual((r['DM_BAKED'], r['DM_BOTH']), ('1', 'player'))   # the player's env.txt before the bundle's
-        self.assertTrue((sup / 'save').is_dir()); self.assertTrue((sup / 'temp').is_dir())
+        self.assertTrue((sup / 'saves/default/save').is_dir()); self.assertTrue((sup / 'temp').is_dir())
+        self.assertFalse((sup / 'save').exists())
         self.assertIn('standin host output', (logs / f'{TID}.log').read_text())
         p = self.launch(); p.communicate(timeout=30)
         self.assertIn('standin host output', (logs / f'{TID}.prev.log').read_text())

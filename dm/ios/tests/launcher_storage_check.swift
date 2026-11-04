@@ -3,6 +3,40 @@
 import Foundation
 import CoreGraphics
 
+private func checkSavePreviews(_ expect: (Bool, String) -> Void) {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let rules = SavePreviewRules(format: "hash32", caption_file: "caption.sav", image_file: "caption.jpg",
+                                time_lower: 1, time_upper: 2, location: 3, district: 4, deleted: 5, automatic: 6, hard_mode: 7,
+                                labels: ["USen": ["Village": "A village"], "CNzh": ["Village": "Localized village"]])
+    func caption(_ time: UInt32, deleted: Bool = false, big: Bool = false) -> Data {
+        var data = Data()
+        func word(_ n: UInt32) { var value = big ? n.bigEndian : n.littleEndian; withUnsafeBytes(of: &value) { data.append(contentsOf: $0) } }
+        word(0x4730); word(UInt32.max); word(1)
+        for (hash, value) in [(UInt32(1), time), (2, 0), (5, deleted ? 1 : 0), (6, 1), (7, 1)] { word(hash); word(value) }
+        for chunk in [[UInt8]("Vill".utf8), [UInt8]("age\0".utf8)] { word(3); data.append(contentsOf: chunk) }
+        word(UInt32.max); return data
+    }
+    do {
+        let older = folder.appendingPathComponent("0"), newer = folder.appendingPathComponent("1"), removed = folder.appendingPathComponent("2")
+        for url in [older, newer, removed] { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+        try caption(1700000000).write(to: older.appendingPathComponent("caption.sav"))
+        try caption(1700000100, big: true).write(to: newer.appendingPathComponent("caption.sav"))
+        try caption(1700000200, deleted: true).write(to: removed.appendingPathComponent("caption.sav"))
+        try FileManager.default.setAttributes([.modificationDate: Date.distantFuture], ofItemAtPath: older.appendingPathComponent("caption.sav").path)
+        let progress = SaveProgress.latest(in: folder, rules: rules, language: "CNzh")
+        expect(progress?.date.timeIntervalSince1970 == 1700000100, "save preview uses embedded time across endian formats and ignores deleted progress")
+        expect(progress?.location == "Localized village", "save preview resolves the game's localized location labels")
+        expect(progress?.automatic == true && progress?.hardMode == true, "save preview preserves automatic and Master Mode flags")
+        let link = folder.appendingPathComponent("linked.sav")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: newer.appendingPathComponent("caption.sav"))
+        expect(SaveProgress.read(link, rules: rules, language: "USen") == nil, "save preview refuses symbolic links")
+        try Data([0, 1, 2]).write(to: newer.appendingPathComponent("caption.sav"))
+        expect(SaveProgress.latest(in: folder, rules: rules, language: "USen")?.date.timeIntervalSince1970 == 1700000000,
+               "a damaged latest caption does not hide an earlier valid progress preview")
+    } catch { expect(false, "save preview fixture: \(error)") }
+}
+
 @_cdecl("dm_botw_rune_icon_snapshot")
 func mockRuneIconSnapshot(_ state: UnsafeMutableRawPointer?) -> Int32 { 0 }
 
@@ -27,6 +61,7 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
     static func main() {
         var failed = 0
         func expect(_ c: Bool, _ what: String) { print((c ? "PASS " : "FAIL ") + what); if !c { failed += 1 } }
+        checkSavePreviews(expect)
         expect(AboutSection.shortCommit("abcdef012345") == "abcdef", "About shows a six-character commit")
         expect(AboutSection.shortCommit("abcdef012345+dirty") == "abcdef+dirty", "About preserves the local-changes marker")
         expect(AboutSection.shortCommit("unknown") == "unknown", "About handles missing source metadata")

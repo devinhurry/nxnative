@@ -89,7 +89,7 @@ def min_os(host):   # the host's deployment target (LC_BUILD_VERSION minos): the
 
 
 def swift_sources():   # the settings window, with the iOS launcher's model and rows
-    return [HERE / 'Launcher.swift', HERE.parent / 'ios/Sources/LauncherSettings.swift', HERE.parent / 'ios/Sources/LauncherRow.swift', HERE.parent / 'ios/Sources/BotwTouchSettings.swift']
+    return [HERE / 'Launcher.swift', HERE.parent / 'ios/Sources/LauncherSettings.swift', HERE.parent / 'ios/Sources/LauncherRow.swift', HERE.parent / 'ios/Sources/BotwTouchSettings.swift', HERE.parent / 'ios/Sources/SaveManagement.swift']
 
 
 def launcher_localizations():
@@ -98,11 +98,11 @@ def launcher_localizations():
 
 def build_launcher(out, minos, clang, swiftc, sdk):   # launcher.c's main and the host's cloud-save code (its send after the host exits), linked by swiftc with the settings window (no Swift main: -parse-as-library)
     with tempfile.TemporaryDirectory(dir=out.parents[3]) as t:
-        objs = [Path(t) / 'launcher.o', Path(t) / 'save_sync.o']
-        for obj, src in zip(objs, (HERE / 'launcher.c', HERE.parent / 'host/save_sync.c')):
-            run([clang, '-isysroot', sdk, '-arch', 'arm64', f'-mmacosx-version-min={minos}', '-O2', '-Wall', '-I', HERE.parent / 'host', '-c', '-o', obj, src])
+        objs = [Path(t) / name for name in ('launcher.o', 'save_sync.o', 'save_manager.o')]
+        for obj, src in zip(objs, (HERE / 'launcher.c', HERE.parent / 'host/save_sync.c', HERE.parent / 'host/save_manager.m')):
+            run([clang, '-isysroot', sdk, '-arch', 'arm64', f'-mmacosx-version-min={minos}', '-O2', '-Wall', '-fobjc-arc', '-I', HERE.parent / 'host', '-c', '-o', obj, src])
         run([swiftc, '-sdk', sdk, '-target', f'arm64-apple-macos{minos}', '-O', '-swift-version', '5', '-parse-as-library', '-module-cache-path', Path(t) / 'module-cache',
-             '-I', HERE.parent / 'host', '-o', out, *swift_sources(), *objs, '-framework', 'CoreFoundation', '-framework', 'AppKit', '-framework', 'SwiftUI'])
+             '-I', HERE.parent / 'host', '-o', out, *swift_sources(), *objs, '-framework', 'Foundation', '-framework', 'CoreFoundation', '-framework', 'AppKit', '-framework', 'SwiftUI'])
 
 
 def make_icns(jpg, out):   # the game's icon (256x256 JPEG) at every size an .icns holds
@@ -239,7 +239,10 @@ def pack(a):
         codesign = Path(codesign).resolve()
         minos = min_os(a.host)
         localizations = launcher_localizations() if a.title_id.upper() == '01007EF00011E000' else []
-        sources = [Path(__file__).resolve(), Path(build_info.__file__), HERE / 'launcher.c', HERE.parent / 'host/save_sync.c', HERE.parent / 'host/save_sync.h', HERE.parent / 'host/romfs_image.h', HERE.parent / 'tools/romfs.py', HERE.parent / 'tools/botw_touch_assets.py', HERE.parent / 'tools/botw_ui_audit.py'] + swift_sources() + [HERE.parent / 'host' / name for name in ('botw_touch_layout.h', 'botw_touch_style.h', 'touchpad_geometry.h', 'dm_input.h', 'memory_mode.h', 'module.modulemap', 'aoc_files.h', 'launcher_settings.h')] + localizations
+        sources = [Path(__file__).resolve(), Path(build_info.__file__), HERE / 'launcher.c', HERE.parent / 'host/save_sync.c', HERE.parent / 'host/save_sync.h', HERE.parent / 'host/save_manager.m', HERE.parent / 'host/save_manager.h', HERE.parent / 'host/romfs_image.h', HERE.parent / 'tools/romfs.py', HERE.parent / 'tools/botw_touch_assets.py', HERE.parent / 'tools/botw_ui_audit.py', HERE.parent / 'tools/save_preview.py'] + swift_sources() + [HERE.parent / 'host' / name for name in ('botw_touch_layout.h', 'botw_touch_style.h', 'touchpad_geometry.h', 'dm_input.h', 'memory_mode.h', 'module.modulemap', 'aoc_files.h', 'launcher_settings.h')] + localizations
+        from save_preview import rules_path
+        preview_rules = rules_path(a.title_id)
+        if preview_rules.is_file(): sources.append(preview_rules)
         source = build_info.source_info()   # A changed commit or repository invalidates reuse; the changing wall clock does not.
         inputs = {'options': vars(a), 'source': source, 'files': [(str(p), p.stat().st_mode, digest(p), os.readlink(p) if p.is_symlink() else None) for p in files + sources],
                   'trees': [(p, inventory(Path(p))) for p in (a.romfs, a.aoc) if p],
@@ -274,6 +277,8 @@ def pack(a):
     if a.title_id.upper() == '01007EF00011E000':
         from botw_touch_assets import prepare
         prepare(a.romfs, dm)
+    from save_preview import prepare as prepare_save_preview
+    prepare_save_preview(a.title_id, a.romfs, dm)
     if pairs: shutil.copyfile(pairs, dm / 'pso_pairs.tsv')   # the split's copy, for a profile without the table
     if fonts: copy(fonts, dm / 'font', False)
     if a.env_file: shutil.copyfile(a.env_file, dm / 'env.txt')

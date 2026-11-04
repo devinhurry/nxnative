@@ -1,6 +1,7 @@
 // Shared production launcher, followed by its in-process game settings sheet.
 // Synthetic resources and runtime setters only; no game or GPU host is run.
 #import <AppKit/AppKit.h>
+
 #import <objc/message.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -95,6 +96,15 @@ static BOOL hasAXLabel(id node, NSString *label, NSString *role, NSHashTable *vi
         (!role || [nodeRole isEqual:role])) return YES;
     for (id child in axChildren(node))
         if (hasAXLabel(child, label, role, visited, depth + 1)) return YES;
+    return NO;
+}
+
+static BOOL disabledAX(id node, NSString *identifier, NSHashTable *visited, NSUInteger depth) {
+    if (!node || depth > 128 || [visited containsObject:node]) return NO;
+    [visited addObject:node];
+    if ([axValue(node,@selector(accessibilityIdentifier)) isEqual:identifier] && [node respondsToSelector:@selector(isAccessibilityEnabled)])
+        return ![node isAccessibilityEnabled];
+    for (id child in axChildren(node)) if (disabledAX(child,identifier,visited,depth+1)) return YES;
     return NO;
 }
 
@@ -261,9 +271,26 @@ int main(void) { @autoreleasepool {
                         NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
                         check(hasAXLabel(sheet, nil, NSAccessibilityCheckBoxRole, nodes, 0), "startup controls include the native rumble toggle");
                         check(applied == 0, "startup does not invoke running-game setters");
+                        waitForSection(sheet, @"Saves", 3, "Saves replaces the cloud-only settings section", ^{
+                        waitForPress(sheet, @"saves.select.Test campaign", nil, nil, "a manually added save can be selected", ^{
+                        waitForCondition(sheet, @"selected save on disk", ^{
+                            NSString *root = @(getenv("DM_SAVES_ROOT"));
+                            NSData *data = [NSData dataWithContentsOfFile:[root stringByAppendingPathComponent:@"saves/current.json"]];
+                            NSDictionary *selection = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+                            return [selection[@"slot_id"] isEqual:@"Test campaign"];
+                        }, ^{
+                        check(YES, "the save switch persists before Play");
+                        if (getenv("DM_TEST_SCREENSHOT")) {
+                            NSBitmapImageRep *image = [sheet.contentView bitmapImageRepForCachingDisplayInRect:sheet.contentView.bounds];
+                            [sheet.contentView cacheDisplayInRect:sheet.contentView.bounds toBitmapImageRep:image];
+                            [[image representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:@(getenv("DM_TEST_SCREENSHOT")) atomically:YES];
+                        }
                         waitForPress(sheet, nil, @"Done", NSAccessibilityButtonRole, "startup editor Done responds", ^{
                             waitForPress(window, nil, @"Play", NSAccessibilityButtonRole,
                                          "Play leaves the launcher", ^{});
+                        });
+                        });
+                        });
                         });
                     }
                 });
@@ -291,11 +318,26 @@ int main(void) { @autoreleasepool {
     [game makeKeyAndOrderFront:nil];
     check(dm_mac_show_game_settings((__bridge void *)game, settingsClosed) == 1,
           "the same process opens in-game settings after startup");
-    check(settings_paused && pause_opens == 1, "in-game settings acquire the game pause before presentation");
-    check(dm_mac_show_game_settings((__bridge void *)game, settingsClosed) == 1 && pause_opens == 1,
-          "reopening the existing settings sheet does not acquire another pause");
     waitForCondition(game, @"in-game settings sheet", ^{ return (BOOL)(game.attachedSheet != nil); }, ^{
         NSWindow *sheet = game.attachedSheet;
+        check(settings_paused && pause_opens == 1, "in-game settings acquire the game pause before presentation");
+        check(dm_mac_show_game_settings((__bridge void *)game, settingsClosed) == 1 && pause_opens == 1,
+              "reopening the existing settings sheet does not acquire another pause");
+        if (getenv("DM_SAVE_UI_ONLY")) {
+            waitForSection(sheet,@"Saves",3,"in-game Saves navigation responds",^{
+                waitForCondition(sheet,@"read-only save library",^{
+                    NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
+                    return disabledAX(sheet,@"saves.new",nodes,0);
+                },^{
+                    NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
+                    check(disabledAX(sheet,@"saves.new",nodes,0),"new saves are disabled during gameplay");
+                    nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
+                    check(disabledAX(sheet,@"saves.select.default",nodes,0),"switching saves is disabled during gameplay");
+                    waitForPress(sheet,nil,@"Done",NSAccessibilityButtonRole,"read-only save library closes normally",^{});
+                });
+            });
+            return;
+        }
         waitForSection(sheet, @"Controls", 1, "in-game Controls navigation responds", ^{
             NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
             check(hasAXLabel(sheet, nil, NSAccessibilityCheckBoxRole, nodes, 0), "in-game controls include the native rumble toggle");

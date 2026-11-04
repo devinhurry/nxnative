@@ -11,6 +11,8 @@
 #include "game_profile.h"   // game profile constants (the RomFS marker path)
 #include "front.h"
 #include "romfs_image.h"
+#include "save_manager.h"
+#import "CloudSaves.h"
 #include "romfs_identity.h"
 #include "aoc_files.h"
 #import "GameFiles.h"
@@ -132,6 +134,8 @@ static void aoc_locate(void) {
     }
 }
 
+static char g_save_error[1024];
+static int g_save_lock = -1;
 static void romfs_identity_report(NSString *doc);
 int front_ios_prepare_game(void) {
     if (g_boot_ok) return 1;
@@ -160,6 +164,16 @@ int front_ios_prepare_game(void) {
         }
     }   // an explicit different DM_AOC_DIR, including empty, remains authoritative
     aoc_locate();   // explicit selection, combined image and imported DLC precede the standalone Documents/bundled fallback
+    dm_cloud_saves_env();
+    if (!getenv("DM_SAVE")) {
+        char save[PATH_MAX];
+        if (dm_saves_prepare(doc.fileSystemRepresentation, DM_GAME_ID, save, sizeof save, &g_save_lock, g_save_error, sizeof g_save_error)) {
+            fprintf(stderr, "[RED] boot: %s\n", g_save_error); return 0;
+        }
+        setenv("DM_SAVE", save, 1);
+        setenv("DM_SAVES_MANAGED", "1", 1);
+    }
+    g_save_error[0] = 0;
     dm_host_preload_start(g_argc, g_argv);
     g_boot_ok = 1;
     return 1;
@@ -170,6 +184,7 @@ int front_ios_prepare_game(void) {
 static char g_boot_message[640];
 const char *front_ios_boot_message(void) { return g_boot_message[0] ? g_boot_message : NULL; }
 NSString *dm_startup_rom_error(void) {
+    if (g_save_error[0]) return @(g_save_error);
     return romfs_locate() ? nil : NSLocalizedString(@"Import RomFS.img to start.",nil);
 }
 int dm_startup_dlc_count(void) {
@@ -216,7 +231,7 @@ static int boot_env(void) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
     NSString *res = NSBundle.mainBundle.resourcePath;
-    for (NSString *d in @[@"save", @"temp"]) [fm createDirectoryAtPath:[doc stringByAppendingPathComponent:d] withIntermediateDirectories:YES attributes:nil error:nil];
+    for (NSString *d in @[@"temp"]) [fm createDirectoryAtPath:[doc stringByAppendingPathComponent:d] withIntermediateDirectories:YES attributes:nil error:nil];
     // Keep game files and scratch data out of device backups (Documents is backed up by default; a RomFS placed there is many GB). Saves, logs and the pipeline list stay in the backup
     for (NSString *d in [@[@"romfs", @"aoc", @"game-data", @"temp"] arrayByAddingObjectsFromArray:[romfs_document_images(doc) valueForKey:@"lastPathComponent"]]) {
         NSURL *u = [NSURL fileURLWithPath:[doc stringByAppendingPathComponent:d]]; NSError *e = nil;
@@ -261,7 +276,6 @@ static int boot_env(void) {
     NSString *lang = [NSBundle.mainBundle objectForInfoDictionaryKey:@"DMLanguage"];
     if (!getenv("DM_LANG") && [lang isKindOfClass:NSString.class] && lang.length) setenv("DM_LANG", lang.UTF8String, 0);
     fprintf(stderr, "boot: game language %s\n", getenv("DM_LANG") ?: "en-US");
-    setenv("DM_SAVE", [doc stringByAppendingPathComponent:@"save"].fileSystemRepresentation, 0);
     setenv("DM_TEMP", [doc stringByAppendingPathComponent:@"temp"].fileSystemRepresentation, 0);
     NSString *dm = [res stringByAppendingPathComponent:@"dm"];
     setenv("DM_NVN_SHMAP", [dm stringByAppendingPathComponent:@"shader_map.tsv"].fileSystemRepresentation, 0);

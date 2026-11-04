@@ -102,6 +102,7 @@ done
 if [ "$GAME" = 01007EF00011E000 ]; then
   python3 "$DM/tools/botw_touch_assets.py" "$ROMFS" Gen/dm || die "prepare BOTW touch icons"
 fi
+python3 "$DM/tools/save_preview.py" "$GAME" "$ROMFS" Gen/dm || die "prepare save preview"
 if [ "$GFXAPI" = vulkan ] || [ "$GFXAPI" = gl ]; then cp "$GD/shader_map.tsv" "$GD/pso_manifest.tsv" Gen/dm/ || die "copy shader tables"   # empty NVN tables: the NVN layer draws nothing
 else cp "$GD/shader_map.tsv" "$GD/pso_manifest.tsv" "$GD/c1_full.tsv" Gen/dm/ || die "copy shader tables"
   if [ -f "$GD/cb_extent.tsv" ]; then cp "$GD/cb_extent.tsv" Gen/dm/ || die "copy cb_extent.tsv"; else t "no $GD/cb_extent.tsv: the host copies whole uniform bindings"; fi
