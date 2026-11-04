@@ -29,6 +29,8 @@ No `tex_flush_upload` (a minute's boot saw it flush 32 CPU-filled textures with 
 
 ## Found on this game
 
+- **Resolved in tools (2026-11-04):** [Package identification tries to execute the dotnet command list as a file](../../../docs/reference/packing.md#package-identification-tries-to-execute-the-dotnet-command-list-as-a-file). The MacBook Air packaging failure affected title, contents and key-check commands; all three now expand the host and DLL prefix. The real-child-process regression check passes; the full Air build has not been rerun here.
+
 - **Resolved in code; physical iPhone acceptance pending:** [A new UIKit class prevents launch on an older supported iOS](../../../docs/reference/packing.md#a-new-uikit-class-prevents-launch-on-an-older-supported-ios).
 
 - **Implemented; physical iPhone acceptance pending:** [Magnesis directions with a hidden D-pad](notes/touch.md#magnesis-directions-with-a-hidden-d-pad).

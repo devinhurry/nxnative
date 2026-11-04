@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 import shutil
 import struct
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -107,7 +108,7 @@ class TitleFromPackage(unittest.TestCase):
             calls.append((cmd, ok)); log.parent.mkdir(parents=True, exist_ok=True)
             log.write_text(self.out)
             if self.broken: raise nsp.BuildError('nx_extract exit code 1')
-        with mock.patch.object(nsp, 'build_nx_extract', lambda *a: 'nx'), mock.patch.object(nsp, 'run', fake_run), nsp.package_title_reader(REPO, keys, {}) as read:
+        with mock.patch.object(nsp, 'build_nx_extract', lambda *a: ['nx']), mock.patch.object(nsp, 'run', fake_run), nsp.package_title_reader(REPO, keys, {}) as read:
             self.out, self.broken = f'title {APP:016x}\n', False
             self.assertEqual(read(pkg), APP)
             self.assertEqual(calls[0][0], ['nx', keys, '--title', pkg]); self.assertIn(5, calls[0][1])
@@ -115,6 +116,30 @@ class TitleFromPackage(unittest.TestCase):
             self.assertIsNone(read(pkg))
             self.out, self.broken = '', True
             self.assertIsNone(read(pkg))
+
+    def test_reader_executes_host_and_dll_prefix(self):
+        keys, pkg = self.tmp / 'keys with spaces/prod.keys', self.tmp / 'Game with spaces.nsp'
+        tool = self.tmp / 'tools with spaces/nx_extract.dll'; tool.parent.mkdir()
+        tool.write_text(
+            'import sys\n'
+            f'assert sys.argv[1] == {str(keys)!r}\n'
+            f'assert sys.argv[3:] == [{str(pkg)!r}]\n'
+            f"if sys.argv[2] == '--title': print('title {APP:016x}')\n"
+            f"elif sys.argv[2] == '--contents': print('content Application {APP:016x} 0')\n"
+            "elif sys.argv[2] == '--keys':\n"
+            "    print('[RED] Game.nsp: prod.keys has no test key')\n"
+            '    sys.exit(6)\n'
+            'else: raise AssertionError(sys.argv)\n')
+        prefix = [sys.executable, str(tool)]
+        fam = {'base': pkg, 'updates': [(1, pkg)], 'dlc': [(APP + 0x1001, 1, pkg)]}
+        with mock.patch.object(nsp.shutil, 'which', return_value=sys.executable), \
+             mock.patch.object(nsp, 'build_nx_extract', return_value=prefix) as build, \
+             nsp.package_title_reader(REPO, keys, dict(nsp.os.environ)) as read:
+            self.assertEqual(read(pkg), APP)
+            self.assertEqual(read.contents(pkg), [('Application', APP, 0)])
+            with self.assertRaisesRegex(nsp.BuildError, 'prod.keys has no test key'):
+                read.check_keys(fam)
+            build.assert_called_once()
 
     def test_reader_without_dotnet_says_what_to_do(self):
         with mock.patch.object(nsp.shutil, 'which', lambda *a, **k: None), nsp.package_title_reader(REPO, self.tmp / 'prod.keys', {}) as read:
@@ -205,7 +230,7 @@ class Merged(unittest.TestCase):
         def fake_run(cmd, log, env=None, cwd=None, on_line=None, ok=()):
             calls.append(cmd); log.parent.mkdir(parents=True, exist_ok=True)
             log.write_text(f'content Application {APP:016x} 0\ncontent Patch {APP | 0x800:016x} 1507328\ncontent AddOnContent {APP + 0x1001:016x} 65536\n')
-        with mock.patch.object(nsp, 'build_nx_extract', lambda *a: 'nx'), mock.patch.object(nsp, 'run', fake_run), nsp.package_title_reader(REPO, keys, {}) as read:
+        with mock.patch.object(nsp, 'build_nx_extract', lambda *a: ['nx']), mock.patch.object(nsp, 'run', fake_run), nsp.package_title_reader(REPO, keys, {}) as read:
             self.assertEqual(read.contents(self.tmp / 'm.nsp'), self.CONTENTS)
             self.assertEqual(calls, [['nx', keys, '--contents', self.tmp / 'm.nsp']])
 
@@ -218,7 +243,7 @@ class Merged(unittest.TestCase):
             calls.append((cmd, ok)); log.parent.mkdir(parents=True, exist_ok=True)
             log.write_text(self.out + '\n')
             if self.broken: raise nsp.BuildError('nx_extract exit code 134')
-        with mock.patch.object(nsp, 'build_nx_extract', lambda *a: 'nx'), mock.patch.object(nsp, 'run', fake_run), nsp.package_title_reader(REPO, keys, {}) as read:
+        with mock.patch.object(nsp, 'build_nx_extract', lambda *a: ['nx']), mock.patch.object(nsp, 'run', fake_run), nsp.package_title_reader(REPO, keys, {}) as read:
             self.out, self.broken = 'the keys open all 2 packages', False
             read.check_keys(fam)
             self.assertEqual(calls[0][0], ['nx', keys, '--keys', m, upd]); self.assertIn(6, calls[0][1])

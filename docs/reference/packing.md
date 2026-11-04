@@ -11,6 +11,14 @@
 
 ## Build tools
 
+### Package identification tries to execute the dotnet command list as a file
+
+- **Symptom:** before extraction, `package_title_reader` raises `FileNotFoundError: [Errno 2] No such file or directory` with the whole `['<dotnet path>', '<temporary folder>/tools/nx_extract/nx_extract.dll']` list as the missing file name, although `dotnet` exists.
+- **Cause:** `build_nx_extract` returns a command prefix containing the discovered .NET host and the DLL. The title, contents and key-check callers wrapped that prefix as one argument, and `run` converted the nested list into an executable-name string.
+- **Fix:** expand the cached prefix into separate arguments in all three calls. The host is still discovered through `PATH`; neither a fixed Homebrew path nor a .NET reinstall is needed.
+- **Check:** `test_reader_executes_host_and_dll_prefix` in `dm/tools/tests/test_nsp_scan.py` launches real child processes through a two-part prefix with spaces in its paths, checks title and contents parsing and the accepted key-error exit code, and verifies that all three calls share one extractor build. It uses synthetic output without game files or keys.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game), packaging app 1.9.3 on a MacBook Air (2026-11-04). The reported traceback stopped in `check_keys` before extraction.
+
 ### Homebrew .NET is on PATH but apphosts cannot find the runtime
 
 - **Symptom:** the first extraction stops with `nx_extract exit code 131` and `.NET location: Not found`, even though `dotnet` is on `PATH`. The shader translator can fail the same way.
