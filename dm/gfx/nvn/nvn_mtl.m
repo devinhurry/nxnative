@@ -10952,6 +10952,19 @@ static int ui_dock_scope(int scope) {
 static void ui_region_to_render(float region[4]) {
     if (atomic_load_explicit(&g_origin_ll,memory_order_relaxed)) region[1]=1-region[1]-region[3];
 }
+// A final canvas may occupy only part of the swapchain (handheld BOTW draws
+// 1280x720 into 1920x1080). Its native viewport is the basis of both panes.
+static MTLViewport ui_canvas_viewport(NSUInteger width,NSUInteger height) {
+    if (!S.has_vp) return (MTLViewport){0,0,width,height,0,1};
+    return (MTLViewport){fmin(S.vp[0][0],S.vp[0][0]+S.vp[0][2]),fmin(S.vp[0][1],S.vp[0][1]+S.vp[0][3]),
+        fabs(S.vp[0][2]),fabs(S.vp[0][3]),0,1};
+}
+static void ui_region_to_texture(float region[4],MTLViewport canvas,id<MTLTexture> target) {
+    ui_region_to_render(region);
+    region[0]=(canvas.originX+canvas.width*region[0])/target.width;
+    region[1]=(canvas.originY+canvas.height*region[1])/target.height;
+    region[2]*=canvas.width/target.width; region[3]*=canvas.height/target.height;
+}
 static void seated_dock_prepare(const tex_t *canvas);
 static void seated_composite(void);
 static _Atomic uint64_t g_rune_source_serial;
@@ -11510,6 +11523,12 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
     g_ui_clip_x = ui_projection ? 1 / sux : 1; g_ui_clip_bias = 0;
     g_ui_clip_y = ui_projection_y ? 1 / suy : 1; g_ui_clip_bias_y = 0;
     int ui_region=g_ui_region[0]!=0 || g_ui_region[1]!=0 || g_ui_region[2]!=1 || g_ui_region[3]!=1;
+    double region_x=0,region_y=0;
+    if (ui_region) {
+        MTLViewport canvas=ui_canvas_viewport(tw,th);
+        region_x=canvas.originX*(1-g_ui_region[2])+canvas.width*g_ui_region[0];
+        region_y=canvas.originY*(1-g_ui_region[3])+canvas.height*g_ui_region[1];
+    }
     if ((ui_projection || g_ui_dock_draw) && ui_scope == NVN_UI_MAP && R.has_sc &&
         R.sc.w > 0 && R.sc.h > 0 && (R.sc.w < tw || R.sc.h < th)) {
         g_ui_map_capture.frame = atomic_load(&g_cur_frame);
@@ -11537,8 +11556,8 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
         if (sw == 0x100) { v.originY += v.height; v.height = -v.height; }
         else if (sw) RED_ONCE(108, "viewport swizzle %d,%d,%d,%d not implemented (drawn unswizzled)", S.vp_sw[0][0], S.vp_sw[0][1] ^ 2, S.vp_sw[0][2] ^ 4, S.vp_sw[0][3] ^ 6); }
       if (ui_projection_y && v.height != 0) g_ui_clip_bias_y = (2 * v.originY + v.height - th) * (1 - g_ui_clip_y) / v.height;
-      v.originX=tw*g_ui_region[0]+v.originX*g_ui_region[2]; v.width*=g_ui_region[2];
-      v.originY=th*g_ui_region[1]+v.originY*g_ui_region[3]; v.height*=g_ui_region[3];
+      v.originX=region_x+v.originX*g_ui_region[2]; v.width*=g_ui_region[2];
+      v.originY=region_y+v.originY*g_ui_region[3]; v.height*=g_ui_region[3];
       if (!(g_ed.ok & ED_VP) || memcmp(&g_ed.vp, &v, sizeof v)) { enc_r_viewport(en, v); g_ed.vp = v; g_ed.ok |= ED_VP; } }
     MTLScissorRect sc = {0, 0, tw, th};
     if ((R.has_sc || ui_region) && !S.rast_discard) {   // raster state cannot suppress vertex storage writes
@@ -11550,8 +11569,8 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
             ui_scissor_x(&y0, &y1, (long)th, suy, ui_projection_y, NVN_UI_HUD);
             if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0; if (x1 > (long)tw) x1 = tw; if (y1 > (long)th) y1 = th;
         }
-        x0=floor(tw*g_ui_region[0]+x0*g_ui_region[2]); x1=ceil(tw*g_ui_region[0]+x1*g_ui_region[2]);
-        y0=floor(th*g_ui_region[1]+y0*g_ui_region[3]); y1=ceil(th*g_ui_region[1]+y1*g_ui_region[3]);
+        x0=floor(region_x+x0*g_ui_region[2]); x1=ceil(region_x+x1*g_ui_region[2]);
+        y0=floor(region_y+y0*g_ui_region[3]); y1=ceil(region_y+y1*g_ui_region[3]);
         if (x1 <= x0 || y1 <= y0) { PD("Z %llu draw skipped: empty scissor (%d,%d %dx%d, target %lux%lu)", g_stat_pass, R.sc.x, R.sc.y, R.sc.w, R.sc.h, (unsigned long)tw, (unsigned long)th); return; }
         sc = (MTLScissorRect){(NSUInteger)x0, (NSUInteger)y0, (NSUInteger)(x1 - x0), (NSUInteger)(y1 - y0)};
     }
@@ -13349,7 +13368,7 @@ static void seated_texture_encode(id<MTL4CommandBuffer> cb,id<MTLTexture> source
 // passes stay on the replay queue: no CPU readback, second scene, or present
 // thread state. Replaced scratch textures retire behind the submission fence.
 static void seated_reflection_encode(id<MTL4CommandBuffer> cb,id<MTLTexture> target,
-                                     const float picture[4],const float dock[4],float aspect,id<MTLBuffer> buffer,size_t offset) {
+                                     MTLViewport canvas,const float picture[4],const float dock[4],float aspect,id<MTLBuffer> buffer,size_t offset) {
     static id<MTLTexture> images[2];
     // The native swapchain is stretched at presentation. Size the scratch image
     // by the displayed picture's aspect so blur stays uniform on both axes.
@@ -13365,7 +13384,7 @@ static void seated_reflection_encode(id<MTL4CommandBuffer> cb,id<MTLTexture> tar
         }
     }
     int ll=atomic_load_explicit(&g_origin_ll,memory_order_relaxed);
-    float raw[4]; memcpy(raw,picture,sizeof raw); ui_region_to_render(raw);
+    float raw[4]; memcpy(raw,picture,sizeof raw); ui_region_to_texture(raw,canvas,target);
     // Content avoids the reserved fold; its decorative background need not
     // leave a black gap. Bridge that band and mirror about the fold's center.
     // The picture is centered in its pane even with a fixed aspect ratio.
@@ -13373,7 +13392,7 @@ static void seated_reflection_encode(id<MTL4CommandBuffer> cb,id<MTLTexture> tar
     float reflected[4]={picture[0],fold_top,picture[2],fminf(1-fold_top,picture[3]+axis-fold_top)};
     float before_axis=(axis-fold_top)/picture[3],fraction=reflected[3]/picture[3];
     float axis_y=(axis-fold_top)/reflected[3],dock_y=(dock[1]-fold_top)/reflected[3];
-    ui_region_to_render(reflected);
+    ui_region_to_texture(reflected,canvas,target);
     float constants[44]={
         raw[0],raw[1],raw[2],raw[3],
         raw[0]+.5f/target.width,raw[1]+.5f/target.height,raw[0]+raw[2]-.5f/target.width,raw[1]+raw[3]-.5f/target.height,
@@ -13421,13 +13440,14 @@ static void seated_composite(void) {
     // Respect the game's render-target view, especially its sRGB conversion.
     MTLRenderPassColorAttachmentDescriptor *attachment=[MTLRenderPassColorAttachmentDescriptor new];
     attach(attachment,R.rt.color[0],&R.rt.cview[0],R.rt.has_cview[0]);
+    MTLViewport canvas=ui_canvas_viewport(attachment.texture.width,attachment.texture.height);
     id<MTLBuffer> reflection; size_t reflection_offset=arena_alloc(176,&reflection);
-    seated_reflection_encode(g_cb,attachment.texture,picture,region,dm_aspect_ratio(),reflection,reflection_offset);
+    seated_reflection_encode(g_cb,attachment.texture,canvas,picture,region,dm_aspect_ratio(),reflection,reflection_offset);
     if (!g_ui_dock_image || g_ui_dock_frame!=atomic_load(&g_cur_frame)) return;
     id<MTLBuffer> buffer; size_t offset=arena_alloc(32,&buffer); float *uv=(float *)((uint8_t *)buffer.contents+offset);
     float w=g_ui_dock_image.width,h=g_ui_dock_image.height;
     const float values[8]={0,0,1,1,.5f/w,.5f/h,1-.5f/w,1-.5f/h}; memcpy(uv,values,sizeof values);
-    ui_region_to_render(region); res_commit();
+    ui_region_to_texture(region,canvas,attachment.texture); res_commit();
     seated_texture_encode(g_cb,g_ui_dock_image,attachment.texture,region,buffer.gpuAddress+offset,SEATED_ALPHA);
 }
 // Present samples only the valid source rectangle declared by NVN; kept separate from the raw swapchain readback screenshot. Edges are clamped to the texel centers of the valid area, so bilinear does not read the black texels outside.
