@@ -13,7 +13,11 @@ static id<MTLBuffer> pixels(id<MTLTexture> t, unsigned lv) {
     static id<MTLLibrary> lib; static id<MTLComputePipelineState> ps[2]; NSError *error=nil;
     int is3=t.textureType==MTLTextureType3D;
     if (!lib) lib=[g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\nkernel void a(texture2d_array<float> t[[texture(0)]],device float4 *o[[buffer(0)]],constant uint4 &p[[buffer(1)]],uint3 g[[thread_position_in_grid]]){if(g.x<p.x&&g.y<p.y&&g.z<p.w)o[(g.z*p.y+g.y)*p.x+g.x]=t.read(g.xy,g.z,p.z);}\nkernel void b(texture3d<float> t[[texture(0)]],device float4 *o[[buffer(0)]],constant uint4 &p[[buffer(1)]],uint3 g[[thread_position_in_grid]]){if(g.x<p.x&&g.y<p.y&&g.z<p.w)o[(g.z*p.y+g.y)*p.x+g.x]=t.read(g,p.z);}" options:nil error:&error];
-    if (!ps[is3]) ps[is3]=[g_dev newComputePipelineStateWithFunction:[lib newFunctionWithName:is3?@"b":@"a"] error:&error];
+    if (!ps[is3]) {
+        id<MTLFunction> function=[lib newFunctionWithName:is3?@"b":@"a"];
+        if (!function) MDIE("pixel probe function missing");
+        ps[is3]=[g_dev newComputePipelineStateWithFunction:function error:&error];
+    }
     CHECK("pixel probe compiled",ps[is3]!=nil);
     uint32_t p[4]={(uint32_t)MAX(t.width>>lv,1u),(uint32_t)MAX(t.height>>lv,1u),lv,(uint32_t)(is3?MAX(t.depth>>lv,1u):t.arrayLength)};
     id<MTLBuffer> out=[g_dev newBufferWithLength:(size_t)p[0]*p[1]*p[3]*16 options:MTLResourceStorageModeShared];
@@ -128,7 +132,7 @@ static void linear_blocks(void) {
     mtl_sub_begin();image=tex_mtl(&t);finish();view=[image newTextureViewWithPixelFormat:image.pixelFormat textureType:MTLTextureType2DArray levels:NSMakeRange(0,1) slices:NSMakeRange(0,1)];
     id<MTLBuffer> second=pixels(view,0);CHECK("CPU writes to linear BC are re-uploaded",((float *)second.contents)[0]==1);
     mtl_sub_begin();p_copy_b2t put={.tex=&t,.src=(uint64_t)mem+4096,.r={4,0,0,4,4,1}};copy_b2t(&put);finish();
-    uint8_t block[8];NVNcopyRegion r={4,0,0,4,4,1};mtl_read_texels(&t,0,0,&r,block,8,8);
+    uint8_t block[8];memset(block,0xa5,sizeof block);NVNcopyRegion r={4,0,0,4,4,1};mtl_read_texels(&t,0,0,&r,block,8,8);
     int same=1;for(unsigned i=0;i<8;i++)same&=!block[i];CHECK("GPU writes to linear BC reach CPU ReadTexels",same);
     CHECK("linear GPU mirror keeps neighboring blocks",((uint8_t *)mem)[0]==255&&((uint8_t *)mem)[8]==0);
     mtl_tex_release(&t);mtl_pool_del(mem);mtl_drain();free(mem);

@@ -84,15 +84,15 @@ int main(int argc,char **argv) { @autoreleasepool {
     NvProg *pr=[NvProg new]; pr->sh[0]=[NvShader new]; pr->sh[1]=[NvShader new];
     pr->sh[0]->fn=[lib newFunctionWithName:@"v"]; pr->sh[1]->fn=[lib newFunctionWithName:@"f"];
     pr->sh[1]->stage=1; pr->sh[1]->rf.color_mask=1; serial_put(program.serial,pr);
-    NvProg *empty=[NvProg new]; empty->sh[0]=pr->sh[0]; empty->sh[1]=[NvShader new];
+    NvProg *empty=[NvProg new]; empty->sh[0]=pr->sh[0]; empty->sh[1]=[NvShader new]; // NOLINT(clang-analyzer-osx.cocoa.RetainCount) -- g_by_serial owns pr through serial_put's CFBridgingRetain.
     empty->sh[1]->fn=[lib newFunctionWithName:@"no_color"]; empty->sh[1]->stage=1;
     empty->sh[1]->rf.color_known=1; serial_put(no_color_program.serial,empty);
-    for (int case_id=0;case_id<12;case_id++) {
+    for (int case_id=0;case_id<12;case_id++) { // NOLINT(clang-analyzer-osx.cocoa.RetainCount) -- g_by_serial owns empty through serial_put's CFBridgingRetain.
         int mode=bench?0:case_id;
         result off,on;
         if(case_id&1) { on=run(1,mode); off=run(0,mode); }
         else { off=run(0,mode); on=run(1,mode); }
-        CHECK(!memcmp(off.color,on.color,256)&&!memcmp(off.depth,on.depth,256)&&!memcmp(off.stencil,on.stencil,64),"store-all and elided planes match byte for byte");
+        CHECK(!memcmp(off.color,on.color,256)&&!memcmp((const unsigned char *)off.depth,(const unsigned char *)on.depth,256)&&!memcmp(off.stencil,on.stencil,64),"store-all and elided planes match byte for byte");
         int good=1; for(int i=0;i<64;i++) {
             uint8_t want_color[4]={mode==7 || mode==8 || mode==10 ? 0 : 255,0,0,255}; good &= !memcmp(on.color+4*i,want_color,4);
             good &= on.depth[i]==(mode==1||mode==11?.5f:mode==3?.625f:.75f);

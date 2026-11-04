@@ -60,7 +60,9 @@ static void abort_exit(int sig) { (void)sig; _exit(77); }
 static void *run(void *unused) {
     (void)unused;
     guest_gate_stack(0); // Test guest code uses its normal pthread stack.
-    unsigned slot = ((gate_slot *)pthread_getspecific(g_keygslot))->slot;
+    gate_slot *assigned = pthread_getspecific(g_keygslot);
+    assert(assigned);
+    unsigned slot = assigned->slot;
     uint64_t top = dm_gate_top[slot];
     for (int i = 0; i < 20; i++) {
         assert(test_gate_observe(pthread_getspecific(g_keygate), 0) == 0xabc0);

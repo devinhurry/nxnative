@@ -41,6 +41,7 @@ static void sample(NvShader *fs, id<MTLRenderPipelineState> pipeline) {
     rp_end();
 }
 static void readback(id<MTLTexture> t, id<MTLBuffer> b, unsigned offset) {
+    if (!t || !b) MDIE("feedback readback resource missing");
     enc_b_copy_texture_buffer(blit(), t, 0, 0, MTLOriginMake(0, 0, 0), MTLSizeMake(4, 4, 1), b, offset, 256, 1024);
 }
 static void pixels(id<MTLBuffer> b, unsigned offset, const uint8_t want[4], const char *label) {
@@ -226,7 +227,7 @@ static void reuse_case(NvProg *pr) {
 // A barrier still refreshes it: red if untouched, green after a real write.
 static void barrier_case(NvProg *pr, int mode) {
     int tid = 680 + mode; tex_t source; target(&source, 99800 + mode);
-    mtl_reg_tex(tid, &source, NULL);
+    mtl_reg_tex(tid, &source, NULL); // NOLINT(clang-analyzer-osx.cocoa.RetainCount) -- g_by_serial owns the texture until mtl_tex_release below.
     prog_t program = {.serial = 99810 + mode}; serial_put(program.serial, pr);
     id<MTLBuffer> result = [g_dev newBufferWithLength:1024 options:MTLResourceStorageModeShared]; res_add(result);
     state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin();
@@ -266,7 +267,7 @@ static void barrier_case(NvProg *pr, int mode) {
 // A later format view must preserve the frozen snapshot, even after the
 // attachment itself changed. Swizzling alone must not disable compression.
 static void view_case(NvProg *pr, id<MTLRenderPipelineState> pipeline) {
-    tex_t source, output; target(&source, 99880); id<MTLTexture> destination = target(&output, 99881);
+    tex_t source, output; target(&source, 99880); id<MTLTexture> destination = target(&output, 99881); // NOLINT(clang-analyzer-osx.cocoa.RetainCount) -- g_by_serial owns source's texture until mtl_tex_release below.
     int tid = 710; mtl_reg_tex(tid, &source, NULL);
     NvShader *fs = pr->sh[1]; fs->rf.b[0].reg = 0;
     id<MTLBuffer> result = [g_dev newBufferWithLength:3072 options:MTLResourceStorageModeShared]; res_add(result);

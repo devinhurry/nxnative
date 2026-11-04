@@ -368,7 +368,9 @@ static void ensure_fi(NSUInteger iw, NSUInteger ih) {
             // Unrefined pixels keep the motion already written by dm_fg_mv.
             " if(total>.001)mv.write(float4(sum/total,0,0),xy);\n"
             "}\n";
-        id<MTLLibrary> lib = [g.dev newLibraryWithSource:[@(src) stringByAppendingString:@(flow_src)] options:o error:&e];
+        NSString *source = [@(src) stringByAppendingString:@(flow_src)];
+        if (!source) MDIE("invalid motion vector Metal source");
+        id<MTLLibrary> lib = [g.dev newLibraryWithSource:source options:o error:&e];
         id<MTLFunction> fn = lib ? [lib newFunctionWithName:@"dm_fg_mv"] : nil;
         g.mv_ps = fn ? [g.dev newComputePipelineStateWithFunction:fn error:&e] : nil;
         if (!g.mv_ps) MDIE("motion vector kernel: %s", e.localizedDescription.UTF8String);
@@ -378,13 +380,18 @@ static void ensure_fi(NSUInteger iw, NSUInteger ih) {
             g.flow_regions_args[i]=[g.dev newArgumentTableWithDescriptor:ad error:&e];
             g.flow_args[i]=[g.dev newArgumentTableWithDescriptor:ad error:&e]; g.flow_fill_args[i]=[g.dev newArgumentTableWithDescriptor:ad error:&e]; g.flow_apply_args[i]=[g.dev newArgumentTableWithDescriptor:ad error:&e];
             if (!g.flow_regions_args[i] || !g.flow_args[i] || !g.flow_fill_args[i] || !g.flow_apply_args[i]) MDIE("optical-flow argument table: %s",e.localizedDescription.UTF8String);
-            g.mv_par[i] = [g.dev newBufferWithLength:256 options:MTLResourceStorageModeShared]; [g.rs addAllocation:g.mv_par[i]];
+            g.mv_par[i] = [g.dev newBufferWithLength:256 options:MTLResourceStorageModeShared];
+            if (!g.mv_par[i]) MDIE("motion vector parameter allocation failed");
+            [g.rs addAllocation:g.mv_par[i]];
         }
         [g.rs commit];
-        g.flow_regions_ps=[g.dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"dm_fg_flow_regions"] error:&e];
-        g.flow_ps=[g.dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"dm_fg_flow"] error:&e];
-        g.flow_fill_ps=[g.dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"dm_fg_flow_fill"] error:&e];
-        g.flow_apply_ps=[g.dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"dm_fg_flow_apply"] error:&e];
+        id<MTLFunction> fn_regions=[lib newFunctionWithName:@"dm_fg_flow_regions"], fn_flow=[lib newFunctionWithName:@"dm_fg_flow"],
+            fn_fill=[lib newFunctionWithName:@"dm_fg_flow_fill"], fn_apply=[lib newFunctionWithName:@"dm_fg_flow_apply"];
+        if (!fn_regions || !fn_flow || !fn_fill || !fn_apply) MDIE("optical-flow entry points missing");
+        g.flow_regions_ps=[g.dev newComputePipelineStateWithFunction:fn_regions error:&e];
+        g.flow_ps=[g.dev newComputePipelineStateWithFunction:fn_flow error:&e];
+        g.flow_fill_ps=[g.dev newComputePipelineStateWithFunction:fn_fill error:&e];
+        g.flow_apply_ps=[g.dev newComputePipelineStateWithFunction:fn_apply error:&e];
         if (!g.flow_regions_ps || !g.flow_ps || !g.flow_fill_ps || !g.flow_apply_ps) MDIE("optical-flow kernels: %s",e.localizedDescription.UTF8String);
         g.fence = [g.dev newFence];
         const char *yf = getenv("DM_FRAMEGEN_YFLIP"); g.yflip = yf ? atof(yf) : 1.0;   // diagnostic: -1 tries the other clip-space y convention
@@ -529,7 +536,7 @@ NSArray *dm_fg_frame_encode(id<MTL4CommandBuffer> cb, int s, id<MTL4CounterHeap>
     // Metal 4 work needs explicit resource lifetime. Hold this exact frame's
     // bindings through completion, while the configuration cache retains only
     // the interpolator, not old scene/pool textures between configurations.
-    NSArray *resources = @[fi, fi.colorTexture, fi.prevColorTexture, depth,
+    NSArray *resources = @[fi, g.scene[g.cur], g.scene[g.cur ^ 1], depth,
                            g.mv, g.ndepth, g.flow, g.flow_fill, g.ui, g.out[s], g.mv_par[s], g.pdepth];
     fi.colorTexture = nil; fi.prevColorTexture = nil; fi.depthTexture = nil;
     fi.motionTexture = nil; fi.uiTexture = nil; fi.outputTexture = nil;

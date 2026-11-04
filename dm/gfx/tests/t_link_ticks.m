@@ -89,7 +89,7 @@ static int snap_case(void) {
 @end
 static void display_tick(NvMetalDisplayLinkDelegate *delegate,double target) {
     ClockUpdate *update=[ClockUpdate new]; update.targetPresentationTimestamp=target;
-    [delegate metalDisplayLink:nil needsUpdate:(id)update];
+    [delegate metalDisplayLink:nil needsUpdate:(id)update]; // NOLINT(clang-analyzer-nullability.NullPassedToNonnull) -- This CPU-only fixture drives the clock callback, which does not use its link argument.
 }
 static void missed_callback_regression(void) {
     _Alignas(8) float state[10]={30}; dm_fps_state=(uint8_t *)state;

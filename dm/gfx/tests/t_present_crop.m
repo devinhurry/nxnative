@@ -27,6 +27,9 @@ static int failed, cases;
 #define EXPECT(n, w, v) do { int a=(w),b=(v); cases++; printf("%s expected %d → got %d %s\n",n,a,b,a==b?"✓":"✗");failed+=a!=b; } while(0)
 static const uint8_t colors[4][4]={{255,0,0,255},{0,255,0,255},{0,0,255,255},{255,255,0,255}};
 
+// These assertions test byte-preserving uniform copies, including float bit patterns.
+static int same_bytes(const void *a, const void *b, size_t bytes) { return memcmp(a, b, bytes) == 0; }
+
 #ifndef CROP_LEGACY_HEADER
 // Exercise the persistent scaler used by real presents, completing each command buffer before its allocator and output leave scope.
 static int check_present_resize(id<MTLTexture> src, int w, int h) {
@@ -34,6 +37,7 @@ static int check_present_resize(id<MTLTexture> src, int w, int h) {
     d.storageMode=MTLStorageModePrivate;d.usage=MTLTextureUsageRenderTarget;
     id<MTLTexture> out=[g_dev newTextureWithDescriptor:d];res_add(out);res_commit();
     id<MTL4CommandAllocator> al=[g_dev newCommandAllocator];id<MTL4CommandBuffer> cb=[g_dev newCommandBuffer];id<MTLSharedEvent> ev=[g_dev newSharedEvent];
+    if (!out || !al || !cb || !ev) MDIE("present command resource allocation failed");
     [cb beginCommandBufferWithAllocator:al];int kind=present_encode_m4(cb,src,out,NULL,g_present_uv[0],&g_fx_present);[cb endCommandBuffer];
     [g_q4 commit:&cb count:1];[g_q4 signalEvent:ev value:1];
     EXPECT("resize present completes",1,[ev waitUntilSignaledValue:1 timeoutMS:10000]);res_remove(out);return kind;
@@ -46,6 +50,7 @@ static void check_seated_dock(id<MTLTexture> src) {
     d.storageMode=MTLStorageModeShared; d.usage=MTLTextureUsageRenderTarget;
     id<MTLTexture> out=[g_dev newTextureWithDescriptor:d];
     id<MTLBuffer> uv=[g_dev newBufferWithLength:32 options:MTLResourceStorageModeShared];
+    if (!out || !uv) MDIE("Seated dock allocation failed");
     const float values[]={0,0,1,1,.5f/8,.5f/8,1-.5f/8,1-.5f/8}; memcpy(uv.contents,values,sizeof values);
     res_add(src); res_add(out); res_add(uv); res_commit();
     for (int ll=0;ll<2;ll++) {
@@ -53,7 +58,9 @@ static void check_seated_dock(id<MTLTexture> src) {
         [out replaceRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0 withBytes:black_pixels bytesPerRow:w*4];
         atomic_store(&g_origin_ll,ll); float picture[]={0,.7f,1,.3f}; ui_region_to_render(picture);
         id<MTL4CommandAllocator> al=[g_dev newCommandAllocator]; id<MTL4CommandBuffer> cb=[g_dev newCommandBuffer];
-        id<MTLSharedEvent> event=[g_dev newSharedEvent]; [cb beginCommandBufferWithAllocator:al];
+        id<MTLSharedEvent> event=[g_dev newSharedEvent];
+        if (!al || !cb || !event) MDIE("map command resource allocation failed");
+        [cb beginCommandBufferWithAllocator:al];
         seated_texture_encode(cb,src,out,picture,uv.gpuAddress,SEATED_ALPHA); [cb endCommandBuffer];
         [g_q4 commit:&cb count:1]; [g_q4 signalEvent:event value:1];
         EXPECT("Seated dock GPU completes",1,[event waitUntilSignaledValue:1 timeoutMS:10000]);
@@ -84,13 +91,16 @@ static void check_seated_map_effect(void) {
     MTLTextureDescriptor *td=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float width:8 height:8 mipmapped:NO];
     td.storageMode=MTLStorageModeShared; td.usage=MTLTextureUsageRenderTarget;
     id<MTLTexture> out=[g_dev newTextureWithDescriptor:td]; res_add(out); res_commit();
+    if (!out) MDIE("map effect output allocation failed");
     for (int dock=0;dock<2;dock++) {
         pso_key key={0}; key.samples=1; key.cfmt[0]=td.pixelFormat; key.chmask=15; key.blend_en=1;
         key.blend[0]=dock ? ui_dock_blend(native) : native;
         id<MTLRenderPipelineState> pipeline=[g_dev newRenderPipelineStateWithDescriptor:pso_desc(&key,vs,fs,nil,0) error:&error];
         EXPECT("Seated map multiply pipeline compiles",1,pipeline!=nil); if (!pipeline) continue;
         id<MTL4CommandAllocator> al=[g_dev newCommandAllocator]; id<MTL4CommandBuffer> cb=[g_dev newCommandBuffer];
-        id<MTLSharedEvent> event=[g_dev newSharedEvent]; [cb beginCommandBufferWithAllocator:al];
+        id<MTLSharedEvent> event=[g_dev newSharedEvent];
+        if (!al || !cb || !event) MDIE("map effect command resource allocation failed");
+        [cb beginCommandBufferWithAllocator:al];
         MTL4RenderPassDescriptor *rp=[MTL4RenderPassDescriptor new];
         rp.colorAttachments[0].texture=out; rp.colorAttachments[0].loadAction=MTLLoadActionClear;
         rp.colorAttachments[0].storeAction=MTLStoreActionStore; rp.colorAttachments[0].clearColor=MTLClearColorMake(.25,.125,.0625,1);
@@ -99,7 +109,8 @@ static void check_seated_map_effect(void) {
         [en setScissorRect:(MTLScissorRect){2,2,4,4}]; [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
         [en endEncoding]; [cb endCommandBuffer]; [g_q4 commit:&cb count:1]; [g_q4 signalEvent:event value:1];
         EXPECT("Seated map effect GPU completes",1,[event waitUntilSignaledValue:1 timeoutMS:10000]);
-        uint16_t pixels[8*8*4]; [out getBytes:pixels bytesPerRow:8*8 fromRegion:MTLRegionMake2D(0,0,8,8) mipmapLevel:0];
+        uint16_t pixels[8*8*4]; memset(pixels,0xff,sizeof pixels);
+        [out getBytes:pixels bytesPerRow:8*8 fromRegion:MTLRegionMake2D(0,0,8,8) mipmapLevel:0];
         int color_bad=0,alpha_bad=0;
         for (int y=0;y<8;y++) for (int x=0;x<8;x++) {
             int inside=x>=2 && x<6 && y>=2 && y<6; const uint16_t *p=pixels+4*(y*8+x);
@@ -467,27 +478,27 @@ int main(int argc,char **argv) { @autoreleasepool {
     memcpy(original, projection, sizeof original);
     g_ui_clip_x=1; g_ui_clip_bias=0; g_ui_clip_y=.3; g_ui_clip_bias_y=.125;
     ui_projection_copy(0,projection,corrected,sizeof corrected);
-    EXPECT("weather projection changes only the vertical clip row",1,!memcmp(original,corrected,16) && !memcmp(original+8,corrected+8,sizeof original-32));
+    EXPECT("weather projection changes only the vertical clip row",1,same_bytes(original,corrected,16) && same_bytes(original+8,corrected+8,sizeof original-32));
     EXPECT("weather y projection preserves its clip center",1,fabs(corrected[5]-(original[5]*.3+original[13]*.125))<.000001);
-    EXPECT("weather projection leaves source uniforms untouched",1,!memcmp(original,projection,sizeof original));
+    EXPECT("weather projection leaves source uniforms untouched",1,same_bytes(original,projection,sizeof original));
     ui_projection_copy(10,projection,corrected,sizeof corrected);
-    EXPECT("vertical correction leaves the clip-x driver bank unchanged",1,!memcmp(original,corrected,sizeof original));
+    EXPECT("vertical correction leaves the clip-x driver bank unchanged",1,same_bytes(original,corrected,sizeof original));
     g_ui_clip_y=1; g_ui_clip_bias_y=0;
     g_ui_clip_x = (16.0 / 9) / (21.0 / 10); g_ui_clip_bias = 0;
     ui_projection_copy(0, projection, corrected, sizeof corrected);
-    EXPECT("UI source uniforms remain unchanged", 1, !memcmp(original, projection, sizeof original));
+    EXPECT("UI source uniforms remain unchanged", 1, same_bytes(original, projection, sizeof original));
     EXPECT("UI x projection scaled before clipping", lround(projection[0] * g_ui_clip_x * 10000), lround(corrected[0] * 10000));
-    EXPECT("UI y/z/w and material parameters unchanged", 1, !memcmp(projection + 4, corrected + 4, sizeof projection - 16));
+    EXPECT("UI y/z/w and material parameters unchanged", 1, same_bytes(projection + 4, corrected + 4, sizeof projection - 16));
     EXPECT("enlarged background reaches clip edge", 10000, lround((21.0 / 10) / (16.0 / 9) * g_ui_clip_x * 10000));
     g_ui_clip_bias = 0.125;
     ui_projection_copy(0, projection, corrected, sizeof corrected);
     EXPECT("partial viewport clip center preserved", lround((projection[1] * g_ui_clip_x + projection[13] * g_ui_clip_bias) * 10000), lround(corrected[1] * 10000));
     ui_projection_copy(10, projection, corrected, sizeof corrected);
     EXPECT("UI clip-x offset follows projection", lround(projection[0] * g_ui_clip_x * 10000), lround(corrected[0] * 10000));
-    EXPECT("other driver constants unchanged", 1, !memcmp(projection + 1, corrected + 1, sizeof projection - 4));
+    EXPECT("other driver constants unchanged", 1, same_bytes(projection + 1, corrected + 1, sizeof projection - 4));
     g_ui_clip_x = 1; g_ui_clip_bias = 0;
     ui_projection_copy(0, projection, corrected, sizeof corrected);
-    EXPECT("16:9 projection remains byte-identical", 1, !memcmp(projection, corrected, sizeof projection));
+    EXPECT("16:9 projection remains byte-identical", 1, same_bytes(projection, corrected, sizeof projection));
     long left=1080,right=1280; double squeeze=(21.0/10)/(16.0/9);
     ui_scissor_x(&left,&right,1280,squeeze,1,NVN_UI_HUD);
     EXPECT("right-edge HUD preserves its clamped open edge",1280,right);
@@ -525,10 +536,10 @@ int main(int argc,char **argv) { @autoreleasepool {
     EXPECT("capture y stays native",1,copy[23]==old_copy[23] && copy[25]==old_copy[25]);
     memcpy(copy,old_copy,sizeof copy);
     EXPECT("16:9 capture stays unchanged",0,ui_capture_projection(copy,bounds,1,0));
-    EXPECT("16:9 capture bank stays byte-identical",1,!memcmp(copy,old_copy,sizeof copy));
+    EXPECT("16:9 capture bank stays byte-identical",1,same_bytes(copy,old_copy,sizeof copy));
     copy[22]=copy[23]=0;copy[24]=copy[25]=1;
     memcpy(old_copy,copy,sizeof copy);
     EXPECT("full-frame and other-menu copies do not borrow map correction",0,ui_capture_projection(copy,bounds,scale,bias));
-    EXPECT("unrelated copy stays byte-identical",1,!memcmp(copy,old_copy,sizeof copy));
+    EXPECT("unrelated copy stays byte-identical",1,same_bytes(copy,old_copy,sizeof copy));
     printf("== %d checks, %d failed ==\n",cases,failed);return failed!=0;
 } }

@@ -292,6 +292,7 @@ static float wrap_degrees(float value) {
 }
 
 static void camera_aim_pitch(uint64_t *regs, int camera) {
+    if (camera < 0 || camera >= 2) return;
     float delta = aim_delta(regs[19], camera, 2);
     if (!delta) return;
     uint8_t *action = (uint8_t *)(uintptr_t)regs[19];
@@ -313,6 +314,7 @@ static void camera_aim_pitch(uint64_t *regs, int camera) {
 }
 
 static void camera_aim_yaw(uint64_t *regs, int camera) {
+    if (camera < 0 || camera >= 2) return;
     float delta = aim_delta(regs[19], camera, 1);
     if (!delta) return;
     uint8_t *action = (uint8_t *)(uintptr_t)regs[19];

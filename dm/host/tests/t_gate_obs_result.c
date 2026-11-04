@@ -8,8 +8,8 @@
 
 static int observed;
 static int observer_depth;
-void guest_gate_observer_enter(void) { assert(observer_depth++ == 0); }
-void guest_gate_observer_leave(void) { assert(--observer_depth == 0); }
+void guest_gate_observer_enter(void) { assert(observer_depth == 0); observer_depth++; }
+void guest_gate_observer_leave(void) { observer_depth--; assert(observer_depth == 0); }
 static void observe(const uint64_t *regs) {
     observed++;
     assert(regs[0] == 0x20 && regs[1] == 0x31 && regs[2] == 0x42);

@@ -518,9 +518,10 @@ static void rec_start(void) {
 static void fill(NpadState *s, uint32_t id, uint32_t style) {
     memset(s, 0, sizeof *s);
     s->sampling = atomic_fetch_add(&g_sampling, 1) + 1;
-    if (!(style_for_player(id, player_of(id)) & style)) return;   // no controller of this id / style: attributes = 0
+    int pl = player_of(id);
+    if (pl < 0 || !(style_for_player(id, pl) & style)) return;   // no controller of this id / style: attributes = 0
     // Player 1: the keyboard / touch path, its controller path and those of the players merged into it; another player: its own controller path
-    int pl = player_of(id); uint32_t src = pl ? 1u << pl : 1u | merged_players();
+    uint32_t src = pl ? 1u << pl : 1u | merged_players();
     uint64_t b = 0, virtual_buttons = 0; int32_t a[4] = {0};
     uint64_t k = 0, c = 0;
     if (!pl) {
