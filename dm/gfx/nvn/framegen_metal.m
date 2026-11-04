@@ -103,7 +103,7 @@ static void dm_fg_capability(void) {
 static int dm_fg_supported(void) { pthread_once(&g_cap_once,dm_fg_capability); return g_supported; }
 static void dm_fg_init(void) {
     int mode=*DM_GAME_FRAMEGEN_SCENE ? dm_framegen_parse(getenv("DM_FRAMEGEN")) : 0;
-    if (mode && !dm_fg_supported()) mode=0;
+    if (mode && (!dm_framegen_allowed() || !dm_fg_supported())) mode=0;
     atomic_store(&g_requested,mode); atomic_store(&g_on,mode); atomic_store(&g_mode_initialized,1);
 }
 int dm_fg_mode(void) {
@@ -116,7 +116,8 @@ int dm_fg_mode(void) {
 int dm_fg_enabled(void) { return dm_fg_mode()!=0; }
 int dm_fg_requested_mode(void) { (void)dm_fg_mode(); return atomic_load(&g_requested); }
 int dm_fg_set_mode(int mode) {
-    if (!*DM_GAME_FRAMEGEN_SCENE || !(mode==0 || mode==-1 || mode==30 || mode==40 || mode==50 || mode==60)) return 0;
+    if (!*DM_GAME_FRAMEGEN_SCENE || !(mode==0 || mode==-1 || (mode>=20 && mode<=60 && mode%5==0))) return 0;
+    if (mode && !dm_framegen_allowed()) return 0;
     pthread_once(&g_once,dm_fg_init);
     if (mode && !dm_fg_supported()) return 0;
     atomic_store(&g_requested,mode);

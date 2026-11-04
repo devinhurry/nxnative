@@ -83,6 +83,7 @@ static inline void dm_applet_leave_(const char *const *name) { (void)name; dm_ap
 // Audio pause / resume following the lifecycle (called by the front end on going to background / returning to foreground)
 extern uint8_t *dm_fps_state;   // frame step state page (loader.c install_fps_state): +0 float target fps, +4 movie flag (dm_movie_playing, written by the host at each present: Tears of the Kingdom's step stub caps its first, undecided steps by it), +0x10 float render scale, +0x18 double game seconds stepped; NULL when the build has none
 void dm_fps_state_apply(void);  // loader.c: apply launcher frame target and render scale to the verified state page
+extern int dm_fps_realtime;     // this build can advance game time at fractional frame intervals
 void dm_fps_lock_setting_changed(int target); // hle_fpslock.c: reapply verified engine frame caps at the next present
 int dm_movie_playing(void);   // hle_movie.c: a video decoder of the SDK's movie library handed out a picture in the last half second (the frame step then holds 30 fps)
 void dm_audio_suspend(int on);

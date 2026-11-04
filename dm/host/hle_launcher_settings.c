@@ -161,8 +161,8 @@ static int value_valid(const char *key, const char *value) {
     if (!value || !*value) return 0;
     if (!strcmp(key, "DM_MOTION_SOURCE")) return !strcmp(value, "auto") || !strcmp(value, "off") ||
         !strcmp(value, "controller") || !strcmp(value, "device");
-    if (!strcmp(key, "DM_FRAMEGEN")) return !strcmp(value, "0") || !strcmp(value, "30") || !strcmp(value, "60");
-    if (!strcmp(key, "DM_FPS_TARGET")) return !strcmp(value, "30") || !strcmp(value, "60");
+    if (!strcmp(key, "DM_FRAMEGEN")) return !strcmp(value, "0") || dm_framegen_parse(value)>0;
+    if (!strcmp(key, "DM_FPS_TARGET")) return strspn(value,"0123456789")==strlen(value) && parse_number(value,&v) && v>=20 && v<=120 && v==(int)v && dm_fps_target_valid((int)v,dm_fps_realtime);
     if (!strcmp(key, "DM_OPMODE")) return !strcmp(value, "0") || !strcmp(value, "1");
     if (!strcmp(key, "DM_RUMBLE") || !strcmp(key, "DM_TOUCH_HAPTICS") || !strcmp(key, "DM_SHOW_FPS") ||
         !strcmp(key, "DM_DYNAMIC_RESOLUTION") || !strcmp(key, "DM_BOTW_PORTRAIT") ||
@@ -203,8 +203,12 @@ int dm_launcher_setting_apply(const char *key, const char *value) {
     if (live < 0 || !value_valid(key, value)) return -1;
     if (!live) return 0;
     if (!strcmp(key, "DM_FRAMEGEN")) {
+        if (strcmp(value,"0") && !dm_framegen_allowed()) return -1;
         if (!dm_fg_set_mode(atoi(value))) return -1;
         return setenv(key, value, 1) ? -1 : 1;
+    }
+    if (*DM_GAME_FRAMEGEN_SCENE && !strcmp(key,"DM_FPS_TARGET") && atoi(value)>60) {
+        if (!dm_fg_set_mode(0) || setenv("DM_FRAMEGEN","0",1)) return -1;
     }
     if (setenv(key, value, 1)) return -1;
     if (!strcmp(key, "DM_OPMODE")) dm_set_opmode(atoi(value));
