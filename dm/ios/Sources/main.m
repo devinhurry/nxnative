@@ -24,7 +24,7 @@ extern char **environ;
 
 int dm_main(int argc, char **argv);   // dm/host/main.c compiled in with -Dmain=dm_main
 UIViewController *front_ios_root(void);
-UIInterfaceOrientationMask front_ios_orientations(UIWindow *window);
+UIInterfaceOrientationMask front_ios_scene_orientations(UIWindowScene *scene);
 void front_ios_focus_event(int ev);
 void dm_gamepad_geometry_changed(UIInterfaceOrientation orientation);
 
@@ -292,8 +292,9 @@ void front_ios_boot(void) {   // Called by front_ios.m once the window and Metal
 @end
 @implementation App
 - (UIInterfaceOrientationMask)application:(UIApplication *)application supportedInterfaceOrientationsForWindow:(UIWindow *)window {
+    // iOS 26 uses this callback; newer scene callbacks share the same policy.
     (void)application;
-    return front_ios_orientations(window);
+    return front_ios_scene_orientations(window.windowScene);
 }
 - (UISceneConfiguration *)application:(UIApplication *)a configurationForConnectingSceneSession:(UISceneSession *)s options:(UISceneConnectionOptions *)o {
     return [[UISceneConfiguration alloc] initWithName:[s.role isEqualToString:UIWindowSceneSessionRoleExternalDisplayNonInteractive] ? @"TV" : @"Default" sessionRole:s.role];   // a TV (front_ios.m DmTVSceneDelegate)
@@ -307,7 +308,7 @@ void front_ios_boot(void) {   // Called by front_ios.m once the window and Metal
 @implementation SceneDelegate
 - (UIInterfaceOrientationMask)supportedInterfaceOrientationsForWindowScene:(UIWindowScene *)scene {
     // Scene-based UIKit queries this instead of the legacy app delegate.
-    return front_ios_orientations(self.window ?: scene.keyWindow);
+    return front_ios_scene_orientations(scene);
 }
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)o {
     self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];

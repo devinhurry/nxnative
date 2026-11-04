@@ -233,6 +233,17 @@ round trip. The test runs from a copy of the user's save. Evidence is in `portra
 `portrait-live-20261031/` in the game work folder. Physical iPhone rotation
 and safe-area acceptance remain pending.
 
+**Duo startup orientation (2026-11-04, implemented; device acceptance pending).**
+The reported portrait clipping and camera-end-dependent inversion already occur
+in the launcher. UIKit now owns presentation orientation, and the launcher
+uses the existing shared host. The single scene policy is described in
+[Duo startup orientation uses the current scene](../../../../docs/reference/rendering.md#duo-startup-orientation-uses-the-current-scene).
+The policy fixture, iPhone Objective-C syntax checks and iOS Swift typechecks
+pass. BOTW-only static shader regression passes with 19,592 shaders and no
+shader/interface changes; its report is in `duo-standard-20261104/regress/` in
+the game work folder. Physical Duo launch in both directions and Seated
+transitions still require acceptance; no game rendering flip was added.
+
 **iPhone Duo window and Seated layout (2026-10-31).** Following
 [Apple's Duo guidance](https://developer.apple.com/documentation/technologyoverviews/preparing-your-app-for-iphone-duo),
 the iOS surface reads UIKit's active `divisionRegionKind` reserved regions during `updateConstraints`,

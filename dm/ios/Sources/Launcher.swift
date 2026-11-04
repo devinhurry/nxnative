@@ -9,18 +9,6 @@ import UniformTypeIdentifiers
 import os
 import DmTouchPad
 
-private final class LauncherHostingController<Content: View>: UIHostingController<Content> {
-    override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
-        touchEditorOrientations ?? presentingViewController?.supportedInterfaceOrientations
-            ?? viewIfLoaded?.window?.rootViewController?.supportedInterfaceOrientations ?? .landscape
-    }
-    override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation {
-        let current = (viewIfLoaded?.window ?? presentingViewController?.view.window)?.windowScene?.interfaceOrientation ?? .unknown
-        if current != .unknown && supportedInterfaceOrientations.contains(UIInterfaceOrientationMask(rawValue: 1 << current.rawValue)) { return current }
-        return supportedInterfaceOrientations == .portrait ? .portrait : .landscapeRight
-    }
-}
-
 private var touchEditorOrientations: UIInterfaceOrientationMask?
 
 // The editor can show the compact bank upright without enabling portrait play.
@@ -28,9 +16,10 @@ private var touchEditorOrientations: UIInterfaceOrientationMask?
 public func dmTouchEditorOrientations() -> UInt { touchEditorOrientations?.rawValue ?? 0 }
 
 func setBotwTouchEditorOrientation(_ portrait: Bool?, window: UIWindow?) {
-    let size = window?.bounds.size ?? .zero
+    let traits = window?.windowScene?.traitCollection
+    let adaptive = traits?.horizontalSizeClass == .regular && traits?.verticalSizeClass == .regular
     if let portrait {
-        touchEditorOrientations = portrait ? .portrait : min(size.width, size.height) >= 600 ? [.landscape, .portrait] : .landscape
+        touchEditorOrientations = portrait ? .portrait : .landscape
     } else { touchEditorOrientations = nil }
     let restore = window?.rootViewController?.supportedInterfaceOrientations ?? .landscape
     let mask = touchEditorOrientations ?? restore
@@ -39,6 +28,9 @@ func setBotwTouchEditorOrientation(_ portrait: Bool?, window: UIWindow?) {
         current.setNeedsUpdateOfSupportedInterfaceOrientations()
         controller = current.presentedViewController
     }
+    // Duo's inner display follows its window. Editing a layout must not
+    // request a second rotation of an already adaptive scene.
+    guard !adaptive else { return }
     window?.windowScene?.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { error in
         fputs("launcher: touch editor orientation: \(error.localizedDescription)\n", stderr)
     }
@@ -297,7 +289,7 @@ public func dmShowGameSettings(_ viewController: UnsafeMutableRawPointer, _ done
             host = nil
             presented.dismiss(animated: false) { dm_launcher_settings_pause(0); done() }
         }
-        let controller = UIHostingController(rootView: page.preferredColorScheme(.dark))
+        let controller = DmHostingController(rootView: page.preferredColorScheme(.dark))
         controller.modalPresentationStyle = .fullScreen
         controller.isModalInPresentation = true
         host = controller
@@ -326,7 +318,7 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
         host = nil
         h.dismiss(animated: false) { done() }
     }
-    let h = LauncherHostingController(rootView: view)
+    let h = DmHostingController(rootView: view)
     h.modalPresentationStyle = .fullScreen
     host = h
     parent.present(h, animated: false)
