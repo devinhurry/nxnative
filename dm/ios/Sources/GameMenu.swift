@@ -4,6 +4,7 @@
 // that need the next start (language, pipelines, the frame rate and so on), and the sliders, stay on the settings screen, which the menu's title points to.
 import UIKit
 
+var gameSettingsSection = "Game"
 var gameMenuModel: LauncherModel?   // the settings screen's model (Launcher.swift); nil in an app without one: the menu has the layout only
 
 @_cdecl("dm_game_menu")
@@ -30,6 +31,10 @@ private func gameMenuItems() -> [UIMenuElement] {
         }
     }
     if !placed { items.insert(UIMenu(options: .displayInline, children: [layout]), at: 0) }
+    items.insert(UIAction(title: NSLocalizedString("Cheats", comment: "In-game menu"), image: UIImage(systemName: "switch.2")) { _ in
+        gameSettingsSection = "Cheats"
+        dm_gamepad_open_settings()
+    }, at: 0)
     return items
 }
 

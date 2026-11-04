@@ -339,6 +339,7 @@ struct LauncherDashboard: View {
 struct LauncherSettingsPage: View {
     @ObservedObject var m: LauncherModel
     var gameBackground: Image? = nil
+    var initialSection = "Game"
     var onPlay: (() -> Void)? = nil
     let close: () -> Void
     @State private var selection: String = "Game"
@@ -350,6 +351,9 @@ struct LauncherSettingsPage: View {
     private var sections: [String] {
         var result = m.sections.filter { !LauncherModel.isTouchSection($0) && $0 != "General" }
         if m.touchStickResponse != nil && !result.contains("Controls") { result.insert("Controls", at: min(2, result.count)) }
+        #if os(iOS)
+        result.append("Cheats")
+        #endif
         result.append("Cloud saves")
         result.append("General")
         return result
@@ -387,6 +391,42 @@ struct LauncherSettingsPage: View {
         #endif
     }
 
+    @ViewBuilder
+    private var settingsOptions: some View {
+        #if os(iOS)
+        if selection == "Cheats" { CheatsView(isRunning: m.isRunning) }
+        else { settingsForm }
+        #else
+        settingsForm
+        #endif
+    }
+
+    private var settingsForm: some View {
+        Form {
+            if selection == "Cloud saves" {
+                CloudSavesSection().disabled(m.isRunning)
+                if m.isRunning { Text("Applies next time you start the game.").font(.footnote).foregroundStyle(.secondary) }
+            } else {
+                if selection == "Controls" && m.touchStickResponse != nil {
+                    BotwTouchSettingsMenu(m: m) { touchPage = $0 }
+                }
+                Section(LocalizedStringKey(sectionTitle(selection))) {
+                    let rows = m.rows(in: selection)
+                    ForEach(rows.filter { $0.env == "DM_SHOW_FPS" } + rows.filter { $0.env != "DM_SHOW_FPS" }) { SettingRow(s: $0, m: m) }
+                    #if os(macOS)
+                    if selection == "Game" && ProcessInfo.processInfo.environment["DM_TOUCH_PREVIEW"] != "1" {
+                        Toggle("Show this window at launch", isOn: $showLauncherAtLaunch).toggleStyle(.checkbox)
+                    }
+                    #endif
+                }
+            }
+            Section {
+                Button("Reset to tested defaults") { m.reset() }.disabled(!m.changed)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
     var body: some View {
         GeometryReader { geometry in
             if let touchPage, touchPage != .stick {
@@ -418,29 +458,7 @@ struct LauncherSettingsPage: View {
                             .frame(width: min(220, max(140, geometry.size.width * 0.24)))
                             .accessibilityIdentifier("settings.sections")
                         Divider()
-                        Form {
-                            if selection == "Cloud saves" {
-                                CloudSavesSection().disabled(m.isRunning)
-                                if m.isRunning { Text("Applies next time you start the game.").font(.footnote).foregroundStyle(.secondary) }
-                            } else {
-                                if selection == "Controls" && m.touchStickResponse != nil {
-                                    BotwTouchSettingsMenu(m: m) { touchPage = $0 }
-                                }
-                                Section(LocalizedStringKey(sectionTitle(selection))) {
-                                    let rows = m.rows(in: selection)
-                                    ForEach(rows.filter { $0.env == "DM_SHOW_FPS" } + rows.filter { $0.env != "DM_SHOW_FPS" }) { SettingRow(s: $0, m: m) }
-                                    #if os(macOS)
-                                    if selection == "Game" && ProcessInfo.processInfo.environment["DM_TOUCH_PREVIEW"] != "1" {
-                                        Toggle("Show this window at launch", isOn: $showLauncherAtLaunch).toggleStyle(.checkbox)
-                                    }
-                                    #endif
-                                }
-                            }
-                            Section {
-                                Button("Reset to tested defaults") { m.reset() }.disabled(!m.changed)
-                            }
-                        }
-                        .formStyle(.grouped)
+                        settingsOptions
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .accessibilityIdentifier("settings.options")
                     }
@@ -448,7 +466,7 @@ struct LauncherSettingsPage: View {
             }
             }
         }
-        .onAppear { if !sections.contains(selection) { selection = sections.first ?? "Game" } }
+        .onAppear { selection = sections.contains(initialSection) ? initialSection : (sections.first ?? "Game") }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("launcher.settings.page")
         .preferredColorScheme(.dark)

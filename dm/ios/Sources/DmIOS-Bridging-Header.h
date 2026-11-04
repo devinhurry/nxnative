@@ -4,3 +4,4 @@
 #import "GraphicsPack.h"
 #import "BotwTouchSurface.h"
 #import "DmGameMenu.h"
+#import "../../host/cheats.h"

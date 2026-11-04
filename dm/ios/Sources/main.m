@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include "game_profile.h"   // game profile constants (the RomFS marker path)
 #include "front.h"
+#include "cheats.h"
 #include "romfs_image.h"
 #include "romfs_identity.h"
 #include "aoc_files.h"
@@ -216,7 +217,7 @@ static int boot_env(void) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
     NSString *res = NSBundle.mainBundle.resourcePath;
-    for (NSString *d in @[@"save", @"temp"]) [fm createDirectoryAtPath:[doc stringByAppendingPathComponent:d] withIntermediateDirectories:YES attributes:nil error:nil];
+    for (NSString *d in @[@"save", @"temp", @"cheats"]) [fm createDirectoryAtPath:[doc stringByAppendingPathComponent:d] withIntermediateDirectories:YES attributes:nil error:nil];
     // Keep game files and scratch data out of device backups (Documents is backed up by default; a RomFS placed there is many GB). Saves, logs and the pipeline list stay in the backup
     for (NSString *d in [@[@"romfs", @"aoc", @"game-data", @"temp"] arrayByAddingObjectsFromArray:[romfs_document_images(doc) valueForKey:@"lastPathComponent"]]) {
         NSURL *u = [NSURL fileURLWithPath:[doc stringByAppendingPathComponent:d]]; NSError *e = nil;
@@ -269,6 +270,14 @@ static int boot_env(void) {
     setenv("DM_FONT_DIR", [dm stringByAppendingPathComponent:@"font"].fileSystemRepresentation, 0);   // Shared-font stand-ins (standard.ttf / nintendo_ext.ttf): iOS lacks the macOS font path
     NSString *pso = [res stringByAppendingPathComponent:@"pso"];   // the pipeline archive made offline (build_ipa.sh, dm/gfx/tools/pso_offline.py): the shader pairs' bases, which the device then does not build
     if ([fm fileExistsAtPath:pso]) setenv("DM_PSO_BUNDLE", pso.fileSystemRepresentation, 0);
+    if (!getenv("DM_CHEATS") && !getenv("DM_ROOT"))
+        setenv("DM_CHEATS", [doc stringByAppendingPathComponent:@"cheats"].fileSystemRepresentation, 0);
+    // The settings screen can manage cheats before Play without starting the host loader.
+    char bid[33] = "", line[256];
+    FILE *fixups = fopen([dm stringByAppendingPathComponent:@"main.fixups.tsv"].fileSystemRepresentation, "r");
+    while (fixups && fgets(line, sizeof line, fixups)) if (sscanf(line, "# BUILD_ID %32s", bid) == 1) break;
+    if (fixups) fclose(fixups);
+    dm_cheats_prepare(bid);
     chdir(doc.fileSystemRepresentation);
     g_argv[0] = strdup("dmhost"); g_argv[1] = strdup(dm.fileSystemRepresentation); g_argc = 2;
     return 0;   // The launcher imports/selects resources and applies settings before starting the preload at Play.

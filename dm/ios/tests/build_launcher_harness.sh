@@ -34,6 +34,11 @@ cat > "$APP/Info.plist" <<'PLIST'
 PLIST
 GFXAPI=nvn python3 "$ROOT/dm/games/settings.py" 01007EF00011E000 "$WORK/metadata" "$WORK/control.nacp" "$APP/dm/launcher.json"
 SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+python3 "$ROOT/dm/games/game.py" header 01007EF00011E000 "$WORK/metadata/game_profile.h"
+for source in "$ROOT/dm/host/hle_cheats.c" "$ROOT/dm/ios/tests/cheats_harness.c"; do
+    xcrun --sdk iphonesimulator clang -target arm64-apple-ios26.0-simulator -isysroot "$SDK" -fblocks \
+        -I "$WORK/metadata" -I "$ROOT/dm/host" -c "$source" -o "$WORK/$(basename "${source%.c}").o"
+done
 for source in GraphicsPack GameImageImport; do
     xcrun --sdk iphonesimulator clang -target arm64-apple-ios26.0-simulator -isysroot "$SDK" -fobjc-arc -fblocks \
         -Wno-deprecated-declarations -c "$ROOT/dm/ios/Sources/$source.m" -o "$WORK/$source.o"
@@ -45,8 +50,8 @@ xcrun --sdk iphonesimulator clang -target arm64-apple-ios26.0-simulator -isysroo
 xcrun --sdk iphonesimulator swiftc -swift-version 5 -parse-as-library -target arm64-apple-ios26.0-simulator \
     -sdk "$SDK" -I "$ROOT/dm/host" -module-cache-path "$WORK/module-cache" -o "$APP/BOTWLauncherTest" \
     -import-objc-header "$ROOT/dm/ios/Sources/DmIOS-Bridging-Header.h" "$WORK/CloudSaves.o" \
-    "$WORK/GraphicsPack.o" "$WORK/GameImageImport.o" "$WORK/resources.o" -larchive \
-    "$ROOT/dm/ios/Sources/DmHostingController.swift" "$ROOT/dm/ios/Sources/LauncherRow.swift" "$ROOT/dm/ios/Sources/LauncherSettings.swift" "$ROOT/dm/ios/Sources/BotwTouchSettings.swift" "$ROOT/dm/ios/Sources/Launcher.swift" "$ROOT/dm/ios/tests/launcher_ui_harness.swift"
+    "$WORK/GraphicsPack.o" "$WORK/GameImageImport.o" "$WORK/resources.o" "$WORK/hle_cheats.o" "$WORK/cheats_harness.o" -larchive \
+    "$ROOT/dm/ios/Sources/DmHostingController.swift" "$ROOT/dm/ios/Sources/LauncherRow.swift" "$ROOT/dm/ios/Sources/LauncherSettings.swift" "$ROOT/dm/ios/Sources/BotwTouchSettings.swift" "$ROOT/dm/ios/Sources/Launcher.swift" "$ROOT/dm/ios/Sources/Cheats.swift" "$ROOT/dm/ios/Sources/CheatFiles.swift" "$ROOT/dm/ios/Sources/GameMenu.swift" "$ROOT/dm/ios/tests/launcher_ui_harness.swift"
 plutil -lint "$APP/Info.plist"
 codesign --force --sign - "$APP"
 echo "Simulator app: $APP"

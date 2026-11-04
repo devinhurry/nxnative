@@ -153,6 +153,7 @@ static int g_any;              // DM_CHEATS_ANY_BUILD
 // read+execute, data and bss read+write, the host's key page read-only at the image's end); region 1: the heap,
 // whose opened extent grows and shrinks as the game's heap does (hle_svc.c); regions 2 (alias) and 3 (aslr) from the
 // same file's layout (region_base)
+static char g_full_build[33]; // The startup UI reads the full ID from main.fixups.tsv before modules are mapped.
 static module_t *g_main_mod;   // the "main" module of the profile (not an NRO), found at init; its loaded fields come from loader.c
 int dm_guest_as_contains(uintptr_t a);              // hle_svc.c: the address lies in the reserved guest address block
 void svc_guest_range(uint8_t **base, size_t *size); // hle_svc.c: that block (the aslr region of GetInfo), NULL before mem_init
@@ -1029,7 +1030,7 @@ static void note_settle(cheat_t *c) {
 static void cheats_pass(void) {
     if (!atomic_load(&g_active) || !atomic_load(&g_master)) return;
     if (pthread_mutex_trylock(&g_lock)) return;
-    if (!atomic_load(&g_master)) { pthread_mutex_unlock(&g_lock); return; }   // switched off while this pass waited for the lock
+    if (!g_main_mod || !atomic_load(&g_master)) { pthread_mutex_unlock(&g_lock); return; }   // switched off while this pass waited for the lock
     int fired = 0, ran = 0;
     g_held = dm_cheats_keys();
     memset(g_reg, 0, sizeof g_reg); memset(g_saved, 0, sizeof g_saved);   // the reference's once-per-pass ResetState (the loop tops: per cheat, in vm_run)
@@ -1104,14 +1105,14 @@ static void files_drain(void) { dispatch_sync(files_queue(), ^{}); }
 
 // The safe-mode flag: <dir>/.cheats-running-<title> exists while some cheat runs (a plain cheat on, or the masters while
 // not in safe mode, with the master switch on); a clean exit removes it (dm_cheats_exit), a crash leaves it for the next
-// launch. Not on iOS: an iOS app usually ends killed (swiped away, or while suspended), and the app has no cheats panel
-// to leave safe mode with. The verdict is taken here, under g_lock; the file itself is written by the files queue, where
+// launch. Not on iOS: an iOS app usually ends killed (swiped away, or while suspended), so a leftover flag cannot
+// distinguish a crash from a normal shutdown. The verdict is taken here, under g_lock; the file itself is written by the files queue, where
 // it checks g_exiting again: a flag queued just before a clean exit must not come back after the exit removed it
 static void running_update(void) {
 #if TARGET_OS_IPHONE
     return;
 #endif
-    if (!g_dir[0] || atomic_load(&g_exiting)) return;
+    if (!g_main_mod || !g_dir[0] || atomic_load(&g_exiting)) return;
     int any = 0;
     for (int i = 0; i < g_ncheat && !any; i++) {
         const cheat_t *c = &g_cheat[i];
@@ -1735,7 +1736,7 @@ static void report_build(void) {
 static void profile_version(void) {
 #ifdef DM_GAME_DISPLAY_VERSIONS
     static const struct { const char *build, *ver; } k[] = {DM_GAME_DISPLAY_VERSIONS};
-    const char *bid = dm_main_build();
+    const char *bid = g_full_build[0] ? g_full_build : dm_main_build();
     for (unsigned j = 0; j < sizeof k / sizeof *k; j++) if (!strcasecmp(bid, k[j].build)) snprintf(g_version, sizeof g_version, "%s", k[j].ver);
 #endif
 }
@@ -1829,7 +1830,7 @@ static void load_all(void) {
         g_have_meta ? ", with its meta file" : "");
     report_build();
     atomic_store(&g_active, g_ncheat > labels);
-    if (atomic_load(&g_active)) tick_start();
+    if (g_main_mod && atomic_load(&g_active)) tick_start();
     running_update();
 }
 
@@ -1847,24 +1848,22 @@ static void folder_flags(void) {
     if (g_safe) LOG("[RED] cheats: the last run ended without a clean exit while cheats were on: every cheat starts off (the Cheats panel restores them)");
 }
 
-// Read the switches, find the game's file and load it (load_all starts the idle apply thread when it has cheats). Called after load_modules
-// (main.c host_preload): the build ID to pick the file by comes from the modules them
-void dm_cheats_init(void) {
+// Read configuration for the startup UI or the loaded game. Callers hold g_lock.
+static void cheats_configure(const char *bid) {
     atomic_store(&g_dbg, !!getenv("DM_CHEATS_DEBUG"));
     const char *e = getenv("DM_CHEATS_ANY_BUILD"); g_any = e && *e && atoi(e) != 0;
+    g_dir[0] = g_build[0] = 0; g_non = 0;
     e = getenv("DM_CHEATS");
     if (e && *e) snprintf(g_dir, sizeof g_dir, "%s", e);
     else { e = getenv("DM_ROOT"); if (e && *e) snprintf(g_dir, sizeof g_dir, "%s/cheats", e); }
     snprintf(g_tid, sizeof g_tid, "%016llX", (unsigned long long)DM_GAME_PROGRAM_ID);
-    // g_build: the main NSO's first 16 hex digits, upper case like the menu and the brief state them; the candidate
-    // match itself is case-insensitive (name_is_build lower-cases both sides)
-    const char *bid = dm_main_build();
+    snprintf(g_full_build, sizeof g_full_build, "%s", bid);
     if (strlen(bid) >= 16) {
         for (int k = 0; k < 16; k++) g_build[k] = (char)toupper((unsigned char)bid[k]);
         g_build[16] = 0;
     }
     e = getenv("DM_CHEATS_ON");
-    if (e && *e) {   // one-off names turned on at launch, split on ','; the saves' own <build>.enabled states stay too
+    if (e && *e) {
         char *dup = strdup(e), *s = dup;
         while (s && g_non < 16) {
             char *t = strchr(s, ',');
@@ -1874,13 +1873,31 @@ void dm_cheats_init(void) {
         }
         free(dup);
     }
+}
+
+// Read and save choices before Play. No writable alias or apply thread exists until the loader maps main and calls init.
+void dm_cheats_prepare(const char *build_id) {
+    pthread_mutex_lock(&g_lock);
+    if (!g_main_mod) {
+        cheats_configure(build_id ? build_id : "");
+        folder_flags();
+        if (g_dir[0]) load_all();
+    }
+    pthread_mutex_unlock(&g_lock);
+}
+
+// Once the loader knows the real module layout, re-read the saved choices and start applying them.
+void dm_cheats_init(void) {
+    pthread_mutex_lock(&g_lock);
+    cheats_configure(dm_main_build());
     if (!g_dir[0]) { LOG("cheats: off (neither DM_CHEATS nor DM_ROOT is set)"); }
-    else {   // for the main module the pass needs its base: the loader's g_mod tables them by name
+    else {
         for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main") && !g_mod[i].nro) { g_main_mod = &g_mod[i]; break; }
         folder_flags();
-        if (g_main_mod) { pthread_mutex_lock(&g_lock); load_all(); pthread_mutex_unlock(&g_lock); }   // load_all maps the writable alias once a file is picked
-        atexit(dm_cheats_exit);   // exit() paths (⌘Q, closing the window); dm_host_exit's _exit calls it itself
+        if (g_main_mod) load_all();
+        atexit(dm_cheats_exit);
     }
+    pthread_mutex_unlock(&g_lock);
 }
 
 // A clean exit: no cheat runs any more, so the safe-mode flag goes (atexit, and dm_host_exit before its _exit)
@@ -1892,7 +1909,7 @@ void dm_cheats_exit(void) {
     unlink(p);
 }
 
-// ---------- the Mac cheats menu and panel (callers: front_mac.m; nothing else uses these) ----------
+// ---------- the Mac and iOS cheat controls ----------
 // Cheap accessors read straight from the shared state: the list itself is rebuilt only from the main thread (this
 // menu's own actions, and init on the Mac's main thread), and a VM pass mutates only its own cheat's dead / why / fails /
 // noted fields, the on / restore_once flags of a one-pass cheat, the never-decrease state, and (through the files queue)
@@ -1989,6 +2006,10 @@ int dm_cheat_preview(int i, char *out, size_t cap) {
     out[0] = 0;
     if (i < 0 || i >= g_ncheat) return 0;
     pthread_mutex_lock(&g_lock);
+    if (!g_main_mod) {
+        snprintf(out, cap, "Start the game to preview memory changes.");
+        pthread_mutex_unlock(&g_lock); return 0;
+    }
     cheat_t *c = &g_cheat[i];
     g_dry_out = out; g_dry_cap = cap; g_dry_len = 0; g_dry_writes = 0;
     if (c->label) dry_line("a label, not a cheat");

@@ -3,6 +3,9 @@
 import UIKit
 import Darwin
 
+@_silgen_name("dm_test_cheats_prepare")
+private func prepareCheatFixture(_ documents: UnsafePointer<CChar>)
+
 // The production launcher reads cloud-save providers through its app bridge.
 // This isolated UI fixture has no shared-folder access or cloud-save storage.
 func dm_clear_cloud_saves() {}
@@ -39,7 +42,10 @@ final class LauncherHarnessRoot: UIViewController {
         reopen.addTarget(self, action: #selector(self.reopen), for: .touchUpInside)
         let settings = UIButton(type: .system); settings.setTitle("Open in-game settings", for: .normal)
         settings.addTarget(self, action: #selector(self.openGameSettings), for: .touchUpInside)
-        let stack = UIStackView(arrangedSubviews: [text, reopen, settings]); stack.axis = .vertical; stack.spacing = 20
+        let menu = UIButton(type: .system); menu.setTitle("Game menu", for: .normal)
+        menu.menu = Unmanaged<UIMenu>.fromOpaque(dmGameMenu()).takeRetainedValue()
+        menu.showsMenuAsPrimaryAction = true
+        let stack = UIStackView(arrangedSubviews: [text, reopen, settings, menu]); stack.axis = .vertical; stack.spacing = 20
         stack.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(stack)
         NSLayoutConstraint.activate([stack.centerXAnchor.constraint(equalTo: view.centerXAnchor), stack.centerYAnchor.constraint(equalTo: view.centerYAnchor)])
     }
@@ -56,6 +62,8 @@ final class LauncherHarnessScene: UIResponder, UIWindowSceneDelegate {
                 UserDefaults.standard.set(value, forKey: "launcher." + key)
             }
         }
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        documents.path.withCString { prepareCheatFixture($0) }
         let window = UIWindow(windowScene: scene)
         window.rootViewController = LauncherHarnessRoot(); window.backgroundColor = .black
         window.makeKeyAndVisible(); self.window = window

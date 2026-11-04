@@ -139,6 +139,36 @@ int main(void) {
     { char p[1200]; snprintf(p, sizeof p, "%s/main.changed.tsv", moddir); FILE *f = fopen(p, "w"); if (!f) { perror(p); return 1; }
       fprintf(f, "# BUILD_ID\t1111111111111111aaaaaaaaaaaaaaaa\n0x300\t0x8\n0x3000\t0x4\n"); fclose(f); }
 
+    // ---- Startup choices are editable before modules load; no cheat runs until initialization. ----
+    char startup_program[512];
+    snprintf(startup_program, sizeof startup_program,
+             "[Startup]\n04000000 00004000 00000063\n"
+             "[Absolute startup]\n40010000 %08X %08X\n40000000 00000000 00000058\nA4010000\n",
+             HI(img + 0x4004), LO(img + 0x4004));
+    fresh("startup", startup_program);
+    setenv("DM_CHEATS", g_dir, 1);
+    g_main_mod = NULL;
+    dm_cheats_prepare(m->build_id);
+    CHECK(dm_cheats_found() && at("Startup", 0) >= 0 && !g_tick_started && !g_alias,
+          "startup: the file loads before main without mapping code or starting an apply thread");
+    dm_cheat_toggle(at("Startup", 0));
+    dm_cheat_toggle(at("Absolute startup", 0));
+    dm_cheats_reload();
+    cheats_pass();
+    CHECK(dm_cheat_on_at(at("Startup", 0)) && rd32(0x4000) == 0 && rd32(0x4004) == 0,
+          "startup: toggles survive a reload, and even an explicit pass cannot write before main loads");
+    char startup_preview[256];
+    dm_cheat_preview(at("Startup", 0), startup_preview, sizeof startup_preview);
+    CHECK(strstr(startup_preview, "Start the game") != NULL, "startup: preview explains why memory is unavailable");
+    dm_cheats_master_set(0);
+    dm_cheats_prepare(m->build_id);
+    CHECK(!dm_cheats_master(), "startup: the master switch survives preparation");
+    dm_cheats_master_set(1);
+    // Existing tests below exercise the normal loaded engine; activation itself is covered after them.
+    g_main_mod = m;
+    snprintf(g_tid, sizeof g_tid, "0100000000000000");
+    unsetenv("DM_CHEATS");
+
     // ---- no cheats file: nothing is mapped and no thread is started ----
     fresh("none", NULL); load_all();
     CHECK(!g_tick_started && !g_alias && !atomic_load(&g_active), "without a cheats file no alias is mapped and no idle thread runs");
@@ -651,6 +681,18 @@ int main(void) {
     fresh("limits", big); free(big);
     load_all();
     CHECK(strstr(dm_cheats_report(), "1 cheats over 0x100 words") != NULL, "the report names a cheat over Atmosphère's 0x100 words");
+
+    fresh("startup-activation", "[Resume]\n04000000 00004000 0000007B\n");
+    setenv("DM_CHEATS", g_dir, 1);
+    g_main_mod = NULL;
+    dm_cheats_prepare(m->build_id);
+    dm_cheat_toggle(at("Resume", 0));
+    dm_cheats_init();
+    CHECK(dm_cheat_on_at(at("Resume", 0)), "startup: loading the modules restores choices saved before Play");
+    cheats_pass();
+    CHECK(rd32(0x4000) == 123, "startup: choices begin applying after main is loaded");
+    unsetenv("DM_CHEATS");
+    dm_cheats_exit();
 
     char rmcmd[1100]; snprintf(rmcmd, sizeof rmcmd, "rm -rf '%s'", root);   // the test's cheats folders
     if (system(rmcmd)) fprintf(stderr, "cannot remove %s\n", root);   // NOLINT(bugprone-command-processor): a fixed rm of the folder mkdtemp made above, no outside input

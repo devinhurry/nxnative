@@ -322,3 +322,37 @@
 "Low available memory" = "Low available memory";
 "More frame rates" = "More frame rates";
 "Frame generation is unavailable above 60 fps." = "Frame generation is unavailable above 60 fps.";
+
+// Cheat controls.
+"Cheats" = "Cheats";
+"Cheats On" = "Cheats On";
+"Build ID" = "Build ID";
+"Import Cheats\U2026" = "Import Cheats\U2026";
+"Reload" = "Reload";
+"Search cheats" = "Search cheats";
+"Select All" = "Select All";
+"Deselect All" = "Deselect All";
+"Load report" = "Load report";
+"No cheats for this build." = "No cheats for this build.";
+"No matching cheats." = "No matching cheats.";
+"Files for other game versions" = "Files for other game versions";
+"Unavailable cheats" = "Unavailable cheats";
+"Master code (always on)" = "Master code (always on)";
+"Cheat details" = "Cheat details";
+"Apply" = "Apply";
+"Value" = "Value";
+"Set value" = "Set value";
+"Enter a value within the allowed range." = "Enter a value within the allowed range.";
+"Start the game to apply one-time cheats." = "Start the game to apply one-time cheats.";
+"Import for this game build?" = "Import for this game build?";
+"Import for This Build" = "Import for This Build";
+"These files have no Build ID in their names. Only continue if they match this game's version." = "These files have no Build ID in their names. Only continue if they match this game's version.";
+"iOS supports data cheats. Cheats that modify game code cannot run on iOS. Choices are saved for this game build." = "iOS supports data cheats. Cheats that modify game code cannot run on iOS. Choices are saved for this game build.";
+"Import an Atmosphere .txt file for the Build ID above. You can also import its .meta.tsv companion for sections and editable values." = "Import an Atmosphere .txt file for the Build ID above. You can also import its .meta.tsv companion for sections and editable values.";
+"Files are stored in Documents/cheats and can also be managed in the Files app. Replaced files are kept with a .bak extension." = "Files are stored in Documents/cheats and can also be managed in the Files app. Replaced files are kept with a .bak extension.";
+"Choose an Atmosphere .txt file or its .meta.tsv companion." = "Choose an Atmosphere .txt file or its .meta.tsv companion.";
+"This app has no game Build ID. Import a file named after its Build ID." = "This app has no game Build ID. Import a file named after its Build ID.";
+"Choose a nonempty cheat file smaller than 4 MiB." = "Choose a nonempty cheat file smaller than 4 MiB.";
+"The cheat file must be UTF-8 text smaller than 4 MiB." = "The cheat file must be UTF-8 text smaller than 4 MiB.";
+"The selected file could not be read." = "The selected file could not be read.";
+"Select only one cheat file and one companion per game build." = "Select only one cheat file and one companion per game build.";

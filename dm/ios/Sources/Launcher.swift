@@ -278,13 +278,15 @@ public func dmShowGameSettings(_ viewController: UnsafeMutableRawPointer, _ done
     let settings = url.flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(SettingsFile.self, from: $0) }?.settings ?? []
     let model = sessionLauncherModel ?? LauncherModel(settings)
     sessionLauncherModel = model
+    let initialSection = gameSettingsSection
+    gameSettingsSection = "Game"
     gameSettingsOpening = true
     withGameSettingsBackground { background in
         gameSettingsOpening = false
         guard parent.presentedViewController == nil else { done(); return }
         model.beginRuntime()
         var host: UIViewController?
-        let page = LauncherSettingsPage(m: model, gameBackground: background) {
+        let page = LauncherSettingsPage(m: model, gameBackground: background, initialSection: initialSection) {
             guard let presented = host else { return }
             host = nil
             presented.dismiss(animated: false) { dm_launcher_settings_pause(0); done() }

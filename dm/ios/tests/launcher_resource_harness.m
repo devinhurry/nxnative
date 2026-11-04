@@ -4,6 +4,7 @@ int dm_botw_rune_icon_snapshot(dm_botw_rune_icon_state *out) { (void)out; return
 // It never loads a game; ROM images use the production index validator and
 // graphics packages use the complete production importer and selector.
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import "GameFiles.h"
 #import "GraphicsPack.h"
@@ -26,7 +27,9 @@ NSString *dm_startup_graphics_error(void) {
     return dm_graphics_status(doc,NSBundle.mainBundle.resourceURL);
 }
 int dm_startup_dlc_count(void) { return 2; }
+void dm_test_cheats_start(void);
 BOOL dm_startup_prepare(void) {
+    dm_test_cheats_start();
     NSURL *doc=[NSFileManager.defaultManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask][0];
     return !dm_startup_rom_error() && dm_graphics_configure(doc,NSBundle.mainBundle.resourceURL,nil);
 }
@@ -40,4 +43,21 @@ int dm_launcher_setting_is_live(const char *key) {
 int dm_launcher_setting_apply(const char *key, const char *value) {
     if (!dm_launcher_setting_is_live(key)) return 0;
     setenv(key, value, 1); return 1;
+}
+
+// The fixture uses the real Swift controller menu without a gamepad view.
+int dm_pad_layout(void) { return 0; }
+bool dm_pad_layout_offered(int layout) { return layout == 0; }
+void dm_pad_layout_set(int layout) { (void)layout; }
+bool dm_setting_live(const char *key, const char *value) {
+    return value ? dm_launcher_setting_apply(key, value) : dm_launcher_setting_is_live(key);
+}
+extern bool dm_show_game_settings(void *parent, void (*done)(void));
+static void fixture_settings_done(void) {}
+void dm_gamepad_open_settings(void) {
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        UIViewController *root = ((UIWindowScene *)scene).windows.firstObject.rootViewController;
+        if (root) { dm_show_game_settings((__bridge void *)root, fixture_settings_done); return; }
+    }
 }
