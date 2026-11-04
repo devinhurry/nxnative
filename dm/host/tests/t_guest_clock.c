@@ -10,6 +10,7 @@ void *guest_sym(const char *name) { (void)name; return NULL; }
 void *module_sym(module_t *m, const char *name) { (void)m; (void)name; return NULL; }
 void crash_watch_frame(void) {}
 void dm_guest_clock_advanced(void) {}
+int dm_sdk_ounce(void) { return 0; }
 
 static dispatch_semaphore_t reading, returned;
 static void *read_clock(void *unused) {

@@ -315,6 +315,7 @@ public func dmShowLauncher(_ viewController: UnsafeMutableRawPointer, _ done: @c
     let settings = data.flatMap { try? JSONDecoder().decode(SettingsFile.self, from: $0) }?.settings ?? []
     let model = LauncherModel(settings)
     sessionLauncherModel = model
+    gameMenuModel = model
     if ProcessInfo.processInfo.environment["DM_LAUNCHER"] == "0" && dm_startup_rom_error() == nil && dm_startup_graphics_error() == nil {
         fputs("launcher: off (DM_LAUNCHER=0)\n", stderr); model.applySaved(); return false
     }

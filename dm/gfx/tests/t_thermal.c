@@ -45,6 +45,7 @@ static void *reader(void *unused) {
 }
 
 int main(void) {
+    setenv("DM_FPS_TARGET", "60", 1);   // controlled cap, independent of the selected profile
     target(60);
     const char *enabled = getenv("DM_THERMAL_CAP");
     if (!enabled || strcmp(enabled, "1")) {

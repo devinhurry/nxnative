@@ -30,7 +30,7 @@ class ResolutionSetting(unittest.TestCase):
                     self.assertEqual(bool(dr),supported)
                     if dr:self.assertEqual((dr[0]['kind'],dr[0]['default']),('toggle','0'))
                     fps=next(s for s in rows if s['env']=='DM_FPS_TARGET')
-                    self.assertEqual(fps['default'],'60')
+                    self.assertEqual(fps['default'],'30' if gid == '01007EF00011E000' else '60')
                     self.assertEqual(fps['options'],[['30','30 fps'],['60','60 fps']])
 
     def test_frame_generation_switch_requires_profile_inputs(self):
@@ -43,7 +43,7 @@ class ResolutionSetting(unittest.TestCase):
                     self.assertEqual(fg[0]['default'],'0')
                     self.assertFalse(fg[0].get('needs'))
                     self.assertEqual((fg[0]['kind'],fg[0]['level']),('choice','basic'))
-                    self.assertEqual([o[0] for o in fg[0]['options']],['0','30','40','50','60','max'])
+                    self.assertEqual([o[0] for o in fg[0]['options']],['0','30','60'])
 
             # Listing follows the supplied capability, not a fixed title ID.
             header=settings.game.header(settings.game.load('010015100B514000'))
@@ -52,5 +52,14 @@ class ResolutionSetting(unittest.TestCase):
             with patch.object(settings.game,'header',return_value=header):
                 rows=settings.build('010015100B514000',tmp,'unused')['settings']
                 self.assertIn('DM_FRAMEGEN',[s['env'] for s in rows])
+
+class UpscalerSetting(unittest.TestCase):
+    def test_only_for_games_naming_their_upscaler(self):
+        with tempfile.TemporaryDirectory() as tmp,patch.object(settings.nacp,'languages',return_value=['en-US']):
+            (Path(tmp)/'main.fixups.tsv').write_text('')
+            for gid,shown in [('040074A01BF12000',True),('010056B015FE8000',False)]:   # Donkey Kong Bananza (its NDSR network), NieR:Automata (none)
+                up=[s for s in settings.build(gid,tmp,'unused')['settings'] if s['env']=='DM_UPSCALER']
+                self.assertEqual(bool(up),shown,gid)
+                if up:self.assertEqual((up[0]['default'],up[0]['options']),('game',[['game',"Game's own"],['metalfx','MetalFX']]))
 
 if __name__=='__main__':unittest.main()

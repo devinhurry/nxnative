@@ -192,6 +192,7 @@ class TargetMaterialization(unittest.TestCase):
             'MTL':self.compiler,'atomic_json':lambda path,value: Path(path).write_text(json.dumps(value,sort_keys=True)),
             'pull_finish':lambda key,sources,refls: refls,'vin_finish':lambda key,sources,refls: refls,
             'alpha_finish':lambda key,sources,refls: refls,'logic_finish':lambda key,sources,refls: refls,
+            'ui_finish':lambda key,sources,refls: refls,
             'fetch_finish':lambda key,src,bindings,refls: refls}
         functions({'active_targets','refresh_reflection','selected_reflection','write_target_refl','materialize_shader','materialize_geometry'},self.ns)
 

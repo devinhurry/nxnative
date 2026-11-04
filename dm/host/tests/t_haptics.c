@@ -53,5 +53,9 @@ int main(void) {
     dm_haptics_set_enabled(1); assert(dm_haptics_enabled());
     dm_haptics_init(record, 0); dm_haptics_route(0, 1); send(0, 0, 1);
     assert(!dm_haptics_available() && dm_haptics_actual(0, 0).amplitude_low == 0);
+    dm_haptics_set_enabled(1); send(0, 0, 1);   // turned on while the game runs (the iOS in-game menu)
+    assert(dm_haptics_available() && dm_haptics_actual(0, 0).amplitude_low > 0);
+    dm_haptics_set_enabled(0);   // and off: every motor stops at once
+    assert(!dm_haptics_available() && dm_haptics_actual(0, 0).amplitude_low == 0);
     puts("haptics: state, timing, routing, sanitization and mapping passed");
 }

@@ -39,6 +39,8 @@
 #include "pad_apple.h"
 #include "pad_slots.h"
 #include <stdatomic.h>
+#import "DmLayout.h"
+#import "DmGameMenu.h"
 
 enum { B_A = 0, B_B, B_X, B_Y, B_LS, B_RS, B_L, B_R, B_ZL, B_ZR, B_PLUS, B_MINUS, B_LEFT, B_UP, B_RIGHT, B_DOWN, B_N };
 enum { C_NONE = 0, C_STICK, C_DPAD, C_FACE, C_BTN, C_SWAP, C_GAME, C_LOOK, C_BOTW_MAP, C_SHIELD, C_MENU, C_MENU_EXTRA, C_BOTW_ADDED };
@@ -264,6 +266,9 @@ int dm_opmode(void);   // hle_oe.c: 0 = handheld
 - (void)setTemporaryGamepadVisible:(BOOL)visible;
 - (void)closeTemporaryGamepad:(UIButton *)sender;
 - (void)showGameSettings:(UIButton *)sender;
+- (void)arrange:(DmLayout)layout;
+- (void)setPadLayout:(int)layout;
+- (int)padLayout;
 - (void)openGameSettings;
 - (void)settingsDidClose;
 @end
@@ -331,6 +336,7 @@ static void pads_start(void);   // Physical controllers, below
     BOOL _full, _tap;                              // the 3D layout / the Tap layout is current
     CALayer *_controls;                            // holds every control layer: hidden while a physical controller is connected (the view itself stays, for game touches)
     BOOL _padOff;                                  // a physical controller is connected: every touch goes to the game
+    DmLayout _layout;
     UITouch *_game[16];                            // touches on the game's touch screen by finger slot
     UITouch *_lookTouch; CGPoint _lookLast, _lookDown, _botwLookTapPoint; CGFloat _lookScale; CFTimeInterval _lookDownTime, _botwLookTapTime; BOOL _lookDragged, _botwLookTapPending;
     CGSize _lookBoundsSize; UIEdgeInsets _lookInsets; UIInterfaceOrientation _lookOrientation; BOOL _lookGeometryKnown;
@@ -363,6 +369,7 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
 
 - (instancetype)initWithFrame:(CGRect)f {
     if ((self = [super initWithFrame:f])) {
+        _layout = dm_layout(self.bounds, UIEdgeInsetsZero, NO, CGRectNull, DM_PICTURE_16_9);
         [self registerForTraitChanges:@[UITraitDisplayScale.class] withHandler:^(id<UITraitEnvironment> view, UITraitCollection *previous) {
             (void)previous; [(UIView *)view setNeedsLayout];
         }];
@@ -593,6 +600,7 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
     } else _touchFeedback=nil;
     [self refreshTouchHudMode];
 }
+- (int)padLayout { return _tap ? 2 : _full ? 1 : 0; }
 - (void)nextLayout {   // 2D → 3D (→ Tap in handheld mode) → 2D: release every touch first (no key stays held), save, lay out again
     if (botwTouchHudSupported() || _manualMenuPad) return;
     int l = _tap ? 0 : _full ? (dm_opmode() == 0 ? 2 : 0) : 1;
@@ -601,10 +609,54 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
     [NSUserDefaults.standardUserDefaults setObject:@(l) forKey:k_layout_key];
     [self applyLayout]; [self setNeedsLayout];
 }
+- (void)opmodeChanged {   // docked: the Tap layout goes (the game reads no touch screen then), unsaved, so handheld mode at the next start brings it back
+    if (!_tap || dm_opmode() == 0) return;
+    [self reset]; _tap = NO; _full = NO; [self applyLayout]; [self setNeedsLayout];
+}
+- (void)setTouchFeedback:(BOOL)on {
+    if (!on) { _touchFeedback = nil; return; }
+    if (!_touchFeedback) { _touchFeedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight]; [_touchFeedback prepare]; }
+}
+
+- (void)setPadLayout:(int)l {   // the in-game menu's pick: release every touch first (no key stays held), save, lay out again
+    if (l == 2 && dm_opmode() != 0) l = 0;
+    [self reset];
+    _full = l == 1; _tap = l == 2;
+    [NSUserDefaults.standardUserDefaults setObject:@(l) forKey:k_layout_key];
+    [self applyLayout]; [self setNeedsLayout];
+}
+- (void)arrange:(DmLayout)layout {
+    if (CGRectEqualToRect(_layout.controls, layout.controls) && CGRectEqualToRect(_layout.game, layout.game) && _layout.separated == layout.separated && _layout.topSafeOnly == layout.topSafeOnly) return;
+    [self reset];   // A finger held across a pose change must not leave a key or game touch stuck.
+    _layout = layout;
+    [self setNeedsLayout];
+}
+- (BOOL)portraitControls { return _layout.separated && self.bounds.size.height > self.bounds.size.width; }
+- (CGPoint)portraitThumbCenter:(BOOL)right {
+    CGRect s = self.safe;
+    return CGPointMake(CGRectGetMinX(s) + s.size.width * (right ? 0.72 : 0.28),
+                       CGRectGetMinY(s) + s.size.height * 0.58);
+}
+- (CGFloat)faceHitR { return MAX(self.faceR * 1.25, _layout.separated ? 22 : 0); }
+- (CGFloat)buttonDistance:(int)b point:(CGPoint)p {
+    CGFloat u = self.u;
+    if (isDrop(b)) return dist(p, [self dropCenter:b]) / MAX([self dropR:b] * 1.35, _layout.separated ? 22 : 0);
+    if (isClick(b)) return dist(p, [self clickCenter:b]) / MAX(K_CLICK_R * u * 1.35, _layout.separated ? 22 : 0);
+    CGRect r = CGRectInset([self pillRect:b], -8 * u, -8 * u);
+    if (!_layout.separated && !CGRectContainsPoint(r, p)) return CGFLOAT_MAX;
+    CGFloat w = MAX(r.size.width, _layout.separated ? 28 : 0), h = MAX(r.size.height, _layout.separated ? 28 : 0);
+    return MAX(fabs(p.x - CGRectGetMidX(r)) / (w / 2), fabs(p.y - CGRectGetMidY(r)) / (h / 2));
+}
 
 // ---- Layout (points; computed inside the safe area) ----
-- (CGRect)safe { return UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets); }
-- (CGRect)corner { UIEdgeInsets i = self.safeAreaInsets; dm_touchpad_rect r = dm_touchpad_corner_rect(self.bounds.size.width, self.bounds.size.height, i.left, i.top, i.right, i.bottom); return CGRectMake(r.x, r.y, r.width, r.height); }   // the rectangle the bottom-corner controls use
+- (CGRect)safe {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000")) { return CGRectIntersection(_layout.controls, UIEdgeInsetsInsetRect(self.bounds, dm_game_safe_insets(self.bounds, self.safeAreaInsets, _layout.topSafeOnly)));
+    }
+ return UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets); }
+- (CGRect)corner {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000")) { if (_layout.separated) return self.safe; UIEdgeInsets i = self.safeAreaInsets; i.left *= K_CORNER_IN; i.right *= K_CORNER_IN; return UIEdgeInsetsInsetRect(self.bounds, i);
+    }
+ UIEdgeInsets i = self.safeAreaInsets; dm_touchpad_rect r = dm_touchpad_corner_rect(self.bounds.size.width, self.bounds.size.height, i.left, i.top, i.right, i.bottom); return CGRectMake(r.x, r.y, r.width, r.height); }   // the rectangle the bottom-corner controls use
 - (CGRect)botwControlArea {
     float r[4]; dm_aspect_region(1,r); CGRect b=self.bounds;
     return CGRectMake(b.origin.x+b.size.width*r[0],b.origin.y+b.size.height*r[1],b.size.width*r[2],b.size.height*r[3]);
@@ -628,7 +680,10 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
     [self cancelSurfaceInput];
     [self refreshBotwRuneIcon];
 }
-- (CGFloat)u { CGRect a=[self botwControlArea]; return ([self botwTouchControlsActive] || [self botwMenuDpadActive]) ?
+- (CGFloat)u {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000")) { if (_layout.separated) { CGRect s = self.safe; return MIN(MIN(s.size.height / 430.0, s.size.width / 700.0), 1.3); } return MIN(self.bounds.size.height / 430.0, 1.3);
+    }
+ CGRect a=[self botwControlArea]; return ([self botwTouchControlsActive] || [self botwMenuDpadActive]) ?
     dm_botw_layout_unit(&_touchLayout,a.size.width,a.size.height) : dm_touchpad_u((float)self.bounds.size.height); }
 static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPointMake(right ? CGRectGetMaxX(s) - dx : CGRectGetMinX(s) + dx, y); }
 - (CGRect)botwLayoutRect:(int)control {
@@ -656,19 +711,43 @@ static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPoint
 }
 - (CGFloat)botwLayoutScale:(int)control { return [self botwTouchControlsActive] ? dm_botw_layout_scale(&_touchLayout,control) : 1; }
 - (CGPoint)botwLayoutCenter:(int)control { CGRect r=[self botwLayoutRect:control]; return CGPointMake(CGRectGetMidX(r),CGRectGetMidY(r)); }
-- (CGPoint)faceCenter { if ([self botwTouchControlsActive]) return [self botwLayoutCenter:0]; UIEdgeInsets i = self.safeAreaInsets; dm_touchpad_point p = dm_touchpad_face_center(self.bounds.size.width, self.bounds.size.height, i.left, i.top, i.right, i.bottom); return CGPointMake(p.x, p.y); }
+- (CGPoint)faceCenter {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000")) { CGRect s = self.corner; CGFloat u = self.u;
+    if (self.portraitControls) return [self portraitThumbCenter:YES];
+    CGFloat edge = _layout.separated ? self.faceGap + self.faceHitR : 0;
+    return side(s, 1, MAX(K_FACE_X * u, edge), CGRectGetMaxY(s) - MAX(K_PAD_Y * u, edge));
+    }
+ if ([self botwTouchControlsActive]) return [self botwLayoutCenter:0]; UIEdgeInsets i = self.safeAreaInsets; dm_touchpad_point p = dm_touchpad_face_center(self.bounds.size.width, self.bounds.size.height, i.left, i.top, i.right, i.bottom); return CGPointMake(p.x, p.y); }
 - (CGFloat)faceGap { return K_FACE_GAP * self.u; }
-- (CGFloat)faceR { return K_FACE_R * self.u * [self botwLayoutScale:0]; }
+- (CGFloat)faceR {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000")) { return K_FACE_R * self.u;
+    }
+ return K_FACE_R * self.u * [self botwLayoutScale:0]; }
 - (CGFloat)faceRadiusForButton:(int)b {
     return [self botwTouchControlsActive] ? [self botwLayoutRect:b].size.width*.5 : self.faceR;
 }
 - (CGPoint)facePos:(int)b {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000")) { CGPoint c = self.faceCenter; CGFloat g = self.faceGap;
+    switch (b) { case B_A: return CGPointMake(c.x + g, c.y); case B_B: return CGPointMake(c.x, c.y + g); case B_X: return CGPointMake(c.x, c.y - g); default: return CGPointMake(c.x - g, c.y); }
+    }
+
     if ([self botwTouchControlsActive]) return [self botwLayoutCenter:b];
     CGPoint c=self.faceCenter; CGFloat gap=self.faceGap;
     if (b==B_A) c.x+=gap; else if (b==B_B) c.y+=gap; else if (b==B_X) c.y-=gap; else c.x-=gap;
     return c;
 }
 - (CGPoint)stickHome {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000")) {
+    if (self.portraitControls) {
+        CGPoint p = [self portraitThumbCenter:NO];
+        if (_full) p.x -= self.dpadR + 6 * self.u;
+        return p;
+    }
+    CGRect s = self.corner;
+    return side(s, 0, K_STICK_X * self.u, CGRectGetMaxY(s) - K_PAD_Y * self.u);
+
+    }
+
     if ([self botwTouchControlsActive]) return [self botwLayoutCenter:4];
     UIEdgeInsets i = self.safeAreaInsets;
     dm_touchpad_point p = dm_touchpad_stick_home(self.bounds.size.width, self.bounds.size.height, i.left, i.top, i.right, i.bottom);
@@ -687,31 +766,68 @@ static CGPoint side(CGRect s, int right, CGFloat dx, CGFloat y) { return CGPoint
 }
 - (CGPoint)stickCentre:(int)i { return i ? _rCentre : (_stick[0] ? _lCentre : self.stickHome); }
 - (CGFloat)stickR:(int)i {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000")) { return (i ? K_RSTICK_R : K_STICK_R) * self.u;
+    }
+
     if (!i && [self botwTouchControlsActive]) return [self botwLayoutRect:B_LS].size.width*.5;
     return (i ? K_RSTICK_R : K_STICK_R) * self.u;
 }
 - (CGFloat)shieldR { return [self botwLayoutRect:B_ZL].size.width*.5; }
 - (BOOL)inLeftArea:(CGPoint)p { CGRect b = [self botwTouchControlsActive] ? [self botwControlArea] : self.bounds; return CGRectContainsPoint(b,p) && p.x < CGRectGetMinX(b)+b.size.width * K_LSWIPE && p.y > CGRectGetMidY(b); }   // lower-left: the left stick starts where the touch lands
-- (BOOL)inRightArea:(CGPoint)p { CGRect b = self.bounds; return p.x >= CGRectGetMaxX(b) - b.size.width * K_RSWIPE; }
-- (CGPoint)dpadCenter { if ([self botwTouchControlsActive] || [self botwMenuDpadActive]) return [self botwLayoutCenter:B_LEFT]; UIEdgeInsets i = self.safeAreaInsets; dm_touchpad_point p = dm_touchpad_dpad_center(self.bounds.size.width, self.bounds.size.height, i.left, i.top, i.right, i.bottom); return CGPointMake(p.x, p.y); }
+- (BOOL)inRightArea:(CGPoint)p {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000")) { CGRect b = _layout.controls; return p.x >= CGRectGetMaxX(b) - b.size.width * K_RSWIPE;
+    }
+ CGRect b = self.bounds; return p.x >= CGRectGetMaxX(b) - b.size.width * K_RSWIPE; }
+- (CGPoint)dpadCenter {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000")) {
+    if (self.portraitControls) {
+        CGPoint p = [self portraitThumbCenter:NO];
+        p.x += [self stickR:0] + 6 * self.u;
+        return p;
+    }
+    CGRect s = self.corner; CGFloat u = self.u;
+    return side(s, 0, K_LOW_X * u, CGRectGetMaxY(s) - K_LOW_Y * u);
+
+    }
+ if ([self botwTouchControlsActive] || [self botwMenuDpadActive]) return [self botwLayoutCenter:B_LEFT]; UIEdgeInsets i = self.safeAreaInsets; dm_touchpad_point p = dm_touchpad_dpad_center(self.bounds.size.width, self.bounds.size.height, i.left, i.top, i.right, i.bottom); return CGPointMake(p.x, p.y); }
 - (CGFloat)dpadR {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000")) { return K_DPAD_R * self.u;
+    }
+
     if ([self botwTouchControlsActive] || [self botwMenuDpadActive]) return [self botwLayoutRect:B_LEFT].size.width*.5;
     return K_DPAD_R * self.u;
 }
 static BOOL isDrop(int b) { return b == B_ZL || b == B_L || b == B_ZR || b == B_R; }
 static BOOL isClick(int b) { return b == B_LS || b == B_RS; }
-- (CGPoint)dropCenter:(int)b { if ([self botwTouchControlsActive]) return [self botwLayoutCenter:b]; CGRect s = self.safe; CGFloat u = self.u; BOOL z = b == B_ZL || b == B_ZR;
+- (CGPoint)dropCenter:(int)b {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000")) { CGRect s = self.safe; CGFloat u = self.u; BOOL z = b == B_ZL || b == B_ZR;
+    CGFloat edge = _layout.separated ? 22 : 0;
+    return side(s, b == B_ZR || b == B_R, MAX((z ? K_ZL_X : K_L_X) * u, edge), CGRectGetMinY(s) + MAX((z ? K_ZL_Y : K_L_Y) * u, edge));
+    }
+ if ([self botwTouchControlsActive]) return [self botwLayoutCenter:b]; CGRect s = self.safe; CGFloat u = self.u; BOOL z = b == B_ZL || b == B_ZR;
     return side(s, b == B_ZR || b == B_R, (z ? K_ZL_X : K_L_X) * u, CGRectGetMinY(s) + (z ? K_ZL_Y : K_L_Y) * u); }
 - (CGFloat)dropR:(int)b {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000")) { return (b == B_ZL || b == B_ZR ? K_ZL_R : K_L_R) * self.u;
+    }
+
     if ([self botwTouchControlsActive]) return [self botwLayoutRect:b].size.width*.5;
     return (b == B_ZL || b == B_ZR ? K_ZL_R : K_L_R) * self.u;
 }
-- (CGPoint)clickCenter:(int)b { CGRect s = self.safe; CGFloat u = self.u; return side(s, b == B_RS, K_CLICK_X * u, CGRectGetMinY(s) + K_ZL_Y * u); }
-- (CGRect)pillRect:(int)b { CGRect s = self.safe; CGFloat u = self.u, w = K_PILL_W * u, h = K_PILL_H * u;
+- (CGPoint)clickCenter:(int)b {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000")) { CGRect s = self.safe; CGFloat u = self.u; CGFloat edge = _layout.separated ? 22 : 0;
+    return side(s, b == B_RS, MAX(K_CLICK_X * u, edge), CGRectGetMinY(s) + MAX(K_ZL_Y * u, edge));
+    }
+ CGRect s = self.safe; CGFloat u = self.u; return side(s, b == B_RS, K_CLICK_X * u, CGRectGetMinY(s) + K_ZL_Y * u); }
+- (CGRect)pillRect:(int)b {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000")) { CGRect s = self.safe; CGFloat u = self.u, w = K_PILL_W * u, h = K_PILL_H * u;
+    CGPoint c = CGPointMake(CGRectGetMidX(s) + (b == B_PLUS ? K_PILL_DX : -K_PILL_DX) * u, CGRectGetMinY(s) + MAX(K_PILL_Y * u, _layout.separated ? 14 : 0));   // − on the left, + on the right
+    return CGRectMake(c.x - w / 2, c.y - h / 2, w, h);
+    }
+ CGRect s = self.safe; CGFloat u = self.u, w = K_PILL_W * u, h = K_PILL_H * u;
     if ([self botwTouchControlsActive]) return [self botwLayoutRect:b];
     CGPoint c = CGPointMake(CGRectGetMidX(s) + (b == B_PLUS ? K_PILL_DX : -K_PILL_DX) * u, CGRectGetMinY(s) + K_PILL_Y * u);   // − on the left, + on the right
     return CGRectMake(c.x - w / 2, c.y - h / 2, w, h); }
-- (CGPoint)swapCenter { CGRect s = self.safe; return CGPointMake(CGRectGetMidX(s), CGRectGetMinY(s) + K_PILL_Y * self.u); }
+- (CGPoint)swapCenter { CGRect s = self.safe; return CGPointMake(CGRectGetMidX(s), CGRectGetMinY(s) + MAX(K_PILL_Y * self.u, _layout.separated ? 14 : 0)); }
 
 static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); }
 - (BOOL)botwTouchControlsActive {
@@ -952,7 +1068,21 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     }
     return NO;
 }
-- (int)btnAt:(CGPoint)p {   // locked keys (tested on touch-down only, then locked)
+- (int)btnAt:(CGPoint)p {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000")) {   // Locked at touch-down; nearest normalized target wins overlapping separated-layout hits.
+    int best = -1; CGFloat distance = 1;
+    for (int i = 0; i < (int)(sizeof k_btns / sizeof *k_btns); i++) { int b = k_btns[i];
+        if (fullOnly(b) && !_full) continue;
+        CGFloat d = [self buttonDistance:b point:p];
+        if (d <= 1 && (best < 0 || d < distance)) {
+            best = b; distance = d;
+            if (!_layout.separated) return b;
+        }
+    }
+    return best;
+
+    }
+   // locked keys (tested on touch-down only, then locked)
     CGFloat u = self.u;
     if ([self botwTouchControlsActive] && dist(p, [self runeButtonCenter]) <= [self dropR:B_L] * 1.45) return B_L;
     if ([self botwTouchControlsActive] && dist(p, self.shieldHome) <= _touchLayout.shield_hit_size * .5) return B_ZL;
@@ -1237,11 +1367,14 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     dm_touch t[16]; int n = 0;
     for (int i = 0; i < 16; i++) if (_game[i]) {
         CGPoint p = [_game[i] locationInView:self];
-        t[n++] = (dm_touch){(uint32_t)i, (float)fmin(fmax((p.x - x0) / w, 0), 0.999), (float)fmin(fmax((p.y - y0) / h, 0), 0.999)};
+        p = strcmp(DM_GAME_ID, "01007EF00011E000") ? dm_game_touch_point(_layout.game, p) :
+            CGPointMake(fmin(fmax((p.x - x0) / w, 0), 0.999), fmin(fmax((p.y - y0) / h, 0), 0.999));
+        t[n++] = (dm_touch){(uint32_t)i, (float)p.x, (float)p.y};
     }
     dm_touch_set(t, n);
 }
 - (BOOL)gameBegin:(UITouch *)t {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000") && (CGRectIsEmpty(_layout.game) || (_layout.separated && !CGRectContainsPoint(_layout.game, [t locationInView:self])))) return NO;
     for (int i = 0; i < 16; i++) if (!_game[i]) { _game[i] = t; [_owner setObject:@(C_GAME | (uint64_t)i << 8) forKey:t]; return YES; }
     return NO;
 }
@@ -1283,6 +1416,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
                 [_owner setObject:@(C_MENU_EXTRA) forKey:t];
             } else if (!_botwMenuTouch) {
                 CGPoint p = [t locationInView:self];
+        if (strcmp(DM_GAME_ID, "01007EF00011E000") && _layout.separated && !CGRectContainsPoint(_layout.controls, p)) { game |= [self gameBegin:t]; continue; }
                 _botwMenuPointerActive = YES; _botwMenuTouch = t; _botwMenuLast = p;
                 [_owner setObject:@(C_MENU) forKey:t];
                 [self sendBotwMenuPointer:DM_BOTW_MENU_BEGIN point:p];
@@ -1745,6 +1879,10 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
     layerDisplayScale(self.layer,displayScale);
     CGFloat u = self.u;
     [CATransaction begin]; [CATransaction setDisableActions:YES];
+    CGFloat scale = MAX(self.traitCollection.displayScale, 1);
+    for (int b = 0; b < B_N; b++) if (_label[b] && _label[b].contentsScale != scale) {
+        _label[b].contentsScale = scale; [_label[b] setNeedsDisplay];
+    }
     _controls.frame = self.layer.bounds;
     _menuDpad.hidden = ![self botwMenuDpadActive];
     if (!_menuDpad.hidden) {
@@ -2129,6 +2267,12 @@ void dm_gamepad_surface_changed(void) {
         [g_view cancelSurfaceInput]; [g_view refreshBotwTouchMenuMode];
     }
 }
+void dm_gamepad_arrange(UIView *view, DmLayout layout) { [(DmGamepad *)view arrange:layout]; }
+void dm_gamepad_opmode_changed(void) { [g_view opmodeChanged]; }
+void dm_gamepad_touch_feedback(bool on) { [g_view setTouchFeedback:on]; }
+int dm_pad_layout(void) { return g_view ? [g_view padLayout] : 0; }
+bool dm_pad_layout_offered(int layout) { return !botwTouchHudSupported() && (layout == 0 || layout == 1 || (layout == 2 && dm_opmode() == 0)); }
+void dm_pad_layout_set(int layout) { [g_view setPadLayout:layout]; }
 void dm_gamepad_active(void) { dispatch_async(dispatch_get_main_queue(), ^{ for (GCController *c in GCController.controllers) dm_motion_rearm(c); }); }   // On become active: motion_apple.h
 void dm_gamepad_reset(void) {   // On resign active: release everything (a key held while switching away and released in background gets no "release")
     dispatch_async(dispatch_get_main_queue(), ^{ [g_view reset]; });

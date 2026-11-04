@@ -91,7 +91,7 @@ int main(int argc,char **argv) { @autoreleasepool {
     setenv("DM_FRAMEGEN","30",1); setenv("DM_OPMODE","1",1);
     setenv("DM_PSO_PREPARE","0",1); setenv("DM_PSO_PREBUILD","0",1);
     if (!dm_fg_enabled()) { puts("SKIP: profile/device has no frame interpolation"); return 0; }
-    mtl_init(); g_dm_present_link=g_link_started=g_link_owns_layer=1;
+    mtl_init(); test_layer=layer(); g_dm_present_link=g_link_started=g_link_owns_layer=1;
     pattern_vertical=argc>6?atoi(argv[6]):0;
     g_sub_thread=pthread_self(); atomic_store(&g_sub_thread_set,1);
     camera[0]=camera[5]=camera[10]=1; camera[12]=camera[17]=camera[22]=camera[27]=1;

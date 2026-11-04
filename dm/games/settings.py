@@ -131,7 +131,7 @@ def build(gid, patched, control):
         if not match or not choices: sys.exit(f'{g.id}: phone_defaults is A<generation>Pro DM_VARIABLE=value ...')
         for choice in choices:
             key, eq, val = choice.partition('=')
-            if not eq or key not in table or table[key] is None or val not in table[key] or key in phone_defaults:
+            if not eq or key not in table or table[key] is None or val not in (table[key] or set()) or key in phone_defaults:
                 sys.exit(f'{g.id}: invalid phone_defaults choice: {choice}')
             phone_defaults[key] = {'generation': int(match[1]), 'value': val}
         if platform == 'ios':
