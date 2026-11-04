@@ -68,6 +68,49 @@ static void check_seated_dock(id<MTLTexture> src) {
     }
     atomic_store(&g_origin_ll,0); res_remove(out); res_remove(uv); res_remove(src);
 }
+static void check_seated_map_effect(void) {
+    // The heading quad multiplies map colors with zero source alpha outside
+    // its fan. The isolated dock must retain coverage across that rectangle.
+    NSError *error=nil;
+    id<MTLLibrary> library=[g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\n"
+        "vertex float4 v(uint i [[vertex_id]]) { return float4(i==1 ? 3.0 : -1.0,i==2 ? 3.0 : -1.0,0,1); }\n"
+        "fragment float4 f() { return float4(.5,.5,.5,0); }\n" options:nil error:&error];
+    EXPECT("Seated map effect fixture compiles",1,library!=nil); if (!library) return;
+    NvShader *vs=[NvShader new],*fs=[NvShader new];
+    vs->fn=[library newFunctionWithName:@"v"]; fs->fn=[library newFunctionWithName:@"f"];
+    fs->rf.color_known=fs->rf.color_mask=1;
+    blend_st native={0,NVN_BLEND_FUNC_DST_COLOR,NVN_BLEND_FUNC_SRC_ALPHA,NVN_BLEND_FUNC_DST_COLOR,
+        NVN_BLEND_FUNC_SRC_ALPHA,NVN_BLEND_EQUATION_ADD,NVN_BLEND_EQUATION_ADD};
+    MTLTextureDescriptor *td=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float width:8 height:8 mipmapped:NO];
+    td.storageMode=MTLStorageModeShared; td.usage=MTLTextureUsageRenderTarget;
+    id<MTLTexture> out=[g_dev newTextureWithDescriptor:td]; res_add(out); res_commit();
+    for (int dock=0;dock<2;dock++) {
+        pso_key key={0}; key.samples=1; key.cfmt[0]=td.pixelFormat; key.chmask=15; key.blend_en=1;
+        key.blend[0]=dock ? ui_dock_blend(native) : native;
+        id<MTLRenderPipelineState> pipeline=[g_dev newRenderPipelineStateWithDescriptor:pso_desc(&key,vs,fs,nil,0) error:&error];
+        EXPECT("Seated map multiply pipeline compiles",1,pipeline!=nil); if (!pipeline) continue;
+        id<MTL4CommandAllocator> al=[g_dev newCommandAllocator]; id<MTL4CommandBuffer> cb=[g_dev newCommandBuffer];
+        id<MTLSharedEvent> event=[g_dev newSharedEvent]; [cb beginCommandBufferWithAllocator:al];
+        MTL4RenderPassDescriptor *rp=[MTL4RenderPassDescriptor new];
+        rp.colorAttachments[0].texture=out; rp.colorAttachments[0].loadAction=MTLLoadActionClear;
+        rp.colorAttachments[0].storeAction=MTLStoreActionStore; rp.colorAttachments[0].clearColor=MTLClearColorMake(.25,.125,.0625,1);
+        id<MTL4RenderCommandEncoder> en=[cb renderCommandEncoderWithDescriptor:rp];
+        [en setRenderPipelineState:pipeline]; [en setViewport:(MTLViewport){2,2,4,4,0,1}];
+        [en setScissorRect:(MTLScissorRect){2,2,4,4}]; [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [en endEncoding]; [cb endCommandBuffer]; [g_q4 commit:&cb count:1]; [g_q4 signalEvent:event value:1];
+        EXPECT("Seated map effect GPU completes",1,[event waitUntilSignaledValue:1 timeoutMS:10000]);
+        uint16_t pixels[8*8*4]; [out getBytes:pixels bytesPerRow:8*8 fromRegion:MTLRegionMake2D(0,0,8,8) mipmapLevel:0];
+        int color_bad=0,alpha_bad=0;
+        for (int y=0;y<8;y++) for (int x=0;x<8;x++) {
+            int inside=x>=2 && x<6 && y>=2 && y<6; const uint16_t *p=pixels+4*(y*8+x);
+            color_bad+=p[0]!=(inside ? 0x3000 : 0x3400) || p[1]!=(inside ? 0x2c00 : 0x3000) || p[2]!=(inside ? 0x2800 : 0x2c00);
+            alpha_bad+=p[3]!=(!dock && inside ? 0 : 0x3c00);
+        }
+        EXPECT("Heading multiply retains the native RGB result",0,color_bad);
+        EXPECT(dock ? "Seated heading quad keeps map coverage over the reflection" : "Native opaque-canvas alpha still follows the game",0,alpha_bad);
+    }
+    res_remove(out);
+}
 static void check_seated_reflection(void) {
     // The upper quadrants remain byte-identical; their mirror is blurred and
     // dimmed below the fold, behind a sharp opaque patch in the dock texture.
@@ -183,6 +226,7 @@ int main(int argc,char **argv) { @autoreleasepool {
     for(int y=0;y<8;y++)for(int x=0;x<8;x++)memcpy(px+4*(y*8+x),colors[(x>=4)+2*(y>=4)],4);
     [src replaceRegion:MTLRegionMake2D(0,0,8,8) mipmapLevel:0 withBytes:px bytesPerRow:32];
     check_seated_dock(src);
+    check_seated_map_effect();
     check_seated_reflection();
     if (argc==2 && !strcmp(argv[1],"--seated")) { printf("== %d checks, %d failed ==\n",cases,failed); return failed!=0; }
     int zero[4]={0},tl[4]={0,0,4,4},tr[4]={4,0,4,4},bl[4]={0,4,4,4},br[4]={4,4,4,4},one[4]={3,3,1,1},inset[4]={1,1,4,4};

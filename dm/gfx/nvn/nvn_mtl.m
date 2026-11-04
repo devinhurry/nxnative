@@ -521,7 +521,7 @@ void mtl_init(void) {
     g_present_args = [g_dev newArgumentTableWithDescriptor:pad error:&ate];
     if (!g_present_args) MDIE("failed to create the present argument table: %s", ate.localizedDescription.UTF8String);
     for (int i = 0; i < 3; i++) {
-        g_present_uv[i] = [g_dev newBufferWithLength:sizeof(float) * 8 options:MTLResourceStorageModeShared];
+        g_present_uv[i] = [g_dev newBufferWithLength:sizeof(float) * 16 options:MTLResourceStorageModeShared];
         if (!g_present_uv[i]) MDIE("failed to create present UV buffer[%d]", i);
         res_add(g_present_uv[i]);
     }
@@ -10949,6 +10949,16 @@ static int ui_dock_scope(int scope) {
     return scope==NVN_UI_MAP || scope==NVN_UI_WEATHER || scope==NVN_UI_DOCK_ENV ||
         scope==NVN_UI_DOCK_EQUIPMENT || scope==NVN_UI_RUNE;
 }
+static blend_st ui_dock_blend(blend_st blend) {
+    // This multiply changes existing color only. Native canvas alpha is not
+    // coverage: the map's heading quad can zero it and expose the reflection.
+    if (!blend.adv && blend.eq_rgb==NVN_BLEND_EQUATION_ADD &&
+        blend.src_rgb==NVN_BLEND_FUNC_DST_COLOR && blend.dst_rgb==NVN_BLEND_FUNC_SRC_ALPHA) {
+        blend.src_a=NVN_BLEND_FUNC_ZERO; blend.dst_a=NVN_BLEND_FUNC_ONE;
+        blend.eq_a=NVN_BLEND_EQUATION_ADD;
+    }
+    return blend;
+}
 static void ui_region_to_render(float region[4]) {
     if (atomic_load_explicit(&g_origin_ll,memory_order_relaxed)) region[1]=1-region[1]-region[3];
 }
@@ -11318,7 +11328,10 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
         // and its cached menu/character pictures in their native coordinates.
         seated_dock_prepare(R.rt.color[0]); __typeof__(R) saved=R;
         R.rt=(p_set_rt){.n=1,.color={&g_ui_dock_tex}}; R.has_rt=1;
+        blend_st blend=S.blend[0];
+        if (S.color.blend_en&1) S.blend[0]=ui_dock_blend(blend);
         g_ui_dock_draw=1; draw_(dw,di); g_ui_dock_encoder=g_enc; g_ui_dock_draw=0; R=saved;
+        S.blend[0]=blend;
     } else {
         seated_dock_finish();
         if (composite) {
@@ -13527,7 +13540,7 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTex
 // Replacing those textures waits for earlier presents; throttle replacement during resizing, and keep standard scaling for refused sizes. Offscreen captures own separate state.
 #define FX_REMAKE_PRESENTS 30
 typedef struct { id<MTL4FXSpatialScaler> sc; id<MTLTexture> in, out; id<MTL4Compiler> compiler; uint64_t made_at; int made; NSUInteger refused[6]; } fx_state;
-static fx_state g_fx_present;   // only the present thread encodes or replaces the scaler
+static fx_state g_fx_present,g_fx_present_picture;   // separate whole-window / upper-pane sizes; owned by the present thread
 static id<MTL4Compiler> g_fx_comp;   // shared by the game-upscaler replacements
 static _Atomic int g_fx_mode = -1;   // shared by scene replay and presentation; 0 = standard, 1 = full-screen MetalFX, 2 = scene MetalFX
 static int fx_mode(void) {
@@ -13755,22 +13768,28 @@ static int up_mfx_encode(NvShader *cs) {
 }
 // The present pass: src's valid rectangle drawn into dst (the drawable, or a screenshot's texture) as present_encode draws it, through MetalFX first where fx_encode takes it
 // (fx: the scaler state to use, nil = bilinear). uvb: the pass's crop constants (one buffer per present allocator, written by the CPU)
-static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4], id<MTLBuffer> uvb, fx_state *fx) {
+// A recorded pane uses window coordinates. Each pass has its own UV offset so
+// overlay encoding cannot overwrite the base pass's constants before GPU use.
+static int present_encode_m4_region(id<MTL4CommandBuffer> cb,id<MTLTexture> src,id<MTLTexture> dst,const int crop[4],
+                                    id<MTLBuffer> uvb,fx_state *fx,const float region[4],size_t offset,int load) {
     NSUInteger r[4]; if (!present_crop_rect(src, crop, r)) return 0;
     present_pipeline(dst.pixelFormat);
     double dw = dst.width, dh = dst.height;
     MTLViewport vp = present_viewport(r[2], r[3], dw, dh);
-    if (dm_aspect_native()) {
+    if (region) {
+        vp=(MTLViewport){dw*region[0],dh*region[1],dw*region[2],dh*region[3],0,1};
+    } else if (dm_aspect_native()) {
         float region[4],cr = dm_aspect_region(1,region) ? 0 : dm_aspect_custom_ratio();
         if (cr > 0) { double w = fmin(dw, dh * cr), h = w / cr; vp = (MTLViewport){floor((dw - w) / 2), floor((dh - h) / 2), round(w), round(h), 0, 1}; }
         else vp = (MTLViewport){0, 0, dw, dh, 0, 1};   // native display: the camera holds the wide view, the canvas is stretched (UI squeezed in draw)
     }
     int full = vp.originX == 0 && vp.originY == 0 && vp.width == dw && vp.height == dh;
-    id<MTLTexture> tex = present_raw_src(src), up = fx && fx_mode() == 1 ? fx_encode(fx, cb, tex, r, vp, dst.pixelFormat, fx == &g_fx_present ? FX_PRESENT : FX_CAPTURE) : nil;
+    id<MTLTexture> tex = present_raw_src(src), up = fx && fx_mode() == 1 ? fx_encode(fx, cb, tex, r, vp, dst.pixelFormat,
+        fx == &g_fx_present || fx == &g_fx_present_picture ? FX_PRESENT : FX_CAPTURE) : nil;
     if (up) { tex = up; r[0] = r[1] = 0; r[2] = up.width; r[3] = up.height; }   // the scaled picture, the viewport's size: drawn 1:1
     MTL4RenderPassDescriptor *rp = [MTL4RenderPassDescriptor new];
     rp.colorAttachments[0].texture = dst;
-    rp.colorAttachments[0].loadAction = full ? MTLLoadActionDontCare : MTLLoadActionClear;
+    rp.colorAttachments[0].loadAction = load ? MTLLoadActionLoad : full ? MTLLoadActionDontCare : MTLLoadActionClear;
     rp.colorAttachments[0].storeAction = MTLStoreActionStore;
     rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
     id<MTL4RenderCommandEncoder> en = [cb renderCommandEncoderWithDescriptor:rp];
@@ -13779,15 +13798,22 @@ static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MT
     [en setArgumentTable:g_present_args atStages:MTLRenderStageFragment];
     [g_present_args setTexture:tex.gpuResourceID atIndex:0];
     [g_present_args setSamplerState:g_blit_samp.gpuResourceID atIndex:0];
-    float *uv = uvb.contents; NSUInteger tw = tex.width, th = tex.height, cx = r[0], cy = r[1], cw = r[2], ch = r[3];
+    float *uv = (float *)((uint8_t *)uvb.contents+offset); NSUInteger tw = tex.width, th = tex.height, cx = r[0], cy = r[1], cw = r[2], ch = r[3];
     uv[0] = (float)cx / tw; uv[1] = (float)cy / th; uv[2] = (float)cw / tw; uv[3] = (float)ch / th;
     uv[4] = (cx + 0.5f) / tw; uv[5] = (cy + 0.5f) / th; uv[6] = (cx + cw - 0.5f) / tw; uv[7] = (cy + ch - 0.5f) / th;
     if (atomic_load_explicit(&g_origin_ll, memory_order_relaxed)) { uv[1] += uv[3]; uv[3] = -uv[3]; }   // lower-left origin: the window image is stored bottom-up
-    [g_present_args setAddress:uvb.gpuAddress atIndex:0];
+    [g_present_args setAddress:uvb.gpuAddress+offset atIndex:0];
     [en setViewport:vp]; [en setRenderPipelineState:g_blit_pso];
+    if (region) {
+        NSUInteger x=lround(vp.originX),y=lround(vp.originY);
+        [en setScissorRect:(MTLScissorRect){x,y,lround(vp.originX+vp.width)-x,lround(vp.originY+vp.height)-y}];
+    }
     [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     m4_end(en);
     return up ? PRESENT_METALFX : PRESENT_STANDARD;
+}
+static int present_encode_m4(id<MTL4CommandBuffer> cb,id<MTLTexture> src,id<MTLTexture> dst,const int crop[4],id<MTLBuffer> uvb,fx_state *fx) {
+    return present_encode_m4_region(cb,src,dst,crop,uvb,fx,NULL,0,0);
 }
 // The present's picture drawn into an offscreen texture (out: private, render target) the way present_now draws it into the drawable, MetalFX included, on the Metal 4 queue;
 // returns whether it was submitted. Completion reports the encoding kind, or PRESENT_FAILED on a GPU error. Resources remain resident and retained until GPU completion.
@@ -13897,7 +13923,7 @@ static void framegen_presented(uint64_t serial,uint64_t ticket,int generated,dou
     fflush(g_fg_timing_file);
     pthread_mutex_unlock(&g_fg_timing_mu);
 }
-static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts, int fg_slot, int release_slot, const int canvas_region[4]) {
+static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts, int fg_slot, int release_slot, const int canvas_region[4],const float picture[4]) {
     if (g_present_stall_ns) { struct timespec ts = {0, (long)g_present_stall_ns}; nanosleep(&ts, NULL); }
     if (fg_slot < 0) g_present_n++;
     if (fg_slot < 0 && bootprof() && (g_present_n == 1 || g_present_n % 120 == 0)) {
@@ -13911,7 +13937,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     PD("X ser=%llu", t->serial);
     id<MTLTexture> src = fg_slot >= 0 ? dm_fg_output(fg_slot) : tex_mtl(t);
     if (!src) { RED_ONCE(8, "present texture could not get an MTLTexture"); return 0; }
-    int mapped_crop[4];
+    const int *real_crop=crop; int mapped_crop[4];
     if (fg_slot>=0) {
         if (!framegen_present_crop(tex_mtl(t),src,crop,canvas_region,mapped_crop)) return 0;
         crop=mapped_crop;
@@ -13988,7 +14014,18 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     [g_q4 waitForDrawable:dr];
     id<MTL4CommandBuffer> cb = g_present_cb[alloc_i];
     [cb beginCommandBufferWithAllocator:g_present_alloc4[alloc_i]];
-    int kind = present_encode_m4(cb, src, dr.texture, crop, g_present_uv[alloc_i], &g_fx_present);
+    int kind;
+    if (picture && picture[2]>0 && picture[3]>0) {
+        // The real snapshot already contains the native dock and blurred
+        // reflection. Interpolate only the upper game picture; keep that same
+        // lower pane for both members of the pair, including its HUD edges.
+        const float full[4]={0,0,1,1};
+        kind=present_encode_m4_region(cb,tex_mtl(t),dr.texture,real_crop,g_present_uv[alloc_i],&g_fx_present,full,0,0);
+        if (kind && fg_slot>=0) {
+            int overlay=present_encode_m4_region(cb,src,dr.texture,crop,g_present_uv[alloc_i],&g_fx_present_picture,picture,32,1);
+            kind=overlay ? MAX(kind,overlay) : 0;
+        }
+    } else kind=present_encode_m4(cb,src,dr.texture,crop,g_present_uv[alloc_i],&g_fx_present);
     if (!kind) { [cb endCommandBuffer]; [g_q4 signalDrawable:dr]; return 0; }
     int fx_kind = kind == PRESENT_METALFX;
     [cb endCommandBuffer];
@@ -14056,7 +14093,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
 // Swapchain texture return: before AcquireTexture gets a texture it waits for the ticket of that texture's previous present to be processed (mtl_present_wait), after which the commands the game draws into it
 // are necessarily ordered after that blit on the GPU queue.
 #define PQ 8
-typedef struct { tex_t t; double period; uint64_t frame; int crop[4]; double t_in; uint64_t ev_val, snap_v; int fg_slot, fg_valid, fg_shown, fg_cadence; int canvas_region[4]; } pq_item;   // snap_v: the snapshot copy this present shows (snap_commit_wait)   // t_in: the time the game handed this frame into the present queue (CACurrentMediaTime); ev_val: see g_ext_ev
+typedef struct { tex_t t; double period; uint64_t frame; int crop[4]; double t_in; uint64_t ev_val, snap_v; int fg_slot, fg_valid, fg_shown, fg_cadence; int canvas_region[4]; float picture[4]; } pq_item;   // snap_v: the snapshot copy this present shows (snap_commit_wait)   // t_in: the time the game handed this frame into the present queue (CACurrentMediaTime); ev_val: see g_ext_ev
 // External producer (the Vulkan layer, dm/gfx/vk) renders on its own queue and signals this event when a frame's rendering is done: the present of that frame waits for the value on g_q4
 static id<MTLSharedEvent> g_ext_ev;
 static void ext_wait(uint64_t v) { if (v && g_ext_ev) [g_q4 waitForEvent:g_ext_ev value:v]; }
@@ -14071,7 +14108,7 @@ static void present_drop_item(uint64_t ticket) {
     g_pres[ticket%PRING]=(pres_ent){ticket,-1};
 }
 static uint64_t g_pq_in;
-static int present_now(const tex_t *, double, uint64_t, uint64_t, const int[4], id<CAMetalDrawable>, double, int, int, const int[4]);
+static int present_now(const tex_t *, double, uint64_t, uint64_t, const int[4], id<CAMetalDrawable>, double, int, int, const int[4],const float[4]);
 static double g_link_vperiod, g_link_vhalf;   // virtual ticks (link_range): seconds per counted tick (0 = every callback is a tick) and half a refresh of the screen
 
 @interface NvMetalDisplayLinkDelegate : NSObject <CAMetalDisplayLinkDelegate> {
@@ -14180,7 +14217,7 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
     int submitted;
     ext_wait(it.ev_val); snap_commit_wait(it.snap_v);
     double display_period=it.fg_cadence ? it.period/2 : it.period;
-    @autoreleasepool { submitted = present_now(&it.t, display_period, it.frame, ticket, it.crop, update.drawable, update.targetPresentationTimestamp, generated ? it.fg_slot : -1, !generated && it.fg_valid ? it.fg_slot : -1,it.canvas_region); }
+    @autoreleasepool { submitted = present_now(&it.t, display_period, it.frame, ticket, it.crop, update.drawable, update.targetPresentationTimestamp, generated ? it.fg_slot : -1, !generated && it.fg_valid ? it.fg_slot : -1,it.canvas_region,it.picture); }
     if (submitted && it.fg_cadence) {
         // Keep the fractional refresh remainder. At 40/50 real frames on a
         // 120 Hz screen, rounding each half-period from the last actual tick
@@ -14355,7 +14392,7 @@ static void *present_main(void *arg) {
         pthread_mutex_unlock(&g_pq_mu);
         int submitted;
         ext_wait(it.ev_val); snap_commit_wait(it.snap_v);
-        @autoreleasepool { submitted = present_now(&it.t,it.fg_cadence?it.period/2:it.period,it.frame,ticket,it.crop,nil,0,generated?it.fg_slot:-1,!generated && it.fg_valid?it.fg_slot:-1,it.canvas_region); }
+        @autoreleasepool { submitted = present_now(&it.t,it.fg_cadence?it.period/2:it.period,it.frame,ticket,it.crop,nil,0,generated?it.fg_slot:-1,!generated && it.fg_valid?it.fg_slot:-1,it.canvas_region,it.picture); }
         if (!submitted && !generated && it.fg_valid) dm_fg_display_done(it.fg_slot);
         pthread_mutex_lock(&g_pq_mu); g_classic_busy = 0;
         if (submitted && !generated) g_fg_last_real_ticket=ticket;
@@ -14536,7 +14573,7 @@ static uint64_t present_enqueue(const tex_t *t, double period, const int crop[4]
         else if (st == 2 && now - t0 >= at + dur) { st = 3; mtl_link_pause(0); MLOG("DM_TEST_LINK_STALL: resuming the display link (frame %llu)", (unsigned long long)atomic_load(&g_cur_frame)); }
     }
     if (ws_on()) { static uint64_t f0; uint64_t f = atomic_load(&g_cur_frame); if (!f0) f0 = f; else if (f >= f0 + 300) { ws_report(f, f - f0); f0 = f; } }
-    int fg_slot=-1,fg_cadence=0,canvas_region[4]={0};
+    int fg_slot=-1,fg_cadence=0,canvas_region[4]={0}; float picture[4]={0};
     if (*DM_GAME_FRAMEGEN_SCENE && dm_fg_enabled() && t && !ev_val && on_sub_thread()) {
         pthread_mutex_lock(&g_pq_mu);
         // The preceding real display command must already be committed: both
@@ -14546,7 +14583,10 @@ static uint64_t present_enqueue(const tex_t *t, double period, const int crop[4]
             !(g_pq_in && g_fg_report_ticket==g_pq_in && g_fg_report_time<=0);
         pthread_mutex_unlock(&g_pq_mu);
         if (*DM_GAME_ASPECT_CANVAS && g_framegen_capture_state.present_serial!=t->serial) interpolate=0;
-        if (g_framegen_capture_state.present_serial==t->serial) memcpy(canvas_region,g_framegen_capture_state.present_region,sizeof canvas_region);
+        if (g_framegen_capture_state.present_serial==t->serial) {
+            memcpy(canvas_region,g_framegen_capture_state.present_region,sizeof canvas_region);
+            memcpy(picture,g_framegen_capture_state.present_picture,sizeof picture);
+        }
         fg_slot=framegen_generate(period,interpolate); fg_cadence=dm_fg_has_history();
         if (fg_cadence && period<=0) period=dm_fg_frame_seconds();
     }
@@ -14560,6 +14600,7 @@ static uint64_t present_enqueue(const tex_t *t, double period, const int crop[4]
     pq_item *it = &g_pq[g_pq_in % PQ]; *it = (pq_item){*t, period, atomic_load(&g_cur_frame), {0}, CACurrentMediaTime(), ev_val, ss ? g_snap[slot].ev : 0, fg_slot, fg_slot>=0, 0, fg_cadence};
     if (crop) memcpy(it->crop, crop, sizeof it->crop);   // The current frame's state is enqueued with the ticket number, rather than reading the mutable window late on the present thread
     memcpy(it->canvas_region,canvas_region,sizeof canvas_region);
+    memcpy(it->picture,picture,sizeof picture);
     uint64_t tk = ++g_pq_in;
     if (ss) { g_snap[slot].ticket = tk; atomic_fetch_add(&g_snap_next, 1); }
     pthread_cond_broadcast(&g_pq_cv);
