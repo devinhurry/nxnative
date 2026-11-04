@@ -196,6 +196,20 @@ int main(int argc, char **argv) { @autoreleasepool {
     acquire_ticks(120, 1, 1, 2, "the 60 fps frame step keeps 60 Hz vsyncs");
     state[0] = 30;
     acquire_ticks(120, 1, 1, 4, "the 30 fps frame step keeps two 60 Hz vsyncs");
+    dm_fps_realtime=1;
+    nvn_present_config(60,0);
+    win_t custom={.interval=1};
+    for (int rate=20;rate<=120;rate+=5) {
+        state[0]=rate; atomic_store(&g_fs_k,0);
+        CHECK(nvn_game_fps()==rate,"custom rates keep their exact cap without interpolation");
+        CHECK(nvn_game_realtime()==(rate!=30 && rate!=60),"ordinary 30/60 retains its original game clock");
+        CHECK(present_period(&custom)==1000000000ull/(uint64_t)rate,"custom present periods use the selected rate");
+    }
+    state[0]=20; acquire_ticks(120,0,1,6,"20 fps uses six physical 120 Hz ticks");
+    state[0]=40; acquire_ticks(120,0,1,3,"40 fps uses three physical 120 Hz ticks");
+    state[0]=120; acquire_ticks(120,0,1,1,"120 fps uses one physical refresh with interpolation off");
+    CHECK(mtl_realtime_clock(),"the Metal presenter follows the custom game clock with interpolation off");
+    dm_fps_realtime=0;
     dm_fps_state = NULL;
     g_link_mode = 1;
     CHECK(mtl_link_rate() == 60, "a 60 Hz link reports 60");

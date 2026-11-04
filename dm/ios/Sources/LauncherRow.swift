@@ -30,6 +30,7 @@ extension LauncherModel {
 struct SettingRow: View {
     let s: Setting
     @ObservedObject var m: LauncherModel
+    @State private var moreFrameRates: Bool? = nil
 
     private var locked: Bool { m.lockingKey(s) != nil }
     private var note: String {
@@ -66,16 +67,11 @@ struct SettingRow: View {
                 .accessibilityIdentifier(s.env)
                 .accessibilityLabel(Text(LocalizedStringKey(s.label)))
                 .accessibilityHint(note)
+                .disabled(!m.canEnableFrameGeneration)
+            case "choice" where s.env == "DM_FPS_TARGET":
+                frameRateRow
             case "choice":
-                if s.env == "DM_FPS_TARGET" {
-                    HStack {
-                        settingLabel
-                        Spacer(minLength: 12)
-                        choices.labelsHidden().pickerStyle(.segmented).frame(width: 180)
-                    }
-                } else {
-                    choices.pickerStyle(.menu)
-                }
+                choices.pickerStyle(.menu)
             case "range":
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -95,6 +91,58 @@ struct SettingRow: View {
             }
         }
         .disabled(locked)
+    }
+
+    private var frameRateRow: some View {
+        let value = m.values[s.env] ?? s.def
+        let extended = (s.options?.count ?? 0) > 2
+        let expanded = moreFrameRates ?? !["30", "60"].contains(value)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                settingLabel
+                Spacer(minLength: 4)
+                if extended {
+                    HStack(spacing: 4) {
+                        ForEach(["30", "60"], id: \.self) { rate in
+                            Button { m.setValue(rate, for: s) } label: {
+                                Text(rate).monospacedDigit().frame(minWidth: 24)
+                            }
+                            .buttonStyle(.bordered).controlSize(.small)
+                            .tint(value == rate ? launcherTint : .secondary)
+                            .accessibilityLabel("\(rate) fps")
+                            .accessibilityIdentifier("DM_FPS_TARGET.\(rate)")
+                        }
+                        Button {
+                            withAnimation { moreFrameRates = !expanded }
+                        } label: {
+                            HStack(spacing: 3) {
+                                Text("More frame rates")
+                                Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                            }.font(.caption).fixedSize()
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier("DM_FPS_TARGET.more")
+                    }
+                } else {
+                    choices.labelsHidden().pickerStyle(.segmented).frame(width: 180)
+                }
+            }
+            if extended && expanded {
+                HStack {
+                    Slider(value: Binding(get: { Double(m.values[s.env] ?? s.def) ?? 30 },
+                                          set: { m.setValue(String(Int($0.rounded())), for: s) }),
+                           in: 20...120, step: 5)
+                        .accessibilityLabel(Text("Frame rate"))
+                        .accessibilityValue("\(value) fps")
+                        .accessibilityIdentifier("DM_FPS_TARGET.slider")
+                    Text("\(value) fps").monospacedDigit().font(.subheadline).frame(minWidth: 58, alignment: .trailing)
+                }
+                Text("Frame generation is unavailable above 60 fps.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(s.env)
     }
 
     private var choices: some View {

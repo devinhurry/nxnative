@@ -21,7 +21,7 @@ static void expect_target(float expected) {
     dm_fps_state_apply(); float target; memcpy(&target,dm_fps_state,sizeof target); assert(target==expected);
 }
 int main(void) {
-    uint8_t state[80]={0}; dm_fps_state=state;
+    uint8_t state[0xa0]={0}; dm_fps_state=state;
     setenv("DM_FPS_TARGET","60",1); setenv("DM_OPMODE","1",1); unsetenv("DM_RENDER_SCALE");
     setenv("DM_FRAMEGEN","30",1); supported=0; expect_target(60);
     supported=1; expect_target(*DM_GAME_FRAMEGEN_SCENE?30:60);
@@ -38,6 +38,15 @@ int main(void) {
     *(uint32_t *)(state+0x20)=3;
     dm_framegen_mode_changed(0); memcpy(&target,state,4); memcpy(&ratio,state+0x40,4); assert(target==30 && ratio==0);
     assert(*(uint32_t *)(state+0x20)==2); // the first ordinary frame cannot inherit the old step
+    setenv("DM_FRAMEGEN","0",1); dm_fps_realtime=1;
+    for (int rate=20;rate<=120;rate+=5) {
+        char value[16]; snprintf(value,sizeof value,"%d",rate); setenv("DM_FPS_TARGET",value,1);
+        expect_target(rate);
+        memcpy(&ratio,state+0x40,4);
+        assert(ratio==(rate==30 || rate==60?0:30.0f/rate));
+        if (rate>60) { setenv("DM_FRAMEGEN","30",1); expect_target(rate); setenv("DM_FRAMEGEN","0",1); }
+    }
+    dm_fps_realtime=0; setenv("DM_FPS_TARGET","45",1); expect_target(0);
     puts("framegen: unavailable, supported, off, default and handheld FPS state: OK");
     return 0;
 }

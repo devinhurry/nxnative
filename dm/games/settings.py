@@ -112,6 +112,11 @@ def build(gid, patched, control):
         if kind == 'choice':
             opts = [list(l) for l in langs] if values == 'languages' else [v.split('=', 1) for v in values.split(',')]
             if any(len(o) != 2 for o in opts): sys.exit(f'settings.tsv:{n}: choice values are value=label,...')
+            # Only builds whose VFR/UI/physics readers follow real time can use
+            # arbitrary source rates. Other engines retain their tested 30/60.
+            if 'REALTIME_FRAME_STEP' in keys:
+                if var == 'DM_FPS_TARGET': opts = [[str(rate), f'{rate} fps'] for rate in range(20, 121, 5)]
+                if var == 'DM_FRAMEGEN': opts = [['0', 'Off']] + [[str(rate), f'{rate} + {rate}'] for rate in range(20, 61, 5)]
             if s['default'] not in [o[0] for o in opts]: s['default'] = opts[0][0]   # a default the game does not offer (a language it lacks): its first
             s['options'] = opts
         elif kind == 'range':

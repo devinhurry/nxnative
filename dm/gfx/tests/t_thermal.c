@@ -10,6 +10,7 @@
 int nvn_game_fps(void);
 static _Alignas(8) uint8_t fps_state[0x40];
 uint8_t *dm_fps_state = fps_state;
+extern int dm_fps_realtime;
 static _Atomic uint64_t test_now;
 static _Atomic int test_thermal = -1, thermal_reads;
 uint64_t now_ns(void) { return atomic_load(&test_now); }
@@ -50,6 +51,12 @@ int main(void) {
     const char *enabled = getenv("DM_THERMAL_CAP");
     if (!enabled || strcmp(enabled, "1")) {
         at(10, 3); CHECK("disabled: a critical device keeps the configured cap", nvn_game_fps() == 60);
+        dm_fps_realtime=1;
+        for (int rate=20;rate<=120;rate+=5) {
+            target(rate); CHECK("verified custom target remains exact with interpolation off", nvn_game_fps()==rate);
+        }
+        target(20); movie(1); CHECK("a movie still uses its native 30 fps at a lower custom target", nvn_game_fps()==30);
+        movie(0); dm_fps_realtime=0;
         target(30); CHECK("disabled: the configured 30 fps cap still applies", nvn_game_fps() == 30);
         target(60);
         movie(1); CHECK("disabled: the movie cap still applies", nvn_game_fps() == 30);

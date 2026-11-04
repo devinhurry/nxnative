@@ -262,8 +262,8 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
         let fgRow = file.settings.first { $0.env == "DM_FRAMEGEN" }!
         let fpsRow = file.settings.first { $0.env == "DM_FPS_TARGET" }!
         let fg = LauncherModel(file.settings, defaults: fgDefaults)
-        expect(fgRow.kind == "choice" && fgRow.options!.map { $0[0] } == ["0", "30", "60"] && !fg.frameGenerationEnabled,
-               "frame generation starts off and exposes only the two supported source rates")
+        expect(fgRow.kind == "choice" && fgRow.options!.map { $0[0] } == ["0"] + stride(from: 20, through: 60, by: 5).map(String.init) && !fg.frameGenerationEnabled,
+               "frame generation starts off and accepts the verified source rates")
         expect(fg.rows(in: "Game", basic: true).contains { $0.env == fgRow.env }, "frame generation is beside the game frame rate")
         for rate in ["30", "60"] { for enabled in [false, true] {
             fg.setValue("0", for: fgRow)
@@ -284,6 +284,25 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
                    String(cString: getenv("DM_FRAMEGEN")) == (enabled ? other : "0"),
                    "live frame-rate changes preserve the independent interpolation switch")
         } }
+        fg.beginRuntime()
+        for rate in stride(from: 20, through: 120, by: 5) {
+            let value = String(rate)
+            fg.binding(fpsRow).wrappedValue = value
+            fg.setValue(rate <= 60 ? value : "30", for: fgRow)
+            expect(fg.values[fpsRow.env] == value && fg.values[fgRow.env] == (rate <= 60 ? value : "0") &&
+                   fg.canEnableFrameGeneration == (rate <= 60), "custom rates preserve source FPS and disable interpolation above 60")
+            let restored = LauncherModel(file.settings, defaults: fgDefaults)
+            expect(restored.values[fpsRow.env] == value && restored.values[fgRow.env] == (rate <= 60 ? value : "0"),
+                   "all custom frame rates and their interpolation state survive reopening")
+        }
+        fg.binding(fpsRow).wrappedValue = "60"
+        expect(!fg.frameGenerationEnabled, "returning from a high rate leaves interpolation off")
+        fgDefaults.set("90", forKey: "launcher.DM_FPS_TARGET")
+        fgDefaults.set("30", forKey: "launcher.DM_FRAMEGEN")
+        let highRate = LauncherModel(file.settings, defaults: fgDefaults)
+        expect(highRate.values[fpsRow.env] == "90" && !highRate.frameGenerationEnabled,
+               "a saved high rate disables a stale interpolation setting instead of lowering FPS")
+        fgDefaults.removeObject(forKey: "launcher.DM_FPS_TARGET")
         fgDefaults.set("30", forKey: "launcher.DM_FRAMEGEN")
         fgDefaults.removeObject(forKey: "launcher.DM_FPS_TARGET")
         let migrated = LauncherModel(file.settings, defaults: fgDefaults)

@@ -4,7 +4,7 @@
 #include <math.h>
 #include <stdio.h>
 int main(void) {
-    for (int rate=30;rate<=120;rate+=10) {
+    for (int rate=20;rate<=120;rate+=5) {
         nvn_framegen_step step={0}; uint64_t now=1000000000ull; double seconds=0;
         (void)nvn_framegen_seconds(&step,now,rate,rate);
         for (int i=0;i<rate;i++) { now=1000000000ull+(uint64_t)llround((i+1)*1e9/rate); seconds+=nvn_framegen_seconds(&step,now,rate,rate); }
@@ -22,5 +22,5 @@ int main(void) {
     assert(nvn_framegen_set_mode(&step,0));
     assert(nvn_framegen_set_mode(&step,30));
     assert(nvn_framegen_seconds(&step,3100000000ull,30,30)==1./30); // no sample crosses Off
-    puts("framegen source clocks: 30..120, interruption and mode changes: OK");
+    puts("real-frame clocks: 20..120 in steps of 5, interruption and mode changes: OK");
 }
