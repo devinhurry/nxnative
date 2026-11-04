@@ -144,6 +144,19 @@ The loading screen's cream and black fills extend vertically. Other menu
 foregrounds retain their centered 16:9 proportions. Returning to 16:9 or wider
 restores the existing HUD transforms.
 
+**Game Over background on narrow displays (2026-11-04).** `GameOver_00`'s
+`RootPane/N_In_00/P_BG_00` is a separate 1280x720 background Picture. The narrow
+display draw scope previously extended only Fade's fills, so the menu projection
+also confined this black background to the centered 16:9 strip. Full-canvas
+background leaves now use the existing fullscreen-fill draw scope on narrow
+displays. Lettering, its capture/glow pictures, buttons and title illustrations
+retain their original proportions. The aspect fixture passes for 4:3, square,
+portrait, 16:9 and wide draw scopes, including foreground/container exclusions.
+The BOTW-only `regress.py check --games 01007EF00011E000 --no-smoke` attempt
+stops on the baseline's existing Metal compiler mismatch (32023.883 installed,
+32023.922 locked); its report is in `gameover-fill-20261104/regress/` in the
+game work folder. Gameplay and physical-device appearance remain unverified.
+
 The current-rune Picture has a separate capture draw tag, which takes priority
 over its equipment group's HUD tag. On narrow displays it must share that
 group's native transform: applying the centered-menu viewport correction again
