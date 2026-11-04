@@ -203,7 +203,7 @@ static void crop_regression(void) {
         dm_fg_display_retain(slot); // the queued real picture's owner
         for (int generated=1;generated>=0;generated--) {
             CAMetalLayer *l=layer(); [layers addObject:l]; [g_q4 addResidencySet:l.residencySet]; drawable[generated]=[l nextDrawable];
-            CHECK("cropped generated/real display submits",present_now(&texture,1./60,0,g_pq_in,crop,drawable[generated],tick_time,generated?slot:-1,generated?-1:slot,NULL));
+            CHECK("cropped generated/real display submits",present_now(&texture,1./60,0,g_pq_in,crop,drawable[generated],tick_time,generated?slot:-1,generated?-1:slot,NULL,NULL));
             wait_present();
         }
         id<MTLBuffer> a=read_pixels(drawable[0].texture),b=read_pixels(drawable[1].texture);
@@ -223,13 +223,54 @@ static void crop_regression(void) {
         id<CAMetalDrawable> drawable[2]; dm_fg_display_retain(slot);
         for (int generated=1;generated>=0;generated--) {
             CAMetalLayer *l=layer(); [layers addObject:l]; [g_q4 addResidencySet:l.residencySet]; drawable[generated]=[l nextDrawable];
-            CHECK("native-canvas cropped display submits",present_now(&texture,1./60,0,g_pq_in,region,drawable[generated],tick_time,generated?slot:-1,generated?-1:slot,region));
+            CHECK("native-canvas cropped display submits",present_now(&texture,1./60,0,g_pq_in,region,drawable[generated],tick_time,generated?slot:-1,generated?-1:slot,region,NULL));
             wait_present();
         }
         id<MTLBuffer> a=read_pixels(drawable[0].texture),b=read_pixels(drawable[1].texture);
         CHECK("native canvas and cropped swapchain display identical pixels",!memcmp(a.contents,b.contents,a.length));
         CHECK("native-canvas pair releases its output references",!dm_fg_slot_refs(slot));
     }
+    // Generated scene pixels must replace only the upper picture. The real
+    // snapshot owns the fold background, reflected picture and native dock.
+    cb=[g_q commandBuffer]; e=[cb blitCommandEncoder];
+    id<MTLBuffer> white=[g_dev newBufferWithLength:output.width*output.height*4 options:MTLResourceStorageModeShared];
+    memset(white.contents,255,white.length);
+    [e copyFromBuffer:white sourceOffset:0 sourceBytesPerRow:output.width*4 sourceBytesPerImage:white.length
+        sourceSize:MTLSizeMake(output.width,output.height,1) toTexture:output destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0,0,0)];
+    [e endEncoding]; [cb commit]; [cb waitUntilCompleted];
+    const float pictures[3][4]={{0,0,1,.5f},{.125f,.0625f,.75f,.375f},{0,0,1,.75f}};
+    const int upscale_crop[4]={0,0,128,128};
+    for (int flip=0;flip<2;flip++) for (int inset=0;inset<3;inset++) {
+        atomic_store(&g_origin_ll,flip);
+        atomic_store(&g_fx_mode,inset==2 ? 1 : 0);
+        const int *valid=inset==2 ? upscale_crop : region;
+        id<CAMetalDrawable> drawable[2]; dm_fg_display_retain(slot);
+        for (int generated=1;generated>=0;generated--) {
+            CAMetalLayer *l=layer(); [layers addObject:l]; [g_q4 addResidencySet:l.residencySet]; drawable[generated]=[l nextDrawable];
+            CHECK("Seated generated/real display submits",present_now(&texture,1./60,0,g_pq_in,valid,drawable[generated],tick_time,generated?slot:-1,generated?-1:slot,region,pictures[inset]));
+            wait_present();
+        }
+        id<MTLBuffer> a=read_pixels(drawable[0].texture),b=read_pixels(drawable[1].texture);
+        const uint8_t *real_pixels=a.contents,*generated_pixels=b.contents;
+        int changed_below=0,missing_upper=0,lowest_upper=255;
+        int x0=lround(256*pictures[inset][0]),y0=lround(256*pictures[inset][1]);
+        int x1=lround(256*(pictures[inset][0]+pictures[inset][2])),y1=lround(256*(pictures[inset][1]+pictures[inset][3]));
+        for (int y=0;y<256;y++) for (int x=0;x<256;x++) {
+            size_t offset=4*(y*256+x);
+            if (x<x0 || x>=x1 || y<y0 || y>=y1) changed_below+=memcmp(real_pixels+offset,generated_pixels+offset,4)!=0;
+            else {
+                for (int c=0;c<3;c++) lowest_upper=MIN(lowest_upper,generated_pixels[offset+c]);
+                // MetalFX's perceptual output can round white down one UNORM step.
+                int minimum=inset==2 ? 254 : 255;
+                missing_upper+=generated_pixels[offset]<minimum || generated_pixels[offset+1]<minimum || generated_pixels[offset+2]<minimum;
+            }
+        }
+        CHECK("Seated generated frame preserves the real reflection, dock and letterbox pixels",!changed_below);
+        if (missing_upper) printf("Seated upper mismatch: flip=%d inset=%d pixels=%d lowest=%d\n",flip,inset,missing_upper,lowest_upper);
+        CHECK("Seated interpolation fills only the captured upper picture",!missing_upper);
+        CHECK("Seated pair releases its output references",!dm_fg_slot_refs(slot));
+    }
+    atomic_store(&g_fx_mode,0);
     int outside[4]={0,0,512,512};
     CHECK("unknown pixels outside the captured canvas are never generated",!framegen_present_crop(real,output,outside,region,mapped));
     atomic_store(&g_origin_ll,0);
@@ -442,7 +483,7 @@ static void live_mode_regression(void) {
     }
     CHECK("uncapped mode can be selected live",dm_fg_set_mode(-1)); dm_fg_latch();
     CHECK("uncapped mode is active",dm_fg_mode()==-1);
-    CHECK("invalid runtime mode is rejected",!dm_fg_set_mode(45) && dm_fg_mode()==-1);
+    CHECK("invalid runtime mode is rejected",!dm_fg_set_mode(42) && dm_fg_mode()==-1);
     CHECK("frame generation can be disabled live",dm_fg_set_mode(0)); dm_fg_latch();
     CHECK("live off stops capture",!dm_fg_enabled());
     uint64_t previous=g_fg_present_serial;

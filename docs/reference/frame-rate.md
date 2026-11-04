@@ -226,6 +226,14 @@ Frame pacing: the host's frame step, engine frame limiters, present intervals an
 - **Check:** the MetalFX fixture covers a smaller canvas copied into a larger swapchain, both framebuffer origins, outside-coverage rejection and repeated registration. Current-checkout Mac runs verify both native canvas sizes; physical-device cadence remains separate.
 - **Found on:** [BOTW Handheld frame generation](../../dm/games/01007EF00011E000/notes/rendering.md#experimental-metalfx-frame-generation).
 
+### Frame generation preserves Seated presentation regions
+
+- **Symptom:** with Seated and frame generation enabled, the lower pane alternates between its blurred mirror and a stretched game picture. Disabling frame generation restores the mirror and removes the flicker.
+- **Cause:** the native window copy already contains the upper game pane, blurred reflection and dock. MetalFX produces a native scene/UI canvas before that Seated composition. The generated-present path stretched this canvas over the whole window instead of applying the same presentation regions as the real frame.
+- **Fix:** record the upper picture rectangle with the final canvas copy and carry it with its present ticket. Both frame types use the matching real snapshot as the window background; a generated frame replaces only the upper picture. The reflection and native dock retain the same pixels and source-frame cadence across the pair. Each pass keeps separate UV constants, and whole-window and upper-pane MetalFX scaling use separate caches. Existing queue ownership prevents the native source from being reused before its display command is committed. Both display-link and classic presenters consume the recorded rectangle; ordinary presentation keeps its existing path.
+- **Check:** `t_framegen` compares every pixel of generated/real drawables for both render origins, a cropped native canvas, fixed-aspect insets and simultaneous MetalFX scaling at two sizes. The lower pane and letterboxes must be byte-identical while interpolation is confined to the upper rectangle. Current-checkout Mac gameplay reaches an indoor shrine and captures a correct native Seated picture. In this Mac session the game did not produce generated displays, so the actual interpolated-gameplay check remains a physical-device acceptance item; production generated presentation is exercised by the real-Metal fixture. Static shader regression is blocked by local Metal `32023.883` versus required `32023.922`.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md).
+
 ### Frame generation waits again for skipped display callbacks
 
 - **Symptom:** a 30 Hz real-frame source can fall to 15 Hz when a busy device supplies only every other requested 60 Hz display update, adding stutter even if generated pictures keep the displayed FPS higher.

@@ -8,6 +8,7 @@ static struct {
     id<MTLTexture> composited_canvas;
     uint64_t canvas_serial,present_serial,display_canvas_serial;
     int present_region[4];
+    float present_picture[4];
     int depth,want_camera,invalid,ui_ready;
     uint64_t candidate_count,profile_candidate;
     NSUInteger profile_w,profile_h;
@@ -109,6 +110,9 @@ static void framegen_after_draw(NvProg *program) {
         if (source && g_framegen_capture_state.composited_canvas && source==g_framegen_capture_state.canvas_serial) {
             g_framegen_capture_state.present_serial=R.rt.color[0]->serial;
             for (int i=0;i<4;i++) g_framegen_capture_state.present_region[i]=(int)llround(S.vp[0][i]);
+            float controls[4];
+            memset(g_framegen_capture_state.present_picture,0,sizeof g_framegen_capture_state.present_picture);
+            if (dm_aspect_region(1,controls)) dm_aspect_region(0,g_framegen_capture_state.present_picture);
             static int last_region[4];
             if (dm_fg_profile_on() && memcmp(last_region,g_framegen_capture_state.present_region,sizeof last_region)) {
                 memcpy(last_region,g_framegen_capture_state.present_region,sizeof last_region);
