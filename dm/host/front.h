@@ -84,6 +84,8 @@ int front_show_game_settings(void);
 int front_startup_settings(void);
 // Re-read live touch settings after the launcher updates their environment.
 void front_refresh_touch_settings(void);
+// Refresh the iOS frame-rate counter after a live visibility change.
+void front_refresh_fps_settings(void);
 
 // Touchscreen (implemented by the host's hle_touch.c; called by the iOS / Mac front end): whenever the set of touch points changes (down / move / up / cancel) the whole set is pushed once; n = 0 = all lifted.
 // id = finger slot number 0–15 (the lowest free slot on down, unchanged until up; used directly as finger_id); x / y = normalized coordinates [0,1) on the output frame, origin at top left.
