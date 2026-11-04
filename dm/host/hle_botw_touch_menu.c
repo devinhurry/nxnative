@@ -773,9 +773,13 @@ static int pane_find_unique_under_parent(uint8_t *root, const char *wanted,
     return pane_find_unique_matching(root, wanted, NULL, parent_prefix, out);
 }
 
+static int rect_equal(const float a[4], const float b[4]) {
+    return a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3];
+}
+
 static void back_hit_rect(const float text[4], const float icon[4],
                           float nearest_left, float nearest_right, float out[4]) {
-    if (!isfinite(nearest_left) && !isfinite(nearest_right) && !memcmp(text, icon, sizeof(float) * 4)) {
+    if (!isfinite(nearest_left) && !isfinite(nearest_right) && rect_equal(text, icon)) {
         memcpy(out, icon, sizeof(float) * 4);
         return;
     }
@@ -1108,7 +1112,7 @@ static void generic_back_prompt_observe(uint8_t *pane, int after_matrix) {
             pthread_mutex_unlock(&g_generic_hits_mu);
             return;
         }
-        float x, y, rect[4];
+        float x, y, rect[4] = {0};
         memcpy(&x, pane + PANE_MATRIX + 0x0c, 4);
         memcpy(&y, pane + PANE_MATRIX + 0x1c, 4);
         int rect_valid;
@@ -1368,8 +1372,8 @@ static dm_botw_touch_menu_view snapshot_native_view_locked(void) {
             hit[0] = left; hit[1] = top; hit[2] = right - left; hit[3] = bottom - top;
             if (atomic_load_explicit(&g_trace, memory_order_acquire) &&
                 (!g_header_trace.action_valid[i] ||
-                 memcmp(g_header_trace.action_icon[i], icon, sizeof hit) ||
-                 memcmp(g_header_trace.action_text[i], text, sizeof hit))) {
+                 !rect_equal(g_header_trace.action_icon[i], icon) ||
+                 !rect_equal(g_header_trace.action_text[i], text))) {
                 g_header_trace.action_valid[i] = 1;
                 memcpy(g_header_trace.action_icon[i], icon, sizeof hit);
                 memcpy(g_header_trace.action_text[i], text, sizeof hit);
@@ -2280,7 +2284,7 @@ static void trace_bottom_strip(uint8_t *pane, int after_matrix) {
             if (!seen[slot].pane) {
                 seen[slot].pane = (uintptr_t)pane;
                 memcpy(seen[slot].rect, rect, sizeof rect);
-            } else if (!memcmp(seen[slot].rect, rect, sizeof rect)) {
+            } else if (rect_equal(seen[slot].rect, rect)) {
                 known = 1;
             } else {
                 memcpy(seen[slot].rect, rect, sizeof rect);
@@ -3278,7 +3282,7 @@ static void selector_publish_menu_presentation(uintptr_t manager, uint64_t frame
             if (!registered && !auditing) continue;
             uintptr_t screen = selector_read_ptr(screens, i * sizeof(uintptr_t));
             if (!selector_range(screen, 0x100)) continue;
-            int shown = ((const int8_t *)screen)[0xfd];
+            int shown = ((const int8_t *)screen)[0xfd]; // NOLINT(bugprone-signed-char-misuse) -- This game field is signed; -1 means hidden.
             int mode = ((const uint8_t *)screen)[0xfe];
             int presented_state = mode == 3 || ((mode == 1 || mode == 2) && shown >= 0);
             if (!auditing && !presented_state) continue;
@@ -3500,14 +3504,19 @@ static void selector_trace_state(uintptr_t manager, uintptr_t focus, uintptr_t s
     if (slot < 0) {
         slot = (int)(g_selector_trace_next++ % 16);
     } else {
-        changed = memcmp(&g_selector_trace_states[slot], &state, sizeof state) != 0;
+        const selector_trace_state_t *old = &g_selector_trace_states[slot];
+        changed = old->focus != state.focus || old->screen != state.screen || old->vtable != state.vtable || old->root != state.root ||
+            old->group != state.group || old->input_active != state.input_active || old->inventory_screen != state.inventory_screen ||
+            old->popup_active != state.popup_active || old->view_valid != state.view_valid || old->generic_mode != state.generic_mode ||
+            old->generic_count != state.generic_count || old->back_valid != state.back_valid || old->inventory_visible != state.inventory_visible ||
+            strcmp(old->screen_name, state.screen_name) != 0;
     }
     g_selector_trace_states[slot] = state;
     pthread_mutex_unlock(&g_selector_trace_mu);
     if (!changed) return;
     int shown_fd = -1, shown_fe = -1;
     if (screen && selector_range(screen + 0xfd, 2)) {
-        shown_fd = (int8_t)((const uint8_t *)screen)[0xfd];
+        shown_fd = (int8_t)((const uint8_t *)screen)[0xfd]; // NOLINT(bugprone-signed-char-misuse) -- Preserve the game's signed hidden-state sentinel.
         shown_fe = ((const uint8_t *)screen)[0xfe];
     }
     LOG("BOTW menu selector state manager=%p focus=%p screen=%p vtable=%p name=%s shown=(%d,%d) group=%d input=%d inventory=%d popup=%d root=%p view=%d generic=%d targets=%d back=%d inventoryVisible=%d",
@@ -4811,7 +4820,7 @@ static void selector_service_map_drag(uint64_t frame, const dm_botw_touch_menu_v
         g_map_drag.screen == view->generic_screen && g_map_drag.page == view->page_key;
     if (pending) {
         memcpy(g_map_drag.applied, point, sizeof point);
-        g_map_drag.pending = memcmp(g_map_drag.point, point, sizeof point) != 0;
+        g_map_drag.pending = g_map_drag.point[0] != point[0] || g_map_drag.point[1] != point[1];
     }
     pthread_mutex_unlock(&g_menu_mu);
     if (!pending || !dm_botw_touch_hud_active()) return;
@@ -5124,7 +5133,7 @@ static int selector_map_view_for_manager(uintptr_t manager, uint64_t frame,
         static float last_rect[4];
         int changed = last_root != root || last_footer != g_native_view.footer_root ||
             last_back != map_view.back_valid || last_footers != map_view.footer_action_count ||
-            memcmp(last_rect, map_view.back, sizeof last_rect) != 0;
+            !rect_equal(last_rect, map_view.back);
         for (int i = 0; i < 5; i++) changed |= last_glyph[i] != g_native_view.guide_icon_glyph[i];
         if (changed) {
             last_root = root; last_footer = g_native_view.footer_root;

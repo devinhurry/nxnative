@@ -1504,7 +1504,8 @@ static void test_shop_grid_paging(void) {
     dm_botw_touch_menu_pointer(DM_BOTW_MENU_END,.15f,.4f);
     assert(g_target_valid);
     view.carousel_valid = 0; publish(current_guest_frame);
-    assert(!sample_axes(++current_guest_frame,axes,&buttons) && !buttons); // quantity modal owns input now
+    current_guest_frame++;
+    assert(!sample_axes(current_guest_frame,axes,&buttons) && !buttons); // quantity modal owns input now
 
     dm_botw_touch_menu_view stale = shop; stale.carousel_valid = stale.clip_valid = 0;
     memset(stale.inventory_arrow_valid,0,sizeof stale.inventory_arrow_valid);
@@ -2058,7 +2059,7 @@ static void test_map_displacement_drag(void) {
     memcpy(target, selector.map_model + 0x890, 8);
     memcpy(cursor, selector.map_model + 0x3868, 8);
     assert(fabsf(origin[0] - 84) < .001f && fabsf(origin[1] + 6) < .001f);
-    assert(!memcmp(origin, target, 8));
+    assert(origin[0] == target[0] && origin[1] == target[1]);
     assert(fabsf(cursor[0] - 36) < .001f && fabsf(cursor[1] - 236) < .001f);
     // Holding still neither repeats displacement nor emits stick velocity.
     unsigned calls = mock_map_current_calls;
@@ -2600,7 +2601,8 @@ static void test_passive_ui_audit(void) {
     int old_mode = mock_touch_hud_active; mock_touch_hud_active = 0;
     ui_audit_view(&empty, 0, 10); assert(ftell(file) == size);
     mock_touch_hud_active = 1;
-    dm_botw_touch_menu_view before = g_view;
+    unsigned char before[sizeof g_view];
+    memcpy(before, &g_view, sizeof before); // Audit must not write any byte of the routing state.
     int old_gameplay = g_presented_gameplay, old_menu = g_presented_menu;
     g_presented_gameplay = 1; g_presented_menu = 0;
     ui_audit_view(&empty, 0, 10);
@@ -2611,9 +2613,12 @@ static void test_passive_ui_audit(void) {
     empty.generic_screen = 1; // a disposed view pointer is never dereferenced or called
     ui_audit_view(&empty, 0, 12);
     ui_audit_view(&empty, 1, 13); // stale targets cannot bind to an unrelated owner
-    assert(!memcmp(&before, &g_view, sizeof before)); // evidence never changes routing
+    assert(!memcmp(before, (const unsigned char *)&g_view, sizeof before)); // evidence never changes routing
     g_presented_gameplay = old_gameplay; g_presented_menu = old_menu;
-    char data[4096] = {0}; rewind(file); assert(fread(data,1,sizeof data-1,file));
+    char data[4096] = {0};
+    assert(fseek(file, 0, SEEK_SET) == 0);
+    size_t read = fread(data, 1, sizeof data - 1, file);
+    assert(read && !ferror(file));
     assert(strstr(data, "Test\\\"Screen"));
     assert(strstr(data, "\"registered\":0"));
     assert(strstr(data, "\"targets\":[]"));

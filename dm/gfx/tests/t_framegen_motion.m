@@ -77,7 +77,7 @@ static void partial_flow_tile_regression(void) {
 }
 
 int main(int argc,char **argv) { @autoreleasepool {
-    alarm(90); setbuf(stdout,NULL);
+    alarm(90); if (setvbuf(stdout,NULL,_IONBF,0)) { perror("setvbuf"); return 1; }
     if (argc<4) {
         int failures=0;
         for (int vertical=0;vertical<2;vertical++) for (int mode=0;mode<3;mode++) for (int oracle=0;oracle<2;oracle++) {
@@ -100,9 +100,11 @@ int main(int argc,char **argv) { @autoreleasepool {
     id<MTLComputePipelineState> camera_pipeline=g.mv_ps;
     NSString *source=@"#include <metal_stdlib>\nusing namespace metal;struct P{float4x4 reproj;float2 size,inv_size;float yflip,dyn,pad1,pad2;};kernel void oracle(depth2d<float,access::read>d[[texture(0)]],texture2d<float,access::write>mv[[texture(1)]],texture2d<float,access::write>nd[[texture(3)]],constant P&p[[buffer(0)]],uint2 xy[[thread_position_in_grid]]){if(any(xy>=uint2(p.size)))return;float z=d.read(xy);nd.write(z,xy);float2 m=float2(p.reproj[3].x*p.size.x*.5,-p.reproj[3].y*p.size.y*.5);if(z<.5)m=float2(-8,0);mv.write(float4(m,0,0),xy);}";
     if (pattern_vertical) source=[source stringByReplacingOccurrencesOfString:@"m=float2(-8,0)" withString:@"m=float2(0,-8)"];
+    if (!source) MDIE("invalid analytic motion Metal source");
     NSError *error=nil;
     id<MTLLibrary> library=[g_dev newLibraryWithSource:source options:nil error:&error];
-    id<MTLComputePipelineState> oracle_pipeline=library?[g_dev newComputePipelineStateWithFunction:[library newFunctionWithName:@"oracle"] error:&error]:nil;
+    id<MTLFunction> oracle_function=[library newFunctionWithName:@"oracle"];
+    id<MTLComputePipelineState> oracle_pipeline=oracle_function?[g_dev newComputePipelineStateWithFunction:oracle_function error:&error]:nil;
     CHECK("analytic motion kernel compiles",oracle_pipeline!=nil); if (!oracle_pipeline) return 1;
     int only_mode=argc>2?atoi(argv[2]):-1,only_oracle=argc>3?atoi(argv[3]):-1;
     int frames=argc>5?atoi(argv[5]):4;

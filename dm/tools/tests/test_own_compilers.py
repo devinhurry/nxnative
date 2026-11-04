@@ -119,8 +119,8 @@ class NspScript(unittest.TestCase):
         if r.returncode: self.assertIn(f'Xcode {own_compilers.XCODE_VERSION}', r.stdout)
 
     def test_flag(self):
-        self.assertTrue(nsp.parse_args(['x', '--allow-other-metal']).allow_other_metal)
-        self.assertFalse(nsp.parse_args(['x']).allow_other_metal)
+        self.assertTrue(nsp.parse_args(['x', '--version', '1.0', '--allow-other-metal']).allow_other_metal)
+        self.assertFalse(nsp.parse_args(['x', '--version', '1.0']).allow_other_metal)
 
     def test_override_reaches_the_shader_step(self):
         ran = []

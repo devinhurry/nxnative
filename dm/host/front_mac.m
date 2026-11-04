@@ -1216,8 +1216,8 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     [self sendBotwMenuPointer:DM_BOTW_MENU_MOVE point:p];
     if (e.phase == NSEventPhaseEnded || e.phase == NSEventPhaseNone) {
         float end_x, end_y;
-        dm_botw_trackpad_scroll_end(&_menuScroll, &end_x, &end_y);
-        [self sendBotwMenuPointer:DM_BOTW_MENU_END point:(dm_touchpad_point){end_x,end_y}];
+        if (dm_botw_trackpad_scroll_end(&_menuScroll, &end_x, &end_y))
+            [self sendBotwMenuPointer:DM_BOTW_MENU_END point:(dm_touchpad_point){end_x,end_y}];
         _menuScrolling = _menuPointerActive = NO;
     }
 }

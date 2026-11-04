@@ -42,7 +42,8 @@ int main(void) {
     assert(getenv("DM_DYNAMIC_RESOLUTION") == NULL); // restart-only keys are not applied via env alone
     assert(dm_launcher_setting_apply("DM_OPMODE", "2") == -1);
     assert(dm_launcher_setting_apply("DM_OPMODE", "0") == 1 && opmode == 0);
-    assert(!strcmp(getenv("DM_OPMODE"), "0"));
+    const char *opmode_env = getenv("DM_OPMODE");
+    assert(opmode_env && !strcmp(opmode_env, "0"));
     assert(dm_launcher_setting_is_live("DM_MOTION_SOURCE") == 1);
     const char *sources[]={"auto","off","controller","device"};
     for (int i=0;i<4;i++) {

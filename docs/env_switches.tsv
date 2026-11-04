@@ -266,6 +266,7 @@ DM_LINK_VTICK	switch	`0` keeps the system's display-link rate on 144 or 165 Hz M
 DM_LOADHASH	diagnostic	`=1` logs an address-independent SHA-256 per module after loading
 DM_LONGFRAME	diagnostic	`0` turns off the long-frame log (on by default), a line for a frame over 20 ms or with GPU time over 16.7 ms that is clearly above recent frames
 DM_LOOK	switch	Enable the BOTW relative touch-camera adapter; 0 keeps ordinary right-stick handling.
+DM_LOOK_GYRO_COMPOSE	switch	Enable experimental BOTW touch/gyro aiming composition (default 1); 0 disables only the aiming composition hooks.
 DM_LOOK_TRACE	diagnostic	Log relative camera input selection and consumption.
 DM_LOW_MEMORY	player	Experimental master memory preset: 1 enables a file-backed guest heap and transient texture upload sources and skips whole-game pipeline prebuild; 0 keeps ordinary behavior. The launcher detects a default below 4.5 GiB available headroom and preserves explicit choices
 DM_MEASURE_LOCK	path	`=<file>`: `scripts/regress.py`'s default `--lock`, the measuring lock `scripts/bench.py --lock` shares: held only while a game runs, and the harness's shader builds pause while another process holds it

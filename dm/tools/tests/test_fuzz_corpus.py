@@ -24,6 +24,11 @@ def replay(test, h, data):
 
 
 class Corpus(unittest.TestCase):
+    def test_ndsr_truncated_record_prefix(self):
+        for size in range(0x20, 0x115):
+            with self.subTest(size=size):
+                self.assertEqual(harness('shader_split').ss.ndsr_shaders(b'NDSR' + bytes(size - 4), '/truncated.ndsr'), [])
+
     def test_seeds_parse_cleanly(self):
         for h in HARNESSES:
             for name, data in harness(h).seeds().items():

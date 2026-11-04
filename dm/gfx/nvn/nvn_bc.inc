@@ -148,11 +148,14 @@ static id<MTLComputePipelineState> bc_pipeline(int is3d) {
     NSError *error = nil;
     if (!lib) {
         NSString *source = [@(k_bcdec_msl) stringByAppendingString:@(k_bc_write_msl)];
+        if (!source) MDIE("invalid BC decoder Metal source");
         lib = [g_dev newLibraryWithSource:source options:nil error:&error];
         if (!lib) MDIE("BC decoder Metal compilation failed: %s", error.localizedDescription.UTF8String);
     }
     if (!ps[is3d]) {
-        ps[is3d] = [g_dev newComputePipelineStateWithFunction:[lib newFunctionWithName:is3d ? @"bc3d" : @"bc2d"] error:&error];
+        id<MTLFunction> fn = [lib newFunctionWithName:is3d ? @"bc3d" : @"bc2d"];
+        if (!fn) MDIE("BC decoder entry point missing");
+        ps[is3d] = [g_dev newComputePipelineStateWithFunction:fn error:&error];
         if (!ps[is3d]) MDIE("BC decoder pipeline failed: %s", error.localizedDescription.UTF8String);
     }
     return ps[is3d];
@@ -259,6 +262,7 @@ static int bc_copy_to(id encoder, id<MTLBuffer> src, NSUInteger off, NSUInteger 
 static int bc_copy_from(id encoder, id<MTLTexture> src, NSUInteger slice, NSUInteger lv, MTLOrigin origin, MTLSize size,
                         id<MTLBuffer> dst, NSUInteger off, NSUInteger row, NSUInteger image) {
     NvBC *info = bc_info(src); if (!info) return 0;
+    if (!dst) MDIE("BC copy has no destination buffer");
     NSUInteger root_lv = bc_level(src, lv);
     NSUInteger ro = bc_offset(src, lv, slice, origin, info), bytes = ((size.width + 3) / 4) * info->bpb, rows = (size.height + 3) / 4;
     for (NSUInteger z = 0; z < size.depth; z++) for (NSUInteger y = 0; y < rows; y++)

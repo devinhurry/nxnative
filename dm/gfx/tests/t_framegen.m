@@ -42,6 +42,7 @@ static void wait_present(void) {
 }
 static void wait_queue(void) {
     id<MTLSharedEvent> event=[g_dev newSharedEvent];
+    if (!event) MDIE("frame-generation completion event allocation failed");
     [g_q4 signalEvent:event value:1];
     CHECK("frame generation GPU work finishes",[event waitUntilSignaledValue:1 timeoutMS:10000]);
     // Shared-event signals precede feedback; release checks need the feedback too.
@@ -74,6 +75,7 @@ static id<CAMetalDrawable> tick(double advance) {
 }
 static void inputs(int with_camera) {
     id<MTLTexture> scene=dm_fg_scene_target(g_dev,256,256,MTLPixelFormatRGBA8Unorm);
+    if (!scene) MDIE("frame-generation scene target missing");
     static int resident;
     if (!resident) { [g_q4 addResidencySet:dm_fg_residency()]; resident=1; }
     if (!depth) {
@@ -88,6 +90,7 @@ static void inputs(int with_camera) {
     id<MTLTexture> staging=[g_dev newTextureWithDescriptor:d];
     id<MTLCommandBuffer> cb=[g_q commandBuffer];
     id<MTLTexture> composed=[g_dev newTextureWithDescriptor:d];
+    if (!staging || !composed) MDIE("frame-generation input allocation failed");
     res_add(composed); res_commit();
     id<MTLTexture> textures[]={staging,composed};
     for (int i=0;i<2;i++) {
@@ -108,8 +111,10 @@ static void inputs(int with_camera) {
     if (with_camera) dm_fg_note_camera(camera,84);
 }
 static int output_green(id<MTLTexture> texture) {
+    if (!texture) return 0;
     id<MTLCommandBuffer> cb=[g_q commandBuffer]; id<MTLBlitCommandEncoder> e=[cb blitCommandEncoder];
     id<MTLBuffer> out=[g_dev newBufferWithLength:256*256*4 options:MTLResourceStorageModeShared];
+    if (!out) MDIE("generated frame readback allocation failed");
     [e copyFromTexture:texture sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(256,256,1) toBuffer:out destinationOffset:0 destinationBytesPerRow:1024 destinationBytesPerImage:256*1024];
     [e endEncoding]; [cb commit]; [cb waitUntilCompleted];
     const uint8_t *b=out.contents; uint64_t r=0,g=0,bl=0;
@@ -186,6 +191,7 @@ static void crop_regression(void) {
     id<MTLTexture> real=[g_dev newTextureWithDescriptor:[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:512 height:512 mipmapped:NO]];
     tex_t texture={.magic=MAGIC('T','E','X',0),.serial=99803}; serial_put(texture.serial,real); res_add(real); res_commit();
     int slot=0; id<MTLTexture> output=dm_fg_output(slot);
+    if (!real || !output) MDIE("positioned frame fixture textures missing");
     id<MTLCommandBuffer> cb=[g_q commandBuffer]; id<MTLBlitCommandEncoder> e=[cb blitCommandEncoder];
     for (id<MTLTexture> t in @[real,output]) {
         NSUInteger w=t.width,h=t.height;
@@ -394,12 +400,13 @@ static void ui_capture_regression(void) {
     snprintf(program->sh[0]->key,sizeof program->sh[0]->key,"fedcba9876543210_b");
     snprintf(program->sh[1]->key,sizeof program->sh[1]->key,"0123456789abcdef_b");
     prog_t pg={.magic=MAGIC('P','R','O','G'),.serial=99801}; serial_put(pg.serial,program);
-    tex_t target={.magic=MAGIC('T','E','X',0),.serial=99802};
+    tex_t target={.magic=MAGIC('T','E','X',0),.serial=99802}; // NOLINT(clang-analyzer-osx.cocoa.RetainCount) -- g_by_serial owns program through serial_put's CFBridgingRetain.
     target.d=(nvn_texdesc){.target=NVN_TEXTURE_TARGET_2D,.format=NVN_FORMAT_RGBA8,.width=256,.height=256,.depth=1,.levels=1,.samples=1};
     id<MTLBuffer> pixels[2]; uint64_t samples[2][2]={{0}};
     id<MTLBuffer> captured=[g_dev newBufferWithLength:256*256*8 options:MTLResourceStorageModeShared]; res_add(captured);
     for (int capture=0;capture<2;capture++) {
         pixels[capture]=[g_dev newBufferWithLength:256*256*4 options:MTLResourceStorageModeShared]; res_add(pixels[capture]);
+        if (!pixels[capture]) MDIE("UI frame readback allocation failed");
         mtl_sub_begin(); state_reset(); memset(&R,0,sizeof R); vis_clear();
         g_framegen_capture_state.ui_ready=0;
         if (capture) {
@@ -494,7 +501,7 @@ static void live_mode_regression(void) {
     g_link_mode=1;
 }
 int main(int argc,char **argv) { @autoreleasepool {
-    alarm(90); setbuf(stdout,NULL);
+    alarm(90); if (setvbuf(stdout,NULL,_IONBF,0)) { perror("setvbuf"); return 1; }
     uint64_t generated_count=mtl_generated_present_count(), source_count=mtl_present_count();
     framegen_presented(0,0,1,0,0,0,0);
     framegen_presented(0,0,1,0,-1,0,0);

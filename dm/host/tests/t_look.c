@@ -2,6 +2,8 @@
 // Installer tests use this BOTW fixture regardless of CI's selected profile.
 #undef DM_GAME_CAMERA_LOOK
 #define DM_GAME_CAMERA_LOOK "cd57b23fa4bbad65803d9788c01821ee:0xd5801c:0x128:0x1e93890:0x3c:60"
+#undef DM_GAME_CAMERA_LOOK_COMPOSE
+#define DM_GAME_CAMERA_LOOK_COMPOSE "cd57b23fa4bbad65803d9788c01821ee:0x10:0x20:0:4:8:12:16:0x30:0x40:0:4:8:12:16:180"
 #include "../hle_look.c"
 #include <assert.h>
 #include <math.h>
@@ -502,7 +504,7 @@ static void test_profile_guard(void) {
     strcpy(g_mod[0].name, "main"); strcpy(g_mod[0].build_id, "cd57b23fa4bbad65803d9788c01821ee");
     g_mod[0].base = image; g_mod[0].size = sizeof image; g_mod[0].text_end = sizeof image;
     test_gate_present = 1; test_missing_gate = 0; test_gate_registered = 0;
-    unsetenv("DM_LOOK"); dm_look_install();
+    unsetenv("DM_LOOK"); unsetenv("DM_LOOK_GYRO_COMPOSE"); dm_look_install();
     check("the matching BOTW build installs source/vector and aiming composition observers", dm_look_enabled() && test_gate_registered == 4);
     setenv("DM_LOOK_GYRO_COMPOSE", "0", 1); test_gate_registered = 0;
     dm_look_install();
