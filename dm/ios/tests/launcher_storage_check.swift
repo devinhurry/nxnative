@@ -14,7 +14,7 @@ private var nativeApplied: [String: String] = [:]
 func mockNativeSettingsPause(_ on: Int32) {}
 @_cdecl("dm_launcher_setting_is_live")
 func mockNativeSettingIsLive(_ key: UnsafePointer<CChar>) -> Int32 {
-    ["DM_BOTW_MOVE_CURVE", "DM_RUMBLE", "DM_FPS_TARGET", "DM_FRAMEGEN"].contains(String(cString: key)) ? 1 : 0
+    ["DM_BOTW_MOVE_CURVE", "DM_RUMBLE", "DM_FPS_TARGET", "DM_FRAMEGEN", "DM_SHOW_FPS"].contains(String(cString: key)) ? 1 : 0
 }
 @_cdecl("dm_launcher_setting_apply")
 func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<CChar>) -> Int32 {
@@ -262,8 +262,8 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
         let fgRow = file.settings.first { $0.env == "DM_FRAMEGEN" }!
         let fpsRow = file.settings.first { $0.env == "DM_FPS_TARGET" }!
         let fg = LauncherModel(file.settings, defaults: fgDefaults)
-        expect(fgRow.kind == "choice" && fgRow.options!.map { $0[0] } == ["0", "30", "60"] && !fg.frameGenerationEnabled,
-               "frame generation starts off and exposes only the two supported source rates")
+        expect(fgRow.kind == "choice" && fgRow.options!.map { $0[0] } == ["0"] + stride(from: 20, through: 60, by: 5).map(String.init) && !fg.frameGenerationEnabled,
+               "frame generation starts off and accepts the verified source rates")
         expect(fg.rows(in: "Game", basic: true).contains { $0.env == fgRow.env }, "frame generation is beside the game frame rate")
         for rate in ["30", "60"] { for enabled in [false, true] {
             fg.setValue("0", for: fgRow)
@@ -284,6 +284,25 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
                    String(cString: getenv("DM_FRAMEGEN")) == (enabled ? other : "0"),
                    "live frame-rate changes preserve the independent interpolation switch")
         } }
+        fg.beginRuntime()
+        for rate in stride(from: 20, through: 120, by: 5) {
+            let value = String(rate)
+            fg.binding(fpsRow).wrappedValue = value
+            fg.setValue(rate <= 60 ? value : "30", for: fgRow)
+            expect(fg.values[fpsRow.env] == value && fg.values[fgRow.env] == (rate <= 60 ? value : "0") &&
+                   fg.canEnableFrameGeneration == (rate <= 60), "custom rates preserve source FPS and disable interpolation above 60")
+            let restored = LauncherModel(file.settings, defaults: fgDefaults)
+            expect(restored.values[fpsRow.env] == value && restored.values[fgRow.env] == (rate <= 60 ? value : "0"),
+                   "all custom frame rates and their interpolation state survive reopening")
+        }
+        fg.binding(fpsRow).wrappedValue = "60"
+        expect(!fg.frameGenerationEnabled, "returning from a high rate leaves interpolation off")
+        fgDefaults.set("90", forKey: "launcher.DM_FPS_TARGET")
+        fgDefaults.set("30", forKey: "launcher.DM_FRAMEGEN")
+        let highRate = LauncherModel(file.settings, defaults: fgDefaults)
+        expect(highRate.values[fpsRow.env] == "90" && !highRate.frameGenerationEnabled,
+               "a saved high rate disables a stale interpolation setting instead of lowering FPS")
+        fgDefaults.removeObject(forKey: "launcher.DM_FPS_TARGET")
         fgDefaults.set("30", forKey: "launcher.DM_FRAMEGEN")
         fgDefaults.removeObject(forKey: "launcher.DM_FPS_TARGET")
         let migrated = LauncherModel(file.settings, defaults: fgDefaults)
@@ -394,6 +413,11 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
         expect(nativeApplied[runtimeCurve.env] == "0.65" && String(cString: getenv(runtimeCurve.env)) == "0.65" &&
                memoryDefaults.string(forKey: "launcher." + runtimeCurve.env) == "0.65" && runtimeModel.appliesImmediately(runtimeCurve),
                "Mac settings bindings apply live values and save the choice")
+        let counter = runtimeModel.settings.first { $0.env == "DM_SHOW_FPS" }!
+        runtimeModel.binding(counter).wrappedValue = "0"
+        runtimeModel.binding(counter).wrappedValue = "1"
+        expect(nativeApplied[counter.env] == "1" && String(cString: getenv(counter.env)) == "1" && runtimeModel.appliesImmediately(counter),
+               "the FPS visibility switch applies immediately through the runtime binding")
         #endif
         for list in [file.settings, mac.settings] {
             let reuse = list.first { $0.env == "DM_NVN_PASS_REUSE" }!

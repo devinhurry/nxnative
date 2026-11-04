@@ -340,10 +340,14 @@ static int aspect_ui_background_pane(uint8_t *pane) {
     uintptr_t child; memcpy(&child, pane + 0x28, sizeof child);
     return !child || child == (uintptr_t)pane + 0x20;
 }
-static int aspect_ui_loading_background(uint8_t *pane) {
+static int aspect_ui_fullscreen_fill(uint8_t *pane) {
     if (aspect_ui_loading_fill(pane)) return 1;
     if (!pane || !aspect_ui_background((const char *)pane+0xb8)) return 0;
-    // Only Fade's background leaves join the cream fill on narrow displays.
+    // Full-canvas background leaves (including Game Over's black fill) cover
+    // narrow displays too; title illustrations keep their native proportions.
+    float height; memcpy(&height,pane+0x54,sizeof height);
+    if (height>=720 && !aspect_ui_title_art(pane) && aspect_ui_background_pane(pane)) return 1;
+    // Fade's partial-height leaves must also join its animated cream fill.
     for (int depth=0;pane && depth<64;depth++,pane=aspect_ui_parent(pane))
         if (aspect_ui_named(pane,"RootPane")) return aspect_ui_child(pane,"N_LogoInOut_00") != NULL;
     return 0;
@@ -357,7 +361,7 @@ static void aspect_ui_draw(const uint64_t *regs) {
     float ratio=dm_aspect_ratio();
     g_ui_background_drawing = ratio > GAME_ASPECT && aspect_ui_background_pane(pane);
     if ((ratio > GAME_ASPECT && aspect_ui_loading_fill(pane)) ||
-        (ratio > 0 && ratio < GAME_ASPECT && aspect_ui_loading_background(pane))) g_ui_background_drawing=2;
+        (ratio > 0 && ratio < GAME_ASPECT && aspect_ui_fullscreen_fill(pane))) g_ui_background_drawing=2;
     float region[4];
     g_ui_hud_drawing = ratio > 0 && (ratio != GAME_ASPECT || dm_aspect_region(1,region)) ? aspect_ui_hud_pane(pane) : 0;
     dm_botw_rune_icon_draw_begin((uint8_t *)(uintptr_t)regs[21]);

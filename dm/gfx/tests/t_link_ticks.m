@@ -5,6 +5,8 @@
 #include <pthread.h>
 #include <time.h>
 #include <errno.h>
+#include <spawn.h>
+#include <sys/wait.h>
 static uint64_t test_now = 10000000000ull;
 static unsigned test_waits, test_spurious;
 static int test_silent;
@@ -66,6 +68,20 @@ static void acquire_ticks(int hz, int display, int interval, double want, const 
     printf("%s: %.2f ticks per acquire (expected %.2f)\n", label, got, want);
     CHECK(got == want, label);
 }
+// Present snapshots (mtl_snap_on, fixed for the process: run as "t_link_ticks snap"): the acquire takes the display link's wait as without them, the ring slot wait only on top.
+// It used to wait for a free slot alone, and the link frees slots by dropping frames, so a game ran ahead of its present interval (Donkey Kong Bananza at the 30 fps cap: 43-65 fps).
+// While the link is stalled the slot time paces instead (no link wait)
+static int snap_case(void) {
+    setenv("DM_RT", "0", 1); setenv("DM_PRESENT_SNAP", "2", 1); setenv("DM_FPS_TARGET", "0", 1);
+    g_dm_present_link = 1; g_link = (CAMetalDisplayLink *)[NSObject new]; g_link_mode = 1;
+    CHECK(mtl_snap_on() && mtl_link_active() && !mtl_link_stalled(), "snapshots on, the link active and ticking");
+    acquire_ticks(60, 0, 2, 2, "snapshots: game interval 2 waits two ticks of a 60 Hz link");
+    acquire_ticks(60, 0, 1, 1, "snapshots: game interval 1 waits one tick");
+    g_stall_t0 = 1;
+    acquire_ticks(60, 0, 2, 0, "snapshots with the link stalled: no link wait");
+    g_stall_t0 = 0;
+    printf("t_link_ticks snap: %d checks, %d failed\n", checks, failed); return failed != 0;
+}
 @interface ClockUpdate : NSObject
 @property CFTimeInterval targetPresentationTimestamp;
 @end
@@ -125,6 +141,7 @@ static void framegen_vsync_regression(void) {
     test_framegen=0;
 }
 int main(int argc, char **argv) { @autoreleasepool {
+    if (argc > 1 && !strcmp(argv[1], "snap")) return snap_case();
     int missed=argc>1 && !strcmp(argv[1],"--framegen-clock");
     int snapshots=missed || (argc>1 && !strcmp(argv[1],"--framegen-snap"));
     setenv("DM_RT", "0", 1); setenv("DM_PRESENT_SNAP", snapshots?"2":"0", 1);
@@ -143,7 +160,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         for (int mode=1;mode<=2;mode++) {
             g_link_mode=mode;
             test_framegen=0;
-            acquire_ticks(60,0,2,0,"ordinary snapshots keep their queue-based pacing");
+            acquire_ticks(60,0,2,mode*2,"ordinary snapshots keep their real-frame vsync budget");
             test_framegen=1;
             // No picture is queued: this covers unavailable, skipped or dropped
             // interpolation without depending on how fast the GPU renders it.
@@ -179,6 +196,20 @@ int main(int argc, char **argv) { @autoreleasepool {
     acquire_ticks(120, 1, 1, 2, "the 60 fps frame step keeps 60 Hz vsyncs");
     state[0] = 30;
     acquire_ticks(120, 1, 1, 4, "the 30 fps frame step keeps two 60 Hz vsyncs");
+    dm_fps_realtime=1;
+    nvn_present_config(60,0);
+    win_t custom={.interval=1};
+    for (int rate=20;rate<=120;rate+=5) {
+        state[0]=rate; atomic_store(&g_fs_k,0);
+        CHECK(nvn_game_fps()==rate,"custom rates keep their exact cap without interpolation");
+        CHECK(nvn_game_realtime()==(rate!=30 && rate!=60),"ordinary 30/60 retains its original game clock");
+        CHECK(present_period(&custom)==1000000000ull/(uint64_t)rate,"custom present periods use the selected rate");
+    }
+    state[0]=20; acquire_ticks(120,0,1,6,"20 fps uses six physical 120 Hz ticks");
+    state[0]=40; acquire_ticks(120,0,1,3,"40 fps uses three physical 120 Hz ticks");
+    state[0]=120; acquire_ticks(120,0,1,1,"120 fps uses one physical refresh with interpolation off");
+    CHECK(mtl_realtime_clock(),"the Metal presenter follows the custom game clock with interpolation off");
+    dm_fps_realtime=0;
     dm_fps_state = NULL;
     g_link_mode = 1;
     CHECK(mtl_link_rate() == 60, "a 60 Hz link reports 60");
@@ -199,5 +230,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     CHECK(g_link_tick_n == tick && test_now - start == 5000000ull, "timeout reaches its deadline without inventing ticks");
     test_silent = 0;
     CHECK(mtl_link_wait_ticks(2, 10000000ull) && g_link_tick_n - tick == 2, "ticks resume from the last successful wait after timeout");
+    pid_t pid; int st = 1; extern char **environ;   // the snapshot cases in a process of their own (mtl_snap_on is decided once)
+    CHECK(!posix_spawn(&pid, argv[0], NULL, NULL, (char *[]){argv[0], "snap", NULL}, environ) && waitpid(pid, &st, 0) == pid && WIFEXITED(st) && !WEXITSTATUS(st), "the snapshot cases pass");
     printf("t_link_ticks: %d checks, %d failed\n", checks, failed); return failed != 0;
 } }

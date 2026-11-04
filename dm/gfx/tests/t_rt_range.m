@@ -43,8 +43,11 @@ int main(int argc,char **argv){@autoreleasepool{enabled=1;for(int i=1;i<argc;i++
  uint8_t yellow[4]={255,255,0,0},green[4]={0,255,0,0}; // alpha is given 0 by the second draw's ONE/ ZERO; integer closed-form RGB yellow.
  for(int m=0;m<2;m++){unsigned bc=0,bd=0,bs=0;for(int i=0;i<64;i++){bc+=memcmp((uint8_t *)buffers[m][0].contents+4*i,small_depth && (i%8>=4||i/8>=4)?green:yellow,4)!=0;bd+=((float *)buffers[m][1].contents)[i]!=.75f;bs+=((uint8_t *)buffers[m][2].contents)[i]!=0x2d;}E("each 64 texels hand-computed yellow",0,bc);E("depth .75 seed kept",0,bd);E("stencil 0x2d seed kept",0,bs);E("samples after Reset, 120 indices / 40 triangles",2560,q[m][0]);}
  E("three planes original vs candidate byte for byte",0,memcmp(buffers[0][0].contents,buffers[1][0].contents,256)||memcmp(buffers[0][1].contents,buffers[1][1].contents,256)||memcmp(buffers[0][2].contents,buffers[1][2].contents,64));
- int merged=(same_target?pass_reuse_on():enabled)&&!small_depth&&!sample_attachment&&!registry_change;
- E("original guard: two passes",2,passes[0]);E("candidate one pass / default two passes",merged?1:2,passes[1]);{
+ // Exact-target continuation may sample another mip. The draw-time resource
+ // generation guard still splits after registration changes.
+ int exact_continue=same_target&&pass_reuse_on()&&rtc_on();
+ int merged=(same_target?pass_reuse_on():enabled)&&!small_depth&&!registry_change&&(!sample_attachment||exact_continue);
+ E("original guard: two passes",2,passes[0]);E("candidate pass count",merged?1:2,passes[1]);{
    // Combined storage keeps both physical planes even with stencil disabled (#702).
    // A full pass transfers 256 colour + 320 depth-stencil bytes each way.
    // Small depth: (256 + 80) * 2, then a 256 * 2 colour-only pass.

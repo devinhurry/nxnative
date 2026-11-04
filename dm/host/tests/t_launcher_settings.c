@@ -6,21 +6,24 @@
 #include <string.h>
 
 uint8_t *dm_fps_state;
+int dm_fps_realtime;
 static uint8_t state_page[0x40];
 static int opmode, fps_apply_count, fps_lock_target, haptics_refresh_count, touch_refresh_count;
 static int framegen_mode, framegen_available = 1;
+static int fps_visibility_refresh_count;
 static char motion_source[16];
 static int motion_refresh_count;
 static unsigned clock_pauses, graphics_pauses, audio_pauses;
 void guest_clock_freeze_for(int reason, int on) { if (on) clock_pauses |= 1u << reason; else clock_pauses &= ~(1u << reason); }
 void dm_gfx_suspend_for(int reason, int on) { if (on) graphics_pauses |= 1u << reason; else graphics_pauses &= ~(1u << reason); }
 void dm_audio_suspend_for(int reason, int on) { if (on) audio_pauses |= 1u << reason; else audio_pauses &= ~(1u << reason); }
-int dm_fg_set_mode(int mode) { if (!framegen_available) return 0; framegen_mode = mode; return 1; }
+int dm_fg_set_mode(int mode) { if (mode && !framegen_available) return 0; framegen_mode = mode; return 1; }
 void dm_set_opmode(int value) { opmode = value; }
 void dm_fps_state_apply(void) { fps_apply_count++; }
 void dm_fps_lock_setting_changed(int target) { fps_lock_target = target; }
 void dm_haptics_apple_settings_changed(void) { haptics_refresh_count++; }
 void front_refresh_touch_settings(void) { touch_refresh_count++; }
+void front_refresh_fps_settings(void) { fps_visibility_refresh_count++; }
 void dm_motion_source_set(const char *value) { strcpy(motion_source,value); motion_refresh_count++; }
 
 int main(void) {
@@ -56,19 +59,43 @@ int main(void) {
     assert(dm_launcher_setting_apply("DM_FPS_TARGET", "60") == 1 && fps_apply_count == 2 && fps_lock_target == 60);
     if (*DM_GAME_FRAMEGEN_SCENE) {
         assert(dm_launcher_setting_is_live("DM_FRAMEGEN") == 1);
-        for (int rate = 30; rate <= 60; rate += 30) {
-            const char *value = rate == 30 ? "30" : "60";
+        for (int rate = 20; rate <= 60; rate += 5) {
+            char value[16]; snprintf(value,sizeof value,"%d",rate);
             assert(dm_launcher_setting_apply("DM_FRAMEGEN", value) == 1 && framegen_mode == rate);
             assert(!strcmp(getenv("DM_FRAMEGEN"), value));
             assert(dm_launcher_setting_apply("DM_FRAMEGEN", "0") == 1 && framegen_mode == 0);
         }
-        assert(dm_launcher_setting_apply("DM_FRAMEGEN", "40") == -1);
+        assert(dm_launcher_setting_apply("DM_FRAMEGEN", "45.5") == -1);
         framegen_available = 0;
         assert(dm_launcher_setting_apply("DM_FRAMEGEN", "60") == -1 && !strcmp(getenv("DM_FRAMEGEN"), "0"));
     } else assert(dm_launcher_setting_is_live("DM_FRAMEGEN") == 0);
+    assert(dm_launcher_setting_apply("DM_FPS_TARGET","40")==-1); // no verified fractional step
+    dm_fps_realtime=1;
+    for (int rate=20;rate<=120;rate+=5) {
+        char value[16]; snprintf(value,sizeof value,"%d",rate);
+        assert(dm_launcher_setting_apply("DM_FPS_TARGET",value)==1 && fps_lock_target==rate);
+        if (*DM_GAME_FRAMEGEN_SCENE && rate>60) {
+            assert(framegen_mode==0 && !strcmp(getenv("DM_FRAMEGEN"),"0"));
+            assert(dm_launcher_setting_apply("DM_FRAMEGEN","30")==-1);
+        }
+    }
+    for (const char **p=(const char *[]){"19","125","31","30.5","2e1","nan",NULL};*p;p++)
+        assert(dm_launcher_setting_apply("DM_FPS_TARGET",*p)==-1);
+    dm_fps_realtime=0;
     assert(dm_launcher_setting_is_live("DM_NVN_PASS_REUSE") == 0);
     assert(dm_launcher_setting_apply("DM_RUMBLE_GAIN", "2.5") == 1 && haptics_refresh_count == 1);
     assert(dm_launcher_setting_apply("DM_RUMBLE_GAIN", "nan") == -1 && haptics_refresh_count == 1);
+#if TARGET_OS_IPHONE
+    assert(dm_launcher_setting_is_live("DM_SHOW_FPS") == 1);
+    assert(dm_launcher_setting_apply("DM_SHOW_FPS", "1") == 1 && fps_visibility_refresh_count == 1);
+    assert(!strcmp(getenv("DM_SHOW_FPS"), "1"));
+    assert(dm_launcher_setting_apply("DM_SHOW_FPS", "0") == 1 && fps_visibility_refresh_count == 2);
+    assert(!strcmp(getenv("DM_SHOW_FPS"), "0"));
+    assert(dm_launcher_setting_apply("DM_SHOW_FPS", "2") == -1 && fps_visibility_refresh_count == 2);
+    assert(haptics_refresh_count == 1 && touch_refresh_count == 0);
+#else
+    assert(dm_launcher_setting_is_live("DM_SHOW_FPS") == 0);
+#endif
     assert(dm_launcher_setting_is_live("DM_PRESENT_UPSCALE") == 0);
     if (!strcmp(DM_GAME_ID, "01007EF00011E000")) {
         assert(dm_launcher_setting_is_live("DM_BOTW_MOVE_CURVE") == 1);

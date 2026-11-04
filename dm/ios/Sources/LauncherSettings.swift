@@ -331,6 +331,7 @@ final class LauncherModel: ObservableObject {
     // are remembered even when they equal this launch's automatic value.
     func setValue(_ v: String, for s: Setting) {
         guard lockingKey(s) == nil, s.accepts(v) else { return }
+        if s.env == "DM_FRAMEGEN", v != "0", !canEnableFrameGeneration { return }
         if s.env == Self.lowMemoryKey {
             lowMemoryOverride = v
             if !ignoreSaved { defaults.set(v, forKey: "launcher." + s.env) }
@@ -341,7 +342,7 @@ final class LauncherModel: ObservableObject {
         }
         var next = values
         setTouchValue(v, for: s.env, in: &next)
-        if s.env == "DM_FPS_TARGET", frameGenerationEnabled { next["DM_FRAMEGEN"] = v }
+        if s.env == "DM_FPS_TARGET", frameGenerationEnabled { next["DM_FRAMEGEN"] = (Int(v) ?? 60) > 60 ? "0" : v }
         if s.env == "DM_FRAMEGEN", v != "0" {
             if fixed.contains("DM_FPS_TARGET") { next[s.env] = values["DM_FPS_TARGET"] ?? v }
             else { next["DM_FPS_TARGET"] = v }
@@ -376,6 +377,7 @@ final class LauncherModel: ObservableObject {
         guard let value = values["DM_FRAMEGEN"] else { return false }
         return value != "0"
     }
+    var canEnableFrameGeneration: Bool { (Int(values["DM_FPS_TARGET"] ?? "60") ?? 60) <= 60 }
 
     func lockingKey(_ s: Setting) -> String? {
         if fixed.contains(s.env) { return s.env }
@@ -386,7 +388,8 @@ final class LauncherModel: ObservableObject {
     }
 
     private func alignFrameGeneration() {
-        guard let rate = values["DM_FRAMEGEN"], ["30", "60"].contains(rate), values["DM_FPS_TARGET"] != nil else { return }
+        guard let rate = values["DM_FRAMEGEN"], rate != "0", values["DM_FPS_TARGET"] != nil else { return }
+        guard canEnableFrameGeneration else { values["DM_FRAMEGEN"] = "0"; return }
         if fixed.contains("DM_FPS_TARGET") && !fixed.contains("DM_FRAMEGEN") {
             values["DM_FRAMEGEN"] = values["DM_FPS_TARGET"]
         } else if !fixed.contains("DM_FPS_TARGET") {
@@ -858,6 +861,17 @@ final class LauncherModel: ObservableObject {
         }
         syncTouchLayout()
         persistTouchLayouts()
+    }
+    private func store(_ s: Setting, _ v: String) {
+        if !ignoreSaved { if s.isDefault(v) { defaults.removeObject(forKey: "launcher." + s.env) } else { defaults.set(v, forKey: "launcher." + s.env) } }
+    }
+
+    // A choice made while the game runs (the iOS in-game menu, GameMenu.swift): saved as Play saves it, so the settings screen shows it at the next start, and put in the environment.
+    // A value an env file or the launch fixed stays
+    func choose(_ s: Setting, _ v: String) {
+        guard !fixed.contains(s.env), s.accepts(v) else { return }
+        values[s.env] = v; store(s, v); setenv(s.env, v, 1)
+        fputs("launcher: \(s.env)=\(v) (in-game menu)\n", stderr)
     }
 
     // DM_LAUNCHER=0: no screen, but the saved choices still apply (only DM_SAVED_CHOICES=0 ignores them); nothing is written

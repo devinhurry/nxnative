@@ -48,7 +48,7 @@ class XcodePipelineTests(unittest.TestCase):
             update.touch()
             registered = game.load('0100A6301214E000')
             profile = SimpleNamespace(id=registered.id, title_id=registered.title_id, dir=root / 'profile' / registered.id,
-                                      get=registered.get, words=registered.words,
+                                      get=registered.get, words=registered.words, modules_in=registered.modules_in,
                                       builds=lambda: {'v0': {'display': '1.0.0', 'main': 'other-build'}})
             sources = {key: (False, '') for key in ('glslc_capture', 'vk_capture', 'gl_capture', 'ue_decode', 'oodle_packs', 'ue_legacy')}
             sources['graphics'] = (graphics, 'fixture')
@@ -60,7 +60,12 @@ class XcodePipelineTests(unittest.TestCase):
             (extraction / 'control.nacp').touch()
             combined = root / 'game-data/RomFS.img'; combined.parent.mkdir(); combined.write_bytes(b'combined fixture')
             aoc = root / 'aoc'; aoc.mkdir(); (aoc / '1.img').touch()
+            def fake_run(cmd, log, **kwargs):
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_text('')  # a successful command with no diagnostic output
+
             mocks = {}
+            stack.enter_context(patch.object(build, 'package_title_reader'))
             for name, value in {
                 'scan_nsps': (int(registered.id, 16), fam), 'check_prereqs': None, 'check_metal': None,
                 'free_gb': 10000, 'build_nx_extract': root / 'nx_extract',
@@ -69,14 +74,15 @@ class XcodePipelineTests(unittest.TestCase):
                 'separate_game_image': combined,
                 'build_shaders': root / 'shaders', 'build_vk_shaders': root / 'shaders',
                 'build_gl_shaders': root / 'shaders', 'provisional_prep': None, 'chain_header': None,
-                'refine_after_rewrite': profile, 'derive_profile': '1.0.0', 'run': None,
+                'refine_after_rewrite': profile, 'derive_profile': '1.0.0',
             }.items():
                 mocks[name] = stack.enter_context(patch.object(build, name, return_value=value))
             def prepared_result(*_args, **kwargs):
+                fake_run(_args[0], _args[1], **kwargs)
                 result = Path(kwargs['env']['W']) / 'graphics-result.json'
                 result.parent.mkdir(parents=True, exist_ok=True)
                 result.write_text(json.dumps(dict(path=str(root / 'Fixture.v3.graphics'), version=3, status='generated')))
-            mocks['run'].side_effect = prepared_result
+            mocks['run'] = stack.enter_context(patch.object(build, 'run', side_effect=prepared_result))
             stack.enter_context(patch.dict(os.environ))  # derived profiles change the tool search environment
             stack.enter_context(patch.object(game, 'by_title', return_value=registered))
             stack.enter_context(patch.object(game, 'load', return_value=profile))

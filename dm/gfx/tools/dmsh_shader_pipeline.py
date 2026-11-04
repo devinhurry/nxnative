@@ -24,7 +24,8 @@ def valid_analysis(stage, payload):
     if payload.get('kind') == 'shader':
         flags = payload.get('candidate_flags'); fallback = payload.get('fallback'); refl = payload.get('base_refl')
         return (bool(payload.get('analysis_source')) and bool(payload.get('candidate')) and
-                (fallback is None or bool(fallback)) and isinstance(refl, dict) and refl.get('stage') == stage and
+                (fallback is None or bool(fallback)) and isinstance(refl, dict) and (refl.get('stage') == stage or
+                (stage == 'cs' and refl.get('stage') in ('ts', 'ms') and isinstance(refl.get('mesh_stage'), dict) and refl['mesh_stage'].get('kind') == refl['stage'])) and
                 isinstance(flags, dict) and all(k in flags for k in ('layer', 'layer_from', 'discard', 'tf', 'uint', 'uint_mask', 'dual')))
     if payload.get('kind') == 'slice': return isinstance(payload.get('reflection'), dict)
     if payload.get('kind') == 'geometry':
@@ -67,9 +68,9 @@ def run(keys, *, pairs, known_keys, work, workers, codegen, translator,
     stats = collections.Counter()
     analysis_only = {ps for vertex in keys for ps in pairs.get(vertex, ()) if ps in known_keys and ps not in keys}
     analysis_keys = sorted(set(keys) | analysis_only)
-    jobs, c1s, recs, digests, bundles = {}, {}, {}, {}, {}
+    jobs, c1s, digests, bundles = {}, {}, {}, {}
     for key in analysis_keys:
-        name, rec = recs[key] = read_record(key)
+        name, rec = read_record(key)
         jobs[key], c1s[key] = make_job(key, name, rec, work)
         digests[key] = digest_for(key, name, rec, jobs[key])
     for key in analysis_keys:

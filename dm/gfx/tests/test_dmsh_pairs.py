@@ -122,6 +122,9 @@ class Pairing(unittest.TestCase):
         pixel_code.write_bytes(b'changed pixel')
         pixel_changed=digest('f1','ps',pixel_code)
         self.assertNotEqual(initial,self.ns['pair_keyed'](vertex_base,[pixel_changed]))
+        self.ns['DUAL_WANT'].add('f1')
+        dual=digest('f1','ps',pixel_code)
+        self.assertNotEqual(initial,self.ns['pair_keyed'](vertex_base,[dual,pixel_extra]))
 
     @unittest.skipUnless(shutil.which('xcrun'), 'needs the Metal compiler')
     def test_metal_archive_with_padded_regular_and_pulling_entries(self):

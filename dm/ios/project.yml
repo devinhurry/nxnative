@@ -43,7 +43,7 @@ targets:
         CFBundleDisplayName: ${DM_DISPLAY_NAME}   # the game name in the base NSP (set by build_ipa.sh)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleShortVersionString: $(MARKETING_VERSION)
-        UILaunchStoryboardName: ""
+        UILaunchScreen: {}
         UIFileSharingEnabled: true          # Documents (log.txt, saves) visible in the Files app
         LSSupportsOpeningDocumentsInPlace: true
         UTExportedTypeDeclarations:
@@ -61,7 +61,7 @@ targets:
           - UIInterfaceOrientationLandscapeRight
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationPortrait
-        UIRequiresFullScreen: true
+          - UIInterfaceOrientationPortraitUpsideDown
         UIStatusBarHidden: true
         UIViewControllerBasedStatusBarAppearance: false
         LSApplicationCategoryType: ${DM_APP_CATEGORY}   # game profile app_category

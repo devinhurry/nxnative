@@ -14,7 +14,7 @@ class StartupOrientation(unittest.TestCase):
     def test_device_policy_and_saved_choices(self):
         source = (REPO / 'dm/ios/Sources/front_ios.m').read_text()
         policy = source[source.index('UIInterfaceOrientationMask front_ios_orientations('):
-                        source.index('static void launcher_done(')]
+                        source.index('static CGFloat g_picture_aspect')]
         fixture = r'''
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
@@ -22,7 +22,7 @@ class StartupOrientation(unittest.TestCase):
 #include "botw_touch_layout.h"
 #define DM_GAME_ID "01007EF00011E000"
 typedef NSUInteger UIInterfaceOrientationMask;
-enum { UIInterfaceOrientationMaskPortrait=2, UIInterfaceOrientationMaskLandscape=24 };
+enum { UIInterfaceOrientationMaskPortrait=2, UIInterfaceOrientationMaskLandscape=24, UIInterfaceOrientationMaskAll=30 };
 static NSUInteger editor;
 NSUInteger dm_touch_editor_orientations(void) { return editor; }
 static NSUserDefaults *preferences;
