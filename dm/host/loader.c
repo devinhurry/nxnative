@@ -348,6 +348,14 @@ void dm_fps_state_apply(void) {
     // (Breath of the Wild 1.9.0's patches.py) render that shape: the output keeps its width (1920) and takes the height that gives the ratio, a multiple of 48 so the
     // 2/3-size layout space (1280 wide) stays whole: 1.43 → 1920x1344 and 1280x896. State +0x48 u32 output height, +0x4c u32 layout height, +0x50 its float; 0 = 16:9
     const char *as = getenv("DM_SCREEN_ASPECT");
+    const char *native_aspect = getenv("DM_ASPECT");
+    if (DM_GAME_ASPECT_NATIVE && !(native_aspect && !strcmp(native_aspect, "0"))) {
+        // Native aspect corrects the camera and UI on the original canvas.
+        // The legacy taller canvas also changes UI projections and pane sizes;
+        // applying both distorts Seated and whole-window presentation alike.
+        if (as && *as && strcmp(as, "0")) LOG("aspect: native layout uses the original canvas; legacy DM_SCREEN_ASPECT=%s is not applied", as);
+        as = NULL;
+    }
     if (as && *as && strcmp(as, "0")) {   // 0: 16:9
         char *end; float a = strtof(as, &end);
         if (end == as || *end || !(a >= 1.3f && a < 1.77f)) LOG("[RED] DM_SCREEN_ASPECT=%s: a width / height from 1.3 to 1.77; keeping 16:9", as);

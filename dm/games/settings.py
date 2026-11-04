@@ -106,6 +106,7 @@ def build(gid, patched, control):
             if can is not None and want not in can: sys.exit(f'settings.tsv:{n}: needs a value {need} never takes: {want} (it takes {", ".join(sorted(can))})')
         if 'format' in m and kind != 'range': sys.exit(f'settings.tsv:{n}: format applies only to range settings')
         if not shown(cond, n): continue
+        if var in ('DM_SCREEN_ASPECT', 'DM_PICTURE_FIT') and macro('DM_GAME_ASPECT_NATIVE', n) != '0': continue   # native layout already follows the display shape
         if var == 'DM_THERMAL_CAP' and platform != 'ios': continue   # only the iOS front end supplies thermal state
         s = {'env': var, 'kind': kind, 'section': section, 'label': label, 'note': note, 'default': value(default, n), **m}
         if var == 'DM_RENDER_SCALE' and base: s['base'] = base   # the render scale in pixels, for the console mode chosen

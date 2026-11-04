@@ -91,11 +91,13 @@ The game's own languages. By default, the app follows the device's preferred lan
 
 ### Picture
 
+Games with native-aspect layout, including Breath of the Wild, adapt to the actual display region automatically. Their launchers and in-game menus omit Fit/Fill and ignore saved values. The following choice applies to games without native-aspect layout.
+
 iPhone and iPad. **Fit**, the default, shows the game's picture (16:9, or the taller one of [Picture shape](#picture-shape)) as large as it fits, with black bars where the screen has another shape. **Fill** enlarges it until it covers the whole screen and crops what lies outside; nothing is stretched. An iPhone loses some of the top and bottom, an iPad some of each side, so health bars, subtitles or maps near the edges can be cut off. A picture that fills the screen without cropping needs a patch for each game that renders a wider view. Fill applies in landscape; in portrait the picture stays fitted above the controls, and on a TV it is always fitted.
 
 ### Picture shape
 
-Games whose profile supports it (Breath of the Wild, Animal Crossing: New Horizons). **iPhone Duo screen (1.43:1)** renders a taller picture of the Duo's own shape: the sides of 16:9 with more above and below, and the HUD at the screen's edges. **16:9** is the Switch's picture. The taller picture has about a quarter more pixels, so it runs a little slower and warmer.
+Games with legacy screen-shape support, such as Animal Crossing: New Horizons. Breath of the Wild uses native-aspect layout instead and ignores saved legacy shape choices. **iPhone Duo screen (1.43:1)** renders a taller picture of the Duo's own shape: the sides of 16:9 with more above and below, and the HUD at the screen's edges. **16:9** is the Switch's picture. The taller picture has about a quarter more pixels, so it runs a little slower and warmer.
 
 ### Frame-rate counter
 

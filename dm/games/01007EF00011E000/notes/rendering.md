@@ -389,7 +389,7 @@ On the Mac, frame times stayed at 60 fps; crop comparisons showed sharper edges 
 
 ### Screen shape (`DM_SCREEN_ASPECT`, current)
 
-This fork keeps 16:9 as the default; select *Picture shape* explicitly to enable the taller view. The observations below are upstream validation. The custom touch layout and frame-generation paths still need separate validation at this shape.
+The native-aspect layout owns display geometry in this fork. It uses the original game canvas and adapts the camera, UI and Seated panes to the actual display. The legacy *Picture shape* choice is hidden, and saved or explicit `DM_SCREEN_ASPECT` values do not enable taller-canvas patches while native aspect is active. Combining both paths flattened Seated pictures and the minimap; see [Native and legacy aspect correction are exclusive](../../../../docs/reference/rendering.md#native-and-legacy-aspect-correction-are-exclusive). The taller-canvas path below remains available with `DM_ASPECT=0`; its observations are upstream validation.
 
 A screen taller than 16:9 (the iPhone Duo's, about 1.43:1) gets a picture of its own shape instead of a stretched or letterboxed 16:9 one. `DM_SCREEN_ASPECT=1.43` (launcher setting *Picture shape*, offered because the profile has `screen_aspect on`) makes the host give the game a 1920x1344 output and a 1280x896 layout space (`loader.c`, state +0x48..+0x9c); the stubs in `patches.py` and `duo_anchor.c` make the game follow it:
 

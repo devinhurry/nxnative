@@ -1423,6 +1423,14 @@ Digimon Story Cyber Sleuth: Complete Edition (Media.Vision's MVGL engine, SDK 6.
 
 Current implementation (2026-11-04; device acceptance pending): the profile's final canvas shader is a plain texture sample. Seated now places that completed native canvas into the upper picture rectangle with the host's ordinary image blit, then draws the reflection and isolated dock. It no longer changes the viewport of the game's canvas-copy draw. This keeps the guest's canvas coordinates and sampling separate from the destination pane; the camera continues to use that pane's displayed aspect. The copy clears unused pixels before drawing the upper picture. Frame-generation transfer metadata is still captured from the original final-copy state, and generated presents retain their existing upper-picture rectangle. No compilation or runtime checks were run for this revision, as requested; the reported compression remains a device acceptance item.
 
+### Native and legacy aspect correction are exclusive
+
+- **Symptom:** Seated gameplay and its minimap look vertically compressed on one computer but correct on another at the same revision. The affected launcher has *Picture shape* set to 1.43.
+- **Cause:** legacy `DM_SCREEN_ASPECT=1.43` changes the game's canvas from 1280x720 to 1280x896 and independently patches UI projections and pane sizes. Native aspect already adjusts the camera and UI using the original canvas; both corrections were active together. A test with the default canvas did not exercise the saved launcher choice.
+- **Fix:** native-aspect profiles keep the original canvas even when a legacy shape value is saved or explicitly set. The launcher hides the redundant shape and Fit/Fill choices; the iOS front end also omits the live Fit/Fill action and ignores its saved value. `DM_ASPECT=0` retains the legacy taller-canvas path for an explicit fallback; profiles without native aspect keep their existing behavior.
+- **Check:** the loader fixture checks both exclusive paths, and launcher tests cover native and legacy profiles on Mac and iOS. Current-checkout Mac gameplay reproduces the distortion with the reported 669x951 Seated window, simulated safe insets and 1.43 setting; the corrected run retains that setting and restores the map's round shape. Both runs reuse existing shader libraries. Air and physical Duo acceptance remain open.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/notes/rendering.md#screen-shape-dm_screen_aspect-current).
+
 ### Isolated HUD layers retain coverage during color multiplication
 
 - **Symptom:** a translucent rectangular patch follows the minimap's heading fan in Seated mode, although the ordinary whole-window map looks correct.

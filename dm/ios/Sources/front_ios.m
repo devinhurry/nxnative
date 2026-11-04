@@ -201,7 +201,7 @@ static void game_settings_done(void) { dm_gamepad_settings_done(); }
     front_hud_env();   // Apply the launcher's choice before the game device check; Info.plist loads HUD support before SwiftUI can initialize Metal.
     const char *dev = front_ios_device_check();   // Check the game GPU after applying the launcher's HUD setting.
     if (dev) { [self showHint:[NSString stringWithFormat:@"This device is not supported.\n%s", dev]]; return; }   // the host does not start
-    self.fill = dm_picture_fill(getenv("DM_PICTURE_FIT"));
+    self.fill = !dm_aspect_native() && dm_picture_fill(getenv("DM_PICTURE_FIT"));
     self.surface = [[UIView alloc] initWithFrame:self.view.bounds];
     self.surface.clipsToBounds = YES;
     [self.view addSubview:self.surface];
@@ -365,6 +365,7 @@ void front_picture_shape(int w, int h) {   // front.h: the views take the presen
 bool dm_setting_live(const char *env, const char *value) {
     if (!env || !g_root.game) return false;
     if (!strcmp(env, "DM_PICTURE_FIT")) {
+        if (dm_aspect_native()) return false;
         if (value) { g_root.fill = dm_picture_fill(value); [g_root.view setNeedsLayout]; LOG("front end: picture %s (in-game menu)", g_root.fill ? "Fill" : "Fit"); }
         return true;
     }
