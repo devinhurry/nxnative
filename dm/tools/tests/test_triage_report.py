@@ -146,9 +146,12 @@ class Report(unittest.TestCase):
     def test_no_op_and_named(self):
         self.assertEqual(self.numbers(self.t['no_op']), [756])
         self.assertEqual(self.numbers(self.t['named']), [167, 408])   # 756 is named too, but merges as a no-op
-        self.assertEqual(self.git['prs'][167]['named'], [(self.sha['landed'], '2026-10-29T00:00:00+00:00', 'body')])
-        self.assertEqual(self.git['prs'][756]['named'], [(self.sha['lint'], '2026-10-31T00:00:00+00:00', 'subject')])
-        self.assertEqual(self.git['prs'][408]['named'], [(self.sha['areas'], '2026-10-31T01:00:00+00:00', 'subject')])   # not 'violet', older than the PR
+        # Git versions spell UTC as Z or +00:00; compare the timestamp itself.
+        def named(number):
+            return [(sha, datetime.fromisoformat(date), where) for sha, date, where in self.git['prs'][number]['named']]
+        self.assertEqual(named(167), [(self.sha['landed'], datetime(2026, 10, 29, tzinfo=timezone.utc), 'body')])
+        self.assertEqual(named(756), [(self.sha['lint'], datetime(2026, 10, 31, tzinfo=timezone.utc), 'subject')])
+        self.assertEqual(named(408), [(self.sha['areas'], datetime(2026, 10, 31, 1, tzinfo=timezone.utc), 'subject')])   # not 'violet', older than the PR
         self.assertEqual(self.git['prs'][29]['named'], [])   # "(#N)" in a body does not count
 
     def test_conflicts_since(self):
