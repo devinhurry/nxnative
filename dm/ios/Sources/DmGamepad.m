@@ -1273,8 +1273,18 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     _stickShown = stick;
 }
 // ---- Relative camera look ----
+- (void)traceLook:(const char *)phase at:(CGPoint)p delta:(CGPoint)delta {
+    const char *trace = getenv("DM_LOOK_TRACE");
+    if (!trace || strcmp(trace,"1")) return;
+    uint64_t owner = _lookTouch ? [_owner objectForKey:_lookTouch].unsignedLongLongValue : 0;
+    LOG("look: ios %s time=%.6f owner=%#llx point=(%.3f,%.3f) previous=(%.3f,%.3f) down=(%.3f,%.3f) delta=(%.6f,%.6f) scale=%.3f canvas=(%.3f,%.3f) virtual=(%d,%d)",
+        phase,_lookTouch.timestamp,(unsigned long long)owner,
+        p.x,p.y,_lookLast.x,_lookLast.y,_lookDown.x,_lookDown.y,delta.x,delta.y,_lookScale,
+        self.bounds.size.width,self.bounds.size.height,g_touch_rx,g_touch_ry);
+}
 - (void)cancelLook {   // Keep the owner's C_LOOK entry until lift; it cannot turn into a stick mid-gesture.
     UITouch *owner = _lookTouch;
+    if (owner) [self traceLook:"cancel" at:_lookLast delta:CGPointZero];
     if (owner) dm_look_input(DM_LOOK_CANCEL, 0, 0);
     _botwLookTapPending = NO;
     _lookTouch = nil; _lookScale = 0;
@@ -1313,6 +1323,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     _lookTouch = t; _lookLast = _lookDown = p; _lookDownTime = t.timestamp; _lookDragged = NO; _lookScale = scale;
     if ([self botwScopeTapExcludedAt:p]) _botwLookTapPending=NO;
     _stick[1] = t; _stickNow[1] = p; _rCentre = p;
+    [self traceLook:"begin" at:p delta:CGPointZero];
     dm_look_input(DM_LOOK_BEGIN, 0, 0);
 }
 - (void)moveLook:(UITouch *)t to:(CGPoint)p {
@@ -1321,24 +1332,40 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     if (!dm_look_enabled() || _lookScale <= 0) { [self cancelLook]; return; }
     float dx = (float)((p.x - _lookLast.x) / _lookScale);
     float dy = (float)((p.y - _lookLast.y) / _lookScale);
+    [self traceLook:"move" at:p delta:CGPointMake(dx,dy)];
+    BOOL quickSelect = [self botwTouchControlsActive] && dm_botw_touch_quick_select_active();
+    BOOL startingLook = !quickSelect && !_lookDragged;
+    CGFloat slop = DM_TP_LOOK_TAP_SLOP * self.u;
     _lookDragged |= dm_touchpad_look_dragged((float)_lookDown.x, (float)_lookDown.y,
-                                              (float)p.x, (float)p.y, DM_TP_LOOK_TAP_SLOP * self.u);
+                                              (float)p.x, (float)p.y, slop);
+    if (startingLook) {
+        // A resting contact can shift before the user intends to drag the camera.
+        // Start at the tap-slop boundary; never replay that initial drift as a turn.
+        CGFloat excess = _lookDragged ? 1 - slop / dist(p, _lookDown) : 0;
+        dx = (float)((p.x - _lookDown.x) * excess / _lookScale);
+        dy = (float)((p.y - _lookDown.y) * excess / _lookScale);
+    }
     if (_lookDragged) _botwLookTapPending = NO;
     _lookLast = p;
     _stickNow[1] = p;
     CGFloat d = dist(p, _rCentre), R = [self stickR:1];
     if (d > R) _rCentre = CGPointMake(p.x - (p.x - _rCentre.x) * R / d, p.y - (p.y - _rCentre.y) * R / d);
-    if ([self botwTouchControlsActive] && dm_botw_touch_quick_select_active()) { dx=-dx; dy=-dy; }
+    if (quickSelect) { dx=-dx; dy=-dy; }
     if (dx != 0 || dy != 0) dm_look_input(DM_LOOK_MOVE, dx, dy);
 }
 - (void)endLook:(UITouch *)t at:(CGPoint)p cancelled:(BOOL)cancelled {
     if (t != _lookTouch) return;
     if (cancelled || !dm_look_enabled()) { [self cancelLook]; return; }
-    [self moveLook:t to:p];   // UIKit may deliver a final location only in touchesEnded.
+    [self traceLook:"end" at:p delta:CGPointZero];
+    BOOL quickSelect = [self botwTouchControlsActive] && dm_botw_touch_quick_select_active();
+    // Menu gestures keep their final location; lifting a camera contact only ends it.
+    if (quickSelect) [self moveLook:t to:p];
+    else _lookDragged |= dm_touchpad_look_dragged((float)_lookDown.x, (float)_lookDown.y,
+        (float)p.x, (float)p.y, DM_TP_LOOK_TAP_SLOP * self.u);
     if (t == _lookTouch) {
         BOOL tap = dm_touchpad_look_tap((float)(t.timestamp - _lookDownTime), _lookDragged);
         dm_look_input(DM_LOOK_END, 0, 0); _lookTouch = nil; _lookScale = 0;
-        if (dm_botw_touch_quick_select_active()) {
+        if (quickSelect) {
             _botwLookTapPending=NO;
             if (tap) {
                 float rect[4]; dm_aspect_touch_rect(self.bounds.size.width,self.bounds.size.height,rect);
@@ -1665,7 +1692,6 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         if ((v & 0xff) == C_LOOK) [self endLook:t at:[t locationInView:self] cancelled:!ended];
         if ((v & 0xff) == C_BTN && [self botwTouchControlsActive] && ((v >> 8) == B_R || (v >> 8) == B_ZR)) {
             if (_touchLayout.trigger_drag[(v>>8)==B_ZR]) {
-                [self moveLook:t to:[t locationInView:self]];
                 _lookDragged=YES; _botwLookTapPending=NO;
                 [self endLook:t at:[t locationInView:self] cancelled:!ended];
             }

@@ -898,14 +898,24 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
     g_look_enabled = YES; reset_look(); g_input_sets = 0; g_input_history[0] = g_input_history[1] = 0;
     CGPoint camera = CGPointMake(view.bounds.size.width * .65, view.bounds.size.height * .38);
     CHECK([view dm_testBtnAt:camera] < 0, "BOTW camera area has no visible or active R3 button hit region");
-    FakeTouch *cameraTap = touch(camera.x,camera.y); beganAt(view,cameraTap,1.0); endedAt(view,cameraTap,camera.x,camera.y,1.08);
+    FakeTouch *cameraTap = touch(camera.x,camera.y); beganAt(view,cameraTap,1.0); endedAt(view,cameraTap,camera.x+.5,camera.y+.5,1.08);
     BOOL r3Pressed = NO, r3Released = NO;
     for (int i=0; i<g_input_sets; i++) { r3Pressed |= (g_input_history[i] & DM_BTN_RS) != 0; r3Released |= !(g_input_history[i] & DM_BTN_RS); }
     CHECK(!r3Pressed && !(g_buttons & DM_BTN_RS), "one short camera-area tap is silent");
-    FakeTouch *cameraTap2 = touch(camera.x+2,camera.y+2); beganAt(view,cameraTap2,1.20); endedAt(view,cameraTap2,camera.x+2,camera.y+2,1.28);
+    FakeTouch *cameraTap2 = touch(camera.x+2,camera.y+2); beganAt(view,cameraTap2,1.20); endedAt(view,cameraTap2,camera.x+2.5,camera.y+2.5,1.28);
     for (int i=0; i<g_input_sets; i++) { r3Pressed |= (g_input_history[i] & DM_BTN_RS) != 0; r3Released |= !(g_input_history[i] & DM_BTN_RS); }
     CHECK(r3Pressed && r3Released && !(g_buttons & DM_BTN_RS),
           "two nearby short camera-area taps emit one R3 press and release");
+    CHECK(!g_queued_dx && !g_queued_dy,"small release shifts in a scope double tap do not turn the camera");
+
+    reset_look(); g_input_sets=0;
+    FakeTouch *pendingLift=touch(camera.x,camera.y);
+    beganAt(view,pendingLift,1.5); endedAt(view,pendingLift,camera.x,camera.y,1.58);
+    FakeTouch *farLift=touch(camera.x,camera.y);
+    beganAt(view,farLift,1.7); endedAt(view,farLift,camera.x+30,camera.y,1.78);
+    BOOL liftR3=NO; for (int i=0;i<g_input_sets;i++) liftR3|=(g_input_history[i]&DM_BTN_RS)!=0;
+    CHECK(!liftR3 && !g_queued_dx && !g_queued_dy,
+          "a distant release location rejects a tap without becoming camera movement");
 
     reset_look(); g_input_sets = 0; g_input_history[0] = g_input_history[1] = 0;
     FakeTouch *pendingTap = touch(camera.x,camera.y); beganAt(view,pendingTap,2.0); endedAt(view,pendingTap,camera.x,camera.y,2.08);
@@ -1544,19 +1554,21 @@ static void test_botw_scope_pointer(DmGamepad *view) {
 
 static void test_look_drag(DmGamepad *view) {
     g_look_enabled = YES; [view setFull:YES];
+    float slop=DM_TP_LOOK_TAP_SLOP*dm_touchpad_u(view.bounds.size.height);
     reset_look();
     FakeTouch *t = touch(600, 150);
     began(view, t); moved(view, t, 615, 165);
     CHECK(g_rx > 0 && g_ry < 0 && abs(g_rx + g_ry) <= 1 && g_rx < 32767 && -g_ry < 32767,
           "moderate look drag keeps the proportional virtual right-stick magnitude");
-    ended(view, t, 620, 170);
+    moved(view, t, 620, 170);
+    ended(view, t, 625, 175);
     CHECK(g_look_count == 4 && g_look_events[0].phase == DM_LOOK_BEGIN &&
           g_look_events[1].phase == DM_LOOK_MOVE && g_look_events[2].phase == DM_LOOK_MOVE &&
-          g_look_events[3].phase == DM_LOOK_END, "look receives BEGIN, relative MOVE samples, final release MOVE, then END");
-    near_value(g_look_events[1].dx, 15.0f / 390.0f, "rightward delta is normalized by the logical short edge");
-    near_value(g_look_events[1].dy, 15.0f / 390.0f, "downward delta is positive and normalized by the logical short edge");
-    near_value(g_look_events[2].dx, 5.0f / 390.0f, "release-only horizontal displacement is delivered");
-    near_value(g_look_events[2].dy, 5.0f / 390.0f, "release-only vertical displacement is delivered");
+          g_look_events[3].phase == DM_LOOK_END, "look receives BEGIN, held MOVE samples, then END without a lift sample");
+    near_value(g_look_events[1].dx, (15.0f-slop/sqrtf(2)) / 390.0f, "rightward look starts at the slop boundary and uses the logical short edge");
+    near_value(g_look_events[1].dy, (15.0f-slop/sqrtf(2)) / 390.0f, "downward look starts at the slop boundary and uses the logical short edge");
+    near_value(g_look_events[2].dx, 5.0f / 390.0f, "an active camera drag retains its full horizontal movement");
+    near_value(g_look_events[2].dy, 5.0f / 390.0f, "an active camera drag retains its full vertical movement");
     CHECK(g_pad_player == 0 && g_pad_buttons == 0 && g_pad_lx == 0 && g_pad_ly == 0 && g_pad_rx == 0 && g_pad_ry == 0,
           "virtual touch right-stick axes stay separate from the physical-pad channel");
     CHECK(g_touch_count == 0, "look drag does not become a game touchscreen touch");
@@ -1568,9 +1580,11 @@ static void test_look_drag(DmGamepad *view) {
     near_value(one_y, split_y, "one and many move events have the same vertical total");
 
     reset_look(); t = touch(600, 150); began(view, t); moved(view, t, 602, 150);
-    CHECK(g_rx == 0 && g_ry == 0 && g_look_count == 2 && g_look_events[1].phase == DM_LOOK_MOVE,
-          "movement inside the stick dead zone stays zero while relative look still receives it");
-    ended(view, t, 602, 150);
+    CHECK(g_rx == 0 && g_ry == 0 && g_look_count == 1,
+          "small initial contact movement turns neither the virtual stick nor the camera");
+    ended(view, t, 605, 148);
+    CHECK(g_look_count==2 && !g_queued_dx && !g_queued_dy,
+          "lifting a resting camera contact does not turn the view");
 
     reset_look(); t = touch(600, 150); began(view, t);
     CGFloat radius = 60.0 * fmin(view.bounds.size.height / 430.0, 1.3);
@@ -1600,7 +1614,7 @@ static void test_look_drag(DmGamepad *view) {
     g_look_enabled = YES;
     dm_pad_set_player(0, 0, 0, 0, 0, 0);
     ended(view, t, 701, 150);
-    CHECK(g_rx == 0 && g_ry == 0, "ending look clears the virtual right-stick axes after the final relative delta");
+    CHECK(g_rx == 0 && g_ry == 0, "ending look clears the virtual right-stick axes");
 
     reset_look(); t = touch(600, 150); began(view, t);
     moved(view, t, 600, 150); moved(view, t, 600, 150); ended(view, t, 600, 150);
@@ -1612,8 +1626,10 @@ static void test_look_drag(DmGamepad *view) {
     reset_look(); t=touch(600,150); began(view,t); moved(view,t,615,165);
     CHECK(g_rx<0 && g_ry>0 && g_look_events[1].dx<0 && g_look_events[1].dy<0,
           "BOTW quick selection reverses only the touch stick and relative impulse");
+    near_value(g_look_events[1].dx,-15.0f/390.0f,"quick-strip movement keeps its full initial travel");
     unsigned quick_taps=g_quick_taps;
-    ended(view,t,615,165);
+    ended(view,t,620,170);
+    near_value(g_look_events[2].dx,-5.0f/390.0f,"quick-strip scrolling keeps its final release location");
     CHECK(g_quick_taps==quick_taps,"a quick-strip drag never accepts a tap selection");
     t=touch(500,150); began(view,t); ended(view,t,500,150);
     CHECK(g_quick_taps==quick_taps+1,"a quick-strip tap selects through the native shortcut list");
@@ -1622,6 +1638,51 @@ static void test_look_drag(DmGamepad *view) {
     CHECK(g_rx>0 && g_look_events[1].dx>0,"closing quick selection restores ordinary look direction");
     ended(view,t,615,165);
     g_botw_touchhud_available=NO; [view reset];
+}
+
+static void test_botw_camera_contact(DmGamepad *view) {
+    g_botw_touchhud_available = g_botw_gameplay_ready = YES;
+    g_look_enabled = YES;
+    setenv("DM_BOTW_PAD_R_DRAG_MODE","1",1);
+    setenv("DM_BOTW_PAD_ZR_DRAG_MODE","1",1);
+    [view refreshTouchSettings];
+    [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view layoutIfNeeded];
+    const int buttons[] = {-1,7,9};
+    for (unsigned i=0;i<sizeof buttons/sizeof *buttons;i++) {
+        int b=buttons[i]; CGPoint c=b<0 ? CGPointMake(600,150) : [view dm_testDropCenter:b];
+        reset_look(); FakeTouch *t=touch(c.x,c.y); began(view,t);
+        CHECK(g_buttons==(b<0 ? 0 : 1ull<<b) && g_look_held,"a camera contact starts immediately and preserves its button owner");
+        // Offsets from the iPhone trace: contact settles downward, then shifts on lift.
+        moved(view,t,c.x+.667,c.y+5);
+        moved(view,t,c.x+3,c.y+8.333);
+        moved(view,t,c.x+5.334,c.y-5.667);
+        ended(view,t,c.x+7,c.y-7.334);
+        CHECK(g_look_count==2 && g_look_events[1].phase==DM_LOOK_END && !g_queued_dx && !g_queued_dy,
+              "iPhone hold and release drift never becomes camera displacement");
+        CHECK(!g_buttons && !g_rx && !g_ry,"releasing a resting camera contact clears its button and virtual axes");
+
+        reset_look(); t=touch(c.x,c.y); began(view,t);
+        moved(view,t,c.x+6,c.y);
+        CHECK(g_look_count==1,"a camera contact stays neutral within the existing tap slop");
+        moved(view,t,c.x+20,c.y);
+        near_value(g_queued_dx,(20-DM_TP_LOOK_TAP_SLOP)/390.0f,
+                   "a camera drag starts continuously with only travel beyond the tap slop");
+        moved(view,t,c.x+23,c.y+2);
+        near_value(g_queued_dy,2.0f/390.0f,"an active camera drag keeps fine vertical adjustment without an axis lock");
+        int before=g_look_count;
+        ended(view,t,c.x+26,c.y-2);
+        CHECK(g_look_count==before+1 && g_look_events[before].phase==DM_LOOK_END,
+              "releasing a dragged contact ends look without injecting the lift location");
+        near_value(g_queued_dx,11.0f/390.0f,"camera END retains real movement queued before release");
+        near_value(g_queued_dy,2.0f/390.0f,"camera END excludes the vertical lift shift");
+
+        reset_look(); t=touch(c.x,c.y); began(view,t); moved(view,t,c.x+20,c.y);
+        cancelled(view,t,c.x+21,c.y-2);
+        CHECK(g_look_events[g_look_count-1].phase==DM_LOOK_CANCEL && !g_queued_dx && !g_queued_dy,
+              "cancelling a camera drag still discards queued movement");
+    }
+    unsetenv("DM_BOTW_PAD_R_DRAG_MODE"); unsetenv("DM_BOTW_PAD_ZR_DRAG_MODE");
+    [view refreshTouchSettings]; g_botw_touchhud_available=NO; [view reset];
 }
 
 static void test_botw_face_gaps(DmGamepad *view) {
@@ -1716,10 +1777,10 @@ static void test_priority_and_multitouch(DmGamepad *view) {
     ended(view, first, 600, 150);
     CHECK(g_rx == 0 && g_ry == 0, "lifting the look owner clears its virtual right-stick axes immediately");
     moved(view, second, 720, 200); ended(view, second, 720, 200);
-    CHECK(g_look_count == held_look_count + 2 && g_look_events[g_look_count - 1].phase == DM_LOOK_END,
+    CHECK(g_look_count == held_look_count + 1 && g_look_events[g_look_count - 1].phase == DM_LOOK_END,
           "an inert second finger does not take over after the owner lifts");
     FakeTouch *next = touch(650, 180); began(view, next);
-    CHECK(g_look_count == held_look_count + 3 && g_look_events[g_look_count - 1].phase == DM_LOOK_BEGIN, "a fresh finger can begin look after the old gesture ends");
+    CHECK(g_look_count == held_look_count + 2 && g_look_events[g_look_count - 1].phase == DM_LOOK_BEGIN, "a fresh finger can begin look after the old gesture ends");
     ended(view, next, 650, 180);
 }
 
@@ -2272,6 +2333,7 @@ static void run_tests(DmGamepad *view) {
     test_botw_scope_pointer(view);
     test_motion_orientation();
     test_look_drag(view);
+    test_botw_camera_contact(view);
     test_botw_face_gaps(view);
     test_botw_left_stick_gaps(view);
     test_priority_and_multitouch(view);
