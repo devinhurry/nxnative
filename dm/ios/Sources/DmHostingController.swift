@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-// Full-screen SwiftUI presentations must preserve the game's four-orientation policy.
+// Full-screen SwiftUI views leave orientation restrictions to the scene.
 final class DmHostingController<Content: View>: UIHostingController<Content> {
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .all }
 }

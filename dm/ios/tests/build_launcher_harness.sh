@@ -46,7 +46,7 @@ xcrun --sdk iphonesimulator swiftc -swift-version 5 -parse-as-library -target ar
     -sdk "$SDK" -I "$ROOT/dm/host" -module-cache-path "$WORK/module-cache" -o "$APP/BOTWLauncherTest" \
     -import-objc-header "$ROOT/dm/ios/Sources/DmIOS-Bridging-Header.h" "$WORK/CloudSaves.o" \
     "$WORK/GraphicsPack.o" "$WORK/GameImageImport.o" "$WORK/resources.o" -larchive \
-    "$ROOT/dm/ios/Sources/LauncherRow.swift" "$ROOT/dm/ios/Sources/LauncherSettings.swift" "$ROOT/dm/ios/Sources/BotwTouchSettings.swift" "$ROOT/dm/ios/Sources/Launcher.swift" "$ROOT/dm/ios/tests/launcher_ui_harness.swift"
+    "$ROOT/dm/ios/Sources/DmHostingController.swift" "$ROOT/dm/ios/Sources/LauncherRow.swift" "$ROOT/dm/ios/Sources/LauncherSettings.swift" "$ROOT/dm/ios/Sources/BotwTouchSettings.swift" "$ROOT/dm/ios/Sources/Launcher.swift" "$ROOT/dm/ios/tests/launcher_ui_harness.swift"
 plutil -lint "$APP/Info.plist"
 codesign --force --sign - "$APP"
 echo "Simulator app: $APP"

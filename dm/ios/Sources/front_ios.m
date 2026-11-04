@@ -130,12 +130,16 @@ static void tv_attach(void);
 static DmRootVC *g_root;
 int front_screen_max_fps(void) { return atomic_load(&g_screen_hz); }
 NSUInteger dm_touch_editor_orientations(void);
-UIInterfaceOrientationMask front_ios_orientations(UIWindow *window) {
+UIInterfaceOrientationMask front_ios_scene_orientations(UIWindowScene *scene) {
+    if (strcmp(DM_GAME_ID,"01007EF00011E000")) return UIInterfaceOrientationMaskAll;
+    // UIKit's regular environment remains resizable in every direction.
+    // Compact phone windows retain the user's portrait permission.
+    UITraitCollection *traits=scene.traitCollection;
+    if (traits.horizontalSizeClass==UIUserInterfaceSizeClassRegular &&
+        traits.verticalSizeClass==UIUserInterfaceSizeClassRegular) return UIInterfaceOrientationMaskAll;
     UIInterfaceOrientationMask editor=dm_touch_editor_orientations();
     if (editor) return editor;
-    if (strcmp(DM_GAME_ID,"01007EF00011E000")) return UIInterfaceOrientationMaskAll;
-    CGSize size=window ? window.bounds.size : UIScreen.mainScreen.bounds.size;
-    BOOL portrait=dm_botw_portrait_allowed(size.width,size.height,0,0);
+    BOOL portrait=dm_botw_portrait_enabled();
     // The launcher has not applied saved choices yet. Read the same compact
     // preference now, while explicit environment overrides retain priority.
     if (!getenv("DM_BOTW_PORTRAIT") && (!getenv("DM_SAVED_CHOICES") || strcmp(getenv("DM_SAVED_CHOICES"),"0"))) {
@@ -265,7 +269,6 @@ static void game_settings_done(void) { dm_gamepad_settings_done(); }
     dm_aspect_region(1,next);
     if (!CGRectEqualToRect(self.surface.frame,frame) || memcmp(previous,next,sizeof next)) {
         dm_gamepad_surface_changed(); [self.pad setNeedsLayout]; [self.game setNeedsLayout];
-        if (!strcmp(DM_GAME_ID,"01007EF00011E000")) [self setNeedsUpdateOfSupportedInterfaceOrientations];
     }
     self.surface.frame=frame;
     CGRect b=self.surface.bounds;
@@ -299,17 +302,8 @@ static void game_settings_done(void) { dm_gamepad_settings_done(); }
 - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
 - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }   // Edge gestures need two swipes, to avoid accidental exits
 - (BOOL)prefersStatusBarHidden { return YES; }
-- (void)viewSafeAreaInsetsDidChange {
-    [super viewSafeAreaInsetsDidChange];
-    if (self.game && !strcmp(DM_GAME_ID,"01007EF00011E000")) [self setNeedsUpdateOfSupportedInterfaceOrientations];
-}
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
-    return front_ios_orientations(self.view.window);
-}
-- (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
-    UIInterfaceOrientation current=self.view.window.windowScene.interfaceOrientation;
-    return current!=UIInterfaceOrientationUnknown && (self.supportedInterfaceOrientations & (1UL<<current)) ?
-        current : UIInterfaceOrientationLandscapeRight;
+    return UIInterfaceOrientationMaskAll;
 }
 @end
 UIViewController *front_ios_root(void) { return [DmRootVC new]; }
