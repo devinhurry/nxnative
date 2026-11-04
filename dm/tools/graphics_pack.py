@@ -70,11 +70,11 @@ def requirements(game, build, api, library, tables, external=True, minimum=MINIM
     for name in INPUT_TABLES:
         p = Path(tables) / name
         h.update(name.encode() + b'\0' + (p.read_bytes() if p.is_file() else b'missing') + b'\0')
-    # The generated header covers graphics constants compiled into this host.
+    # Runtime defaults and touch/camera settings share this profile with shaders.
+    # The host header is not a resource input: adding a macro must not change the series.
     sys.path.insert(0, str(repo / 'dm/games'))
     import game as game_module
     profile = game_module.load(game)
-    h.update('\n'.join(line for line in game_module.header(profile).splitlines() if line.startswith('#define ')).encode())
     h.update(json.dumps([r for r in getattr(profile, 'rows', []) if r[0].startswith(('nvn_', 'shader_'))], separators=(',', ':')).encode())
     compatibility = dict(game=game.upper(), build=build, platform='ios', api=api,
                          chain=chain, library=library, contract=h.hexdigest())

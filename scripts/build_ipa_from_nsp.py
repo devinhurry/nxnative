@@ -1059,6 +1059,16 @@ def chain_files(repo):   # what the iOS shaders run: not the split's readers (sh
     return python_tool_files(repo, 'dm/gfx/tools/dmsh_build.py', ('dm/gfx/tools', 'dm/ios/tools', 'dm/games')) + [repo / 'dm/gfx/tools/dmsh_chain.lock']
 
 
+def shader_tool_inputs(repo, files):
+    """Track the profile reader used by shaders, independently of host header generation."""
+    reader = repo / 'dm/games/game.py'
+    if reader not in files: return [('files', files)]
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'dm/gfx/tools'))
+    from dmsh_codegen_cache import code_fingerprint
+    return [('files', [p for p in files if p != reader]),
+            ('profile reader', code_fingerprint(reader, ['load'], runtime=('HERE',)))]
+
+
 def split_profile_inputs(g):   # shader_split.py's GAME reads, plus the tables the packer checks or writes; renderer settings, notes and translation tables are not extraction inputs
     settings = [(name, g.get(name, '')) for name in ('modules', 'shader_groups', 'shader_note', 'shader_key_skip')]
     tables = [g.table(n) for n in ('shader_facts_manual.tsv', 'shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv', 'pso_pairs.tsv')]
@@ -2046,7 +2056,7 @@ def split_shaders(py, repo, roms, mains, pkg, env, logs, g, provisional=False, o
     names = ('shader_map.tsv', 'shader_facts.tsv', 'shader_pairs.tsv')
     PROG.stage('shader split', step='checking the inputs')   # then the count of files and archive ranges scanned (shader_split.py's progress lines); the package and tables come at the end
     kf, outputkf = pkg.with_name(pkg.name + '.key'), pkg.with_name(pkg.name + '.outputs.key')
-    inputs = [('files', python_tool_files(repo, 'dm/gfx/tools/shader_split.py', ('dm/gfx/tools', 'dm/tools', 'dm/games'))), bool(provisional), 'split-v2']
+    inputs = [('shader tools', fingerprint(*shader_tool_inputs(repo, python_tool_files(repo, 'dm/gfx/tools/shader_split.py', ('dm/gfx/tools', 'dm/tools', 'dm/games'))))), bool(provisional), 'split-v2']
     for r, m in zip(roms, mains):
         inputs += [('files', [m] + [m.parent / n for n in g.modules_in(m.parent) if n != 'main']), ('stat' if provisional else 'tree', r)]
         for setting, folder, pattern in (('DM_GLSLC_CAPTURE', 'glslc_capture', '*.glslc'), ('DM_UE_SHADERS', 'ue_shaders', '*.ushaderbytecode')):
@@ -2307,7 +2317,7 @@ def build_shaders(py, repo, sh, xlate, env, logs, g, pkg_key=None, mac=False):
     if not pso_pairs.is_file(): pso_pairs = sh / 'pso_pairs.tsv'   # the split's copy is a shader input too (vs_pad)
     if pkg_key:
         PROG.set(step='checking the inputs')
-        key = fingerprint(pkg_key, ('files', chain_files(repo)), ('stat', xlate.parent), ('files', shader_profile_files(repo, g) + [pso_pairs]), shader_profile_rules(g), *toolchain(repo, env), str(xlate),
+        key = fingerprint(pkg_key, *shader_tool_inputs(repo, chain_files(repo)), ('stat', xlate.parent), ('files', shader_profile_files(repo, g) + [pso_pairs]), shader_profile_rules(g), *toolchain(repo, env), str(xlate),
                           {k: env.get(k) for k in ('XLATE_DEBUG', 'XLATE_REDUCED')}, env=env)
         note = next((n for k in ((kmac, kf) if mac else (kf,)) if (n := reused(k, key)) is not None), None)
         # the libraries are the last build's, so are tables that name their stamp; a missing or stale one is made from that build's Mac outputs, and without them the step runs again

@@ -88,6 +88,13 @@
 - **Fix:** after checking hard requirements, the packager compares the complete current output inventory and compiler records with published packages and verifies an equal ZIP's payloads. It reuses the original ZIP and version and records only its exact ID in the new IPA's `equivalent_package_ids`. Import, discovery and installed selection accept that ID while retaining game/build, platform/API, shader-chain, library, minimum-version, OS and integrity checks. The source contract and prepared-project checks remain current. Shader-chain changes still require matching resources. See [compatibility and updates](../graphics-pack.md#compatibility-and-updates).
 - **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game); graphics v4 and v6 have identical 78,018-file inventories and compiler records. Foundation and packaging fixtures cover exact-ID authorization, changed payloads, corruption and hard-requirement rejection. Physical iPhone acceptance remains pending.
 
+### Runtime profile changes invalidate graphics reuse
+
+- **Symptom:** adding touch-camera settings, changing memory accounting or updating default frame rate re-enters shader preparation and changes the graphics compatibility series.
+- **Cause:** graphics requirements hashed every macro in the generated host header, and shader-stage reuse hashed the whole `game.py`, including its unrelated host-header generator.
+- **Fix:** graphics requirements include shader profile rows (`nvn_*` / `shader_*`) instead of the host header. Shader extraction and NVN compilation reuse fingerprint the profile reader's dependency closure with the existing semantic-code cache helper; host-header changes do not invalidate them. Renderer, shader-chain, shader-table, compiler and package-integrity checks remain in place. Older packages retain the existing exact-content verification path.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game), while comparing the touch/gyro experiment with main. Fixtures cover unchanged requirements after touch/memory/frame-rate/operation-mode edits, retained extraction/build keys after host-header edits, and invalidation after shader inputs or reader logic change.
+
 ### Generated shader-table timestamps publish duplicate graphics packages
 
 - **Symptom:** a rebuild publishes another large graphics package even though every shader library, reflection file, pipeline archive and compiler record is unchanged.

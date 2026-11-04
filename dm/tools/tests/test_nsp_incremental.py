@@ -615,6 +615,22 @@ class SplitShaders(Base):
         helper.unlink()
         self.go(g); self.assertEqual(self.splits, 3)
 
+    def test_host_header_changes_keep_shader_split_and_build_keys(self):
+        reader = self.repo / 'dm/games/game.py'; reader.parent.mkdir(parents=True, exist_ok=True)
+        source = (REPO / 'dm/games/game.py').read_text()
+        reader.write_text(source)
+        for name in ('shader_split.py', 'dmsh_build.py'):
+            (self.repo / 'dm/gfx/tools' / name).write_text('import game\n')
+        def build_key(): return nsp.fingerprint(*nsp.shader_tool_inputs(self.repo, nsp.chain_files(self.repo)))
+        g = self.own(); before = self.go(g); key = build_key()
+        source = source.replace('def header(g):', 'def header(g):\n    touch_setting = 1')
+        reader.write_text(source)
+        self.assertEqual(self.go(g), before); self.assertEqual(self.splits, 1)
+        self.assertEqual(build_key(), key)
+        reader.write_text(source.replace(r"return '\t'.join(r[0])", r"return '\t'.join(r[-1])"))
+        self.go(g); self.assertEqual(self.splits, 2)
+        self.assertNotEqual(build_key(), key)
+
     def test_extraction_settings_and_auxiliary_modules_reextract(self):
         g = self.own(); self.go(g)
         for i, (key, value) in enumerate((('shader_groups', 'foo=bar'), ('shader_note', 'Other sources'), ('shader_key_skip', '0x770+0x78'), ('modules', 'main sdk')), 2):
