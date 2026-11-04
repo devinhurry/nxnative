@@ -197,6 +197,43 @@ static void test_narrow_hud(void) {
     assert(*(float *)(weather+0x48)==1 && *(float *)(weather+0x4c)==1);
 }
 
+static void test_narrow_fullscreen_background(void) {
+    // GameOver_00 keeps its full-canvas background separate from captured
+    // lettering and native buttons. Only the background may stretch.
+    uint8_t root[0x100],in[0x100],bg[0x100],text[0x100],capture[0x100],button[0x100],art[0x100];
+    pane_init(root,"RootPane",0,1280,720);
+    pane_init(in,"N_In_00",0,1280,720); pane_child(root,in);
+    pane_init(bg,"P_BG_00",0,1280,720); pane_child(in,bg);
+    pane_init(text,"T_GameOver_00",0,700,110); pane_child(root,text);
+    pane_init(capture,"P_Capture_00",0,740,130); pane_child(in,capture);
+    pane_init(button,"Pa_Btn_00",0,500,60); pane_child(root,button);
+    pane_init(art,"N_0_MainV_00",0,1280,720); pane_child(root,art);
+    const float ratios[]={4.f/3,1,9.f/16,GAME_ASPECT,21.f/10};
+    uint64_t regs[31]={0};
+    for (unsigned i=0;i<sizeof ratios/sizeof *ratios;i++) {
+        dm_aspect_set_display(ratios[i]);
+        regs[21]=(uintptr_t)bg; draw_callback(regs);
+        assert(dm_aspect_ui_background_drawing()==(ratios[i]<GAME_ASPECT ? 2 : ratios[i]>GAME_ASPECT));
+        draw_end_callback(regs); assert(!dm_aspect_ui_background_drawing());
+        const uint8_t *foreground[]={text,capture,button};
+        for (unsigned p=0;p<sizeof foreground/sizeof *foreground;p++) {
+            regs[21]=(uintptr_t)foreground[p]; draw_callback(regs);
+            assert(!dm_aspect_ui_background_drawing()); draw_end_callback(regs);
+        }
+    }
+    dm_aspect_set_display(4.f/3);
+    // A partial-height panel or a container is not a full-screen fill.
+    *(float *)(bg+0x54)=360; regs[21]=(uintptr_t)bg; draw_callback(regs);
+    assert(!dm_aspect_ui_background_drawing()); draw_end_callback(regs);
+    *(float *)(bg+0x54)=720; pane_child(bg,text); draw_callback(regs);
+    assert(!dm_aspect_ui_background_drawing()); draw_end_callback(regs);
+    // Title artwork retains its centered proportions on narrow displays.
+    strcpy((char *)in+0xb8,"N_InOut_00"); pane_child(in,art);
+    pane_init(bg,"TitleBG_00",0,1280,720); pane_child(art,bg);
+    draw_callback(regs); assert(!dm_aspect_ui_background_drawing()); draw_end_callback(regs);
+    dm_aspect_set_display(GAME_ASPECT);
+}
+
 static void test_seated_regions(void) {
     const float widths[]={795,1200};
     for (unsigned n=0;n<2;n++) {
@@ -410,6 +447,7 @@ int main(void) {
     test_right_hud_padding();
     test_edge_hud();
     test_narrow_hud();
+    test_narrow_fullscreen_background();
     test_seated_regions();
     free(g_mod[0].base); puts("aspect: camera, centered content/hit regions and independent fullscreen backgrounds passed");
 }

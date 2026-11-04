@@ -320,3 +320,5 @@
 "Collapse" = "\U6536\U8D77";
 "Expand" = "\U5C55\U5F00";
 "Low available memory" = "\U53EF\U7528\U5185\U5B58\U4E0D\U8DB3";
+"More frame rates" = "\U66F4\U591A\U5E27\U7387";
+"Frame generation is unavailable above 60 fps." = "\U8D85\U8FC7 60 fps \U65F6\U65E0\U6CD5\U542F\U7528\U8865\U5E27\U3002";

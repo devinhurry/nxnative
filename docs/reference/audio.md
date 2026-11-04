@@ -181,6 +181,14 @@ For a replaced DSP renderer the size query keeps the service's work-buffer contr
 - **Found on:** the [synthetic real-time audio audit in issue #313](https://github.com/seedds/nxnative/issues/313#issuecomment-6523656102). No particular game's audible failure is attributed to this finding.
 - **Check:** `t_audio_stats` calls the real callback with synthetic PCM and traps callback-thread stdio, including its stream lock. With the watchdog's writer deliberately blocked, each PCM buffer still triggers its guest release event and is refilled correctly; queued and merged reports preserve their fields. Close drains a second pending snapshot while the watchdog holds only a local copy, which it logs after the output was freed. Statistics alone cause no guest event. The fixture needs no sound device or game files.
 
+### AudioOut release notification can sleep with pending work
+
+- **Symptom:** PCM is consumed correctly and its buffer reaches the released queue, but the guest release event never arrives. The notifier is asleep with `notify_pending=1` and `notify_armed=0`.
+- **Cause:** the notifier cleared `notify_armed` with a release-only store before checking `notify_pending`. A producer could publish pending work and see the old armed value, leaving the notifier to wake itself; without acquiring that producer's exchange, the notifier could read stale pending state and sleep. Apple-silicon code generated a store-release followed by acquire-PC loads, which permit this ordering.
+- **Fix:** disarm with an acquire-release exchange. If the producer's armed exchange precedes it, the notifier acquires the pending publication. Otherwise the producer sees zero and posts, or finds the notifier already re-armed with its own semaphore post. No timeout, polling, callback logging or audio pacing changes are needed.
+- **Found on:** shared CI's `t_audio_stats` ASan/UBSan fixture, reproduced locally without a sound device or game. This is a general AudioOut mechanism; no gameplay reproduction is claimed.
+- **Check:** the existing blocked-diagnostics cases remain intact. The fixture also renders and individually reclaims 100,000 event-driven PCM buffers, so releases cannot be hidden by bulk notification coalescing. The old notifier naturally strands a release in this case; diagnostics distinguish event delivery, PCM contents and returned-buffer identity without retrying the failed wait.
+
 ### Stopping an AudioOut releases its pending buffers
 
 - **Symptom:** FMOD waits for buffer release after stopping an AudioOut, hanging the game during a scene transition.
@@ -222,6 +230,15 @@ For a replaced DSP renderer the size query keeps the service's work-buffer contr
   - `front_ios.m` also observes `AVAudioSessionMediaServicesWereResetNotification` (`dm_audio_reset` recreates every AudioUnit);
   - a watchdog in `hle_audio.c` switches any started output whose device has not called back for 200 ms in focus to the silent sink, retrying the AudioUnit after 1, 2, 4, 8 s. A start that fails (session still held by a call) falls back the same way instead of aborting.
 - **Check:** the log shows `audio session: interrupted`, `the device has not called back for N ms` and `AudioUnit restarted`. `tests/t_audio.c` (in `dm/host`) scenario 3 stops a playing AudioUnit behind the host's back.
+
+### A blocked audio device start freezes the game
+
+- **Symptom:** a game stops advancing while the Mac's selected output refuses to play. A process sample shows `AudioOutputUnitStart` waiting in the HAL, with the game's audio renderer waiting for a released PCM buffer.
+- **Cause:** Start and the watchdog's retries stopped the silent sink and waited for the device while holding the output registry lock. A driver could block there for seconds or return success without delivering any callbacks.
+- **Fix:** the silent sink paces the guest at 48 kHz while a host worker starts the device. Until the watchdog sees a callback after startup and joins the silent sink, the device returns silence. A device that fails to deliver its first callback within one second is stopped and retried with backoff. Each output can start independently. A Close during a start that the driver still holds returns at once: it unregisters the output, and the start's worker stops and disposes the unit and frees the output when the driver returns (waiting for it in Close held the game's thread as long as the driver blocked).
+- **Check:** `tests/t_audio_device.c` (in `dm/host`) blocks the mock driver's `AudioOutputUnitStart`: Start returns and the queued buffer is released, callbacks play silence until the handoff, and Stop / suspend / reset / Close each run while the start is still blocked.
+- **Open:** `AudioOutputUnitStop` still runs under `g_aos_lock` (Stop, suspend, the media services reset, the watchdog's stall path). A driver that blocked there as it does in Start would hold the lock; not seen so far.
+- **Found on:** [Splatoon Raiders](../../dm/games/0400380020056000/README.md), with an unavailable HDMI audio output on the Mac ([issue #1030](https://github.com/seedds/nxnative/issues/1030)).
 
 ### AudioUnit construction before output publication
 
@@ -266,6 +283,13 @@ For a replaced DSP renderer the size query keeps the service's work-buffer contr
 - **Fix:** the volume `SetAudioDeviceOutputVolume` sets is now kept and read back (`hle_audren.c`). `audio::GetAudioOutName` is hooked too.
 - **Found on:** [DRAGON QUEST VII Reimagined](../../dm/games/0100A9D01C446000/README.md) (SDK 19.3.1, Unreal Engine 4.27: `GetAudioDeviceOutputVolume`); [13 Sentinels: Aegis Rim](../../dm/games/01003FC01670C000/README.md) (SDK 11: `GetAudioOutName`).
 - **Note:** older SDKs name some device calls differently (`ListAudioDeviceName` / `GetActiveAudioDeviceName`, `OpenDefaultAudioOut` in SDK 12; [Older SDK names for the same calls](services.md#older-sdk-names-for-the-same-calls)), and [Super Mario Odyssey](../../dm/games/0100000000010000/README.md) (SDK 7) aborted in `audio::AcquireAudioDeviceSwitchNotification` ([SDK calls that open a system service through sm](services.md#sdk-calls-that-open-a-system-service-through-sm)).
+
+### The output device notification under its SDK 21 and 22 name
+
+- **Symptom:** an `nn::diag` abort with Result 0xe15 on an audio thread at start, in `audio::CreateUserClientSessionByHipc` under `audio::AcquireAudioOutputDeviceNotification`, after the line `sf: the game connects to service aud:u itself`.
+- **Cause:** SDK 21 and 22 name the output device notification `AcquireAudioOutputDeviceNotification` (older SDKs: `AcquireAudioDeviceNotificationForOutput`, and SDK 7's `AcquireAudioDeviceSwitchNotification`). SDK 22.2.0's version (`sdk+0x1f1e00`) opens a user session with `aud:u`, which the host does not serve, asks it for a read end and attaches it AutoClear. It keeps no per-process flag (the service keys each acquire by its event) and returns a Result.
+- **Fix:** `hle_audren.c` takes the name over, first for SDK 21 (Splatoon Raiders); the same takeover serves SDK 22. The event is bound and never signaled, and the Result is 0. The takeover keeps the older names' once-per-process flag, so a second acquire returns 0x499 where SDK 22.2.0's code would bind again. No game has been seen to acquire twice. `ReleaseAudioOutputDeviceNotification` (which destroys the event once the service lets it go) is not taken over: no game seen imports it.
+- **Found on:** [Fire Emblem Fortune's Weave](../../dm/games/04007EF01F8AE000/README.md) (Switch 2, SDK 22.2.0, `main+0xe7b9c`).
 
 ### No audio input devices
 

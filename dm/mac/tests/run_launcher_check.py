@@ -14,7 +14,7 @@ app = work / 'LauncherCheck.app/Contents'
 binary = app / 'MacOS/LauncherCheck'; binary.parent.mkdir(parents=True)
 resources = app / 'Resources'; (resources / 'dm').mkdir(parents=True)
 for name in ('romfs', 'msl', 'patched'): (work / name).mkdir()
-(work / 'patched/main.fixups.tsv').write_text('# RENDER_SCALE\t1\n')
+(work / 'patched/main.fixups.tsv').write_text('# RENDER_SCALE\t1\n# FPS_STATE_OFF\t0x4000\n# REALTIME_FRAME_STEP\t1\n')
 env = dict(os.environ, SETTINGS_PLATFORM='mac', GFXAPI='nvn')
 subprocess.run([sys.executable, str(REPO / 'dm/games/settings.py'), '01007EF00011E000', str(work / 'patched'),
                 str(work / 'control.nacp'), str(resources / 'dm/launcher.json')], env=env, check=True)

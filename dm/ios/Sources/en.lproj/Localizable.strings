@@ -320,3 +320,5 @@
 "Collapse" = "Collapse";
 "Expand" = "Expand";
 "Low available memory" = "Low available memory";
+"More frame rates" = "More frame rates";
+"Frame generation is unavailable above 60 fps." = "Frame generation is unavailable above 60 fps.";

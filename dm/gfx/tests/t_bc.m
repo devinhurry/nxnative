@@ -39,7 +39,7 @@ static void formats(void) {
     uint32_t seed=0x5ac13719;
     for(int f=0x41;f<=0x50;f++){@autoreleasepool{
         void *mem=NULL;CHECK("aligned pool",!posix_memalign(&mem,getpagesize(),65536));memset(mem,0,65536);
-        pool_t pool={.mem=mem,.size=65536,.flags=NVN_MEMORY_POOL_FLAGS_CPU_CACHED|NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
+        pool_t pool={.magic=MAGIC('P','O','O','L'),.mem=mem,.size=65536,.flags=NVN_MEMORY_POOL_FLAGS_CPU_CACHED|NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
         tex_t t={.magic=MAGIC('T','E','X',0),.serial=9800+f,.pool=&pool,.mem=mem,.has_layout=1};
         t.d=(nvn_texdesc){.target=NVN_TEXTURE_TARGET_2D_ARRAY,.format=f,.width=12,.height=8,.depth=2,.levels=4,.samples=1};nvn_tex_layout(&t.d,&t.L);mtl_pool_add(mem,65536);
         uint32_t pf;nvn_fmt_to_mtl(f,&pf,NULL);MTLTextureDescriptor *d=[MTLTextureDescriptor new];d.textureType=MTLTextureType2DArray;d.pixelFormat=pf;d.width=12;d.height=8;d.arrayLength=2;d.mipmapLevelCount=4;d.storageMode=MTLStorageModePrivate;d.usage=MTLTextureUsageShaderRead;
@@ -119,7 +119,7 @@ static void render_blocks(unsigned target,unsigned depth,uint64_t serial) {
 static void linear_blocks(void) {
     if(!g_no_bc)return;
     void *mem=NULL;CHECK("linear pool",!posix_memalign(&mem,getpagesize(),65536));memset(mem,0,65536);mtl_pool_add(mem,65536);
-    pool_t pool={.mem=mem,.size=65536,.flags=NVN_MEMORY_POOL_FLAGS_CPU_CACHED|NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
+    pool_t pool={.magic=MAGIC('P','O','O','L'),.mem=mem,.size=65536,.flags=NVN_MEMORY_POOL_FLAGS_CPU_CACHED|NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
     tex_t t=texture(NVN_TEXTURE_TARGET_2D,1,9995);t.pool=&pool;t.mem=mem;t.d.flags=NVN_TEXTURE_FLAGS_LINEAR;t.d.stride=64;nvn_tex_layout(&t.d,&t.L);
     mtl_sub_begin();id<MTLTexture> image=tex_mtl(&t);CHECK("linear BC uses decoded storage",image&&bc_block(image));finish();
     id<MTLTexture> view=[image newTextureViewWithPixelFormat:image.pixelFormat textureType:MTLTextureType2DArray levels:NSMakeRange(0,1) slices:NSMakeRange(0,1)];
@@ -153,7 +153,7 @@ static void transcodes(void) {
         else {unsigned c=f==0x43||f==0x44||f==0x47||f==0x48?8:0;block[c]=0;block[c+1]=0xf8;
             if(f==0x43||f==0x47)memset(block,255,8);else if(c)block[0]=block[1]=255;}
         void *mem=NULL;CHECK("transcode pool allocated",!posix_memalign(&mem,getpagesize(),65536));memset(mem,0,65536);
-        pool_t pool={.mem=mem,.size=65536,.flags=NVN_MEMORY_POOL_FLAGS_CPU_CACHED|NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
+        pool_t pool={.magic=MAGIC('P','O','O','L'),.mem=mem,.size=65536,.flags=NVN_MEMORY_POOL_FLAGS_CPU_CACHED|NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
         tex_t t={.magic=MAGIC('T','E','X',0),.serial=11000+f,.pool=&pool,.mem=mem,.has_layout=1};
         t.d=(nvn_texdesc){.target=NVN_TEXTURE_TARGET_2D_ARRAY,.format=f,.width=12,.height=8,.depth=2,.levels=3,.samples=1};nvn_tex_layout(&t.d,&t.L);
         for(unsigned lv=0;lv<3;lv++)for(unsigned sl=0;sl<2;sl++) {

@@ -2,6 +2,7 @@
 import ast
 import hashlib
 import os
+import mmap
 from pathlib import Path
 import re
 import struct
@@ -16,7 +17,7 @@ class ShaderPackage(unittest.TestCase):
     def test_wrong_package_is_rejected_before_translation(self):
         tree = ast.parse((TOOLS / 'dmsh_build.py').read_text())
         nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef)
-                 and n.name in {'records', 'record_key', 'rec_of'}]
+                 and n.name in {'record_index', 'record_key', 'rec_of'}]
         with tempfile.TemporaryDirectory() as folder:
             ctl = bytearray(0x880)
             code = b'original shader code'
@@ -25,7 +26,7 @@ class ShaderPackage(unittest.TestCase):
             rec += code + ctl
             key = hashlib.sha256(ctl + code).hexdigest()[:16]
             (Path(folder) / 'vs_test.bin').write_bytes(rec)
-            ns = dict(re=re, struct=struct, hashlib=hashlib, os=os, sys=sys,
+            ns = dict(mmap=mmap, re=re, struct=struct, hashlib=hashlib, os=os, sys=sys,
                       dm_dir=folder, loc={key: ('vs_test.bin', 0)}, packs={})
             exec(compile(ast.Module(body=nodes, type_ignores=[]), str(TOOLS / 'dmsh_build.py'), 'exec'), ns)
             self.assertEqual(ns['rec_of'](key), ('vs_test.bin', rec))
@@ -42,6 +43,7 @@ class ShaderPackage(unittest.TestCase):
             ns['loc'][wrong_key] = ('vs_test.bin', 1)
             with self.assertRaisesRegex(SystemExit, 'invalid record'):
                 ns['rec_of'](wrong_key)
+            for fd, _ in ns['packs'].values(): os.close(fd)
 
 
 if __name__ == '__main__':

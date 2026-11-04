@@ -6,6 +6,16 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'games'))
 import settings
 
 class ResolutionSetting(unittest.TestCase):
+    def test_more_frame_rates_require_verified_realtime_readers(self):
+        with tempfile.TemporaryDirectory() as tmp,patch.object(settings.nacp,'languages',return_value=['en-US']):
+            (Path(tmp)/'main.fixups.tsv').write_text('# FPS_STATE_OFF\t0x4000\n# REALTIME_FRAME_STEP\t1\n')
+            rows=settings.build('01007EF00011E000',tmp,'unused')['settings']
+            fps=next(s for s in rows if s['env']=='DM_FPS_TARGET')
+            fg=next(s for s in rows if s['env']=='DM_FRAMEGEN')
+            self.assertEqual(fps['default'],'30')
+            self.assertEqual([o[0] for o in fps['options']],[str(rate) for rate in range(20,121,5)])
+            self.assertEqual([o[0] for o in fg['options']],['0']+[str(rate) for rate in range(20,61,5)])
+
     def test_framegen_scene_boundaries_require_complete_keys(self):
         profile=settings.game.load('01007EF00011E000')
         valid='bd7ffdd435c6c3bc f7ee6fe10b925543'
@@ -30,7 +40,7 @@ class ResolutionSetting(unittest.TestCase):
                     self.assertEqual(bool(dr),supported)
                     if dr:self.assertEqual((dr[0]['kind'],dr[0]['default']),('toggle','0'))
                     fps=next(s for s in rows if s['env']=='DM_FPS_TARGET')
-                    self.assertEqual(fps['default'],'60')
+                    self.assertEqual(fps['default'],'30' if gid == '01007EF00011E000' else '60')
                     self.assertEqual(fps['options'],[['30','30 fps'],['60','60 fps']])
 
     def test_frame_generation_switch_requires_profile_inputs(self):
@@ -43,7 +53,7 @@ class ResolutionSetting(unittest.TestCase):
                     self.assertEqual(fg[0]['default'],'0')
                     self.assertFalse(fg[0].get('needs'))
                     self.assertEqual((fg[0]['kind'],fg[0]['level']),('choice','basic'))
-                    self.assertEqual([o[0] for o in fg[0]['options']],['0','30','40','50','60','max'])
+                    self.assertEqual([o[0] for o in fg[0]['options']],['0','30','60'])
 
             # Listing follows the supplied capability, not a fixed title ID.
             header=settings.game.header(settings.game.load('010015100B514000'))
@@ -52,5 +62,14 @@ class ResolutionSetting(unittest.TestCase):
             with patch.object(settings.game,'header',return_value=header):
                 rows=settings.build('010015100B514000',tmp,'unused')['settings']
                 self.assertIn('DM_FRAMEGEN',[s['env'] for s in rows])
+
+class UpscalerSetting(unittest.TestCase):
+    def test_only_for_games_naming_their_upscaler(self):
+        with tempfile.TemporaryDirectory() as tmp,patch.object(settings.nacp,'languages',return_value=['en-US']):
+            (Path(tmp)/'main.fixups.tsv').write_text('')
+            for gid,shown in [('040074A01BF12000',True),('010056B015FE8000',False)]:   # Donkey Kong Bananza (its NDSR network), NieR:Automata (none)
+                up=[s for s in settings.build(gid,tmp,'unused')['settings'] if s['env']=='DM_UPSCALER']
+                self.assertEqual(bool(up),shown,gid)
+                if up:self.assertEqual((up[0]['default'],up[0]['options']),('game',[['game',"Game's own"],['metalfx','MetalFX']]))
 
 if __name__=='__main__':unittest.main()
