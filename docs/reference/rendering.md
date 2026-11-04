@@ -1413,6 +1413,14 @@ Digimon Story Cyber Sleuth: Complete Edition (Media.Vision's MVGL engine, SDK 6.
 - **Check:** the [Duo harness](../../dm/ios/tests/duo/README.md) tests layout, hit targets, touches, the in-game menu's live settings and the drawable cap in the Simulator with synthetic host state. A physical Duo was tested by the PR #683 author on their fork; full-game tests on a physical iPad and a Duo with this repository's build are open.
 - **Found on:** [Pokémon Brilliant Diamond](../../dm/games/0100000011D90000/README.md).
 
+### Seated composition follows the native canvas viewport
+
+- **Symptom:** in half-folded Seated mode the lower-pane map appears near the bottom and overlaps the right controls; the reflected background is mostly black. Docked mode can look correct while handheld mode is displaced.
+- **Cause:** the Seated dock and reflection used the entire swapchain texture as their coordinate basis. Breath of the Wild in handheld mode composites a 1280x720 viewport into a 1920x1080 swapchain and presents only that crop. Mapping lower-pane destinations and reflection samples against the larger allocation moved them outside the displayed region. Changing the startup default to handheld exposed this existing assumption.
+- **Fix:** use the final native canvas viewport for picture viewport/scissor transforms, reflection sampling and dock destinations. Convert pane coordinates to texture coordinates only after mapping them through that viewport; retain the existing render origin and sRGB view.
+- **Check:** `t_present_crop --seated` exercises whole and offset cropped canvases with both render origins, fixed aspect ratios, a short lower pane and a sharp dock overlay. The cropped case failed 16 checks before the fix; all 307 full present checks pass afterward. Current-checkout Mac gameplay with `scripts/run_mac.py --test --touch-preview` reproduces the old displacement and confirms the corrected map and reflection, a live docked-to-handheld transition, leaving/reentering Seated and clicking the relocated plus button to open inventory. A physical Duo fold and UIKit orientation still need device acceptance.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md).
+
 ### Duo startup orientation uses the current scene
 
 - **Symptom:** the launcher is already sideways or clipped on a portrait Duo inner display; turning the camera end up or down leaves misplaced or inverted content in the launcher and game.
