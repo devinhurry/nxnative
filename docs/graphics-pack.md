@@ -50,7 +50,11 @@ either matching compatibility metadata or an exact package ID whose equivalent
 contents the current build verified. A UI-only IPA update keeps the series.
 
 `dm/tools/graphics_pack.py` derives the series from the game/build, graphics API,
-current shader chain, renderer sources, profile constants and shader-input tables.
+current shader chain, renderer sources, shader profile rows (`nvn_*` / `shader_*`)
+and shader-input tables. Runtime defaults, touch/camera parameters, memory settings
+and the generated host configuration header are excluded. Shader extraction and
+build reuse track only the profile reader used by shaders; edits to host header
+generation in `game.py` do not invalidate those stages.
 Renderer changes conservatively start another series, even if a specific edit
 might be compatible. Launcher/touch UI, local source paths and the app commit are
 excluded. The existing strict `DMSH_CHAIN` check is unchanged.

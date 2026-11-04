@@ -350,6 +350,21 @@ int main(int argc,char **argv) { @autoreleasepool {
             render.write_text('renderer contract'); (self.tables / 'shader_map.tsv').write_text('new map')
             self.assertNotEqual(gp.requirements(*args, repo=repo)['series'], first['series'])
 
+    def test_runtime_profile_and_new_touch_macros_keep_graphics_compatible(self):
+        profile = types.SimpleNamespace(rows=[])
+        game = types.SimpleNamespace(load=lambda gid: profile,
+                                     header=lambda p: '\n'.join(f'#define DM_GAME_{k.upper()} {v!r}' for k, v in p.rows))
+        repo = self.root / 'repo'
+        args = ('01007EF00011E000', 'v1114112', 'nvn', 'b-fixture', self.tables)
+        with patch.dict(sys.modules, game=game):
+            first = gp.requirements(*args, repo=repo)
+            for key, value in (('camera_look_compose', 'new aiming offsets'), ('pad_layout', 'full'),
+                               ('mem_used', '0x5000000'), ('fps_target', '30'), ('op_mode', 'handheld')):
+                profile.rows.append((key, [value]))
+                self.assertEqual(gp.requirements(*args, repo=repo), first, key)
+            profile.rows.append(('shader_key_skip', ['0x770+0x78']))
+            self.assertNotEqual(gp.requirements(*args, repo=repo)['series'], first['series'])
+
     def test_foundation_import_select_and_minimum_version(self):
         self.native()
         active = json.loads((self.documents / 'graphics/current.json').read_text())
