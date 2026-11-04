@@ -95,7 +95,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 | [Subnautica: Below Zero](#subnautica-below-zero) | 1 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [Super Smash Bros. Ultimate](#super-smash-bros-ultimate) | 11 | 0 | 0 | 1 | 0 | `game` |
 | [Taiko Risshiden V DX](#taiko-risshiden-v-dx) | 1 | 0 | 0 | 2 | 0 | `game` |
-| [The Legend of Zelda: Breath of the Wild](#the-legend-of-zelda-breath-of-the-wild) | 7 | 13 | 10 | 0 | 3 | `build` → `game` ×3 |
+| [The Legend of Zelda: Breath of the Wild](#the-legend-of-zelda-breath-of-the-wild) | 7 | 17 | 10 | 0 | 3 | `build` → `game` ×3 |
 | [The Legend of Zelda: Link's Awakening](#the-legend-of-zelda-links-awakening) | 1 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [The Legend of Zelda: Tears of the Kingdom](#the-legend-of-zelda-tears-of-the-kingdom) | 0 | 0 | 9 | 0 | 0 | `build` → `game` |
 | [Xenoblade Chronicles 3](#xenoblade-chronicles-3) | 6 | 0 | 0 | 0 | 0 | `build` → `game` |
@@ -526,6 +526,10 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - gate 31 at `+0xe1a628`: MainScreen3D update: correct its copied projection before rebuilding the world-label view
   - gate 33 at `+0xd58008`: shared stick getter: snapshot the selected raw child pair before the native dead-zone/filter branches
   - gate 32 at `+0xd5801c`: shared normalized stick getter: inject one frame of relative input after native filtering and before return
+  - gate 42 at `+0xbf0c4c`: CameraAiming common pitch target: add touch after gyro, before native clamp and smoothing
+  - gate 298 at `+0xbf2ccc`: CameraAiming2 pitch target: add touch after gyro, before native smoothing
+  - gate 43 at `+0xbf0e34`: CameraAiming final yaw: shift both native target and smoothed output by touch displacement
+  - gate 299 at `+0xbf2f90`: CameraAiming2 final yaw: shift native target and output after gyro
   - gate 37 at `+0xf57ba0`: BoxCursorControl update entry: x0 is the native manager; observe focused/requested item before native validation and focus callbacks
   - gate 37 at `+0xf57a08`: BoxCursorControl constructor exit: x0 is the initialized manager, including first boot without a Title cursor update
   - gate 38 at `+0xd6f034`: native list-widget update entry: x0 is the shared list widget; cache receiver metadata only
@@ -648,6 +652,7 @@ Profile keys (`game.tsv`) whose value changes what the host does, set away from 
 | `aspect_ui 21fe759b8114941c 60e2041ed375cae1 9f8de48697e031b5 71018be49e22ab4a 5275c47bd2f93f12 86208e96540877ab 51deaed0b27374b9 4fb3d55c47745276 78a4ace2913b091d a983fef957911db8` | [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) | `game`, at goal | the game's UI draw identities, transformed together with their scissors |
 | `camera_aspect cd57b23fa4bbad65803d9788c01821ee:0x1e39d10:0x38:0x1d05380:0xb0:0x8` | [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) | `game`, at goal | the game's projection singleton and member offsets, checked against its main build |
 | `camera_look cd57b23fa4bbad65803d9788c01821ee:0xd5801c:0x128:0x1e93890:0x3c:60` | [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) | `game`, at goal | the game's selected stick pair and frame-ratio layout, checked against its main build |
+| `camera_look_compose cd57b23fa4bbad65803d9788c01821ee:0xbf0a44:0x1cbee50:0x234:0x360:0x364:0x230:0x50:0xbf2af8:0x1cbefd0:0x128:0x358:0x35c:0x238:0x50:180` | [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) | `game`, at goal | the game's selected stick pair and frame-ratio layout, checked against its main build |
 | `camera_ui_aspect 19:0xa0:0xa8:0x74` | [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) | `game`, at goal | the game's model lens and projection members at the checked observation gate |
 | `camera_world_aspect 19:0x41c0` | [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) | `game`, at goal | the game's world-label camera member at the checked observation gate |
 | `enc_thread on` | [Need For Speed™ Hot Pursuit Remastered](../../dm/games/010029B0118E8000/README.md) | `game` → `host`, gap | what iOS does for every game: a default for every game after `regress.py check` on the games |

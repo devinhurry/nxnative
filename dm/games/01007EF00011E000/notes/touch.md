@@ -846,6 +846,50 @@ Validation and evidence for this follow-up are recorded in the
 
 BOTW relative-look input also accepts `look <phase> <dx> <dy>` through `DM_CTL`: phase 0 begins, 1 moves, 2 ends and 3 cancels; deltas are normalized camera motion.
 
+**Experimental: continuous touch/gyro aiming composition (2026-11-04).**
+The host continues publishing six-axis samples during a drag. In build
+`cd57b23fa4bbad65803d9788c01821ee`, CameraAiming's getter call at
+`main+0xbf0a40` and CameraAiming2's at `main+0xbf2af4` are followed by exact
+zero checks on both processed stick components. Nonzero input clears the
+tracker-use flag (`+0x369` / `+0x388`) and calls `main+0xd02c68` to deactivate
+and reset the orientation tracker. The next eligible zero-input frame calls
+`main+0xd02cb0`, initializing reference matrices from the current sensor
+orientation. Repeated changes between drag impulses and zero-input frames can
+therefore interrupt this tracker and repeatedly establish a new reference.
+The complete aiming functions and reset/initialization stores were checked in
+the original instructions and decompiled. This applies to physical stick and
+touch input alike; it does not establish a touch-only defect or prove that all
+native gyro paths are disabled. It is a candidate explanation for the reported
+constrained feel; concurrent physical inputs still need device acceptance.
+
+This experiment matches the exact getter return PCs and action vtables, in
+addition to the existing frozen HID source proof. A relative touch call
+returns zero to that decision while retaining the frame's displacement for
+later composition. Physical, ordinary virtual and unknown sources keep their
+native results.
+
+Two pitch gates add displacement to the native target and smoothing base;
+two final yaw gates shift both the persistent target and current output.
+Gyro calculations run before these additions, tracker matrices are untouched,
+and the native pitch bounds still apply. Axis consumption is per camera and
+frame; END keeps its final sample and CANCEL clears deferred movement too.
+Ordinary scene look and MagneForce object input retain the shared-vector path.
+The experimental angular gain is 180 degrees per normalized short edge, as in
+the earlier direct aiming adapter; the exact sensitivity may differ from the
+current native stick response. `DM_LOOK_GYRO_COMPOSE=0` disables composition for
+comparison; `DM_LOOK_TRACE=1` reports `look: compose` updates. Rebuild the host
+and rewrite main; these changes are restricted to the exact 1.9.0 build.
+
+Targeted host tests cover retained native motion results, unchanged tracker
+matrices, 30/60 fps ratios, per-axis single consumption, cancellation and
+physical-stick passthrough (91 look checks; motion/HID and observer checks
+also pass). A full current-source rewrite and Mac test-mode build succeeded.
+In-game Magnesis aiming reached CameraAiming2's new gates: a normalized drag
+of `(0.02, -0.015)` produced `-3.6` degrees yaw and `-2.7` degrees pitch,
+with both `look: compose` callbacks in frame 13903. This verifies the live
+route and touch addition, not simultaneous physical sensor input. Physical
+iOS aiming feel remains unverified.
+
 #### AppCamera touch gestures
 
 In BOTW touch mode, drag with one finger to frame the shot and pinch to zoom.

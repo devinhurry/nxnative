@@ -9,7 +9,7 @@ static pthread_mutex_t g_look_mu = PTHREAD_MUTEX_INITIALIZER;
 static int g_available, g_held, g_have_pending, g_have_snapshot, g_suppress_snapshot;
 static uint64_t g_snapshot_frame, g_pending_frame;
 static uint64_t g_owned_frame = UINT64_MAX;
-static float g_dx, g_dy, g_sample_x, g_sample_y, g_gain;
+static float g_dx, g_dy, g_sample_x, g_sample_y, g_sample_dx, g_sample_dy, g_gain;
 static int g_trace;
 static uint64_t g_injections;
 // OBS33 and OBS32 bracket one native getter call. This must be thread-local: camera/action
@@ -19,6 +19,8 @@ static _Thread_local struct {
     float raw_x, raw_y;
     int valid;
     dm_hid_look_sample hid;
+    uint64_t action;
+    int aim_camera;
 } g_raw_call;
 
 typedef struct {
@@ -26,6 +28,18 @@ typedef struct {
     uint64_t hook, source_pair, vfr_singleton, vfr_ratio;
 } camera_look_t;
 static camera_look_t g_camera;
+typedef struct {
+    uint64_t caller, vtable, pitch_base, pitch_min, pitch_max, yaw_base, yaw_stack;
+} aim_compose_t;
+static aim_compose_t g_aim[2];
+static int g_compose;
+static float g_aim_gain;
+// Keep the tracker continuous: aiming sees zero stick input, then the later
+// pitch/yaw gates add relative displacement to that frame's native gyro result.
+static _Thread_local struct {
+    uint64_t frame, action;
+    int camera, consumed;
+} g_aim_call;
 
 int dm_look_enabled(void) {
     pthread_mutex_lock(&g_look_mu);
@@ -47,7 +61,7 @@ static void dm_look_set_available(int available) {
     if (g_available != available) {
         g_available = available;
         g_held = g_have_pending = g_have_snapshot = g_suppress_snapshot = 0;
-        g_dx = g_dy = g_sample_x = g_sample_y = 0;
+        g_dx = g_dy = g_sample_x = g_sample_y = g_sample_dx = g_sample_dy = 0;
         g_snapshot_frame = g_pending_frame = 0;
         g_owned_frame = UINT64_MAX;
     }
@@ -90,7 +104,7 @@ static void look_input_at(int phase, float dx, float dy, uint64_t frame) {
         // this cancel supersedes. A matched virtual source is replaced with zero independently
         // of gesture state, so no stale synthetic stick can survive this cancellation.
         if (g_have_snapshot && event_frame >= g_snapshot_frame)
-            g_sample_x = g_sample_y = 0;
+            g_sample_x = g_sample_y = g_sample_dx = g_sample_dy = 0;
         break;
     }
     pthread_mutex_unlock(&g_look_mu);
@@ -127,6 +141,8 @@ static void look_apply_vector(uint64_t frame, float native_x, float native_y, fl
         // movement can still apply once the game publishes its update interval.
         g_sample_x = replace && queued_x != 0 && ratio > 0 ? queued_x * g_gain / ratio : 0;
         g_sample_y = replace && queued_y != 0 && ratio > 0 ? -queued_y * g_gain / ratio : 0;
+        g_sample_dx = replace && ratio > 0 ? queued_x : 0;
+        g_sample_dy = replace && ratio > 0 ? queued_y : 0;
         if (!isfinite(g_sample_x) || !isfinite(g_sample_y)) { pthread_mutex_unlock(&g_look_mu); die("[RED] look: normalized relative impulse overflow"); }
         g_dx = g_dy = 0; g_have_pending = 0;
         g_snapshot_frame = frame;
@@ -154,6 +170,7 @@ static void look_apply_vector(uint64_t frame, float native_x, float native_y, fl
 
 static void camera_look_source(const uint64_t *regs) {
     memset(&g_raw_call, 0, sizeof g_raw_call);
+    g_raw_call.aim_camera = -1;
     if (!regs[0]) return; // the native null-source branch skips the raw pair load
     g_raw_call.frame = dm_guest_frame();
     if (!dm_hid_look_sample_at(g_raw_call.frame, &g_raw_call.hid)) return;
@@ -161,6 +178,21 @@ static void camera_look_source(const uint64_t *regs) {
     memcpy(&g_raw_call.raw_x, child + g_camera.source_pair, sizeof(float));
     memcpy(&g_raw_call.raw_y, child + g_camera.source_pair + sizeof(float), sizeof(float));
     g_raw_call.valid = isfinite(g_raw_call.raw_x) && isfinite(g_raw_call.raw_y);
+    if (g_compose && regs[29] && regs[29] <= UINTPTR_MAX - 24) {
+        // The validated getter saves LR at FP+8 and the caller's x19 at FP+16.
+        // Match both the exact call site and the owning camera before diverting input.
+        uint64_t caller, action, vtable;
+        memcpy(&caller, (const void *)(uintptr_t)(regs[29] + 8), sizeof caller);
+        for (int i = 0; i < 2; i++) if (caller == (uint64_t)(uintptr_t)g_camera.main->base + g_aim[i].caller) {
+            memcpy(&action, (const void *)(uintptr_t)(regs[29] + 16), sizeof action);
+            if (!action) break;
+            memcpy(&vtable, (const void *)(uintptr_t)action, sizeof vtable);
+            if (vtable == (uint64_t)(uintptr_t)g_camera.main->base + g_aim[i].vtable) {
+                g_raw_call.aim_camera = i; g_raw_call.action = action;
+            }
+            break;
+        }
+    }
 }
 
 static void native_stick_pair(int32_t rx, int32_t ry, float *out_x, float *out_y) {
@@ -212,6 +244,16 @@ static void camera_look_vector(const uint64_t *regs) {
     }
     float out_x, out_y;
     look_apply_vector(frame, x, y, ratio, sample_valid, raw_match, physical, &out_x, &out_y);
+    if (g_compose && g_raw_call.aim_camera >= 0) {
+        if (sample_valid && raw_match && !physical) {
+            if (g_aim_call.frame != frame || g_aim_call.action != g_raw_call.action ||
+                g_aim_call.camera != g_raw_call.aim_camera) g_aim_call.consumed = 0;
+            g_aim_call.frame = frame; g_aim_call.action = g_raw_call.action;
+            g_aim_call.camera = g_raw_call.aim_camera;
+            // Let native gyro selection and tracking run, even while the finger moves.
+            out_x = out_y = 0;
+        } else g_aim_call.action = 0;
+    }
     if (out_x != x || out_y != y) {
         memcpy(native, &out_x, sizeof out_x); memcpy(native + 1, &out_y, sizeof out_y);
     }
@@ -226,6 +268,96 @@ static void camera_look_vector(const uint64_t *regs) {
             g_raw_call.hid.physical_rx, g_raw_call.hid.physical_ry,
             g_raw_call.hid.source, raw_match, out_x, out_y);
     memset(&g_raw_call, 0, sizeof g_raw_call);
+}
+
+static float aim_delta(uint64_t action, int camera, int axis) {
+    if (!g_compose || camera < 0 || camera >= 2 || !action || g_aim_call.action != action ||
+        g_aim_call.camera != camera || g_aim_call.frame != dm_guest_frame() ||
+        (g_aim_call.consumed & axis)) return 0;
+    pthread_mutex_lock(&g_look_mu);
+    float delta = 0;
+    if (g_available && g_have_snapshot && !g_suppress_snapshot && g_snapshot_frame == g_aim_call.frame) {
+        delta = (axis == 1 ? -g_sample_dx : g_sample_dy) * g_aim_gain;
+        g_aim_call.consumed |= axis;
+    }
+    pthread_mutex_unlock(&g_look_mu);
+    if (!isfinite(delta)) die("[RED] look: aim displacement overflow");
+    return delta;
+}
+
+static float wrap_degrees(float value) {
+    value = fmodf(value + 180, 360);
+    if (value < 0) value += 360;
+    return value - 180;
+}
+
+static void camera_aim_pitch(uint64_t *regs, int camera) {
+    float delta = aim_delta(regs[19], camera, 2);
+    if (!delta) return;
+    uint8_t *action = (uint8_t *)(uintptr_t)regs[19];
+    const aim_compose_t *aim = &g_aim[camera];
+    float target, base, lo, hi;
+    // entry.S saves q0 at byte 256. Change only its low float, the native pitch target.
+    memcpy(&target, (uint8_t *)regs + 256, sizeof target);
+    memcpy(&base, action + aim->pitch_base, sizeof base);
+    memcpy(&lo, action + aim->pitch_min, sizeof lo);
+    memcpy(&hi, action + aim->pitch_max, sizeof hi);
+    if (!isfinite(target) || !isfinite(base) || !isfinite(lo) || !isfinite(hi) || lo > hi)
+        die("[RED] look: invalid native aim pitch or bounds");
+    float next = fminf(hi, fmaxf(lo, target + delta));
+    base = fminf(hi, fmaxf(lo, base + next - target));
+    memcpy((uint8_t *)regs + 256, &next, sizeof next);
+    memcpy(action + aim->pitch_base, &base, sizeof base);
+    if (g_trace) LOG("look: compose camera=%d frame=%llu pitch=%.3f touch=%.3f",
+        camera, (unsigned long long)g_aim_call.frame, next, delta);
+}
+
+static void camera_aim_yaw(uint64_t *regs, int camera) {
+    float delta = aim_delta(regs[19], camera, 1);
+    if (!delta) return;
+    uint8_t *action = (uint8_t *)(uintptr_t)regs[19];
+    const aim_compose_t *aim = &g_aim[camera];
+    if (regs[29] < aim->yaw_stack) die("[RED] look: invalid native aim frame");
+    void *output = (void *)(uintptr_t)(regs[29] - aim->yaw_stack);
+    float target, current;
+    memcpy(&target, action + aim->yaw_base, sizeof target);
+    memcpy(&current, output, sizeof current);
+    if (!isfinite(target) || !isfinite(current)) die("[RED] look: invalid native aim yaw");
+    target = wrap_degrees(target + delta); current = wrap_degrees(current + delta);
+    memcpy(action + aim->yaw_base, &target, sizeof target);
+    memcpy(output, &current, sizeof current);
+    if (g_trace) LOG("look: compose camera=%d frame=%llu yaw=%.3f touch=%.3f",
+        camera, (unsigned long long)g_aim_call.frame, current, delta);
+}
+
+static void aim_compose_install(const char *look_build) {
+    g_compose = 0;
+    if (!*DM_GAME_CAMERA_LOOK_COMPOSE) return;
+    char build[33] = {0}; unsigned long long v[14]; float gain; int used = 0;
+    int n = sscanf(DM_GAME_CAMERA_LOOK_COMPOSE,
+        "%32[0-9a-f]:%llx:%llx:%llx:%llx:%llx:%llx:%llx:%llx:%llx:%llx:%llx:%llx:%llx:%llx:%f%n",
+        build, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6],
+        &v[7], &v[8], &v[9], &v[10], &v[11], &v[12], &v[13], &gain, &used);
+    if (n != 16 || DM_GAME_CAMERA_LOOK_COMPOSE[used] || strcmp(build, look_build) ||
+        !isfinite(gain) || gain <= 0 || gain > 3600)
+        die("[RED] look: malformed or mismatched camera_look_compose profile");
+    for (int i = 0; i < 2; i++) {
+        unsigned long long *a = v + 7 * i;
+        if (!a[0] || a[0] >= g_camera.main->text_end || !a[1] || a[1] > g_camera.main->size - sizeof(uint64_t) ||
+            a[2] > 0x10000 - sizeof(float) || a[3] > 0x10000 - sizeof(float) ||
+            a[4] > 0x10000 - sizeof(float) || a[5] > 0x10000 - sizeof(float) || !a[6] || a[6] > 0x1000)
+            die("[RED] look: camera_look_compose offsets are out of range");
+        g_aim[i] = (aim_compose_t){a[0], a[1], a[2], a[3], a[4], a[5], a[6]};
+    }
+    const char *e = getenv("DM_LOOK_GYRO_COMPOSE");
+    if (e && strcmp(e, "0") && strcmp(e, "1")) die("[RED] DM_LOOK_GYRO_COMPOSE must be 0 or 1");
+    if (e && !strcmp(e, "0")) return;
+    if (!gate_obs_present(OBS_BOTW_LOOK_PITCH) || !gate_obs_present(OBS_BOTW_LOOK_YAW))
+        die("[RED] look: composition gates missing; rewrite main with the experimental patch_nso.py");
+    g_aim_gain = gain; g_compose = 1;
+    gate_obs_set(OBS_BOTW_LOOK_PITCH, camera_aim_pitch);
+    gate_obs_set(OBS_BOTW_LOOK_YAW, camera_aim_yaw);
+    LOG("look: experimental touch/gyro aiming composition (%.1f degrees per normalized short edge)", gain);
 }
 
 void dm_look_install(void) {
@@ -250,6 +382,7 @@ void dm_look_install(void) {
     g_trace = e && !strcmp(e, "1");
     gate_obs_read_set(OBS_BOTW_LOOK_SOURCE, camera_look_source);
     gate_obs_read_set(OBS_BOTW_LOOK_VECTOR, camera_look_vector);
+    aim_compose_install(build);
     dm_look_set_available(1);
     front_look_mode_changed();
     LOG("look: BOTW shared stick vector main+%#llx installed for build %s (%.1f normalized-input impulse per short edge)",
@@ -259,6 +392,7 @@ void dm_look_install(void) {
 #ifdef DM_TEST_HOOKS
 void dm_look_test_input_at(int phase, float dx, float dy, uint64_t frame) { look_input_at(phase, dx, dy, frame); }
 void dm_look_test_vector_config(module_t *main, float gain) {
+    g_compose = 0; memset(&g_aim_call, 0, sizeof g_aim_call);
     g_camera.main = main; g_camera.source_pair = 0x128; g_camera.vfr_singleton = 0x100; g_camera.vfr_ratio = 0x20;
     if (!isfinite(gain) || gain <= 0) die("[RED] look: invalid test gain");
     g_gain = gain; dm_look_set_available(0); dm_look_set_available(1);

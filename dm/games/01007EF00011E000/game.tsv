@@ -42,6 +42,9 @@ camera_world_aspect	19:0x41c0
 camera_aspect	cd57b23fa4bbad65803d9788c01821ee:0x1e39d10:0x38:0x1d05380:0xb0:0x8
 # BOTW 1.9.0 relative look enters the native right-stick vector after filtering; gain is a normalized-input impulse scale.
 camera_look	cd57b23fa4bbad65803d9788c01821ee:0xd5801c:0x128:0x1e93890:0x3c:60
+# Experimental aim composition: per camera, getter return PC, vtable, pitch base, pitch limits,
+# yaw base and distance below FP of the final yaw; last value is degrees per normalized short edge.
+camera_look_compose	cd57b23fa4bbad65803d9788c01821ee:0xbf0a44:0x1cbee50:0x234:0x360:0x364:0x230:0x50:0xbf2af8:0x1cbefd0:0x128:0x358:0x35c:0x238:0x50:180
 # The frame-interval controller (60 fps cuts in patches.py) and dynamic resolution read the GPU time between the frame's two timestamp reports: each report takes its segment's GPU start / end
 gpu_timestamps	segment
 # 60 fps (30 on the Switch): the host decides each frame's step in whole vsyncs and holds the frame that long (rewriter stubs at setWaitVsyncInterval and VFR::updateInterval,
