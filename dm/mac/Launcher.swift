@@ -9,6 +9,13 @@ import DmTouchPad
 
 private var launcherDetails: [String: String] = [:]
 private var launcherDefaults = UserDefaults.standard
+// Capture before a library refresh applies the preference to the environment.
+private let saveCloudOverride = ProcessInfo.processInfo.environment["DM_SAVE_SYNC"]
+func configureSaveCloud() {
+    if let value = saveCloudOverride { setenv("DM_SAVE_SYNC", value, 1) }
+    else if let folder = launcherDefaults.string(forKey: "cloudSaves.folder"), !folder.isEmpty { setenv("DM_SAVE_SYNC", folder, 1) }
+    else { unsetenv("DM_SAVE_SYNC") }
+}
 private var sessionModel: LauncherModel?
 private func info(_ key: String) -> String? { Bundle.main.object(forInfoDictionaryKey: key) as? String ?? launcherDetails[key] }
 
@@ -89,12 +96,8 @@ struct LauncherView: View {
 /// Cloud saves: a folder the save is synced through (dm/host/save_sync.h), the one the iPhone app picks in its launcher's Cloud saves section. It is kept in this app's
 /// preferences as cloudSaves.folder, which launcher.c puts into DM_SAVE_SYNC before the host starts; a DM_SAVE_SYNC an env file or the launch environment set wins, and is shown here.
 struct CloudSavesSection: View {
-    @AppStorage("cloudSaves.folder") private var folder = ""
-    private let fixed: String? = {
-        let env = ProcessInfo.processInfo.environment
-        let keys = ((env["DM_ENV_FILE_KEYS"] ?? "") + " " + (env["DM_ENV_LAUNCH_KEYS"] ?? "")).split(separator: " ")
-        return keys.contains("DM_SAVE_SYNC") || env["DM_SAVE_SYNC"] != nil ? env["DM_SAVE_SYNC"] : nil
-    }()
+    @AppStorage("cloudSaves.folder", store: launcherDefaults) private var folder = ""
+    private let fixed = saveCloudOverride
 
     var body: some View {
         Section {
@@ -105,7 +108,7 @@ struct CloudSavesSection: View {
             if fixed == nil {
                 HStack {
                     Button(folder.isEmpty ? "Choose a folder…" : "Choose a different folder…", action: choose)
-                    if !folder.isEmpty { Button("Turn off") { folder = "" } }
+                    if !folder.isEmpty { Button("Turn off") { folder = ""; configureSaveCloud() } }
                 }
             }
         } footer: {
@@ -119,7 +122,7 @@ struct CloudSavesSection: View {
         panel.prompt = "Use for Cloud Saves"
         panel.message = "The folder the iPhone app chose in its launcher's Cloud saves"
         panel.directoryURL = URL(fileURLWithPath: folder.isEmpty ? Self.drive : folder)
-        if panel.runModal() == .OK, let url = panel.url { folder = url.path }
+        if panel.runModal() == .OK, let url = panel.url { folder = url.path; configureSaveCloud() }
     }
 
     static let drive = NSHomeDirectory() + "/Library/Mobile Documents/com~apple~CloudDocs"   // iCloud Drive, as the Finder shows it

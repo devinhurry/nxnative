@@ -3,6 +3,9 @@
 import UIKit
 import Darwin
 
+// Keep the launcher's menu model without linking the native gamepad menu.
+var gameMenuModel: LauncherModel?
+
 // The production launcher reads cloud-save providers through its app bridge.
 // This isolated UI fixture has no shared-folder access or cloud-save storage.
 func dm_clear_cloud_saves() {}

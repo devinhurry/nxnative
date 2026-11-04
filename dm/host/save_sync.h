@@ -1,6 +1,7 @@
 // Saves through a cloud folder (iCloud Drive), so the Mac app and the iPhone app of one game play on from the same save. Off unless DM_SAVE_SYNC names the folder
 // (each app's launcher sets the folder the player chose in its Cloud saves: dm/mac/launcher.c from the Mac settings window, CloudSaves.m on the iPhone; "icloud" is iCloud Drive/nxnative Saves).
-// The folder holds one file per game, <folder>/<title ID>/save.dmsync (a folder named after the title ID is taken as the game's own): the committed save (DM_SAVE and DM_SAVE_device) packed into one file. iCloud replaces a file as a
+// The default slot (and unmanaged/old clients) uses <folder>/<title ID>/save.dmsync; additional managed slots use <title ID>/slots/<UUID>/save.dmsync.
+// A folder named after the title ID is taken as the game's own. Each file holds the committed save (DM_SAVE and DM_SAVE_device). iCloud replaces a file as a
 // whole but syncs a folder file by file, and a save that is half one device's and half the other's is worse than either.
 // When: the cloud's copy comes in at the game's first save mount (hle_fs.c, before the work directory is cloned from the committed save); the committed save goes out a few
 // seconds after a Commit, on a thread of its own (the game never waits), when the iPhone app goes to the background, and from the Mac launcher once the host has exited.
@@ -9,6 +10,7 @@
 // Every save this replaces, here or in the cloud, is kept first in <DM_SAVE>-backups/<date> <side>; the newest 10 of each side stay.
 #pragma once
 #include <stdint.h>
+#include <stddef.h>
 
 #define SS_HASH 32   // hex digits of a save's hash: the first 16 bytes of a SHA-256
 
@@ -31,8 +33,18 @@ typedef enum { SS_KEEP, SS_PULL, SS_PUSH } ss_way;
 // Which way, from the three hashes ("" for none: no save here, no sync yet, nothing in the cloud) and, when both sides changed, their times. *both = both changed
 ss_way ss_decide(const char *local, const char *base, const char *remote, int64_t local_saved, int64_t remote_saved, int *both);
 
+// Managed saves keep the legacy cloud file for "default". Other slots use
+// <title ID>/slots/<UUID>/save.dmsync. Unmanaged DM_SAVE paths retain legacy behavior.
+int ss_slot_id(const char *save, char *out, size_t size);
+int ss_valid_slot_id(const char *slot);
+int ss_cloud_file(const char *save, const char *title, char *out, size_t size);
+// A discovered cloud-only slot cannot start as an empty new game while offline.
+// Returns 1 when usable, 0 when its initial checked download is still pending.
+int ss_prepare_pending(const char *save, const char *title);
+
 // ---- the host ----
 void save_sync_mount(const char *save, const char *title);   // the game's first save mount (hle_fs.c): brings the cloud's save in when it is the one to keep, starts the sender
+int save_sync_active(void);              // initialization succeeded and a sender is running
 void save_sync_committed(void);           // a Commit went through (hle_fs.c, under its locks: it only wakes the sender)
 int save_sync_flush(int timeout_ms);      // sends now what was committed and not sent (the iPhone app going to the background): 1 = in step with the cloud, 0 = not (yet)
 int save_sync_after_exit(const char *save, const char *title);   // the Mac launcher once the host has exited (a crash included): 1 = in step, 0 = not

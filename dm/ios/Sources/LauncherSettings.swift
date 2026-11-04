@@ -238,6 +238,7 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var touchLayouts: [BotwSavedTouchLayout] = []
     @Published private(set) var selectedTouchLayoutID = ""
     @Published private(set) var isRunning = false
+    @Published var saveOperationBusy = false
     @Published private(set) var deferredSettings: Set<String> = []
 
     private let defaults: UserDefaults

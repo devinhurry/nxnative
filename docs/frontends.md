@@ -7,6 +7,7 @@ A graphical app that packs games, keeps a library of them or starts them is a pr
 - [The settings list](#the-settings-list)
 - [Starting a game](#starting-a-game)
 - [An app that hosts the engine](#an-app-that-hosts-the-engine)
+- [Save collections](#save-collections)
 - [What a front end cannot see yet](#what-a-front-end-cannot-see-yet)
 
 ## Building: the NSP script
@@ -59,7 +60,7 @@ A built app carries the settings its game supports, as the iPhone app's settings
 
 ## Starting a game
 
-**A Mac app** is started like any app, or by running its `Contents/MacOS/nxnative` with the chosen settings in its environment (`DM_FPS_TARGET=30`, …). The launcher there runs the host as a child, forwards SIGTERM, SIGINT and SIGHUP to it and exits with its exit code. A variable already in the environment wins; then come `~/Library/Application Support/nxnative/<title ID>/env.txt` and the bundle's `dm/env.txt`, one `KEY=VALUE` per line ([A Mac app](development.md#a-mac-app)). The save is in `save/` in that Application Support folder; the log is `~/Library/Logs/nxnative/<title ID>.log`, the previous run's `<title ID>.prev.log`. The title ID is `DMTitleID` in the app's `Info.plist`.
+**A Mac app** is started like any app, or by running its `Contents/MacOS/nxnative` with the chosen settings in its environment (`DM_FPS_TARGET=30`, …). The launcher there runs the host as a child, forwards SIGTERM, SIGINT and SIGHUP to it and exits with its exit code. A variable already in the environment wins; then come `~/Library/Application Support/nxnative/<title ID>/env.txt` and the bundle's `dm/env.txt`, one `KEY=VALUE` per line ([A Mac app](development.md#a-mac-app)). The selected save is in `saves/<slot ID>/save/` in that Application Support folder; the log is `~/Library/Logs/nxnative/<title ID>.log`, the previous run's `<title ID>.prev.log`. The title ID is `DMTitleID` in the app's `Info.plist`.
 
 A Mac app shows its own settings window before the game, drawn from its `launcher.json` and keeping its choices in the same store ([Saved choices](#saved-choices), [The Mac settings window](settings.md#the-mac-settings-window)). It shows a variable the launch environment or an `env.txt` sets as fixed. A front end that draws the settings itself starts the app with `DM_LAUNCHER=0` in its environment (or `--no-launcher` on its command line) to skip the window. The saved choices still apply, so a front end that writes them gets the same game as the window would.
 
@@ -68,6 +69,66 @@ A Mac game quits when the player holds a controller's Home button for 2 seconds 
 Settings a player chose in a front end and wants kept, also for a start from Finder or the Dock, go in the app's saved choices ([Saved choices](#saved-choices)), not in its environment.
 
 **An IPA** is installed by the player (sideloading); its own settings screen starts the game. Lines in the app's `Documents/env.txt` win over that screen ([Settings in a file](settings.md#settings-in-a-file)). The save and `log.txt` are in the app's Documents folder.
+
+## Save collections
+
+Open **Settings > Saves** in either native launcher to manage the collection. The Mac and iOS launchers use the same backend, `dm/host/save_manager.m` and its C API in `save_manager.h`. The data root is `~/Library/Application Support/nxnative/<title ID>` on Mac and the game's `Documents` on iOS:
+
+```text
+saves/
+  current.json
+  current.json.bak
+  default/
+    info.json
+    save/
+    save_device/         # only when the host uses a separate device save
+    save.sync            # private to this save's cloud identity
+    save-backups/
+  <UUID or custom name>/
+    info.json            # optional for manually added folders
+    save/
+  staging/
+  trash/
+```
+
+A slot contains the game's complete committed save, including both host save directories where applicable. It is separate from the save slots a game implements inside its own files. `default` is reserved for compatibility with old apps. App-created IDs are generated UUIDs; renaming a save changes `info.json`, never its directory. Players can also drop game files into `saves/<custom name>/save/` and refresh the list. A custom name is a single UTF-8 path component of up to 128 bytes, without leading dots, slashes, backslashes or control characters; internal names such as `slots`, `staging` and `trash` are reserved. No metadata file is required. The folder name is that save's stable identity, including its separate cloud path. `info.json` version 1 records `title_id`, `name`, `created_at` (Unix seconds) and `source`. Names are local to each device; newly discovered cloud slots use their ID in the initial name. Game updates use the same collection.
+
+`current.json` version 1 contains `slot_id`. It is written to a temporary file, flushed, and renamed into place; the previous valid selection is kept in `current.json.bak`. The save directories themselves are the inventory, so damaged or missing metadata never hides its save directories. An invalid selection falls back to a valid backup, then to the sole remaining slot. With several slots and neither selection valid, starting the game requires an explicit selection; no modification time is used to guess. An explicit `DM_SAVE` keeps its existing unmanaged behavior and bypasses automatic migration and selection.
+
+On first use the old `save`, `save_device`, `save.sync` and `save-backups` move through a persistent migration directory into `saves/default`. Interrupted moves resume before publishing the complete slot. If a downgraded app later recreates the old paths, a separate **Recovered legacy save** slot keeps that data without overwriting the existing default. Its old sync record is retained as `legacy.sync`, not reused against the new cloud path. Do not run old and new app copies against one local data root at the same time: old apps do not know the collection lock.
+
+A lock is held throughout native gameplay, including the Mac launcher's final send. Changes require the game closed; the list remains readable during play. `dm_saves_prepare(root, title, ...)` returns the selected `DM_SAVE` path and the descriptor the caller must hold for that lifetime. `dm_saves_command(...)` returns allocated JSON; callers must free it. Both native settings pages use this C API. The `inspect` command reads the inventory during gameplay without acquiring the mutation lock, repairing the selection or downloading data. The old `saves/slots/<id>` layout is moved into the flat layout on first use; a collision keeps both copies and asks the player to rename the manually added folder.
+
+The terminal entry point builds the small native command tool on first use (Xcode command-line tools required):
+
+```sh
+python3 scripts/saves.py --game 010015100B514000 list
+python3 scripts/saves.py --game 010015100B514000 create 'Second playthrough'
+python3 scripts/saves.py --game 010015100B514000 select <slot-id>
+python3 scripts/saves.py --game 010015100B514000 export <slot-id> /path/to/save.dmsync
+python3 scripts/saves.py --game 010015100B514000 import /path/to/save.dmsync --name 'Imported'
+python3 scripts/saves.py --game 010015100B514000 import /path/to/raw-save --raw
+```
+
+`--root /path/to/game-data` selects a different root, including an iOS Documents copy. Additional commands are `copy <id> <name>`, `rename <id> <name>`, `delete <id>`, `restore <id>`, `refresh` and `sync <id>`. `--cloud /path/to/shared-folder` or `DM_SAVE_SYNC` enables cloud operations. `refresh` discovers additional cloud slots; `sync` downloads or sends one slot using the same conflict rules as gameplay. JSON is written to stdout, readable errors to stderr, and errors return nonzero.
+
+Imports always create a new ID. The native `.dmsync` format retains the archive's title ID, checksum, both save directories, file dates and guest-name extended attributes. A folder containing `save/` and optionally `save_device/` is also accepted; use `--raw` for a folder of game files. Archives of another game, damaged archives, path escapes, links and special files are rejected before publication. Exports contain only committed save data, excluding selections, sync baselines, backups and transaction work files. Existing export files are never overwritten. ZIP is not a supported exchange format in this first backend.
+
+Deleting an inactive non-default slot moves its complete directory into `trash/`; `restore` returns it under the same ID. Deletion is local, does not erase its cloud copy, and suppresses that ID during local cloud discovery until restored. The default slot cannot be deleted, and the current slot must be switched away from before deletion. No automatic trash purge is performed.
+
+### Cloud compatibility
+
+The `.dmsync` version 1 format is unchanged. The default slot exclusively owns the old `<title ID>/save.dmsync`; switching to another slot never mirrors that slot over the legacy file. Extra slots have their own `<title ID>/slots/<UUID>/save.dmsync`. Neither `current.json` nor local sync records are uploaded, and no shared cloud inventory is needed.
+
+| Devices | Behavior |
+|---|---|
+| Both old | Existing single-save sync |
+| One old, one new | Both share the default; extra saves remain invisible to the old app |
+| Both new | Both share the default and can discover the same extra IDs; each device chooses its current slot independently |
+| Cloud has only the old file | A new app uses it for the default without converting or removing it |
+| Cloud contains old and new paths | The default and each extra ID stay isolated |
+
+Discovery only enumerates the provider's local listing. A discovered extra slot, or an empty local default with an existing legacy cloud file, is marked `cloud-pending` until its first whole archive has been downloaded, checked and installed. Starting, copying or exporting that slot is refused while its contents are unavailable, so an offline start cannot produce empty progress over a remote save. Existing downloaded saves retain the original offline behavior. Background sending and conflict backups retain their existing semantics; this does not add cross-device locking or merge two devices' gameplay changes.
 
 ## Saved choices
 
@@ -92,7 +153,7 @@ The folder a Mac app's save is synced through ([Cloud saves](settings.md#cloud-s
 
 - **Read at every start** by `dm/mac/launcher.c`, with or without the window, and passed on to the host as `DM_SAVE_SYNC`. A change takes effect at the game's next start.
 - **The order** is that of the saved choices: `DM_SAVE_SYNC` in the launch environment wins (a folder for this start only, or `0` to start without cloud saves), then an `env.txt`, then this key. `DM_SAVE_SYNC=icloud` is iCloud Drive › nxnative Saves.
-- **One folder serves every game.** Each game keeps its own `<title ID>/save.dmsync` in it, so a front end can write the same path into each app's domain to give its whole library one cloud folder. A path that already ends in the game's title ID is taken as that game's own folder.
+- **One folder serves every game.** Each game keeps its default save at `<title ID>/save.dmsync` and additional saves at `<title ID>/slots/<slot ID>/save.dmsync`, so a front end can write the same path into each app's domain to give its whole library one cloud folder. A path that already ends in the game's title ID is taken as that game's own folder.
 - **The iPhone app** keeps its folder as a security-scoped bookmark that only its own folder picker can make, so it is chosen there.
 
 ## Cheats

@@ -5,6 +5,7 @@ module DmTouchPad {
     header "botw_rune_icon.h"
     header "memory_mode.h"
     header "launcher_settings.h"
+    header "save_manager.h"
     header "aoc_files.h"
     module Artwork {
         requires objc

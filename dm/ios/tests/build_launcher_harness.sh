@@ -42,11 +42,15 @@ xcrun --sdk iphonesimulator clang -target arm64-apple-ios26.0-simulator -isysroo
     -I "$ROOT/dm/ios/Sources" -I "$ROOT/dm/host" -c "$ROOT/dm/ios/tests/launcher_resource_harness.m" -o "$WORK/resources.o"
 xcrun --sdk iphonesimulator clang -target arm64-apple-ios26.0-simulator -isysroot "$SDK" -fobjc-arc \
     -c "$ROOT/dm/ios/Sources/CloudSaves.m" -o "$WORK/CloudSaves.o"
+for source in save_manager.m save_sync.c; do
+    xcrun --sdk iphonesimulator clang -target arm64-apple-ios26.0-simulator -isysroot "$SDK" -fobjc-arc \
+        -Wno-deprecated-declarations -c "$ROOT/dm/host/$source" -o "$WORK/$source.o"
+done
 xcrun --sdk iphonesimulator swiftc -swift-version 5 -parse-as-library -target arm64-apple-ios26.0-simulator \
     -sdk "$SDK" -I "$ROOT/dm/host" -module-cache-path "$WORK/module-cache" -o "$APP/BOTWLauncherTest" \
     -import-objc-header "$ROOT/dm/ios/Sources/DmIOS-Bridging-Header.h" "$WORK/CloudSaves.o" \
-    "$WORK/GraphicsPack.o" "$WORK/GameImageImport.o" "$WORK/resources.o" -larchive \
-    "$ROOT/dm/ios/Sources/DmHostingController.swift" "$ROOT/dm/ios/Sources/LauncherRow.swift" "$ROOT/dm/ios/Sources/LauncherSettings.swift" "$ROOT/dm/ios/Sources/BotwTouchSettings.swift" "$ROOT/dm/ios/Sources/Launcher.swift" "$ROOT/dm/ios/tests/launcher_ui_harness.swift"
+    "$WORK/GraphicsPack.o" "$WORK/GameImageImport.o" "$WORK/resources.o" "$WORK/save_manager.m.o" "$WORK/save_sync.c.o" -larchive \
+    "$ROOT/dm/ios/Sources/DmHostingController.swift" "$ROOT/dm/ios/Sources/LauncherRow.swift" "$ROOT/dm/ios/Sources/LauncherSettings.swift" "$ROOT/dm/ios/Sources/BotwTouchSettings.swift" "$ROOT/dm/ios/Sources/SaveManagement.swift" "$ROOT/dm/ios/Sources/Launcher.swift" "$ROOT/dm/ios/tests/launcher_ui_harness.swift"
 plutil -lint "$APP/Info.plist"
 codesign --force --sign - "$APP"
 echo "Simulator app: $APP"
