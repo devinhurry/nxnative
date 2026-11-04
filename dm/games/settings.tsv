@@ -23,7 +23,9 @@ DM_OPMODE	choice	1=Docked,0=Handheld	DM_GAME_OPMODE	always	Game	Console mode		le
 DM_PRESENT_UPSCALE	choice	off=Standard,scene=Scene MetalFX,metalfx=Full-screen MetalFX	off	DM_GAME_SCENE_UPSCALE_PS!=	Game	Upscaling	Scene MetalFX (experimental) scales 3D only; Full-screen MetalFX also scales text and UI. Uses more GPU time and can increase heat.
 DM_PRESENT_UPSCALE	choice	off=Standard,metalfx=Full-screen MetalFX	off	DM_GAME_SCENE_UPSCALE_PS==	Game	Upscaling	Uses more GPU time and can increase heat.
 DM_LANG	choice	languages	build:DM_LANG	languages>1	General	Game language		level=basic
+DM_UPSCALER	choice	game=Game's own,metalfx=MetalFX	game	DM_GAME_UPSCALER_N!=0	Game	Game's upscaler
 DM_FULLSCREEN	choice	0=Window,1=Fullscreen	0	platform:mac	Game	Display mode		level=basic
+DM_PICTURE_FIT	choice	fit=Fit,fill=Fill	fit	platform:ios	Game	Picture	Fill crops the game's 16:9 picture to cover the screen. Health bars, subtitles or maps near the edges can be cut off. A full-screen picture without cropping needs a patch for each game.
 DM_SHOW_FPS	toggle	-	build:DM_SHOW_FPS	platform:ios	Game	Frame-rate counter
 DM_TOUCH_HAPTICS	toggle	-	1	platform:ios	Controls	Touch feedback
 DM_MOTION_SOURCE	choice	off=Off,auto=Automatic,controller=Controller,device=Device gyroscope	auto	always	Controls	Motion controls	Automatic prefers controller motion, then the device gyroscope.	level=basic
@@ -136,6 +138,7 @@ DM_BOTW_PORTRAIT_PAD_STICK_ALPHA	range	0:1:0.01	0.150	DM_GAME_ID==01007EF00011E0
 DM_LOW_MEMORY	toggle	-	0	DM_GAME_ID==01007EF00011E000	Performance	Experimental low-memory mode	May reduce memory use at the cost of more storage activity and pauses in new scenes. Applies when you press Play.
 DM_NVN_PASS_REUSE	toggle	-	1	gfxapi:nvn	Performance	Memory transfer optimization	Reduces GPU image reads and writes. Turn off if rendering errors appear. Applies when you press Play.
 DM_NVN_FB_SNAP	toggle	0/1	0	gfxapi:nvn	Performance	Skip feedback snapshots (experimental)	May reduce GPU copies but can cause rendering errors. Applies when you press Play.
+DM_SCREEN_ASPECT	choice	1.43=iPhone Duo screen (1.43:1),0=16:9 (Switch)	0	DM_GAME_SCREEN_ASPECT!=0	Game	Picture shape	Renders about a quarter more pixels: a little slower and warmer.
 DM_PRESENT_SNAP	toggle	-	DM_GAME_PRESENT_SNAP	gfxapi:nvn	Performance	Frame buffering	Up to one frame more display latency.
 DM_PSO_MTL4	toggle	-	DM_GAME_PSO_MTL4|1	gfxapi:nvn	Performance	Metal 4 pipelines	Keeps a pipeline archive; uses more memory.
 DM_PSO_PREBUILD	toggle	-	1	gfxapi:nvn	Performance	Pipeline prebuild	The first start waits a few minutes for it, once.	needs=DM_PSO_MTL4=1

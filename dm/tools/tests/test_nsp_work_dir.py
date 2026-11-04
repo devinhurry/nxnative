@@ -42,7 +42,7 @@ class WorkDir(unittest.TestCase):
         args = nsp.parse_args(['--version', '1.0.0', str(self.nsps), '-k', str(self.tmp / 'prod.keys'), *opts])
         said, seen = [], {}
         def stop(env, *a): seen.update(env); raise Stop()
-        with mock.patch.object(nsp, 'find_repo', return_value=REPO), mock.patch.object(nsp, 'scan_nsps', return_value=(TID, fam)), \
+        with mock.patch.object(nsp, 'find_repo', return_value=REPO), mock.patch.object(nsp, 'package_title_reader'), mock.patch.object(nsp, 'scan_nsps', return_value=(TID, fam)), \
              mock.patch.object(nsp, 'decompress_nsz', return_value=fam) as nsz, mock.patch.object(nsp, 'nsp_versions', return_value={'v0': fam['base']}), \
              mock.patch.object(nsp, 'configure_dotnet'), mock.patch.object(nsp, 'WORK_DIR', setting), mock.patch.object(nsp, 'check_prereqs', side_effect=stop), \
              mock.patch.object(nsp, 'say', side_effect=said.append):

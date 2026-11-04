@@ -21,6 +21,7 @@ class Profile:
             (root / name).write_text('table\n')
         self._write_game()
 
+    def modules_in(self, folder): return self.words('modules', 'main')
     def table(self, name): return self.dir / name
     def get(self, key, default=None):
         row = next((vs for k, vs in self.rows if k == key), None)
@@ -49,7 +50,8 @@ class SplitCache(unittest.TestCase):
         root = Path(self.tmp.name); self.repo = root / 'repo'; profile_dir = root / 'profile'; profile_dir.mkdir()
         self.profile = Profile(profile_dir)
         for rel in nsp.split_tool_files(self.repo):
-            rel.parent.mkdir(parents=True, exist_ok=True); rel.write_text(rel.name)
+            rel.parent.mkdir(parents=True, exist_ok=True); rel.write_text('# ' + rel.name + '\n')
+        (self.repo / 'dm/gfx/tools/shader_split.py').write_text('import unityfs, uepak\n')
         self.version = root / 'v1'; self.rom = self.version / 'RomFS'; self.rom.mkdir(parents=True)
         (self.rom / 'asset.bin').write_bytes(b'rom')
         self.main = self.version / 'main'; self.main.write_bytes(b'main')
@@ -80,7 +82,7 @@ class SplitCache(unittest.TestCase):
 
     def test_split_tools_game_shader_rules_and_sources_invalidate(self):
         self.split()
-        (self.repo / 'dm/gfx/tools/unityfs.py').write_text('changed tool')
+        (self.repo / 'dm/gfx/tools/unityfs.py').write_text('# changed tool\n')
         self.split()
         self.profile.setrow('shader_groups', ['a=c'])
         self.split()
