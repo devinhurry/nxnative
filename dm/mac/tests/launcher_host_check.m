@@ -5,6 +5,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../../host/botw_rune_icon.h"
+
+// This component fixture has no game frame or native rune pixels.
+int dm_botw_rune_icon_snapshot(dm_botw_rune_icon_state *out) { if (out) memset(out,0,sizeof *out); return 0; }
+void dm_launcher_grab_game_frame(void (^callback)(CGImageRef)) { if (callback) callback(NULL); }
 
 int dm_mac_launcher(void);
 int dm_mac_show_game_settings(void *, void (*)(void));
@@ -233,15 +238,21 @@ int main(void) { @autoreleasepool {
             waitForCondition(window, @"startup settings sheet", ^{ return (BOOL)(window.attachedSheet != nil); }, ^{
                 NSWindow *sheet = window.attachedSheet;
                 check(YES, "startup editor is a separate sheet");
-                waitForCondition(sheet, @"frame-rate segments", ^{
+                waitForCondition(sheet, @"frame-rate shortcuts", ^{
                     NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
-                    return hasAXLabel(sheet, @"30 fps", NSAccessibilityRadioButtonRole, nodes, 0);
+                    return hasAXLabel(sheet, @"30 fps", NSAccessibilityButtonRole, nodes, 0);
                 }, ^{
                     NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
-                    check(hasAXLabel(sheet, @"60 fps", NSAccessibilityRadioButtonRole, nodes, 0),
-                          "frame rate offers 30 and 60 as segments");
-                    nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
-                    BOOL interpolationSwitch = hasAXLabel(sheet, @"Frame generation", NSAccessibilityCheckBoxRole, nodes, 0);
+                    check(hasAXLabel(sheet, @"60 fps", NSAccessibilityButtonRole, nodes, 0),
+                          "frame rate offers 30 and 60 shortcuts");
+                waitForPress(sheet, @"DM_FPS_TARGET.more", nil, NSAccessibilityButtonRole, "More frame rates responds", ^{
+                waitForCondition(sheet, @"expanded frame-rate slider", ^{
+                    NSHashTable *sliderNodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
+                    return hasAXLabel(sheet, @"Frame rate", NSAccessibilitySliderRole, sliderNodes, 0);
+                }, ^{
+                    check(YES, "More frame rates expands the FPS slider below the shortcuts");
+                    NSHashTable *switchNodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
+                    BOOL interpolationSwitch = hasAXLabel(sheet, @"Frame generation", NSAccessibilityCheckBoxRole, switchNodes, 0);
                     if (!interpolationSwitch) dumpHierarchy(sheet);
                     check(interpolationSwitch,
                           "interpolation is a separate switch beside frame rate");
@@ -255,6 +266,8 @@ int main(void) { @autoreleasepool {
                                          "Play leaves the launcher", ^{});
                         });
                     }
+                });
+                });
                 });
                 });
             });

@@ -40,6 +40,8 @@ A Mac app carries the same list (`Contents/Resources/dm/launcher.json`), without
 
 Games whose speed the app controls (Breath of the Wild, Tears of the Kingdom and a few others) offer **30 fps** or **60 fps**. 60 is smoother; 30 is what the Switch ran and uses less power, so the phone stays cooler and the battery lasts longer. The game runs at real speed either way.
 
+Verified real-time builds, currently BOTW 1.9.0, also offer **More frame rates** beside those shortcuts. It expands a **20–120 fps** slider in steps of five and remembers the chosen target. Actual FPS depends on device performance and the screen. Selecting more than 60 automatically disables frame generation; lowering the target leaves it off until enabled again.
+
 ### Render scale
 
 The size of the 3D picture, from 50 to 100 %. Below 100 % the size is fixed there and the game's own dynamic resolution is off; 100 % keeps the game's own. Lower can be lighter on the GPU but is blurrier; the HUD and text keep their sharpness. Only games the app can scale offer it.
@@ -178,9 +180,9 @@ These settings change how the app hands frames to the screen and how it prepares
 
 ### Frame generation
 
-Open **Settings → Game** in the shared iOS/Mac launcher or in-game settings. **Frame rate** is a 30/60 segmented control; **Frame generation** is a separate, default-off switch. Together they select 30, 30+30, 60 or 60+60. Changing the base rate while interpolation is on updates its source rate too. Both choices are remembered, and supported runtime changes take effect at the next real-frame boundary. The standalone interpolation menu and floating button are removed.
+Open **Settings → Graphics** in the shared iOS/Mac launcher or in-game settings. **Frame generation** is a separate, default-off switch beside the frame-rate setting. At targets up to 60, enabling it inserts one picture per real pair (for example, 45+45); above 60 the switch is disabled. Changing the base rate while interpolation is on updates its source rate or turns it off above 60. Both choices are remembered, and supported runtime changes take effect at the next real-frame boundary.
 
-The switch is shown only for profiles with configured inputs, currently BOTW in Docked and Handheld modes. Handheld uses a smaller native canvas. GPUs without native interpolation support keep normal rendering and the base frame rate. An explicit environment override remains locked. Numeric environment modes `40`, `50` and `max` remain diagnostic backend options outside this UI. [BOTW validation and remaining work](../dm/games/01007EF00011E000/notes/rendering.md#experimental-metalfx-frame-generation).
+The switch is shown only for profiles with configured inputs, currently BOTW in Docked and Handheld modes. Handheld uses a smaller native canvas. GPUs without native interpolation support keep normal rendering and the base frame rate. An explicit environment override remains locked; a target above 60 takes precedence over an incompatible interpolation request. Environment mode `max` remains a diagnostic backend option outside this UI. [BOTW validation and remaining work](../dm/games/01007EF00011E000/notes/rendering.md#experimental-metalfx-frame-generation).
 
 ### Experimental low-memory mode
 

@@ -15,7 +15,7 @@
 // CPU-only tools have no interpolation backend. The graphics implementation
 // supplies the strong definition and checks device support before the cap.
 __attribute__((weak)) int dm_fg_enabled(void) { return 0; }
-__attribute__((weak)) int dm_fg_mode(void) { return *DM_GAME_FRAMEGEN_SCENE && dm_fg_enabled()?dm_framegen_parse(getenv("DM_FRAMEGEN")):0; }
+__attribute__((weak)) int dm_fg_mode(void) { return *DM_GAME_FRAMEGEN_SCENE && dm_framegen_allowed() && dm_fg_enabled()?dm_framegen_parse(getenv("DM_FRAMEGEN")):0; }
 __attribute__((weak)) int dm_fg_requested_mode(void) { return dm_fg_mode(); }
 
 module_t *g_mod;
@@ -267,6 +267,7 @@ static void read_layout(module_t *m, const char *dir) {
         else if (!strcmp(key, "RO_OFF")) m->ro_off = v;
         else if (!strcmp(key, "DATA_OFF")) m->data_off = v;
         else if (!strcmp(key, "FPS_STATE_OFF")) m->fps_state_off = v;
+        else if (!strcmp(key, "REALTIME_FRAME_STEP")) m->fps_realtime = v != 0;
         else if (!strcmp(key, "UE_MALLOC_VT")) m->ue_malloc_vt = v;
         else if (!strcmp(key, "UE_MALLOC_SLOT")) m->ue_malloc_slot = (unsigned)v;
         else if (!strcmp(key, "FPS_TARGET_PTR")) m->fps_target_ptr = v;
@@ -294,36 +295,39 @@ static void read_layout(module_t *m, const char *dir) {
 }
 
 // Frame step state (the page after the key page, read-write; layout in patch_nso.py FRAME_STEP): the rewriter's stubs step the game by the host's whole vsyncs capped at this
-// target, 0 = the game's own interval logic. The profile's fps_target, overridden by DM_FPS_TARGET (0, 30 or 60); the graphics layer decides the steps and paces presents
+// target, 0 = the game's own interval logic. Verified real-time builds also support 20..120 in steps of 5; other builds keep 30/60. The graphics layer paces presents
 // (hle_nvn.c fstep_tick)
 uint8_t *dm_fps_state;
+int dm_fps_realtime;
 static const char *g_fps_mod;   // the module holding the state page (for the log)
 static _Atomic int g_normal_fps_target;
 void dm_framegen_mode_changed(int mode) {
     if (!dm_fps_state) return;
     uint32_t was=__atomic_load_n((uint32_t *)(dm_fps_state+0x40),__ATOMIC_RELAXED);
     float target=mode ? (mode>0?mode:60) : g_normal_fps_target;
-    float ratio=mode ? 30.0f/(mode>0?mode:60) : 0;
+    int realtime=mode || (dm_fps_realtime && target>0 && target!=30 && target!=60);
+    float ratio=realtime ? 30.0f/target : 0;
     uint32_t bits; memcpy(&bits,&target,4); __atomic_store_n((uint32_t *)dm_fps_state,bits,__ATOMIC_RELAXED);
     memcpy(&bits,&ratio,4); __atomic_store_n((uint32_t *)(dm_fps_state+0x40),bits,__ATOMIC_RELAXED);
-    if (mode || was) {
+    if (realtime || was) {
         // The first guest frame after a live change precedes the next present.
         // Publish its nominal step now instead of leaving the old policy's one.
         uint32_t rate=(uint32_t)target,step=rate?(60+rate-1)/rate:0;
         __atomic_store_n((uint32_t *)(dm_fps_state+0x20),step,__ATOMIC_RELAXED);
     }
-    if (!mode) __atomic_store_n((uint32_t *)(dm_fps_state+0x44),0,__ATOMIC_RELAXED);
+    if (!realtime) __atomic_store_n((uint32_t *)(dm_fps_state+0x44),0,__ATOMIC_RELAXED);
 }
 static void install_fps_state(module_t *m) {
     if (m->fps_state_off + 0x9c > m->size || m->fps_state_off < m->key_page_off + m->key_page_size) die("%s: frame step state page out of range", m->name);
     dm_fps_state = m->base + m->fps_state_off; g_fps_mod = m->name;
+    dm_fps_realtime = m->fps_realtime;
 }
 // The settings in the state page, written when the game starts (main.c, after host loading): on iOS the loading runs at app launch, before the launcher has set DM_FPS_TARGET and
 // DM_RENDER_SCALE (Launcher.swift), and nothing reads the page before the game runs
 void dm_fps_state_apply(void) {
     if (!dm_fps_state) return;
     const char *e = getenv("DM_FPS_TARGET"); int t = e ? atoi(e) : DM_GAME_FPS_TARGET;
-    if (t != 0 && t != 30 && t != 60) { LOG("[RED] DM_FPS_TARGET=%s: must be 0, 30 or 60; using the game's own frame step", e); t = 0; }
+    if (!dm_fps_target_valid(t,dm_fps_realtime)) { LOG("[RED] DM_FPS_TARGET=%s: unsupported frame rate for this build; using the game's own frame step", e); t = 0; }
     g_normal_fps_target=t;
     int framegen=dm_fg_mode(); dm_framegen_mode_changed(framegen);
     if (framegen) t=framegen>0?framegen:60;
@@ -377,7 +381,8 @@ void dm_fps_state_apply(void) {
     }
     char cap[32]; snprintf(cap, sizeof cap, ", capped at %d fps", t);
     if (framegen<0) snprintf(cap,sizeof cap,", uncapped");
-    LOG("%s: frame step %s%s (%s)", g_fps_mod, framegen ? "measured time between real frames" : !t ? "as the game sets it" : "in whole vsyncs decided by the host", t ? cap : "", framegen ? "DM_FRAMEGEN" : e ? "DM_FPS_TARGET" : "game profile fps_target");
+    int realtime=framegen || (dm_fps_realtime && t && t!=30 && t!=60);
+    LOG("%s: frame step %s%s (%s)", g_fps_mod, realtime ? "measured time between real frames" : !t ? "as the game sets it" : "in whole vsyncs decided by the host", t ? cap : "", framegen ? "DM_FRAMEGEN" : e ? "DM_FPS_TARGET" : "game profile fps_target");
 }
 static void install_key_page(module_t *m) {
     if (m->key_page_off + m->key_page_size > m->size) die("%s: key page out of range", m->name);

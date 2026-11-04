@@ -20,6 +20,14 @@ Frame pacing: the host's frame step, engine frame limiters, present intervals an
 - **Check:** probes confirmed the legacy result: the framework presents at interval 1, VFR reports interval 1 with ratio 0.5, and when a frame runs long the game steps back to 2 with ratio 1, so the game speed does not change.
 - **Note:** the zeldaret/botw decompilation (`VFR.cpp`) gave the semantics; 1.9.0's addresses were found by the constants (`60 / interval`, the `fmov s11, #2.0` floor).
 
+### Custom frame rates use the real-frame clock
+
+- **Symptom:** the launcher offers only 30/60 fps even though the optional interpolation backend already supports 40/50 fps; simply accepting arbitrary targets would leave ordinary presentation and game time quantized to 60 Hz vsyncs.
+- **Cause:** the fractional VFR/UI/physics readers and measured real-frame clock were enabled only with interpolation. Ordinary caps, display-link mode selection and launcher validation still assumed 30/60.
+- **Fix:** builds with verified fractional readers advertise `REALTIME_FRAME_STEP` in their fixups. Their launcher keeps 30/60 shortcuts and adds an expandable 20–120 fps slider in steps of five. Other builds keep their tested choices. Custom targets reuse the existing real-frame clock independently of interpolation, with matching acquire/present periods and physical display-link ticks; VI still receives 60 logical vsyncs per second. Ordinary 30/60 with interpolation off retains whole-vsync stepping. Selecting more than 60 disables interpolation, including live/startup overrides; returning to a lower rate leaves it off. The movie cap remains 30, and a thermal cap never raises a lower custom target.
+- **Check:** native loader/settings checks, all 21 real-frame clock rates, real NVN acquire/display-link checks, movie/thermal checks and shared Swift validation/persistence checks. Physical-device gameplay and cadence acceptance remain open.
+- **Found on:** [Breath of the Wild 1.9.0](../../dm/games/01007EF00011E000/README.md#found-on-this-game), reusing its existing fractional timing stubs; no new game instruction patches.
+
 ### A regress run stops when another app takes the key window
 
 - **Symptom:** `scripts/regress.py` reports a hang (`no frame after … s`, a state dump with every game thread waiting) in some runs of Tears of the Kingdom, baseline and candidate alike; the log's last focus line before it is `oe focus state → 2`, with no `→ 1` after it.

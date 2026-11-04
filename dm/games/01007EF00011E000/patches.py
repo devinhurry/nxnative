@@ -513,7 +513,7 @@ def frame_step(ctx):
     fs_put(0x12670ac, [B(0x12670ac, start)], 'native dynamic-resolution GPU budget follows the host frame-rate cap')
 
 FRAME_STEP = {'cd57b23fa4bbad65803d9788c01821ee': frame_step}
-CAPABILITIES = {'cd57b23fa4bbad65803d9788c01821ee': ('DYNAMIC_RESOLUTION',)}
+CAPABILITIES = {'cd57b23fa4bbad65803d9788c01821ee': ('DYNAMIC_RESOLUTION', 'REALTIME_FRAME_STEP')}
 
 # Main's input-vector probes are fixed to the exact 1.9.0 build. Keep the original instructions
 # checked here with the per-game rewrite rules, rather than embedding BOTW addresses in patch_nso.py.

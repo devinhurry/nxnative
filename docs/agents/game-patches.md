@@ -612,7 +612,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   </details>
 
   - render scale stub (the launcher offers DM_RENDER_SCALE)
-  - launcher capabilities: DYNAMIC_RESOLUTION
+  - launcher capabilities: DYNAMIC_RESOLUTION, REALTIME_FRAME_STEP
   - host [hle_botw_touch_actions.c:13](../../dm/host/hle_botw_touch_actions.c#L13): build check
   - host [hle_botw_touch_menu.c:22](../../dm/host/hle_botw_touch_menu.c#L22): build check
   - host [hle_botw_touchhud.c:17](../../dm/host/hle_botw_touchhud.c#L17): build check
