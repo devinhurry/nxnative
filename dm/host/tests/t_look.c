@@ -21,9 +21,14 @@ int dm_hid_look_sample_at(uint64_t frame, dm_hid_look_sample *out) {
     *out = test_hid_sample; return 1;
 }
 
-static int known_gate(int id) { return id == OBS_BOTW_LOOK_VECTOR || id == OBS_BOTW_LOOK_SOURCE; }
+static int known_gate(int id) { return id == OBS_BOTW_LOOK_VECTOR || id == OBS_BOTW_LOOK_SOURCE ||
+    id == OBS_BOTW_LOOK_PITCH || id == OBS_BOTW_LOOK_YAW; }
 int gate_obs_present(int id) { return known_gate(id) && test_gate_present && id != test_missing_gate; }
 void gate_obs_read_set(int id, void (*fn)(const uint64_t *regs)) {
+    assert(known_gate(id) && fn);
+    test_gate_registered++;
+}
+void gate_obs_set(int id, void (*fn)(uint64_t *regs, int param)) {
     assert(known_gate(id) && fn);
     test_gate_registered++;
 }
@@ -498,7 +503,91 @@ static void test_profile_guard(void) {
     g_mod[0].base = image; g_mod[0].size = sizeof image; g_mod[0].text_end = sizeof image;
     test_gate_present = 1; test_missing_gate = 0; test_gate_registered = 0;
     unsetenv("DM_LOOK"); dm_look_install();
-    check("the matching BOTW build installs the pre-filter source and shared vector observers", dm_look_enabled() && test_gate_registered == 2);
+    check("the matching BOTW build installs source/vector and aiming composition observers", dm_look_enabled() && test_gate_registered == 4);
+    setenv("DM_LOOK_GYRO_COMPOSE", "0", 1); test_gate_registered = 0;
+    dm_look_install();
+    check("the comparison switch restores the original shared-vector path", !g_compose && test_gate_registered == 2);
+    unsetenv("DM_LOOK_GYRO_COMPOSE");
+}
+
+static void test_gyro_composition(void) {
+    for (int camera = 0; camera < 2; camera++) {
+        uint8_t image[0x400] = {0}, child[0x200] = {0}, action[0x400] = {0}, stack[0x100] = {0}, vfr[0x40] = {0};
+        uint64_t regs[96] = {0}, getter_fp[3] = {0};
+        module_t main = {.base=image, .size=sizeof image};
+        reset(60); g_camera.main = &main;
+        uint64_t vfr_ptr = (uint64_t)(uintptr_t)vfr;
+        memcpy(image + 0x100, &vfr_ptr, sizeof vfr_ptr);
+        memcpy(vfr + 0x20, &(float){camera ? .5f : 1.0f}, sizeof(float));
+        g_aim[camera] = (aim_compose_t){.caller=0x100 + 4 * camera, .vtable=0x200 + 16 * camera,
+            .pitch_base=camera ? 0x128 : 0x234, .pitch_min=0x300, .pitch_max=0x304,
+            .yaw_base=camera ? 0x238 : 0x230, .yaw_stack=0x50};
+        g_aim_gain = 180; g_compose = 1;
+        uint64_t vtable = (uint64_t)(uintptr_t)(image + g_aim[camera].vtable);
+        memcpy(action, &vtable, sizeof vtable);
+        memcpy(action + 0x300, &(float){-80}, sizeof(float));
+        memcpy(action + 0x304, &(float){80}, sizeof(float));
+        float *pitch_base = (float *)(action + g_aim[camera].pitch_base);
+        float *yaw_base = (float *)(action + g_aim[camera].yaw_base);
+        float *native_pitch = (float *)((uint8_t *)regs + 256);
+        float *native_yaw = (float *)(stack + 0x80 - 0x50);
+        getter_fp[1] = (uint64_t)(uintptr_t)(image + g_aim[camera].caller);
+        getter_fp[2] = (uint64_t)(uintptr_t)action;
+        test_frame = 700 + camera;
+        test_hid_valid = 1;
+        test_hid_sample = (dm_hid_look_sample){.frame=test_frame, .source=DM_HID_LOOK_RELATIVE};
+        dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, test_frame);
+        dm_look_test_input_at(DM_LOOK_MOVE, .05f, -.02f, test_frame);
+        float pair[2] = {.4f, -.3f};
+        regs[0] = (uint64_t)(uintptr_t)child; regs[19] = (uint64_t)(uintptr_t)pair;
+        regs[29] = (uint64_t)(uintptr_t)getter_fp;
+        camera_look_source(regs); camera_look_vector(regs);
+        check("a proven relative aiming call sees zero stick input so native gyro selection stays eligible", pair[0] == 0 && pair[1] == 0);
+
+        // These native results already include a gyro contribution. The callbacks
+        // must retain it and add the touch delta to both target and smoothing base.
+        regs[19] = (uint64_t)(uintptr_t)action; regs[29] = (uint64_t)(uintptr_t)(stack + 0x80);
+        *native_pitch = 10; *pitch_base = 8; *native_yaw = 20; *yaw_base = 21;
+        uint8_t tracker_before[0xd0]; memcpy(tracker_before, action + 0x150, sizeof tracker_before);
+        camera_aim_pitch(regs, camera); camera_aim_yaw(regs, camera);
+        check("native gyro pitch and touch displacement add without resetting the smoothing base",
+            near(*native_pitch, 6.4f) && near(*pitch_base, 4.4f));
+        check("native gyro yaw and touch displacement add to the persistent target and current output",
+            near(*native_yaw, 11) && near(*yaw_base, 12));
+        check("touch composition leaves native gyro tracker matrices unchanged",
+            !memcmp(tracker_before, action + 0x150, sizeof tracker_before));
+        camera_aim_pitch(regs, camera); camera_aim_yaw(regs, camera);
+        check("repeated aim gates cannot apply the same frame's displacement twice",
+            near(*native_pitch, 6.4f) && near(*native_yaw, 11));
+
+        test_frame++; test_hid_sample.frame = test_frame;
+        dm_look_test_input_at(DM_LOOK_MOVE, .05f, -.02f, test_frame);
+        regs[0] = (uint64_t)(uintptr_t)child; regs[19] = (uint64_t)(uintptr_t)pair;
+        regs[29] = (uint64_t)(uintptr_t)getter_fp;
+        camera_look_source(regs); camera_look_vector(regs);
+        dm_look_test_input_at(DM_LOOK_CANCEL, 0, 0, test_frame);
+        regs[19] = (uint64_t)(uintptr_t)action; regs[29] = (uint64_t)(uintptr_t)(stack + 0x80);
+        camera_aim_pitch(regs, camera); camera_aim_yaw(regs, camera);
+        check("cancelling after the getter also cancels deferred pitch and yaw composition",
+            near(*native_pitch, 6.4f) && near(*native_yaw, 11));
+
+        test_frame++; test_hid_sample.frame = test_frame;
+        dm_look_test_input_at(DM_LOOK_BEGIN, 0, 0, test_frame);
+        dm_look_test_input_at(DM_LOOK_MOVE, .05f, -.02f, test_frame);
+        test_hid_sample.source = DM_HID_LOOK_PHYSICAL;
+        test_hid_sample.selected_rx = DM_STICK_MAX / 2;
+        native_stick_pair(test_hid_sample.selected_rx, 0, (float *)(child + 0x128), (float *)(child + 0x12c));
+        pair[0] = .25f; pair[1] = -.5f;
+        regs[0] = (uint64_t)(uintptr_t)child; regs[19] = (uint64_t)(uintptr_t)pair;
+        regs[29] = (uint64_t)(uintptr_t)getter_fp;
+        camera_look_source(regs); camera_look_vector(regs);
+        regs[19] = (uint64_t)(uintptr_t)action; regs[29] = (uint64_t)(uintptr_t)(stack + 0x80);
+        camera_aim_pitch(regs, camera); camera_aim_yaw(regs, camera);
+        check("a physical stick keeps its native vector and bypasses deferred touch composition",
+            pair[0] == .25f && pair[1] == -.5f && near(*native_pitch, 6.4f) && near(*native_yaw, 11));
+        dm_look_test_input_at(DM_LOOK_CANCEL, 0, 0, test_frame);
+    }
+    reset(60);
 }
 
 int main(void) {
@@ -512,6 +601,7 @@ int main(void) {
     test_native_stick_float_mapping();
     test_actual_observer_ratio_read();
     test_profile_guard();
+    test_gyro_composition();
     printf("== %d checks, %d failed ==\n", cases, fails);
     return fails != 0;
 }

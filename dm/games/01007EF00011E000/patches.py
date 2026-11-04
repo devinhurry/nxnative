@@ -180,6 +180,26 @@ def validate_main(ctx):
     assert tuple(word(o) for o in range(0xd5801c, 0xd58030, 4)) == (
         0xfd400be8, 0xf94017f3, 0xa941fbfd, 0x9100c3ff, 0xd65f03c0,
     ), 'BOTW shared getter epilogue changed; recheck OBS32 scratch-register liveness'
+    # Experimental composition preserves gyro selection. Pitch gates change only saved s0
+    # and a persistent smoothing base; yaw gates change memory, never saved registers.
+    # At each site x9-x17 remain unread through the next native call on every path.
+    assert tuple(word(o) for o in range(0xbf0c4c, 0xbf0c7c, 4)) == (
+        0xbd436261, 0x1e2a390a, 0xbd024669, 0x1e212000, 0x540000c4, 0xbd436662,
+        0x1e204001, 0x1e222000, 0x5400004d, 0x1e204041, 0x1e204020, 0x940595ab,
+    ), 'CameraAiming common pitch target/clamp changed'
+    assert tuple(word(o) for o in range(0xbf2ccc, 0xbf2ce8, 4)) == (
+        0x394e2268, 0xbd023660, 0x1e2c1000, 0xaa1503e0, 0x7100051f, 0x1e2a0c00, 0x9400df15,
+    ), 'CameraAiming2 pitch target/smoothing changed'
+    assert tuple(word(o) for o in range(0xbf0e34, 0xbf0ea8, 4)) == (
+        0x1e2f190a, 0x394da668, 0x7100051f, 0x54000280, 0x91054277, 0x2a1f03e1,
+        0xb9023e7f, 0xaa1703e0, 0x94059cbf, 0x2a1f03f8, 0x37000160, 0xaa1703e0,
+        0x52800021, 0x52800038, 0x94059cb9, 0x370000c0, 0xaa1703e0, 0x52800041,
+        0x52800058, 0x94059cb4, 0x36000040, 0xb9023e78, 0xb902427f, 0x910083e1,
+        0xaa1303e0, 0xbd02aa69, 0x91218297, 0xb90023ff, 0x940000d8,
+    ), 'CameraAiming final yaw join or scratch-register liveness changed'
+    assert tuple(word(o) for o in range(0xbf2f90, 0xbf2f9c, 4)) == (
+        0xaa1303e0, 0xbd02826a, 0x9400016e,
+    ), 'CameraAiming2 final yaw join changed'
     # Pane::Draw saves this in x21 and invokes DrawSelf at vtable +0xb0.
     # The begin gate precedes that call with x9-x17 dead; the end gate follows it.
     assert tuple(word(o) for o in range(0x27d50, 0x27d8c, 4)) == (
@@ -356,6 +376,10 @@ OBS = {
     (0xe1a628, 31, 'f960de68', 'MainScreen3D update: correct its copied projection before rebuilding the world-label view'),
     (0xd58008, 33, 'f9409408', 'shared stick getter: snapshot the selected raw child pair before the native dead-zone/filter branches'),
     (0xd5801c, 32, 'fd400be8', 'shared normalized stick getter: inject one frame of relative input after native filtering and before return'),
+    (0xbf0c4c, 42, 'bd436261', 'CameraAiming common pitch target: add touch after gyro, before native clamp and smoothing'),
+    (0xbf2ccc, 42 | 1 << 8, '394e2268', 'CameraAiming2 pitch target: add touch after gyro, before native smoothing'),
+    (0xbf0e34, 43, '1e2f190a', 'CameraAiming final yaw: shift both native target and smoothed output by touch displacement'),
+    (0xbf2f90, 43 | 1 << 8, 'aa1303e0', 'CameraAiming2 final yaw: shift native target and output after gyro'),
     (0xf57ba0, 37, 'd10143ff', 'BoxCursorControl update entry: x0 is the native manager; observe focused/requested item before native validation and focus callbacks'),
     (0xf57a08, 37, 'f9400bf3', 'BoxCursorControl constructor exit: x0 is the initialized manager, including first boot without a Title cursor update'),
     (0xd6f034, 38, 'd101c3ff', 'native list-widget update entry: x0 is the shared list widget; cache receiver metadata only'),
@@ -370,7 +394,10 @@ OBS = {
 # general straight-line checker deliberately refuses unknown indirect calls.
 # 0xf714b8 loads only x8 before the Draw virtual call. Its receiver x0 and
 # render info x1 are live; x9-x17 are unread until that call, as checked above.
-OBS_SAFE = {'cd57b23fa4bbad65803d9788c01821ee': {0xd5801c, 0x27ae4, 0xe1a628, 0x27d7c, 0xf714b8}}
+OBS_SAFE = {'cd57b23fa4bbad65803d9788c01821ee': {
+    0xd5801c, 0x27ae4, 0xe1a628, 0x27d7c, 0xf714b8,
+    0xbf0c4c, 0xbf2ccc, 0xbf0e34, 0xbf2f90,
+}}
 # How general each patch is and could be (dm/tools/docs_patches.py "Binding", listed in docs/agents/game-patches.md): what, its binding now, the loosest it could have (goal),
 # purpose, why; blocked or kept: why the gap stays open (cannot close yet, or left open on purpose); checked: what was checked on game files (else a judgement)
 BINDING = [
