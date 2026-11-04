@@ -260,13 +260,13 @@ static void camera_look_vector(const uint64_t *regs) {
     uint32_t raw_bits[2];
     memcpy(raw_bits, &g_raw_call.raw_x, sizeof raw_bits);
     if (sample_valid && g_trace && (drag_active || physical || raw_match))
-        LOG("look: source frame=%llu raw=(%a,%a) bits=(%08x,%08x) selected=(%d,%d) virtual=(%d,%d) physical=(%d,%d) source=%d match=%d out=(%.5f,%.5f)",
+        LOG("look: source frame=%llu raw=(%a,%a) bits=(%08x,%08x) selected=(%d,%d) virtual=(%d,%d) physical=(%d,%d) source=%d match=%d native=(%.5f,%.5f) out=(%.5f,%.5f) aim=%d",
             (unsigned long long)frame, g_raw_call.raw_x, g_raw_call.raw_y,
             raw_bits[0], raw_bits[1],
             g_raw_call.hid.selected_rx, g_raw_call.hid.selected_ry,
             g_raw_call.hid.virtual_rx, g_raw_call.hid.virtual_ry,
             g_raw_call.hid.physical_rx, g_raw_call.hid.physical_ry,
-            g_raw_call.hid.source, raw_match, out_x, out_y);
+            g_raw_call.hid.source, raw_match, x, y, out_x, out_y, g_raw_call.aim_camera);
     memset(&g_raw_call, 0, sizeof g_raw_call);
 }
 
@@ -294,7 +294,7 @@ static float wrap_degrees(float value) {
 static void camera_aim_pitch(uint64_t *regs, int camera) {
     if (camera < 0 || camera >= 2) return;
     float delta = aim_delta(regs[19], camera, 2);
-    if (!delta) return;
+    if (!delta && !g_trace) return;
     uint8_t *action = (uint8_t *)(uintptr_t)regs[19];
     const aim_compose_t *aim = &g_aim[camera];
     float target, base, lo, hi;
@@ -303,6 +303,13 @@ static void camera_aim_pitch(uint64_t *regs, int camera) {
     memcpy(&base, action + aim->pitch_base, sizeof base);
     memcpy(&lo, action + aim->pitch_min, sizeof lo);
     memcpy(&hi, action + aim->pitch_max, sizeof hi);
+    if (g_trace) {
+        uint64_t frame = dm_guest_frame();
+        LOG("look: aim camera=%d frame=%llu pitch=%.6f base=%.6f bounds=(%.3f,%.3f) touch=%.6f owned=%d",
+            camera,(unsigned long long)frame,target,base,lo,hi,delta,
+            g_aim_call.action == regs[19] && g_aim_call.frame == frame);
+    }
+    if (!delta) return;
     if (!isfinite(target) || !isfinite(base) || !isfinite(lo) || !isfinite(hi) || lo > hi)
         die("[RED] look: invalid native aim pitch or bounds");
     float next = fminf(hi, fmaxf(lo, target + delta));

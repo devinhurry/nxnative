@@ -890,6 +890,54 @@ with both `look: compose` callbacks in frame 13903. This verifies the live
 route and touch addition, not simultaneous physical sensor input. Physical
 iOS aiming feel remains unverified.
 
+**Current: iPhone shoulder-drag pitch jump (2026-11-05; device acceptance pending).** The reported
+downward step happens near the first movement of R or ZR in drag-camera mode,
+including horizontal drags with the motion source off. Releasing the bow can
+produce an upward step. Switching ZR to drag-cancel avoids it; the same report
+was not reproduced on Mac. This does not establish a gyro-reference fault.
+A current-checkout Mac test also retained continuous aiming pitch for injected
+relative displacement; it does not reproduce UIKit touch delivery or establish
+the cause on an iPhone. Its isolated save had no arrows, so firing was not
+validated.
+
+`DM_LOOK_TRACE=1` now records UIKit BEGIN/MOVE/END/CANCEL coordinates, the
+previous point, normalized displacement, canvas scale and previously published
+virtual axes. The shared-getter trace includes both native and substituted
+vectors and the matched aiming camera; the pitch gate records its incoming
+target, smoothing base, bounds and accepted touch contribution even when that
+contribution is zero. Capture a short R/ZR reproduction in `Documents/log.txt`
+with this switch in `Documents/env.txt`. These diagnostics distinguish an
+unexpected UIKit vertical delta, a native-vector passthrough after a source
+mismatch, and a native pitch change with no touch contribution.
+
+An iPhone trace from `03a95cfb` with `DM_MOTION_SOURCE=off` contains four
+shoulder holds with maximum touch displacement of 5.70, 8.90, 9.80 and
+10.14 pt. The first hold's first MOVE shifts down 5 pt, producing a
+2.142857-degree pitch step at frame 716. Its release-only location shifts up
+1.667 pt and contributes -0.714286 degrees at frame 752. All 419 recorded
+aiming pitch targets equal the preceding target plus its accepted touch
+contribution to within 0.000001 degrees; aiming calls with relative input
+match their frozen source. This capture establishes that small reported
+touch displacements enter camera motion directly, including on button release;
+it does not distinguish finger roll from UIKit touch processing.
+
+Free-space and R/ZR camera dragging now recognize a drag using the existing
+12 pt tap slop. A shoulder button still presses immediately. Initial movement inside that radius
+does not turn the camera; the crossing sample contributes only travel beyond
+the radius, then subsequent movement retains its full displacement. Camera
+END retains queued movement from MOVE events but does not turn its lifting
+contact location into an extra MOVE. Its final location still rejects a tap
+when it exceeds the slop, so a release-only displacement cannot become a
+scope double tap. Quick-strip scrolling retains its full initial movement
+and final location. Native gyro composition is unchanged.
+
+The UIKit input harness replays the recorded drift and intentional drags for
+both shoulders and free-space look, plus scope taps and quick-strip scrolling.
+The 12 new failing assertions on the original shoulder implementation pass
+with the fix; its ten pre-existing artwork/scope-tap failures remain unchanged.
+The iPhoneOS source syntax check passes. Real iPhone feel and simultaneous
+motion input still require device acceptance.
+
 #### AppCamera touch gestures
 
 In BOTW touch mode, drag with one finger to frame the shot and pinch to zoom.
