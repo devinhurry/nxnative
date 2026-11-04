@@ -192,7 +192,7 @@ int dm_launcher_setting_is_live(const char *key) {
     if ((!strcmp(key, "DM_FPS_TARGET") || !strcmp(key, "DM_RENDER_SCALE")) && dm_fps_state) return 1;
     if (botw_key(key) && !strcmp(DM_GAME_ID, "01007EF00011E000")) return 1;
 #if TARGET_OS_IPHONE
-    if (!strcmp(key, "DM_TOUCH_HAPTICS")) return 1;
+    if (!strcmp(key, "DM_TOUCH_HAPTICS") || !strcmp(key, "DM_SHOW_FPS")) return 1;
 #endif
     if (!strcmp(key, "DM_RUMBLE") || !strcmp(key, "DM_RUMBLE_GAIN") || !strcmp(key, "DM_RUMBLE_MIN")) return 1;
     return 0;
@@ -214,6 +214,9 @@ int dm_launcher_setting_apply(const char *key, const char *value) {
         dm_fps_state_apply();
     }
     else if (!strcmp(key, "DM_RENDER_SCALE")) dm_fps_state_apply();
+#if TARGET_OS_IPHONE
+    else if (!strcmp(key, "DM_SHOW_FPS")) front_refresh_fps_settings();
+#endif
     else if (botw_key(key) || !strcmp(key, "DM_TOUCH_HAPTICS")) {
         front_refresh_touch_settings();
     }

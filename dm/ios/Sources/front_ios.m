@@ -41,6 +41,7 @@ static _Atomic int g_screen_hz=60;
 static void front_ios_power_watch(void);
 static void front_ios_audio_watch(void);
 static UIButton *front_ios_fps_button(void);
+static BOOL front_ios_fps_enabled(void);
 
 @interface DmGameView : UIView
 @end
@@ -114,11 +115,13 @@ static void tv_attach(void);
 @property (nonatomic, strong) UIView *surface;
 @property (nonatomic, strong) UIView *pad;
 @property (nonatomic, strong) UIButton *fps;
+@property (nonatomic, strong) NSTimer *fpsTimer;
 @property (nonatomic) BOOL launched;
 @property (nonatomic, strong) id tv;   // the TV scene accessory's registration (iOS 27)
 - (void)startGame;
 - (void)showLauncher;
 - (void)openSettings:(id)sender;
+- (void)refreshFpsCounter;
 @end
 static DmRootVC *g_root;
 int front_screen_max_fps(void) { return atomic_load(&g_screen_hz); }
@@ -161,7 +164,7 @@ static void game_settings_done(void) { dm_gamepad_settings_done(); }
     }
 #endif
 }
-// The game view, the pad and the frame-rate counter are made once the launcher has set the switches they read (DM_SHOW_FPS, DM_METAL_HUD); the host's loading began at app launch (main.m)
+// Create the game surface after applying launcher choices; the FPS counter can change live.
 - (void)startGame {
     if (self.game) return;
     if (!front_ios_prepare_game()) { [self showLauncher]; return; }
@@ -185,12 +188,25 @@ static void game_settings_done(void) { dm_gamepad_settings_done(); }
     self.pad = dm_gamepad_view(self.view.bounds);
     self.pad.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.surface addSubview:self.pad];
-    self.fps = front_ios_fps_button();   // above the pad, which hides while a controller is connected
-    if (self.fps) [self.surface addSubview:self.fps];
+    [self refreshFpsCounter];
     [self.view setNeedsLayout]; [self.view layoutIfNeeded];
     UIApplication.sharedApplication.idleTimerDisabled = YES;
     tv_attach();   // a TV connected while the launcher showed
     front_ios_boot();
+}
+- (void)refreshFpsCounter {
+    if (!self.game || !self.surface) return;
+    BOOL enabled = front_ios_fps_enabled();
+    if (enabled == (self.fps != nil)) return;
+    if (enabled) {
+        self.fps = front_ios_fps_button();
+        [self.surface addSubview:self.fps]; // above the pad, including controller mode
+    } else {
+        [self.fpsTimer invalidate]; self.fpsTimer = nil;
+        [self.fps removeFromSuperview]; self.fps = nil;
+        LOG("front end: frame-rate counter off");
+    }
+    [self.view setNeedsLayout];
 }
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
@@ -259,6 +275,9 @@ void front_refresh_touch_settings(void) {
     };
     if (NSThread.isMainThread) refresh(); else dispatch_async(dispatch_get_main_queue(),refresh);
 }
+void front_refresh_fps_settings(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{ [g_root refreshFpsCounter]; });
+}
 
 // A TV (cable or AirPlay): iOS gives the app the TV as a scene of its own instead of mirroring the phone. The game's view moves there, 16:9 fills the TV, and the game is
 // docked as a Switch on its dock (1080p, the operation mode change notification); the phone keeps the pad. Unplugging puts the view back and the mode the game had before
@@ -317,12 +336,14 @@ static void front_ios_power_watch(void) {
 }
 
 // Frame-rate counter: source presents in the last second, plus confirmed generated pictures while interpolation is enabled. Queued source frames merged away are not counted.
-// On when the IPA was built with it (the NSP script's SHOW_FPS / --show-fps → DMShowFPS in Info.plist); DM_SHOW_FPS=0 / 1 in Documents/env.txt overrides that without a rebuild. NULL when off
+// The IPA's default can be overridden at launch or by the live settings switch.
 uint64_t mtl_present_count(void);
 uint64_t mtl_generated_present_count(void);
-static UIButton *front_ios_fps_button(void) {
+static BOOL front_ios_fps_enabled(void) {
     const char *e = getenv("DM_SHOW_FPS");
-    if (!(e ? atoi(e) != 0 : [[NSBundle.mainBundle objectForInfoDictionaryKey:@"DMShowFPS"] boolValue])) return nil;
+    return e ? atoi(e) != 0 : [[NSBundle.mainBundle objectForInfoDictionaryKey:@"DMShowFPS"] boolValue];
+}
+static UIButton *front_ios_fps_button(void) {
     UIButton *l = [UIButton buttonWithType:UIButtonTypeSystem];
     l.titleLabel.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightSemibold];
     [l setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
@@ -332,7 +353,7 @@ static UIButton *front_ios_fps_button(void) {
     l.accessibilityIdentifier = @"game.fps.settings";
     [l addTarget:g_root action:@selector(openSettings:) forControlEvents:UIControlEventTouchUpInside];
     __block uint64_t n0 = mtl_present_count(), generated0 = mtl_generated_present_count(); __block double t0 = CACurrentMediaTime();
-    [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
+    g_root.fpsTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
         (void)t; uint64_t n = mtl_present_count(), generated = mtl_generated_present_count(); double now = CACurrentMediaTime(), elapsed = now - t0;
         if (elapsed > 0 && elapsed < 1.5) {   // A longer span is time in the background: no reading.
             double fps = (n - n0) / elapsed;

@@ -14,7 +14,7 @@ private var nativeApplied: [String: String] = [:]
 func mockNativeSettingsPause(_ on: Int32) {}
 @_cdecl("dm_launcher_setting_is_live")
 func mockNativeSettingIsLive(_ key: UnsafePointer<CChar>) -> Int32 {
-    ["DM_BOTW_MOVE_CURVE", "DM_RUMBLE", "DM_FPS_TARGET", "DM_FRAMEGEN"].contains(String(cString: key)) ? 1 : 0
+    ["DM_BOTW_MOVE_CURVE", "DM_RUMBLE", "DM_FPS_TARGET", "DM_FRAMEGEN", "DM_SHOW_FPS"].contains(String(cString: key)) ? 1 : 0
 }
 @_cdecl("dm_launcher_setting_apply")
 func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<CChar>) -> Int32 {
@@ -394,6 +394,11 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
         expect(nativeApplied[runtimeCurve.env] == "0.65" && String(cString: getenv(runtimeCurve.env)) == "0.65" &&
                memoryDefaults.string(forKey: "launcher." + runtimeCurve.env) == "0.65" && runtimeModel.appliesImmediately(runtimeCurve),
                "Mac settings bindings apply live values and save the choice")
+        let counter = runtimeModel.settings.first { $0.env == "DM_SHOW_FPS" }!
+        runtimeModel.binding(counter).wrappedValue = "0"
+        runtimeModel.binding(counter).wrappedValue = "1"
+        expect(nativeApplied[counter.env] == "1" && String(cString: getenv(counter.env)) == "1" && runtimeModel.appliesImmediately(counter),
+               "the FPS visibility switch applies immediately through the runtime binding")
         #endif
         for list in [file.settings, mac.settings] {
             let reuse = list.first { $0.env == "DM_NVN_PASS_REUSE" }!

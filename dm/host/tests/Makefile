@@ -183,6 +183,12 @@ $(B)/t_audio_spsc_tsan: t_audio_spsc.c ../hle_audio.c ../hle_bigstack.c ../hle.h
 run: $(B)/t_fpslock
 $(B)/t_launcher_settings: t_launcher_settings.c ../hle_launcher_settings.c ../launcher_settings.h ../../gfx/nvn/framegen_policy.h ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_launcher_settings.c ../hle_launcher_settings.c
+$(B)/t_launcher_settings_ios: t_launcher_settings.c ../hle_launcher_settings.c ../launcher_settings.h ../../gfx/nvn/framegen_policy.h ../hle.h ../dm.h $(GAME_H) | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -UTARGET_OS_IPHONE -DTARGET_OS_IPHONE=1 -I.. $(GINC) -o $@ t_launcher_settings.c ../hle_launcher_settings.c
+.PHONY: launcher-settings-ios
+launcher-settings-ios: $(B)/t_launcher_settings_ios
+	$(B)/t_launcher_settings_ios
+run: launcher-settings-ios
 $(B)/t_fpslock: t_fpslock.c ../hle_fpslock.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -g -Wno-unused-function $(GINC) -o $@ t_fpslock.c
 run: $(B)/t_uecvar

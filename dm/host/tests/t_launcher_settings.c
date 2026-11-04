@@ -9,6 +9,7 @@ uint8_t *dm_fps_state;
 static uint8_t state_page[0x40];
 static int opmode, fps_apply_count, fps_lock_target, haptics_refresh_count, touch_refresh_count;
 static int framegen_mode, framegen_available = 1;
+static int fps_visibility_refresh_count;
 static char motion_source[16];
 static int motion_refresh_count;
 static unsigned clock_pauses, graphics_pauses, audio_pauses;
@@ -21,6 +22,7 @@ void dm_fps_state_apply(void) { fps_apply_count++; }
 void dm_fps_lock_setting_changed(int target) { fps_lock_target = target; }
 void dm_haptics_apple_settings_changed(void) { haptics_refresh_count++; }
 void front_refresh_touch_settings(void) { touch_refresh_count++; }
+void front_refresh_fps_settings(void) { fps_visibility_refresh_count++; }
 void dm_motion_source_set(const char *value) { strcpy(motion_source,value); motion_refresh_count++; }
 
 int main(void) {
@@ -69,6 +71,17 @@ int main(void) {
     assert(dm_launcher_setting_is_live("DM_NVN_PASS_REUSE") == 0);
     assert(dm_launcher_setting_apply("DM_RUMBLE_GAIN", "2.5") == 1 && haptics_refresh_count == 1);
     assert(dm_launcher_setting_apply("DM_RUMBLE_GAIN", "nan") == -1 && haptics_refresh_count == 1);
+#if TARGET_OS_IPHONE
+    assert(dm_launcher_setting_is_live("DM_SHOW_FPS") == 1);
+    assert(dm_launcher_setting_apply("DM_SHOW_FPS", "1") == 1 && fps_visibility_refresh_count == 1);
+    assert(!strcmp(getenv("DM_SHOW_FPS"), "1"));
+    assert(dm_launcher_setting_apply("DM_SHOW_FPS", "0") == 1 && fps_visibility_refresh_count == 2);
+    assert(!strcmp(getenv("DM_SHOW_FPS"), "0"));
+    assert(dm_launcher_setting_apply("DM_SHOW_FPS", "2") == -1 && fps_visibility_refresh_count == 2);
+    assert(haptics_refresh_count == 1 && touch_refresh_count == 0);
+#else
+    assert(dm_launcher_setting_is_live("DM_SHOW_FPS") == 0);
+#endif
     assert(dm_launcher_setting_is_live("DM_PRESENT_UPSCALE") == 0);
     if (!strcmp(DM_GAME_ID, "01007EF00011E000")) {
         assert(dm_launcher_setting_is_live("DM_BOTW_MOVE_CURVE") == 1);
