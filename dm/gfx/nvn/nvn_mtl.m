@@ -10976,7 +10976,7 @@ static void ui_region_to_texture(float region[4],MTLViewport canvas,id<MTLTextur
     region[2]*=canvas.width/target.width; region[3]*=canvas.height/target.height;
 }
 static void seated_dock_prepare(const tex_t *canvas);
-static void seated_composite(void);
+static int seated_composite(NvProg *program);
 static _Atomic uint64_t g_rune_source_serial;
 static uint64_t g_rune_last_capture_frame;
 static _Atomic int g_rune_capture_pending;
@@ -11334,11 +11334,9 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
         S.blend[0]=blend;
     } else {
         seated_dock_finish();
-        if (composite) {
-            rp_flush(); R.clear_c[0]=1; R.cc[0]=MTLClearColorMake(0,0,0,1);
-        }
-        draw_(dw,di);
-        if (composite) seated_composite();
+        // The completed native canvas is the game picture. Place that image
+        // in the upper pane once, without changing the game's draw.
+        if (!composite || !seated_composite(pr)) draw_(dw,di);
     }
     cp_end(5,start);
 }
@@ -13363,7 +13361,8 @@ static void seated_texture_encode(id<MTL4CommandBuffer> cb,id<MTLTexture> source
     }
     MTL4RenderPassDescriptor *rp=[MTL4RenderPassDescriptor new];
     rp.colorAttachments[0].texture=target;
-    rp.colorAttachments[0].loadAction=kind==SEATED_COPY || kind==SEATED_BLUR ? MTLLoadActionDontCare : MTLLoadActionLoad;
+    rp.colorAttachments[0].loadAction=kind==SEATED_COPY ? MTLLoadActionClear : kind==SEATED_BLUR ? MTLLoadActionDontCare : MTLLoadActionLoad;
+    rp.colorAttachments[0].clearColor=MTLClearColorMake(0,0,0,1);
     rp.colorAttachments[0].storeAction=MTLStoreActionStore;
     id<MTL4RenderCommandEncoder> en=[cb renderCommandEncoderWithDescriptor:rp];
     if (!en) MDIE("Seated dock has no render encoder");
@@ -13447,21 +13446,43 @@ static void seated_dock_prepare(const tex_t *canvas) {
         g_ui_dock_frame=frame;
     }
 }
-static void seated_composite(void) {
-    float region[4],picture[4]; if (!dm_aspect_region(1,region) || !dm_aspect_region(0,picture)) return;
+static int seated_composite(NvProg *program) {
+    float region[4],picture[4]; if (!dm_aspect_region(1,region) || !dm_aspect_region(0,picture)) return 0;
+    unsigned tid=(unsigned)(tex_slot_h(S.tex[1],S.img[1],0)&0xfffff);
+    tex_t native={0};
+    os_unfair_lock_lock(&g_rmu);
+    if (tid>0 && tid<(unsigned)g_ntreg && g_treg[tid].ok) native=g_treg[tid].t;
+    os_unfair_lock_unlock(&g_rmu);
+    if (!native.serial) MDIE("Seated composition has no native canvas");
+    g_ui_tex=native.serial;
     rp_flush(); ubd_land_compute(); if (g_blit) { enc_b_end(g_blit); g_blit=nil; } up_flush();
+    id<MTLTexture> source=tex_mtl(&native);
+    if (!source) MDIE("Seated composition cannot resolve its native canvas");
     // Respect the game's render-target view, especially its sRGB conversion.
     MTLRenderPassColorAttachmentDescriptor *attachment=[MTLRenderPassColorAttachmentDescriptor new];
     attach(attachment,R.rt.color[0],&R.rt.cview[0],R.rt.has_cview[0]);
     MTLViewport canvas=ui_canvas_viewport(attachment.texture.width,attachment.texture.height);
+    id<MTLBuffer> image_buffer; size_t image_offset=arena_alloc(32,&image_buffer);
+    float w=source.width,h=source.height;
+    const float image_uv[8]={0,0,1,1,.5f/w,.5f/h,1-.5f/w,1-.5f/h};
+    memcpy((uint8_t *)image_buffer.contents+image_offset,image_uv,sizeof image_uv);
+    float upper[4]; memcpy(upper,picture,sizeof upper);
+    ui_region_to_texture(upper,canvas,attachment.texture); res_commit();
+    seated_texture_encode(g_cb,source,attachment.texture,upper,image_buffer.gpuAddress+image_offset,SEATED_COPY);
     id<MTLBuffer> reflection; size_t reflection_offset=arena_alloc(176,&reflection);
     seated_reflection_encode(g_cb,attachment.texture,canvas,picture,region,dm_aspect_ratio(),reflection,reflection_offset);
-    if (!g_ui_dock_image || g_ui_dock_frame!=atomic_load(&g_cur_frame)) return;
-    id<MTLBuffer> buffer; size_t offset=arena_alloc(32,&buffer); float *uv=(float *)((uint8_t *)buffer.contents+offset);
-    float w=g_ui_dock_image.width,h=g_ui_dock_image.height;
-    const float values[8]={0,0,1,1,.5f/w,.5f/h,1-.5f/w,1-.5f/h}; memcpy(uv,values,sizeof values);
-    ui_region_to_texture(region,canvas,attachment.texture); res_commit();
-    seated_texture_encode(g_cb,g_ui_dock_image,attachment.texture,region,buffer.gpuAddress+offset,SEATED_ALPHA);
+    if (g_ui_dock_image && g_ui_dock_frame==atomic_load(&g_cur_frame)) {
+        id<MTLBuffer> buffer; size_t offset=arena_alloc(32,&buffer); float *uv=(float *)((uint8_t *)buffer.contents+offset);
+        w=g_ui_dock_image.width; h=g_ui_dock_image.height;
+        const float values[8]={0,0,1,1,.5f/w,.5f/h,1-.5f/w,1-.5f/h}; memcpy(uv,values,sizeof values);
+        ui_region_to_texture(region,canvas,attachment.texture); res_commit();
+        seated_texture_encode(g_cb,g_ui_dock_image,attachment.texture,region,buffer.gpuAddress+offset,SEATED_ALPHA);
+    }
+    framegen_after_draw(program);
+    // Keep interpolation tied to the rectangle encoded above, including a
+    // fold change that arrives while this frame is being recorded.
+    memcpy(g_framegen_capture_state.present_picture,picture,sizeof picture);
+    return 1;
 }
 // Present samples only the valid source rectangle declared by NVN; kept separate from the raw swapchain readback screenshot. Edges are clamped to the texel centers of the valid area, so bilinear does not read the black texels outside.
 // Present samples the raw bytes stored in the swapchain texture (the Switch's scan-out sends the stored bytes as they are): an sRGB source is replaced by a non-sRGB view of the same storage,
