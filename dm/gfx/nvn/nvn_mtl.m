@@ -12533,8 +12533,10 @@ static const char *cctx_snap(void) {
 }
 // When the game itself asks for 30 fps (pacing by the game's present interval, interval 2, hle_nvn.c) the display link runs at 30 Hz too: games whose logic counts frames, such as Engage, are not pulled up to 60 fps by the display link on iOS
 __attribute__((weak)) int nvn_game_fps(void) { return 60; }   // hle_nvn.c provides the strong definition
+extern int nvn_game_realtime(void) __attribute__((weak_import));
+static int mtl_realtime_clock(void) { return nvn_game_realtime ? nvn_game_realtime() : dm_fg_enabled(); }
 int mtl_fps_target(void) { static int env = -2; if (env == -2) { const char *e = getenv("DM_FPS"); env = e ? atoi(e) : -1; if (env != 30 && env != 60) env = -1; else MLOG("DM_FPS=%d: frame rate pinned by the test switch", env); }
-    return env > 0 ? env : nvn_game_fps() == 30 ? 30 : 60; }
+    return env > 0 ? env : nvn_game_fps(); }
 // Hand a submission to the GPU in segments (DM_NVN_CUT=draw count, 0 = off; default 64): when the game holds back the next frame's submit until this frame's GPU work is done (The Legend of Zelda: Breath of the Wild: the main thread's nvnSyncWait on the fence of the frame just submitted),
 // the GPU sits idle for the milliseconds the host spends translating inside the submit (in the shrine each frame is GPU 13 ms + translation 7 ms back to back). Each time this many draws have accumulated, the command buffer encoded so far is committed between two passes: the GPU runs the earlier passes while the CPU translates the later ones.
 // Cut only when no encoder is open and no pass is deferred / merged / hoisted; commit this batch's uploads first (later draws use them). The fence signal and completion work stay on the last segment only: the queue executes in commit order and every encoder starts with a queue barrier
@@ -14098,7 +14100,7 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
     pthread_mutex_lock(&g_link_mu);
     __atomic_store_n(&g_link_tick_ns, now_ns(), __ATOMIC_RELAXED);
     double tickTime=update.targetPresentationTimestamp;
-    int tickRate=dm_fg_enabled() && isfinite(tickTime) && tickTime>0 ? mtl_link_rate() : 0;
+    int tickRate=mtl_realtime_clock() && isfinite(tickTime) && tickTime>0 ? mtl_link_rate() : 0;
     if (tickRate) {
         // Notifications can be omitted under GPU backpressure. The source
         // waits for elapsed refresh intervals, not two successful callbacks:
@@ -14216,7 +14218,7 @@ __attribute__((weak)) void front_picture_shape(int w, int h) { (void)w; (void)h;
 static CAFrameRateRange link_range(int mode) {
     static int on = -1; if (on < 0) { const char *e = getenv("DM_LINK_VTICK"); on = !(e && !strcmp(e, "0")); }
     int rate = mode == 3 ? 30 : mode == 2 ? 120 : 60, hz = on ? front_screen_max_fps() : 0;
-    if (dm_fg_enabled() && mode==1) {
+    if (mtl_realtime_clock() && mode==1) {
         // Match MacNativeGames: automatic interpolation follows the physical
         // screen; the source clock decides its own rate independently.
         int native=front_screen_max_fps(); if (native<=0) native=60;
@@ -14271,11 +14273,11 @@ static void link_sync(void) {   // Called every frame by the game's present thre
     }
     if (g_rescue_mode) want = 0;
     pthread_mutex_unlock(&g_pq_mu);
-    if (want && mtl_fps_target() == 30 && !dm_fg_enabled()) want = 3;   // Power-saving mode: display link at 30 Hz
-    if (want && !dm_fg_enabled()) front_screen_match(want == 3 ? 30 : want == 2 ? 120 : 60);
+    if (want && mtl_fps_target() == 30 && !mtl_realtime_clock()) want = 3;   // Power-saving mode: display link at 30 Hz
+    if (want && !mtl_realtime_clock()) front_screen_match(want == 3 ? 30 : want == 2 ? 120 : 60);
     // The screen's rate changed (switched by front_screen_match, or another screen): the range again, virtual ticks or none. Taken only once the link object exists, so a change
     // while its thread starts (after link_main read the rate) is not lost
-    static int hz_was,fg_was; int hz = front_screen_max_fps(),fg_now=dm_fg_enabled(); CAMetalDisplayLink *lk = g_link;
+    static int hz_was,fg_was; int hz = front_screen_max_fps(),fg_now=mtl_realtime_clock(); CAMetalDisplayLink *lk = g_link;
     if (lk && (hz != hz_was || fg_now!=fg_was)) { hz_was = hz; fg_was=fg_now; if (want && want == applied) { lk.preferredFrameRateRange = link_range(want); MLOG("display link: the screen runs at %d Hz now, range set again (frame %llu)", hz, (unsigned long long)atomic_load(&g_cur_frame)); } }
     int lat = link_latency();   // fullscreen, screen or refresh mode changed: a link created since took the current policy
     if (lk && lk.preferredFrameLatency != lat) { lk.preferredFrameLatency = lat; MLOG("display link: frame latency %d (%s; frame %llu)", lat, link_latency_why(), (unsigned long long)atomic_load(&g_cur_frame)); }
@@ -14611,7 +14613,7 @@ int mtl_link_wait_tick(int vsyncs, uint64_t timeout_ns) {
 }
 // Interpolation's automatic mode follows the screen; explicit modes retain 120 / 60 / 30 Hz.
 int mtl_link_rate(void) {
-    if (dm_fg_enabled() && g_link_mode==1) { int hz=front_screen_max_fps(); return hz>0?hz:60; }
+    if (mtl_realtime_clock() && g_link_mode==1) { int hz=front_screen_max_fps(); return hz>0?hz:60; }
     return g_link_mode == 3 ? 30 : g_link_mode == 2 ? 120 : 60;
 }
 // The same wait counted in the display link's own ticks: one per frame for a frame rate as high as the link's (present_interval display at DM_PRESENT_HZ=120 on a 120 Hz link)
@@ -14638,7 +14640,7 @@ static uint64_t link_vsync_count(uint64_t ticks,int native_rate) {
 }
 int mtl_link_wait_vsync(uint64_t *seen, uint64_t timeout_ns) {
     if (!mtl_link_active() || g_link_mode == 3) return 0;
-    int framegen=dm_fg_enabled(),rate=framegen?mtl_link_rate():0;
+    int framegen=mtl_realtime_clock(),rate=framegen?mtl_link_rate():0;
     if (framegen && rate<60) return 0;
     const uint64_t step = framegen ? 1 : g_link_mode == 2 ? 2 : 1;
     pthread_mutex_lock(&g_link_mu);
@@ -14648,7 +14650,7 @@ int mtl_link_wait_vsync(uint64_t *seen, uint64_t timeout_ns) {
     ts.tv_sec += timeout_ns / 1000000000ull; ts.tv_nsec += timeout_ns % 1000000000ull;
     if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
     while (link_vsync_count(g_link_tick_n,rate) < *seen + step) {
-        if (framegen!=dm_fg_enabled() || (framegen && rate!=mtl_link_rate()) || pthread_cond_timedwait(&g_link_cv,&g_link_mu,&ts)==ETIMEDOUT) {
+        if (framegen!=mtl_realtime_clock() || (framegen && rate!=mtl_link_rate()) || pthread_cond_timedwait(&g_link_cv,&g_link_mu,&ts)==ETIMEDOUT) {
             pthread_mutex_unlock(&g_link_mu); return 0;
         }
     }

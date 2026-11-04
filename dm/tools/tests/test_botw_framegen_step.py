@@ -44,7 +44,7 @@ class FrameStep(unittest.TestCase):
 
     def test_fractional_and_disabled_paths_preserve_registers(self):
         assert arm is not None
-        for ratio in (0, 1, .75, .6, .5, .25):
+        for ratio in (0, 1.5, 1.2, 1, 30/35, .75, .6, .5, .25):
             for offset, output, original in ((0x151d484, arm.UC_ARM64_REG_S1, .8),
                                              (0x125f128, arm.UC_ARM64_REG_S0, 1),
                                              (0x1280ee4, arm.UC_ARM64_REG_S0, 1),

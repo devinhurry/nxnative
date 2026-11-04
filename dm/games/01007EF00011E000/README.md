@@ -112,6 +112,7 @@ No `tex_flush_upload` (a minute's boot saw it flush 32 CPU-filled textures with 
 
 General host changes first needed here; each applies to every game:
 
+- **Custom frame-rate targets (1.9.0):** [Custom frame rates use the real-frame clock](../../../docs/reference/frame-rate.md#custom-frame-rates-use-the-real-frame-clock).
 - **Movies at twice their speed at 60 fps** (issue #636): [Movies hold 30 fps under the frame step](../../../docs/reference/frame-rate.md#movies-hold-30-fps-under-the-frame-step).
 - **Frame captures under the standard thread policy** (`cap_policy_standard`; also on Pokemon Scarlet): [A frame capture runs under the standard thread policy](../../../docs/reference/nvn-objects.md#a-frame-capture-runs-under-the-standard-thread-policy).
 - **Capture interface hashes of binding values** (also on Scarlet, Tears of the Kingdom and Wonder): [A capture refused after a change to the reflection structs](../../../docs/reference/nvn-objects.md#a-capture-refused-after-a-change-to-the-reflection-structs).

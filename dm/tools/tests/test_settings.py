@@ -6,6 +6,16 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'games'))
 import settings
 
 class ResolutionSetting(unittest.TestCase):
+    def test_more_frame_rates_require_verified_realtime_readers(self):
+        with tempfile.TemporaryDirectory() as tmp,patch.object(settings.nacp,'languages',return_value=['en-US']):
+            (Path(tmp)/'main.fixups.tsv').write_text('# FPS_STATE_OFF\t0x4000\n# REALTIME_FRAME_STEP\t1\n')
+            rows=settings.build('01007EF00011E000',tmp,'unused')['settings']
+            fps=next(s for s in rows if s['env']=='DM_FPS_TARGET')
+            fg=next(s for s in rows if s['env']=='DM_FRAMEGEN')
+            self.assertEqual(fps['default'],'30')
+            self.assertEqual([o[0] for o in fps['options']],[str(rate) for rate in range(20,121,5)])
+            self.assertEqual([o[0] for o in fg['options']],['0']+[str(rate) for rate in range(20,61,5)])
+
     def test_framegen_scene_boundaries_require_complete_keys(self):
         profile=settings.game.load('01007EF00011E000')
         valid='bd7ffdd435c6c3bc f7ee6fe10b925543'
