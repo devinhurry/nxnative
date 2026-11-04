@@ -515,7 +515,7 @@ def package_title_reader(repo, keys, env):
                 if not shutil.which('dotnet', path=env.get('PATH')): raise BuildError(f'{path.name} has neither a ticket nor a [title ID] in its name, and reading it from the package needs dotnet (.NET SDK 10): install it or add the title ID to the name')
                 nx.append(build_nx_extract(repo, work, work / 'logs', env))
             log = work / 'logs/title.log'
-            try: run([nx[0], keys, '--title', path], log, env=env, ok=(5,))
+            try: run([*nx[0], keys, '--title', path], log, env=env, ok=(5,))
             except BuildError: return None
             m = re.search(r'^title ([0-9a-f]{16})$', log.read_text(errors='replace'), re.M)
             return int(m.group(1), 16) if m else None
@@ -524,7 +524,7 @@ def package_title_reader(repo, keys, env):
                 if not shutil.which('dotnet', path=env.get('PATH')): raise BuildError(f'{path.name} holds several titles (base game, update, DLC in one file): reading them needs dotnet (.NET SDK 10)')
                 nx.append(build_nx_extract(repo, work, work / 'logs', env))
             log = work / 'logs/contents.log'
-            try: run([nx[0], keys, '--contents', path], log, env=env, ok=(5,))
+            try: run([*nx[0], keys, '--contents', path], log, env=env, ok=(5,))
             except BuildError: return None
             out = [(t, int(i, 16), int(v)) for t, i, v in re.findall(r'^content (\w+) ([0-9a-f]{16}) (\d+)$', log.read_text(errors='replace'), re.M)]
             return out or None
@@ -537,7 +537,7 @@ def package_title_reader(repo, keys, env):
                 nx.append(build_nx_extract(repo, work, work / 'logs', env))
             log = work / 'logs/keys.log'
             paths = list(dict.fromkeys([fam['base'], *(p for _, p in fam['updates']), *(p for _, _, p in fam['dlc'])]))   # a merged package is the base game, the update and DLC: checked once
-            try: run([nx[0], keys, '--keys', *paths], log, env=env, ok=(6,))
+            try: run([*nx[0], keys, '--keys', *paths], log, env=env, ok=(6,))
             except BuildError: return
             m = re.search(r'^\[RED\] (.*prod\.keys has no .*|.*no title key for rights ID .*)$', log.read_text(errors='replace'), re.M)
             if m: raise BuildError(m.group(1))
