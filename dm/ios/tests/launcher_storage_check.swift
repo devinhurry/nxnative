@@ -253,6 +253,7 @@ func mockNativeLUTApply(_ path: UnsafePointer<CChar>) -> Int32 {
         draft["DM_BOTW_PAD_WEAPON_MODE"] = "2"
         draft["DM_BOTW_PAD_L_ICON_MODE"] = "1"
         draft["DM_BOTW_PAD_DPAD_VISIBLE"] = "0"
+        draft["DM_BOTW_PAD_DPAD_SHOW_BUTTONS"] = "1"
         draft["DM_BOTW_PORTRAIT_PAD_B_Y_PT"] = "100.000"
         expect(editor.values["DM_BOTW_PAD_A_X_PT"] != "15.300" && editorDefaults.string(forKey: "launcher.DM_BOTW_PAD_A_X_PT") == nil,
                "an editor draft can be discarded without changing the launcher or saved choices")
@@ -264,6 +265,10 @@ func mockNativeLUTApply(_ path: UnsafePointer<CChar>) -> Int32 {
                BotwTouchControl.all.first { $0.id == 6 }!.keys.contains("DM_BOTW_PAD_L_ICON_MODE"),
                "L icon choice saves independently per bank and defaults to the current rune")
         expect(savedEditor.touchSettingsExport.contains("DM_BOTW_PAD_L_ICON_MODE=1"), "layout export includes L icon display choice")
+        expect(savedEditor.touchLayout(portrait: false).dpad_show_buttons == 1 && savedEditor.touchLayout(portrait: true).dpad_show_buttons == 0 &&
+               savedEditor.touchSettingsExport.contains("DM_BOTW_PAD_DPAD_SHOW_BUTTONS=1") &&
+               BotwTouchControl.all.first { $0.id == 12 }!.keys.contains("DM_BOTW_PAD_DPAD_SHOW_BUTTONS"),
+               "D-pad artwork choice persists per bank, exports and participates in control reset")
         expect(savedEditor.values["DM_BOTW_PAD_WEAPON_ENABLED"] == "1" && savedEditor.values["DM_BOTW_PAD_WEAPON_MODE"] == "2" &&
                savedEditor.values["DM_BOTW_PAD_DPAD_VISIBLE"] == "0" && savedEditor.values["DM_BOTW_PORTRAIT_PAD_WEAPON_ENABLED"] == "0",
                "added buttons, switch modes and D-pad visibility save only in the edited bank")

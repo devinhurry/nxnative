@@ -375,7 +375,14 @@ struct BotwTouchSettingsView: View {
                 }.pickerStyle(.menu).labelsHidden()
                     .frame(minWidth: 64, maxWidth: 110, alignment: .leading).layoutPriority(2)
                     .accessibilityIdentifier("botw.touch.control")
-                if controlOptions.count == 1, let row = controlOptions.first {
+                if selected.id == 12, let row = m.settings.first(where: { $0.env == selected.option("SHOW_BUTTONS", portrait: portrait) }) {
+                    Toggle("Show buttons", isOn: Binding(
+                        get: { (values[row.env] ?? row.def) == row.onValue },
+                        set: { m.setTouchValue($0 ? row.onValue : row.offValue, for: row.env, in: &values) }))
+                        .toggleStyle(.button)
+                        .disabled(m.fixed.contains(row.env))
+                        .accessibilityIdentifier(row.env)
+                } else if controlOptions.count == 1, let row = controlOptions.first {
                     controlOption(row).labelsHidden()
                         .frame(maxWidth: .infinity, alignment: .leading).layoutPriority(1)
                 } else if controlOptions.count > 1 {
