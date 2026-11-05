@@ -283,7 +283,7 @@ public func dmShowGameSettings(_ viewController: UnsafeMutableRawPointer, _ done
     let model = sessionLauncherModel ?? LauncherModel(settings)
     sessionLauncherModel = model
     gameSettingsOpening = true
-    withGameSettingsBackground { background in
+    withGameSettingsBackground(model) { background in
         gameSettingsOpening = false
         guard parent.presentedViewController == nil else { done(); return }
         model.beginRuntime()

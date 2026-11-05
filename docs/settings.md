@@ -19,7 +19,7 @@ updates. About also shows the imported graphics version and recorded Metal
 version when available. See [graphics packages](graphics-pack.md).
 
 - [Tested defaults](#tested-defaults)
-- [Graphics](#graphics): [Frame rate](#frame-rate), [Frame generation](#frame-generation), [Render scale](#render-scale), [Console mode](#console-mode), [Upscaling](#upscaling), [Game's upscaler](#games-upscaler), [Picture](#picture), [Game language](#game-language), [Frame-rate counter](#frame-rate-counter)
+- [Graphics](#graphics): [Frame rate](#frame-rate), [Frame generation](#frame-generation), [Render scale](#render-scale), [Console mode](#console-mode), [Upscaling](#upscaling), [Picture filter](#picture-filter), [Game's upscaler](#games-upscaler), [Picture](#picture), [Game language](#game-language), [Frame-rate counter](#frame-rate-counter)
 - [Controls](#controls): [Motion controls](#motion-controls), [Touch feedback](#touch-feedback), [Game rumble](#game-rumble), [Rumble strength](#rumble-strength), [Rumble cutoff](#rumble-cutoff)
 - [Touch left stick](#touch-left-stick): BOTW movement deadzone, response curve, full movement and size
 - [Performance](#performance): [Experimental low-memory mode](#experimental-low-memory-mode), [Memory transfer optimization](#memory-transfer-optimization), [Skip feedback snapshots (experimental)](#skip-feedback-snapshots-experimental), [Frame buffering](#frame-buffering), [Metal 4 pipelines](#metal-4-pipelines), [Pipeline prebuild](#pipeline-prebuild), [Encode thread](#encode-thread), [Hold frames when late](#hold-frames-when-late), [Reduce to 30 fps when hot](#reduce-to-30-fps-when-hot), [Performance HUD](#performance-hud), [Reset to tested defaults](#reset-to-tested-defaults)
@@ -69,6 +69,47 @@ Breath of the Wild renders 1280x720 in handheld mode. Docked it renders its worl
 - **When to change it:** choose a MetalFX mode if the picture looks soft and the device has GPU time to spare: on a Mac, or on an iPhone in handheld mode at 30 fps. For long sessions at 60 fps on an iPhone leave it at Standard.
 - **Cost:** more GPU time each frame, which can increase heat on an iPhone. [Breath of the Wild's measurements](../dm/games/01007EF00011E000/notes/rendering.md#upscaling-current) cover Mac and iPhone; the matching iPhone Standard run and MetalFX's share of the thermal cost remain unmeasured. Full-screen MetalFX only acts when the final picture is smaller than the display; Scene MetalFX only acts when the verified 3D input is smaller than its UI canvas. Unsupported devices and sizes use Standard scaling.
 - **On the Mac:** choose **Full-screen MetalFX** under **Settings** > **Graphics** > **Upscaling** in the [settings window](#the-mac-settings-window), or set `DM_PRESENT_UPSCALE=metalfx` in its `env.txt` (off by default). It helps in a large window or on a 4K screen.
+
+### Picture filter
+
+In **Settings → Graphics**, **Picture filter** offers **Original** (the default),
+**Vivid**, **Cinematic**, **Warm**, **Cool** and **Custom LUT** on Mac, iPhone and iPad.
+Vivid increases colour separation and contrast; Cinematic uses the bundled
+[33-point creative CUBE](../dm/gfx/luts/README.md), preserving black and white
+instead of lifting the black level; Warm and Cool tint midtones while preserving
+black and white. **Filter strength** runs from 0 to 100%: 0% keeps the original
+picture and 100% applies the full selected filter.
+
+Opening **Picture filter** shows a full-canvas editor like the touch-layout
+editor. During a game, its large preview and every style thumbnail use the
+same ungraded current-frame snapshot. Select a thumbnail or adjust strength
+to update the preview; **Compare original** temporarily shows the source
+without changing the selected filter. **Hide controls** reveals the whole
+picture. Images keep their aspect ratio. Before starting a game, the editor
+still offers the settings and explains when a current-picture preview is
+available. Preview rendering runs only while editing, not on every game frame.
+
+The **Custom LUT** card shows a large **+** that opens the system file picker.
+Each import adds a separate card with that LUT's current-picture preview and
+filename; earlier imports remain available. Tap a card to select it. Its corner
+**Remove LUT** trash button asks for confirmation with the LUT's filename before
+deleting only that entry's private copy. Removing the
+selected LUT restores Original; removing another entry keeps the current filter.
+Adding, selecting and deleting never adds another row of controls. The library
+and selection survive reopening, including imports from the previous single-LUT
+version. Failed imports keep the previous selection. All changes apply live.
+Supported files are 3D CUBEs with 2–65 points per axis, up to 32 MiB, including
+`DOMAIN_MIN`/`DOMAIN_MAX` or `LUT_3D_INPUT_RANGE`. Combined 1D/3D CUBEs are not
+supported. Use a creative SDR look; camera Log-to-display transforms expect a
+different input. For command-line runs, set `DM_PRESENT_FILTER=custom` and
+`DM_PRESENT_LUT=/absolute/path/look.cube`.
+
+Both choices apply immediately during a game and are remembered. Reset restores
+Original and 100% strength. The filter processes the final game picture,
+including its text, map and HUD, after full-screen upscaling and frame generation.
+The launcher's own settings and the native virtual gamepad are separate UI.
+No game shader split or translation rebuild is required; the built-in filter
+shader is compiled with the host. See [final-picture filters](reference/rendering.md#picture-filters-in-the-final-present).
 
 ### Game's upscaler
 
@@ -408,6 +449,9 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Rumble strength | `DM_RUMBLE_GAIN` | `0` to `3` |
 | Rumble cutoff | `DM_RUMBLE_MIN` | `0` to `0.9` |
 | Upscaling | `DM_PRESENT_UPSCALE` | `off`, `scene` (verified profiles), `metalfx` |
+| Picture filter | `DM_PRESENT_FILTER` | `off` (default), `vivid`, `cinematic`, `warm`, `cool`, `custom` |
+| Custom LUT | `DM_PRESENT_LUT` | An imported 3D `.cube` file; `none` clears it |
+| Filter strength | `DM_PRESENT_FILTER_STRENGTH` | `0` to `1` (default `1`) |
 | Frame generation | `DM_FRAMEGEN` | `0` off (default); `30` or `60` follows Frame rate |
 | Experimental low-memory mode (BOTW) | `DM_LOW_MEMORY` | `1`, `0` |
 | Memory transfer optimization | `DM_NVN_PASS_REUSE` | `1` on (default), `0` off |

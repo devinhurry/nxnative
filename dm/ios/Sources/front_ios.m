@@ -40,6 +40,11 @@ void dm_launcher_grab_game_frame(void (^callback)(CGImageRef)) {
     if (mtl_grab_next_present) mtl_grab_next_present(callback);
     else callback(NULL);
 }
+void mtl_grab_next_present_unfiltered(void (^callback)(CGImageRef)) __attribute__((weak_import));
+void dm_launcher_grab_filter_frame(void (^callback)(CGImageRef)) {
+    if (mtl_grab_next_present_unfiltered) mtl_grab_next_present_unfiltered(callback);
+    else callback(NULL);
+}
 static _Atomic int g_screen_hz=60;
 static void front_ios_power_watch(void);
 static void front_ios_audio_watch(void);

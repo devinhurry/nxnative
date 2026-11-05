@@ -13,6 +13,7 @@ static int framegen_mode, framegen_available = 1;
 static int fps_visibility_refresh_count;
 static char motion_source[16];
 static int motion_refresh_count;
+static int filter_refresh_count;
 static unsigned clock_pauses, graphics_pauses, audio_pauses;
 void guest_clock_freeze_for(int reason, int on) { if (on) clock_pauses |= 1u << reason; else clock_pauses &= ~(1u << reason); }
 void dm_gfx_suspend_for(int reason, int on) { if (on) graphics_pauses |= 1u << reason; else graphics_pauses &= ~(1u << reason); }
@@ -25,6 +26,7 @@ void dm_haptics_apple_settings_changed(void) { haptics_refresh_count++; }
 void front_refresh_touch_settings(void) { touch_refresh_count++; }
 void front_refresh_fps_settings(void) { fps_visibility_refresh_count++; }
 void dm_motion_source_set(const char *value) { strcpy(motion_source,value); motion_refresh_count++; }
+void dm_present_filter_settings_changed(void) { filter_refresh_count++; }
 
 int main(void) {
     dm_launcher_settings_pause(1);
@@ -51,6 +53,21 @@ int main(void) {
         assert(!strcmp(motion_source,sources[i]) && motion_refresh_count==i+1);
     }
     assert(dm_launcher_setting_apply("DM_MOTION_SOURCE","phone")==-1 && motion_refresh_count==4);
+    assert(dm_launcher_setting_is_live("DM_PRESENT_FILTER") == 1);
+    assert(dm_launcher_setting_is_live("DM_PRESENT_FILTER_STRENGTH") == 1);
+    const char *filters[] = {"off", "vivid", "cinematic", "warm", "cool"};
+    for (int i = 0; i < 5; i++) {
+        assert(dm_launcher_setting_apply("DM_PRESENT_FILTER", filters[i]) == 1);
+        assert(!strcmp(getenv("DM_PRESENT_FILTER"), filters[i]) && filter_refresh_count == i + 1);
+    }
+    for (const char **p = (const char *[]){"0", "0.5", "1", NULL}; *p; p++)
+        assert(dm_launcher_setting_apply("DM_PRESENT_FILTER_STRENGTH", *p) == 1);
+    assert(filter_refresh_count == 8);
+    assert(dm_launcher_setting_apply("DM_PRESENT_FILTER", "crt") == -1);
+    for (const char **p = (const char *[]){"", "nan", "inf", "-0.01", "1.01", "0.5oops", NULL}; *p; p++)
+        assert(dm_launcher_setting_apply("DM_PRESENT_FILTER_STRENGTH", *p) == -1);
+    assert(!strcmp(getenv("DM_PRESENT_FILTER"), "cool") && !strcmp(getenv("DM_PRESENT_FILTER_STRENGTH"), "1") && filter_refresh_count == 8);
+    assert(haptics_refresh_count == 0 && touch_refresh_count == 0);
 
     assert(dm_launcher_setting_is_live("DM_RENDER_SCALE") == 0);
     dm_fps_state = state_page;

@@ -256,7 +256,7 @@ public func dmMacShowGameSettings(_ parentPointer: UnsafeMutableRawPointer, _ do
     }
     let parent = Unmanaged<NSWindow>.fromOpaque(parentPointer).takeUnretainedValue()
     gameSettingsOpening = true
-    withGameSettingsBackground { background in
+    withGameSettingsBackground(model) { background in
         gameSettingsOpening = false
         model.beginRuntime()
         dm_launcher_settings_pause(1)

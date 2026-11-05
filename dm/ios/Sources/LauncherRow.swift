@@ -6,21 +6,32 @@ import Darwin
 import UIKit
 #endif
 import DmTouchPad
+import UniformTypeIdentifiers
 
 let launcherTint = Color(red: 66.0 / 255, green: 102.0 / 255, blue: 134.0 / 255)
 
 // Only the game process links the frame-capture adapter; the standalone Mac launcher does not.
 #if os(iOS) || DM_HOST_UI
-func withGameSettingsBackground(_ complete: @escaping (Image?) -> Void) {
+func withGameSettingsBackground(_ model: LauncherModel, _ complete: @escaping (Image?) -> Void) {
     var delivered = false
+    model.picturePreviewFrame = nil
     let finish: (Image?) -> Void = { image in
         guard !delivered else { return }
         delivered = true
         complete(image)
     }
-    dm_launcher_grab_game_frame { image in
-        let background = image.map { Image(decorative: $0, scale: 1) }
-        DispatchQueue.main.async { finish(background) }
+    dm_launcher_grab_filter_frame { image in
+        DispatchQueue.main.async {
+            guard !delivered else { return }
+            model.picturePreviewFrame = image
+            guard let image else { finish(nil); return }
+            let mode = model.values["DM_PRESENT_FILTER"] ?? "off"
+            let strength = Float(model.values["DM_PRESENT_FILTER_STRENGTH"] ?? "1") ?? 1
+            DispatchQueue.global(qos: .userInitiated).async {
+                let filtered = dm_launcher_filter_preview(image, mode, strength, 1280) ?? image
+                DispatchQueue.main.async { finish(Image(decorative: filtered, scale: 1)) }
+            }
+        }
     }
     // A game that has stopped presenting must still allow settings to open.
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { finish(nil) }
@@ -362,6 +373,7 @@ struct LauncherSettingsPage: View {
     let close: () -> Void
     @State private var selection: String = "Game"
     @State private var touchPage: BotwTouchPage?
+    @State private var pictureFilterPage = false
     #if os(macOS)
     @AppStorage("window.show") private var showLauncherAtLaunch = true
     #endif
@@ -384,6 +396,71 @@ struct LauncherSettingsPage: View {
     }
 
     private func sectionTitle(_ section: String) -> String { section == "Game" ? "Graphics" : section }
+
+    // Keep this row separate so SwiftUI does not infer it with the whole settings page.
+    private func pictureFilterRow(_ row: Setting) -> some View {
+        let mode = m.values[row.env] ?? "off"
+        let name: String
+        if mode == "custom", let lutName = m.pictureLUTName {
+            name = lutName
+        } else {
+            let key = row.options?.first { $0[0] == mode }?[1] ?? "Original"
+            name = NSLocalizedString(key, comment: "Filter name")
+        }
+        return Button { pictureFilterPage = true } label: {
+            HStack {
+                Text(LocalizedStringKey(row.label))
+                Spacer()
+                Text(verbatim: name).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                Image(systemName: "chevron.right").font(.caption)
+            }.contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityIdentifier("DM_PRESENT_FILTER")
+    }
+
+    private var settingsRows: [Setting] {
+        let rows = m.rows(in: selection).filter { $0.env != "DM_PRESENT_FILTER_STRENGTH" }
+        return rows.filter { $0.env == "DM_SHOW_FPS" } + rows.filter { $0.env != "DM_SHOW_FPS" }
+    }
+
+    @ViewBuilder private func settingOption(_ row: Setting) -> some View {
+        if row.env == "DM_PRESENT_FILTER" {
+            pictureFilterRow(row)
+        } else {
+            SettingRow(s: row, m: m)
+        }
+    }
+
+    private var settingsForm: some View {
+        Form {
+            if selection == "Controls" && m.touchStickResponse != nil {
+                BotwTouchSettingsMenu(m: m) { touchPage = $0 }
+            }
+            Section(LocalizedStringKey(sectionTitle(selection))) {
+                ForEach(settingsRows, content: settingOption)
+                #if os(macOS)
+                if selection == "Game" && ProcessInfo.processInfo.environment["DM_TOUCH_PREVIEW"] != "1" {
+                    Toggle("Show this window at launch", isOn: $showLauncherAtLaunch).toggleStyle(.checkbox)
+                }
+                #endif
+            }
+            Section {
+                Button("Reset to tested defaults") { m.reset() }.disabled(!m.changed)
+            }
+        }
+    }
+
+    private var settingsOptions: some View {
+        Group {
+            if selection == "Saves" {
+                SaveManagementPage(launcher: m)
+            } else {
+                settingsForm
+            }
+        }
+        .formStyle(.grouped)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier("settings.options")
+    }
 
     private var sectionList: some View {
         #if os(macOS)
@@ -417,7 +494,9 @@ struct LauncherSettingsPage: View {
 
     var body: some View {
         GeometryReader { geometry in
-            if let touchPage, touchPage != .stick {
+            if pictureFilterPage {
+                PictureFilterSettingsView(m: m, close: close) { pictureFilterPage = false }
+            } else if let touchPage, touchPage != .stick {
                 BotwTouchSettingsView(m: m, portrait: touchPage == .compact, background: gameBackground,
                                       play: m.isRunning ? close : onPlay) { self.touchPage = nil }
                     .id(touchPage)
@@ -446,40 +525,210 @@ struct LauncherSettingsPage: View {
                             .frame(width: min(220, max(140, geometry.size.width * 0.24)))
                             .accessibilityIdentifier("settings.sections")
                         Divider()
-                        Group {
-                            if selection == "Saves" {
-                                SaveManagementPage(launcher: m)
-                            } else { Form {
-                                if selection == "Controls" && m.touchStickResponse != nil {
-                                    BotwTouchSettingsMenu(m: m) { touchPage = $0 }
-                                }
-                                Section(LocalizedStringKey(sectionTitle(selection))) {
-                                    let rows = m.rows(in: selection)
-                                    ForEach(rows.filter { $0.env == "DM_SHOW_FPS" } + rows.filter { $0.env != "DM_SHOW_FPS" }) { SettingRow(s: $0, m: m) }
-                                    #if os(macOS)
-                                    if selection == "Game" && ProcessInfo.processInfo.environment["DM_TOUCH_PREVIEW"] != "1" {
-                                        Toggle("Show this window at launch", isOn: $showLauncherAtLaunch).toggleStyle(.checkbox)
-                                    }
-                                    #endif
-                                }
-                            Section {
-                                Button("Reset to tested defaults") { m.reset() }.disabled(!m.changed)
-                            }
-                            } }
-                        }
-                        .formStyle(.grouped)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .accessibilityIdentifier("settings.options")
+                        settingsOptions
                     }
                 }
             }
             }
         }
         .onAppear { if !sections.contains(selection) { selection = sections.first ?? "Game" } }
+        .onDisappear { m.picturePreviewFrame = nil }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("launcher.settings.page")
         .preferredColorScheme(.dark)
         .tint(launcherTint).accentColor(launcherTint)
+    }
+}
+
+// Full-canvas editor, using one ungraded snapshot from the settings-open frame.
+// Preview jobs never modify the live filter choice to render their thumbnails.
+struct PictureFilterSettingsView: View {
+    @ObservedObject var m: LauncherModel
+    let close: () -> Void
+    let back: () -> Void
+    @State private var preview: CGImage?
+    @State private var thumbnails: [String: CGImage] = [:]
+    @State private var comparing = false
+    @State private var importingLUT = false
+    @State private var lutError: String?
+    @State private var lutToRemove: PictureLUT?
+    @State private var controlsVisible = true
+    @ScaledMetric(relativeTo: .caption) private var captionHeight: CGFloat = 14
+
+    private var filter: Setting? { m.settings.first { $0.env == "DM_PRESENT_FILTER" } }
+    private var strengthRow: Setting? { m.settings.first { $0.env == "DM_PRESENT_FILTER_STRENGTH" } }
+    private var mode: String { m.values["DM_PRESENT_FILTER"] ?? "off" }
+    private var strength: Float { Float(m.values["DM_PRESENT_FILTER_STRENGTH"] ?? "1") ?? 1 }
+    private var thumbnailID: String { "\(strength)-\(m.pictureLUTs.map(\.id).joined(separator: ","))" }
+    private var previewID: String { "\(mode)-\(m.selectedPictureLUTID ?? "")-\(strength)-\(comparing)" }
+    private var cardBarHeight: CGFloat {
+        // macOS can reserve a legacy scroller gutter only when the row overflows.
+        #if os(macOS)
+        return 73 + captionHeight + NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
+        #else
+        return 73 + captionHeight
+        #endif
+    }
+
+    private func render(_ image: CGImage, mode: String, width: Int, lutPath: String? = nil) async -> CGImage? {
+        #if os(iOS) || DM_HOST_UI
+        let amount = strength
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result: CGImage?
+                if let lutPath { result = dm_launcher_lut_preview(image, lutPath, amount, Int32(width)) }
+                else { result = dm_launcher_filter_preview(image, mode, amount, Int32(width)) }
+                continuation.resume(returning: result)
+            }
+        }
+        #else
+        return nil   // The standalone launcher has no running game picture.
+        #endif
+    }
+
+    private func card(id: String, name: String, selected: Bool = false, symbol: String? = nil, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Group {
+                    if let symbol {
+                        Rectangle().fill(.secondary.opacity(0.15))
+                            .overlay { Image(systemName: symbol).font(.system(size: 30, weight: .light)) }
+                    } else if let image = thumbnails[id] {
+                        Image(decorative: image, scale: 1).resizable().scaledToFill()
+                    } else { Rectangle().fill(.secondary.opacity(0.15)).overlay { Image(systemName: "photo") } }
+                }
+                .frame(width: 112, height: 63).clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(selected ? launcherTint : .clear, lineWidth: 3))
+                Text(name).font(.caption).lineLimit(1).truncationMode(.middle).frame(height: captionHeight)
+            }.frame(width: 112)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(name)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier(id)
+    }
+
+    private var filterCards: some View {
+        ScrollView(.horizontal) {
+            HStack(alignment: .top, spacing: 10) {
+                ForEach((filter?.options ?? []).filter { $0[0] != "custom" }, id: \.[0]) { option in
+                    card(id: "pictureFilter." + option[0], name: NSLocalizedString(option[1], comment: "Filter name"), selected: mode == option[0]) {
+                        comparing = false
+                        if let filter { m.setValue(option[0], for: filter) }
+                    }.disabled(filter.map { m.lockingKey($0) != nil } ?? true)
+                }
+                ForEach(m.pictureLUTs) { lut in
+                    ZStack(alignment: .topTrailing) {
+                        card(id: "pictureLUT." + lut.id, name: lut.name, selected: mode == "custom" && m.selectedPictureLUTID == lut.id) {
+                            do { try m.selectPictureLUT(lut.id); comparing = false }
+                            catch { lutError = error.localizedDescription }
+                        }.disabled(filter.map { m.lockingKey($0) != nil } ?? true)
+                        Button(role: .destructive) { lutToRemove = lut } label: {
+                            Image(systemName: "trash").font(.system(size: 12, weight: .semibold))
+                                .frame(width: 26, height: 26).background(.ultraThinMaterial, in: Circle())
+                                .frame(width: 44, height: 44)
+                        }
+                        .buttonStyle(.plain).disabled(m.pictureLUTLocked)
+                        .accessibilityLabel("Remove LUT").accessibilityIdentifier("pictureLUT.remove." + lut.id)
+                    }.accessibilityElement(children: .contain)
+                }
+                card(id: "pictureLUT.import", name: NSLocalizedString("Custom LUT", comment: "Filter name"), symbol: "plus") { importingLUT = true }
+                    .disabled(m.pictureLUTLocked).accessibilityLabel("Import .cube…")
+            }.padding(3).frame(maxHeight: .infinity, alignment: .top)
+        }
+        .scrollIndicators(.hidden)
+        .frame(height: cardBarHeight)
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                Color.black
+                if let image = comparing ? m.picturePreviewFrame : preview ?? m.picturePreviewFrame {
+                    Image(decorative: image, scale: 1).resizable().scaledToFit()
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .accessibilityLabel("Current game picture")
+                } else {
+                    ContentUnavailableView("Current picture preview", systemImage: "photo",
+                                           description: Text("Start the game to preview its current picture."))
+                }
+            }
+            .overlay(alignment: .top) {
+                HStack {
+                    Button(action: back) { Label("Back", systemImage: "chevron.left") }
+                        .accessibilityIdentifier("pictureFilter.back")
+                    Text("Picture filter").font(.headline)
+                    Spacer(minLength: 4)
+                    Button { comparing.toggle() } label: { Image(systemName: comparing ? "circle.fill" : "circle.lefthalf.filled") }
+                        .accessibilityLabel("Compare original")
+                        .accessibilityAddTraits(comparing ? .isSelected : [])
+                        .accessibilityIdentifier("pictureFilter.compare")
+                    Button { controlsVisible.toggle() } label: { Image(systemName: "slider.horizontal.3") }
+                        .accessibilityLabel(controlsVisible ? "Hide controls" : "Show controls")
+                    Button("Done", action: close)
+                }
+                .font(.subheadline).buttonStyle(.borderless).padding(12)
+                .background(.ultraThinMaterial)
+            }
+            .overlay(alignment: .bottom) {
+                if controlsVisible {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let strengthRow {
+                            HStack {
+                                Text("Filter strength")
+                                Slider(value: Binding(get: { Double(strength) }, set: { m.setValue(String(format: "%.2f", $0), for: strengthRow) }), in: 0...1, step: 0.01)
+                                    .accessibilityLabel("Filter strength").accessibilityIdentifier(strengthRow.env)
+                                    .disabled(m.lockingKey(strengthRow) != nil)
+                                Text("\(Int((strength * 100).rounded()))%").monospacedDigit().frame(width: 44)
+                            }.font(.caption)
+                        }
+                        filterCards
+                    }.padding(12).background(.ultraThinMaterial)
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("pictureFilter.editor")
+        .task(id: previewID) {
+            guard let source = m.picturePreviewFrame else { return }
+            try? await Task.sleep(for: .milliseconds(35))
+            guard !Task.isCancelled else { return }
+            let lutPath = mode == "custom" ? m.pictureLUTs.first { $0.id == m.selectedPictureLUTID }.map { m.pictureLUTPath(for: $0) } : nil
+            let image = comparing ? source : await render(source, mode: mode, width: 1280, lutPath: lutPath)
+            guard !Task.isCancelled else { return }
+            preview = image
+        }
+        .task(id: thumbnailID) {
+            guard let source = m.picturePreviewFrame else { return }
+            try? await Task.sleep(for: .milliseconds(60))
+            for option in (filter?.options ?? []).filter({ $0[0] != "custom" }) {
+                guard !Task.isCancelled else { return }
+                let image = await render(source, mode: option[0], width: 224)
+                guard !Task.isCancelled else { return }
+                thumbnails["pictureFilter." + option[0]] = image
+            }
+            for lut in m.pictureLUTs {
+                guard !Task.isCancelled else { return }
+                let image = await render(source, mode: "custom", width: 224, lutPath: m.pictureLUTPath(for: lut))
+                guard !Task.isCancelled else { return }
+                thumbnails["pictureLUT." + lut.id] = image
+            }
+            let ids = Set(m.pictureLUTs.map { "pictureLUT." + $0.id })
+            thumbnails = thumbnails.filter { $0.key.hasPrefix("pictureFilter.") || ids.contains($0.key) }
+        }
+        .fileImporter(isPresented: $importingLUT, allowedContentTypes: [UTType(filenameExtension: "cube", conformingTo: .data) ?? .data]) { result in
+            do { try m.importPictureLUT(from: result.get()) }
+            catch { if (error as NSError).code != NSUserCancelledError { lutError = error.localizedDescription } }
+        }
+        .alert("Unable to import LUT", isPresented: Binding(get: { lutError != nil }, set: { if !$0 { lutError = nil } })) {
+            Button("OK", role: .cancel) { lutError = nil }
+        } message: { Text(lutError ?? "") }
+        .alert("Remove LUT?", isPresented: Binding(get: { lutToRemove != nil }, set: { if !$0 { lutToRemove = nil } }), presenting: lutToRemove) { lut in
+            Button("Remove LUT", role: .destructive) { m.removePictureLUT(lut.id); lutToRemove = nil }
+            Button("Cancel", role: .cancel) { lutToRemove = nil }
+        } message: { lut in Text(verbatim: lut.name) }
     }
 }
 
