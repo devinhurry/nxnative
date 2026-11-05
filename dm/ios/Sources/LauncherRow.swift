@@ -417,6 +417,51 @@ struct LauncherSettingsPage: View {
         }.buttonStyle(.plain).accessibilityIdentifier("DM_PRESENT_FILTER")
     }
 
+    private var settingsRows: [Setting] {
+        let rows = m.rows(in: selection).filter { $0.env != "DM_PRESENT_FILTER_STRENGTH" }
+        return rows.filter { $0.env == "DM_SHOW_FPS" } + rows.filter { $0.env != "DM_SHOW_FPS" }
+    }
+
+    @ViewBuilder private func settingOption(_ row: Setting) -> some View {
+        if row.env == "DM_PRESENT_FILTER" {
+            pictureFilterRow(row)
+        } else {
+            SettingRow(s: row, m: m)
+        }
+    }
+
+    private var settingsForm: some View {
+        Form {
+            if selection == "Controls" && m.touchStickResponse != nil {
+                BotwTouchSettingsMenu(m: m) { touchPage = $0 }
+            }
+            Section(LocalizedStringKey(sectionTitle(selection))) {
+                ForEach(settingsRows, content: settingOption)
+                #if os(macOS)
+                if selection == "Game" && ProcessInfo.processInfo.environment["DM_TOUCH_PREVIEW"] != "1" {
+                    Toggle("Show this window at launch", isOn: $showLauncherAtLaunch).toggleStyle(.checkbox)
+                }
+                #endif
+            }
+            Section {
+                Button("Reset to tested defaults") { m.reset() }.disabled(!m.changed)
+            }
+        }
+    }
+
+    private var settingsOptions: some View {
+        Group {
+            if selection == "Saves" {
+                SaveManagementPage(launcher: m)
+            } else {
+                settingsForm
+            }
+        }
+        .formStyle(.grouped)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier("settings.options")
+    }
+
     private var sectionList: some View {
         #if os(macOS)
         List(sections, id: \.self, selection: Binding<String?>(get: { selection }, set: { if let section = $0 { selection = section } })) { section in
@@ -480,34 +525,7 @@ struct LauncherSettingsPage: View {
                             .frame(width: min(220, max(140, geometry.size.width * 0.24)))
                             .accessibilityIdentifier("settings.sections")
                         Divider()
-                        Group {
-                            if selection == "Saves" {
-                                SaveManagementPage(launcher: m)
-                            } else { Form {
-                                if selection == "Controls" && m.touchStickResponse != nil {
-                                    BotwTouchSettingsMenu(m: m) { touchPage = $0 }
-                                }
-                                Section(LocalizedStringKey(sectionTitle(selection))) {
-                                    let rows = m.rows(in: selection)
-                                    ForEach((rows.filter { $0.env == "DM_SHOW_FPS" } + rows.filter { $0.env != "DM_SHOW_FPS" }).filter { $0.env != "DM_PRESENT_FILTER_STRENGTH" }) { row in
-                                        if row.env == "DM_PRESENT_FILTER" {
-                                            pictureFilterRow(row)
-                                        } else { SettingRow(s: row, m: m) }
-                                    }
-                                    #if os(macOS)
-                                    if selection == "Game" && ProcessInfo.processInfo.environment["DM_TOUCH_PREVIEW"] != "1" {
-                                        Toggle("Show this window at launch", isOn: $showLauncherAtLaunch).toggleStyle(.checkbox)
-                                    }
-                                    #endif
-                                }
-                            Section {
-                                Button("Reset to tested defaults") { m.reset() }.disabled(!m.changed)
-                            }
-                            } }
-                        }
-                        .formStyle(.grouped)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .accessibilityIdentifier("settings.options")
+                        settingsOptions
                     }
                 }
             }
