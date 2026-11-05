@@ -181,7 +181,6 @@ DM_BOTW_PAD_L_ICON_MODE	choice	0=Current rune,1=Fixed icon	0	DM_GAME_ID==01007EF
 DM_BOTW_PAD_R_DRAG_MODE	choice	0=Drag to cancel,1=Drag to look	0	DM_GAME_ID==01007EF00011E000	Touch layout	R: Drag action	Choose whether dragging cancels the action or moves the camera.
 DM_BOTW_PAD_ZR_DRAG_MODE	choice	0=Drag to cancel,1=Drag to look	0	DM_GAME_ID==01007EF00011E000	Touch layout	ZR: Drag action	Choose whether dragging cancels the action or moves the camera.
 DM_BOTW_PAD_DPAD_VISIBLE	toggle	-	1	DM_GAME_ID==01007EF00011E000	Touch layout	D-pad visible	Hiding the D-pad restores the native equipment display position.
-DM_BOTW_PAD_DPAD_SHOW_BUTTONS	toggle	-	0	DM_GAME_ID==01007EF00011E000	Touch layout	Show buttons	Keep direction buttons visible alongside the equipment display.
 DM_BOTW_PORTRAIT_PAD_WEAPON_X_PT	range	-10000:10000:0.5	0	DM_GAME_ID==01007EF00011E000	Touch layout	Weapons: Horizontal offset	Offsets and diameters are in pt.	format=number
 DM_BOTW_PORTRAIT_PAD_WEAPON_Y_PT	range	-10000:10000:0.5	0	DM_GAME_ID==01007EF00011E000	Touch layout	Weapons: Vertical offset	Offsets and diameters are in pt.	format=number
 DM_BOTW_PORTRAIT_PAD_WEAPON_SIZE_PT	range	20:240:0.5	44	DM_GAME_ID==01007EF00011E000	Touch layout	Weapons: Size	Offsets and diameters are in pt.	format=number
@@ -214,4 +213,3 @@ DM_BOTW_PORTRAIT_PAD_L_ICON_MODE	choice	0=Current rune,1=Fixed icon	0	DM_GAME_ID
 DM_BOTW_PORTRAIT_PAD_R_DRAG_MODE	choice	0=Drag to cancel,1=Drag to look	0	DM_GAME_ID==01007EF00011E000	Touch layout	R: Drag action	Choose whether dragging cancels the action or moves the camera.
 DM_BOTW_PORTRAIT_PAD_ZR_DRAG_MODE	choice	0=Drag to cancel,1=Drag to look	0	DM_GAME_ID==01007EF00011E000	Touch layout	ZR: Drag action	Choose whether dragging cancels the action or moves the camera.
 DM_BOTW_PORTRAIT_PAD_DPAD_VISIBLE	toggle	-	1	DM_GAME_ID==01007EF00011E000	Touch layout	D-pad visible	Hiding the D-pad restores the native equipment display position.
-DM_BOTW_PORTRAIT_PAD_DPAD_SHOW_BUTTONS	toggle	-	0	DM_GAME_ID==01007EF00011E000	Touch layout	Show buttons	Keep direction buttons visible alongside the equipment display.

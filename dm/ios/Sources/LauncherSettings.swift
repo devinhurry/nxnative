@@ -112,7 +112,6 @@ struct BotwTouchControl: Identifiable, Hashable {
         if id == 8 { keys.insert(env("HIT", portrait: portrait)) }
         if id == 4 { keys.insert(option("ALPHA", portrait: portrait)) }
         if id == 7 || id == 9 { keys.insert(option("DRAG_MODE", portrait: portrait)) }
-        if id == 12 { keys.insert(option("SHOW_BUTTONS", portrait: portrait)) }
         return keys
     }
 
@@ -745,7 +744,6 @@ final class LauncherModel: ObservableObject {
         }
         result.badges = Int32(number(botwTouchKey("DM_BOTW_PAD_BADGES", portrait: portrait)))
         result.dpad_visible = Int32(number(botwTouchKey("DM_BOTW_PAD_DPAD_VISIBLE", portrait: portrait), 1))
-        result.dpad_show_buttons = Int32(number(botwTouchKey("DM_BOTW_PAD_DPAD_SHOW_BUTTONS", portrait: portrait)))
         result.cancel_enabled = Int32(number(BotwTouchControl.cancel.visibilityKey(portrait: portrait), 1))
         withUnsafeMutableBytes(of: &result.added) { bytes in
             let flags = bytes.bindMemory(to: Int32.self)
@@ -768,11 +766,17 @@ final class LauncherModel: ObservableObject {
         result.stick_alpha = Float(number(botwTouchKey("DM_BOTW_PAD_STICK_ALPHA", portrait: portrait), Double(result.stick_alpha)))
         return result
     }
+    private func touchOptionKeys(portrait: Bool) -> Set<String> {
+        let geometryKeys = Set(BotwTouchControl.editable.flatMap { control in
+            [control.env("X", portrait: portrait), control.env("Y", portrait: portrait),
+             control.env("SIZE", portrait: portrait), control.option("ANCHOR", portrait: portrait)]
+        })
+        return touchSettingsKeys(portrait: portrait).subtracting(geometryKeys)
+    }
     private func portableBank(_ saved: BotwSavedTouchLayout, portrait: Bool) -> BotwPortableBank {
         let area = portrait ? saved.compactArea : saved.normalArea
         var config = touchLayout(portrait: portrait, values: saved.values)
         var controls: [String: BotwPortableControl] = [:]
-        var positionKeys = Set<String>()
         for control in BotwTouchControl.editable {
             let r = dm_botw_layout_control(&config, Int32(control.id), Float(area.width), Float(area.height), 0, 0, 0, 0,
                 dm_botw_layout_canvas(Float(area.width), Float(area.height)))
@@ -783,10 +787,8 @@ final class LauncherModel: ObservableObject {
                 side: (max(0, anchor == .right ? area.width - Double(r.x + r.width) : Double(r.x)) * 1000).rounded() / 1000,
                 bottom: (max(0, area.height - Double(r.y + r.height)) * 1000).rounded() / 1000,
                 size: (Double(r.width) * 1000).rounded() / 1000)
-            positionKeys.formUnion([control.env("X", portrait: portrait), control.env("Y", portrait: portrait),
-                control.env("SIZE", portrait: portrait), control.option("ANCHOR", portrait: portrait)])
         }
-        let optionKeys = touchSettingsKeys(portrait: portrait).subtracting(positionKeys)
+        let optionKeys = touchOptionKeys(portrait: portrait)
         return .init(controls: controls, options: saved.values.filter { optionKeys.contains($0.key) })
     }
     func exportTouchLayouts(all: Bool, normalArea: BotwTouchArea? = nil, compactArea: BotwTouchArea? = nil) throws -> Data {
@@ -812,7 +814,27 @@ final class LauncherModel: ObservableObject {
         guard data.count <= 4_194_304 else { throw BotwTouchFileError.limit }
         guard normalArea.valid, compactArea.valid else { throw BotwTouchFileError.invalid }
         let file: BotwTouchLayoutsFile
-        do { file = try JSONDecoder().decode(BotwTouchLayoutsFile.self, from: data) }
+        do {
+            guard var json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  var layouts = json["layouts"] as? [[String: Any]] else { throw BotwTouchFileError.invalid }
+            let controlNames = Set(BotwTouchControl.editable.map(\.key))
+            // Discard unfamiliar entries before typed decoding, so their
+            // values need not match the current control or option format.
+            for index in layouts.indices {
+                for (name, portrait) in [("normal", false), ("compact", true)] {
+                    guard let rawBank = layouts[index][name], !(rawBank is NSNull) else { continue }
+                    guard var bank = rawBank as? [String: Any],
+                          let controls = bank["controls"] as? [String: Any],
+                          let options = bank["options"] as? [String: Any] else { throw BotwTouchFileError.invalid }
+                    let optionKeys = touchOptionKeys(portrait: portrait)
+                    bank["controls"] = controls.filter { controlNames.contains($0.key) }
+                    bank["options"] = options.filter { optionKeys.contains($0.key) }
+                    layouts[index][name] = bank
+                }
+            }
+            json["layouts"] = layouts
+            file = try JSONDecoder().decode(BotwTouchLayoutsFile.self, from: JSONSerialization.data(withJSONObject: json))
+        }
         catch { throw BotwTouchFileError.invalid }
         guard file.schemaVersion == 1 else { throw BotwTouchFileError.version }
         guard file.game == "01007EF00011E000", !file.layouts.isEmpty else { throw BotwTouchFileError.invalid }
@@ -825,17 +847,11 @@ final class LauncherModel: ObservableObject {
             for portrait in [false, true] {
                 guard let bank = portrait ? incoming.compact : incoming.normal else { continue }
                 let area = portrait ? compactArea : normalArea
-                var geometryKeys = Set<String>()
-                for control in BotwTouchControl.editable {
-                    geometryKeys.formUnion([control.env("X", portrait: portrait), control.env("Y", portrait: portrait),
-                        control.env("SIZE", portrait: portrait), control.option("ANCHOR", portrait: portrait)])
-                }
-                let optionKeys = touchSettingsKeys(portrait: portrait).subtracting(geometryKeys)
+                let optionKeys = touchOptionKeys(portrait: portrait)
                 for (key, value) in bank.options {
                     guard optionKeys.contains(key), let row = settings.first(where: { $0.env == key }), row.accepts(value) else { throw BotwTouchFileError.invalid }
                     next[key] = value
                 }
-                guard !bank.controls.isEmpty else { throw BotwTouchFileError.invalid }
                 for (name, position) in bank.controls {
                     guard let control = BotwTouchControl.editable.first(where: { $0.key == name }),
                           position.side.isFinite, position.bottom.isFinite, position.size.isFinite,
