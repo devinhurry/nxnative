@@ -635,8 +635,9 @@ and use the validated category refresh and native item setter below. Equipment
 switches hold native Right/Left; L's optional long modes hold native Up, with
 release or explicit Cancel. Tap equipment selection releases only after native
 input has consumed the final selection sample. Hiding D-pad leaves touch mode
-active while bypassing only `N_MainAll_00` translation/scaling, so a fresh
-native matrix restores the authored loadout position and size.
+active while returning `N_MainAll_00` to the upper-left HUD column below hearts.
+Controller mode uses that same column, including its heart-aligned edge inset
+and narrow-display magnification.
 
 Cancel is independently removable and can be restored through Add button in
 either layout bank. Its saved `CANCEL_ENABLED` flag also controls runtime hit
@@ -646,6 +647,31 @@ once. A later manual removal survives saving, reopening and layout import;
 rendering or retaining the same action choice does not add it again.
 When D-pad relocation is enabled, both frontends move the loadout target 14pt
 upward before HUD normalization, independently of screen size and button scale.
+On displays narrower than 16:9, including Duo landscape, equipment now receives
+the same HUD gain as hearts and the map before relocation. Its native pane
+position and basis are scaled together during Calculate; the touch matrix hook
+then anchors the scaled cross-guide to the D-pad target. Frontend point-size
+normalization retains that gain instead of dividing it away. Focused host tests
+cover the 951x669 Duo ratio, portrait and Seated canvases; device appearance
+remains to be checked.
+
+The four native `Pa_SinJu_00` through `Pa_SinJu_03` Champion panels share the
+hearts' picture aspect, scale, edge offset and vertical origin. A visible
+upper-left loadout reserves its visible rune/cross-guide height before the
+Champion rows; otherwise the rows start directly below hearts. Spacing uses
+the actual 81-unit rune panel, 46-unit cross-guide and 80-unit Champion artwork
+with their authored scales, rather than the transparent 254/124-unit container
+bounds. Gaps are 10 native HUD units, scaled together with the artwork.
+Passive native presentation observation also runs with a controller, without
+touch selection or additional guest calls. In Seated mode, upper-left equipment
+and Champion abilities remain in the picture pane; only D-pad-attached equipment
+and its rune enter the lower control pane.
+
+Without a virtual Plus glyph, the measured map edge uses the ordinary HUD edge
+margin (or the device's safe inset) instead of reserving Plus and its gap. The
+map's ornaments and environment gauges follow the same translated cluster on
+16:9, narrow and wide displays. Focused host checks cover controller/hidden-pad
+handoff, loadout visibility, safe insets and both landscape/portrait ratios.
 
 ### Magnesis directions with a hidden D-pad
 
@@ -657,7 +683,7 @@ both rendered Push/Up (`E060`) and Pull/Down (`E061`) guides under
 private capture copy. A fresh gameplay
 presentation temporarily enables only Up/Down in both touch frontends; menus,
 quick switching and controller handoff retain their visibility rules. Ordinary
-and compact layouts keep their saved hidden flag and native loadout position.
+and compact layouts keep their saved hidden flag and upper-left loadout column.
 The same direction mask controls artwork and touch ownership, and leaving the
 operation releases any held temporary direction. Native presentation and layout
 checks cover hidden guides, stale frames, quick switching and both layout banks.

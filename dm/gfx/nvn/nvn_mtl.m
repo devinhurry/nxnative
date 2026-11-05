@@ -10956,7 +10956,8 @@ static uint64_t g_ui_tex;
 static float g_ui_region[4]={0,0,1,1};
 static int ui_dock_scope(int scope) {
     return scope==NVN_UI_MAP || scope==NVN_UI_WEATHER || scope==NVN_UI_DOCK_ENV ||
-        scope==NVN_UI_DOCK_EQUIPMENT || scope==NVN_UI_RUNE;
+        scope==NVN_UI_DOCK_EQUIPMENT ||
+        (scope==NVN_UI_RUNE && dm_botw_touch_hud_relocates_loadout());
 }
 static blend_st ui_dock_blend(blend_st blend) {
     // This multiply changes existing color only. Native canvas alpha is not

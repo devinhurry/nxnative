@@ -91,6 +91,7 @@ int main(void) {
     set_pane_parent(all, root); set_pane_parent(target, all);
     target[BOTW_TOUCH_FLAGS] = 0x01; // local visibility/state bit is preserved
     dm_botw_touch_hud_publish(1, 0.5f, 0.5f,1);
+    assert(dm_botw_touch_hud_relocates_loadout());
     calculate_entry(target);
     assert(target[BOTW_TOUCH_FLAGS] == 0x11);
 
@@ -111,10 +112,12 @@ int main(void) {
     calculated_matrix(target);
     expect_translation(target, -275, -216);
     dm_botw_touch_hud_keep_native_loadout(1);
+    assert(!dm_botw_touch_hud_relocates_loadout());
     matrix_translation(target,-509,210); calculate_entry(target); calculated_matrix(target);
     expect_translation(target,-509,210);
     assert(dm_botw_touch_hud_active()); // hiding D-pad does not disable menus or other touch HUD hooks
     dm_botw_touch_hud_keep_native_loadout(0);
+    assert(dm_botw_touch_hud_relocates_loadout());
 
     // A resized D-pad scales its native equipment artwork about the touch center.
     dm_botw_touch_hud_publish(1, .25f, .75f, 1.25f);
@@ -133,33 +136,40 @@ int main(void) {
     memcpy(&basis, target + BOTW_TOUCH_MATRIX, sizeof basis);
     assert(basis == 1);
 
-    // Native equipment must keep the same point size as the frontend D-pad
-    // after the game's tall/narrow HUD basis and viewport conversion.
-    const float point_cases[][3]={{430,1,1},{1024,.421875f,16.f/9},{1100,795.f/1100/(16.f/9),16.f/9},{540,795.f/540/(16.f/9),540.f/(795.f*9/16)}};
+    // Retain hearts/map magnification on narrow displays (including Duo
+    // landscape), without moving the cross-guide away from the D-pad target.
+    const float point_cases[][3]={{430,1,1},{669,(951.f/669)/(16.f/9),(16.f/9)/(951.f/669)},
+        {1024,.421875f,16.f/9},{1100,795.f/1100/(16.f/9),16.f/9},
+        {540,795.f/540/(16.f/9),540.f/(795.f*9/16)}};
     for (unsigned i=0;i<sizeof point_cases/sizeof *point_cases;i++) {
         float height=point_cases[i][0]; hud_y_scale=point_cases[i][1]; hud_gain=point_cases[i][2];
-        float point_scale=dm_botw_layout_hud_scale(1,height,hud_y_scale*hud_gain);
+        float point_scale=dm_botw_layout_hud_scale(1,height,hud_y_scale);
         dm_botw_touch_hud_publish(1,.25f,.75f,point_scale);
-        matrix_translation(target,-509,210);
         float ybasis=hud_y_scale*hud_gain;
+        matrix_translation(target,-509*hud_gain,210*ybasis);
         memcpy(target+BOTW_TOUCH_MATRIX,&hud_gain,4); memcpy(target+BOTW_TOUCH_MATRIX+0x14,&ybasis,4);
         calculate_entry(target); calculated_matrix(target);
         memcpy(&basis,target+BOTW_TOUCH_MATRIX+0x14,4);
-        assert(fabsf(basis*height/720-430.f/720)<.001f);
+        assert(fabsf(basis*height/720-430.f/720*hud_gain)<.001f);
+        float tx,ty,xbasis;
+        memcpy(&tx,target+BOTW_TOUCH_MATRIX+0x0c,4); memcpy(&ty,target+BOTW_TOUCH_MATRIX+0x1c,4);
+        memcpy(&xbasis,target+BOTW_TOUCH_MATRIX,4);
+        assert(fabsf(tx-45*xbasis-(-320))<.001f);
+        assert(fabsf(ty+36*basis-(-180))<.001f);
     }
     // The narrow shortcut keeps its cross-guide centered after native Y
     // scaling, using the D-pad size published by the active frontend profile.
     setenv("DM_BOTW_PORTRAIT","1",1); hud_y_scale=.3f; hud_gain=16.f/9;
     dm_botw_touch_hud_publish(1,.25f,.75f,1.1f);
-    matrix_translation(target,-509,210);
     float sy=hud_y_scale*hud_gain;
+    matrix_translation(target,-509*hud_gain,210*sy);
     memcpy(target+BOTW_TOUCH_MATRIX,&hud_gain,4); memcpy(target+BOTW_TOUCH_MATRIX+0x14,&sy,4);
     calculate_entry(target); calculated_matrix(target);
     expect_translation(target,-232,-201.12f);
     memcpy(&basis,target+BOTW_TOUCH_MATRIX+0x14,4); assert(fabsf(basis-sy*1.1f)<.001f);
     // A wide portrait view uses the normal profile on the same narrow canvas.
     dm_botw_touch_hud_publish(1,.25f,.75f,1.25f);
-    matrix_translation(target,-509,210);
+    matrix_translation(target,-509*hud_gain,210*sy);
     memcpy(target+BOTW_TOUCH_MATRIX,&hud_gain,4); memcpy(target+BOTW_TOUCH_MATRIX+0x14,&sy,4);
     calculate_entry(target); calculated_matrix(target);
     expect_translation(target,-220,-204);
@@ -260,10 +270,13 @@ int main(void) {
     // itself to the safe boundary and retain its native vertical position.
     atomic_store(&g_touchhud_active,0);
     for (int wide=0;wide<2;wide++) {
+      for (int inset=0;inset<2;inset++) {
+        hud_safe_right=inset ? 100 : 0;
         hud_offset[0]=hud_offset[1]=wide ? 116 : 0;
         scaled_matrix(cut,1,510,-240); calculate_entry(cut); calculated_matrix(cut);
-        expect_translation(cut,457,-240);
+        expect_translation(cut,inset ? 457 : 497,-240);
         assert(!map_region_valid);
+      }
     }
     atomic_store(&g_touchhud_active,1);
     hud_safe_right=0; hud_offset[0]=hud_offset[1]=0;
@@ -459,7 +472,7 @@ int main(void) {
     assert(fabsf(map_region[1]-10.f/720)<.001f);
     dm_botw_touch_hud_publish(0,0,0,1); seated=0; hud_gain=1;
     matrix_translation(cut,510,-240); calculate_entry(cut); calculated_matrix(cut);
-    expect_translation(cut,510,-240);
+    expect_translation(cut,497,-240);
     // The shared pane hook still services widescreen backgrounds without an
     // installed touch HUD (ordinary Mac/controller mode).
     dm_botw_touchhud_test_clear();

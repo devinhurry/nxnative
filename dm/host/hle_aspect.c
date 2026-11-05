@@ -3,6 +3,7 @@
 // 16:9; gameplay HUD and flat loading backgrounds can use the display edges.
 #include "hle.h"
 #include "botw_rune_icon.h"
+#include "botw_touch_menu.h"
 #include "touchpad_geometry.h"
 #include <ctype.h>
 #include <math.h>
@@ -214,6 +215,7 @@ typedef struct {
 } aspect_ui_width;
 static void *g_ui_widths;
 static pthread_mutex_t g_ui_width_mu = PTHREAD_MUTEX_INITIALIZER;
+static float g_ui_heart_bottom = 285;
 static int aspect_ui_width_order(const void *a, const void *b) {
     uintptr_t x = ((const aspect_ui_width *)a)->pane, y = ((const aspect_ui_width *)b)->pane;
     return (x > y) - (x < y);
@@ -267,6 +269,8 @@ static int aspect_ui_hud_anchor(uint8_t *pane) {
         aspect_ui_named(all, "N_All_00") && aspect_ui_named(aspect_ui_parent(all), "RootPane")) return -1;
     if (aspect_ui_named(parent, "N_All_00") && aspect_ui_named(all, "RootPane")) {
         if (aspect_ui_named(pane,"N_MainAll_00")) return 3;
+        if (aspect_ui_named(pane,"Pa_SinJu_00") || aspect_ui_named(pane,"Pa_SinJu_01") ||
+            aspect_ui_named(pane,"Pa_SinJu_02") || aspect_ui_named(pane,"Pa_SinJu_03")) return 4;
         const char *names[] = {"Pa_Sensor_00", "Pa_SoundGauge_00", "Pa_TempMeter_00", "Pa_Weather_00", "Pa_Time_00"};
         for (unsigned i=0;i<sizeof names/sizeof *names;i++) if (aspect_ui_named(pane,names[i])) return 1;
     }
@@ -277,9 +281,7 @@ static int aspect_ui_hud_pane(uint8_t *pane) {
     for (int i=0; pane && i<64; i++,pane=aspect_ui_parent(pane)) {
         int anchor=aspect_ui_hud_anchor(pane);
         if (anchor==3) {
-            if (!dm_botw_touch_hud_active()) continue;
-            if (seated) return 5;
-            if (dm_aspect_hud_y_scale()==1) continue;
+            if (seated && dm_botw_touch_hud_relocates_loadout()) return 5;
         }
         if (anchor==1 && aspect_ui_named(pane,"Pa_Weather_00") && (seated || dm_aspect_hud_y_scale()<1)) return 3;
         if (anchor==1 && seated) return 4;
@@ -387,11 +389,13 @@ void dm_aspect_ui_pane(uint8_t *pane) {
     aspect_ui_width **found = tfind(&key, &g_ui_widths, aspect_ui_width_order);
     float wide = fmaxf(1, dm_aspect_ratio() / GAME_ASPECT);
     float region[4]; int seated=dm_aspect_region(1,region);
-    float ratio=hud==-1 ? dm_aspect_ratio() : dm_aspect_control_ratio();
+    int relocate=dm_botw_touch_hud_relocates_loadout();
+    int left_hud=hud==-1 || hud==4 || (hud==3 && !relocate);
+    float ratio=left_hud ? dm_aspect_ratio() : dm_aspect_control_ratio();
     float hud_y=ratio>0 && ratio<GAME_ASPECT ? ratio/GAME_ASPECT : 1;
     float gain=ratio>0 && ratio<GAME_ASPECT ? GAME_ASPECT*fminf(1,1/ratio) : 1;
     int dock=seated && (hud==1 || hud==2);
-    int narrow = hud && hud_y<1 && (hud!=3 || dm_botw_touch_hud_active());
+    int narrow = hud && hud_y<1;
     if (hud==2 && !aspect_ui_map_collapsed(aspect_ui_map_cut(pane))) narrow=0;
     if (hud==2 && !aspect_ui_map_collapsed(aspect_ui_map_cut(pane))) dock=0;
     float xscale=dock ? dm_aspect_map_gain() : narrow ? gain : 1;
@@ -400,7 +404,7 @@ void dm_aspect_ui_pane(uint8_t *pane) {
     // Leave the component's model geometry intact and resize the whole draw
     // in projection, so its pictures and background keep the same proportions.
     if (hud==1 && aspect_ui_named(pane,"Pa_Weather_00")) xscale=yscale=1;
-    if (!found && wide == 1 && !narrow && !dock && hud != -1) { pthread_mutex_unlock(&g_ui_width_mu); return; }
+    if (!found && wide == 1 && !narrow && !dock && !left_hud) { pthread_mutex_unlock(&g_ui_width_mu); return; }
     if (!found) {
         aspect_ui_width *entry = calloc(1, sizeof *entry);
         if (!entry) die("[RED] aspect: cannot allocate background pane state");
@@ -427,24 +431,35 @@ void dm_aspect_ui_pane(uint8_t *pane) {
     // flat fills and Windows extend horizontally with their edge sizes intact.
     int cover = !hud && title_art == 1;
     entry->written_height = entry->native_height * (cover ? wide : 1);
-    entry->written_x = entry->native_x*(hud==3 ? 1 : xscale);
-    entry->written_y = entry->native_y*(hud==3 ? 1 : yscale);
+    entry->written_x = entry->native_x*xscale;
+    entry->written_y = entry->native_y*yscale;
     entry->written_scale_x=entry->native_scale_x*xscale;
     entry->written_scale_y=entry->native_scale_y*yscale;
     if (cover) { entry->written_x *= wide; entry->written_y *= wide; }
-    if (hud == -1) {
+    if (hud == -1) g_ui_heart_bottom=entry->native_y-entry->native_height*entry->native_scale_y*.5f;
+    if (left_hud) {
+        // MainShortCut's visible rune panel is 81 units at .7 scale; the
+        // cross-guide is 46*.78 units at .9 scale. Its 254-unit pane includes
+        // transparent space, so use these artwork extents for the stack.
+        float gap=10, loadout_top=21+.7f*(70+81*.5f), loadout_bottom=36-46*.78f*.9f*.5f;
+        float top=g_ui_heart_bottom-gap;
+        if (hud==3) entry->written_y=(entry->native_y-210+top-loadout_top)*yscale;
+        if (hud==4) {
+            int row=((const char *)pane)[0xb8+10]-'0';
+            if (!relocate && dm_botw_touch_loadout_visible()) top-=loadout_top-loadout_bottom+gap;
+            // PaSinJu's base pictures are 80 units at .75 scale. Preserve its
+            // native order and animation delta, leaving a gap between rows.
+            float size=80*.75f;
+            entry->written_y=(top-size*.5f-row*(size+gap)+entry->native_y-(190-row*50))*yscale;
+        }
         float authored=DM_TP_BOTW_HEART_EDGE*gain;
         float padding=authored+DM_TP_BOTW_EDGE_EXTRA*dm_aspect_ui_point_scale();
         entry->written_x += dm_touchpad_botw_edge_margin(atomic_load(&g_hud_safe_left),padding)-authored - fmaxf(0, 360 * dm_aspect_ratio() - 640);
     }
-    if (hud == -1 && narrow) {
+    if (left_hud && narrow) {
         entry->written_x += 640*(xscale-1);
         entry->written_y += 360*(1-yscale)-atomic_load(&g_hud_safe_top);
     }
-    // AppMap's ScissorPane::Draw rejects clips outside its native 16:9
-    // target before submitting draws. Anchor that subtree during GPU replay.
-    else if (hud == 1 && !dm_botw_touch_hud_active() && !seated && dm_aspect_hud_safe_right()==0)
-        entry->written_x += dm_aspect_hud_offset(1);
     if (title_right) {
         // The native origin is the right edge. Extending width and moving that
         // edge together preserves the seam with the unchanged left panel.

@@ -1780,6 +1780,14 @@ static void test_menu_animation_visibility(void) {
     selector.active[1]=0;
     selector_publish_menu_presentation((uintptr_t)selector.manager,8000);
     assert(dm_botw_touch_loadout_visible() && dm_botw_touch_controls_visible());
+    // Controller mode still publishes visibility for the upper-left HUD stack,
+    // while stopping before native selector calls or touch requests.
+    mock_touch_hud_active=0;
+    shortcut_main[0x59]=0; selector_tick();
+    assert(!dm_botw_touch_loadout_visible());
+    shortcut_main[0x59]=255; selector_tick();
+    assert(dm_botw_touch_loadout_visible());
+    mock_touch_hud_active=1;
     assert(!dm_botw_touch_quick_select_active());
     uint8_t *quick=fake_pane(79,"N_ShortCutPos_00",76,632,148,0,0);
     uint8_t *quick_cut=fake_pane(80,"N_Cut_00",79,632,148,0,0);
