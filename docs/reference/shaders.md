@@ -1320,6 +1320,14 @@ Finding, keying and translating shaders (`dm/gfx/tools/shader_split.py`, `dmsh_b
 
 ## Pipelines and caches
 
+### Save copies retain the game's pipeline cache
+
+- **Symptom:** each `run_mac.py --save-copy` launch spends a long time at *Preparing pipelines*, and separate `save-copies/<session>/pso_archive` folders accumulate.
+- **Cause:** the launcher changed `DM_SAVE` for each copy without specifying pipeline storage. The host derives its default `pso_user.tsv` from the save's parent and `pso_archive` from that list's parent, so each save copy unintentionally started with empty caches.
+- **Fix:** `run_mac.py` sets `DM_PSO_USER` and `DM_PSO_ARCHIVE` to the game build's fixed `run/pso_user.tsv` and `run/pso_archive` in both test and release modes, independently of the save path. Explicit overrides remain available for isolated tests. Earlier per-copy caches are not migrated; the fixed cache prepares once and is reused thereafter.
+- **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game), local Mac launches with multiple independent save copies.
+- **Check:** `test_run_mac` checks identical cache paths across different saves and successive `--save-copy` launches, and preserves explicit cache overrides including `DM_PSO_ARCHIVE=off`.
+
 ### A compile that does not return stalls every flush and draw
 
 - **Symptom:** the pipeline prebuild stops at the same line on every start (`pipeline prebuild: 7000 of 20740 pairs, 1987 built, 5013 already archived, 0 left to the draws, 0 failed`), behind *Preparing pipelines* or, with `DM_PSO_PREPARE=0`, as a black screen while the sound plays on; the NSP script's `[7/7] Pipeline prebuild` does not end (`dmhost` at 0% CPU, `MTLCompilerService` at 100%), and `MTLCompilerService` crash reports (`EXC_CRASH`, `llvm::report_bad_alloc_error`) come every 6 to 10 minutes. The bases built since the last file are never written, so the next start builds them again and stops at the same pair.

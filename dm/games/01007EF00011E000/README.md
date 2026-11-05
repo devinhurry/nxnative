@@ -29,6 +29,8 @@ No `tex_flush_upload` (a minute's boot saw it flush 32 CPU-filled textures with 
 
 ## Found on this game
 
+- **Resolved; launcher tests checked:** [Save copies retain the game's pipeline cache](../../../docs/reference/shaders.md#save-copies-retain-the-games-pipeline-cache). Repeated Mac launches with independent save copies share the game's pipeline storage; startup timing has not been remeasured.
+
 - **Implemented; Mac gameplay checked, physical iPhone acceptance pending:** [Final-picture filters](../../../docs/reference/rendering.md#picture-filters-in-the-final-present); this game's [validation and limits](notes/rendering.md#picture-filters-current).
 
 - **Resolved in tools (2026-11-04):** [Runtime profile changes invalidating graphics reuse](../../../docs/reference/packing.md#runtime-profile-changes-invalidate-graphics-reuse). Touch/gyro parameters and other runtime defaults no longer enter the graphics contract, and host-header edits keep shader extraction/build reuse. Shader resources and rendering code are unchanged; targeted packaging and incremental-build fixtures cover both reuse and real-input invalidation. The static game regression is blocked by the local Metal compiler (`32023.883`, locked `32023.922`); no gameplay check was run for this packaging change.
