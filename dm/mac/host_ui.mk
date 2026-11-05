@@ -2,7 +2,7 @@
 MAC_UI_SOURCES = ../mac/Launcher.swift ../ios/Sources/LauncherSettings.swift ../ios/Sources/LauncherRow.swift ../ios/Sources/BotwTouchSettings.swift ../ios/Sources/SaveManagement.swift
 MAC_UI_OBJECT = gen/mac-ui.o
 MAC_UI_SDK = $(shell xcrun --sdk macosx --show-sdk-path)
-MAC_UI_LINK = -L"$(MAC_UI_SDK)/usr/lib/swift" -Wl,-rpath,/usr/lib/swift -framework SwiftUI
+MAC_UI_LINK = -L"$(MAC_UI_SDK)/usr/lib/swift" -Wl,-rpath,/usr/lib/swift -framework SwiftUI -larchive
 
 gen/mac-ui-toolchain: FORCE
 	@mkdir -p gen

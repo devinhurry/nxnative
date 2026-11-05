@@ -37,7 +37,7 @@ private func loadModel() -> LauncherModel? {
 struct LauncherView: View {
     @ObservedObject var m: LauncherModel
     let done: (Bool) -> Void
-    @State private var showSettings = false
+    @State private var settingsDestination: LauncherSettingsDestination?
     @State private var startAfterSettings = false
     @State private var availableMemory = dm_low_memory_available()
 
@@ -72,15 +72,16 @@ struct LauncherView: View {
             shouldShowTouchNotice: {
                 ProcessInfo.processInfo.environment["DM_TOUCH_PREVIEW"] == "1" && GCController.controllers().isEmpty
             },
-            onPlay: { done(true) }, onSettings: { showSettings = true },
+            onPlay: { done(true) }, onSettings: { settingsDestination = .graphics },
+            onSaves: { settingsDestination = .saves },
             onImportROM: nil, onImportShaders: nil)
             .frame(minWidth: 720, minHeight: 420)
-            .sheet(isPresented: $showSettings, onDismiss: {
+            .sheet(item: $settingsDestination, onDismiss: {
                 if startAfterSettings { startAfterSettings = false; done(true) }
-            }) {
-                LauncherSettingsPage(m: m, onPlay: {
-                    startAfterSettings = true; showSettings = false
-                }) { showSettings = false }.frame(width: 1000, height: 620)
+            }) { destination in
+                LauncherSettingsPage(m: m, initialSection: destination.rawValue, onPlay: {
+                    startAfterSettings = true; settingsDestination = nil
+                }) { settingsDestination = nil }.frame(width: 1000, height: 620)
             }
             .task {
                 while !Task.isCancelled {

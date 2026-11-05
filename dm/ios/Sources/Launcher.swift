@@ -130,7 +130,7 @@ private struct DocumentPicker: UIViewControllerRepresentable {
 private struct LauncherView: View {
     @ObservedObject var m: LauncherModel
     let play: () -> Void
-    @State private var showSettings = false
+    @State private var settingsDestination: LauncherSettingsDestination?
     @State private var startAfterSettings = false
     @State private var memory = os_proc_available_memory()
     @State private var importing: ImportKind?
@@ -162,18 +162,19 @@ private struct LauncherView: View {
                 resourceStatus: resourceStatus, importProgress: importProgress,
                 graphicsVersion: graphicsVersion, graphicsCompiler: graphicsMetal, buildInfo: [:],
                 shouldShowTouchNotice: { GCController.controllers().isEmpty },
-                onPlay: finishStart, onSettings: { showSettings = true },
+                onPlay: finishStart, onSettings: { settingsDestination = .graphics },
+                onSaves: { settingsDestination = .saves },
                 onImportROM: { importing = .rom }, onImportShaders: { importing = .shaders },
                 onRefresh: { refreshResources() })
                 .toolbar(.hidden, for: .navigationBar)
         }
         .preferredColorScheme(.dark)
-        .fullScreenCover(isPresented: $showSettings, onDismiss: {
+        .fullScreenCover(item: $settingsDestination, onDismiss: {
             if startAfterSettings { startAfterSettings = false; finishStart() }
-        }) {
-            LauncherSettingsPage(m: m, onPlay: {
-                startAfterSettings = true; showSettings = false
-            }) { showSettings = false }
+        }) { destination in
+            LauncherSettingsPage(m: m, initialSection: destination.rawValue, onPlay: {
+                startAfterSettings = true; settingsDestination = nil
+            }) { settingsDestination = nil }
         }
         .alert("Import failed", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
             Button("OK") { importError = nil }

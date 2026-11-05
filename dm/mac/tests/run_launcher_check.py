@@ -34,7 +34,7 @@ for source in ('save_manager.m', 'save_sync.c'):
     objects.append(str(obj))
 subprocess.run(['xcrun', 'clang', '-fobjc-arc', '-mmacosx-version-min=26.0', str(Path(__file__).with_name('launcher_host_check.m')),
                 str(REPO / 'dm/host/gen/mac-ui.o'), *objects, '-L' + sdk + '/usr/lib/swift', '-Wl,-rpath,/usr/lib/swift',
-                '-framework', 'AppKit', '-framework', 'SwiftUI', '-o', str(binary)], check=True)
+                '-framework', 'AppKit', '-framework', 'SwiftUI', '-larchive', '-o', str(binary)], check=True)
 subprocess.run(['codesign', '--force', '--sign', '-', str(app.parent)], check=True)
 env.update(DM_ROMFS=str(work / 'romfs'), DM_MSL_DIR=str(work / 'msl'), DM_SAVES_ROOT=str(work / 'player'), DM_TEST_SCREENSHOT=str(work / 'saves.png'))
 subprocess.run([str(binary), '-AppleLanguages', '(en)'], env=env, check=True, timeout=35)

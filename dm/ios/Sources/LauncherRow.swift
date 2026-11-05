@@ -1,6 +1,10 @@
 // Shared launcher dashboard, settings pages and rows for the iOS and native Mac wrappers.
 // A row whose setting is fixed by an env file or by the launch environment is shown but disabled.
 import SwiftUI
+import Darwin
+#if os(iOS)
+import UIKit
+#endif
 import DmTouchPad
 
 let launcherTint = Color(red: 66.0 / 255, green: 102.0 / 255, blue: 134.0 / 255)
@@ -174,6 +178,7 @@ struct LauncherDashboard: View {
     let shouldShowTouchNotice: () -> Bool
     let onPlay: () -> Void
     let onSettings: () -> Void
+    let onSaves: () -> Void
     let onImportROM: (() -> Void)?
     let onImportShaders: (() -> Void)?
     var onRefresh: (() -> Void)? = nil
@@ -250,6 +255,16 @@ struct LauncherDashboard: View {
                     }.padding(.horizontal, 16).padding(.vertical, 10)
                     List {
                         Section {
+                            Button(action: onSaves) {
+                                HStack {
+                                    Label("Manage saves", systemImage: "folder")
+                                    Spacer()
+                                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                                }
+                            }
+                            .accessibilityIdentifier("launcher.saves")
+                        }
+                        Section {
                             LabeledContent("ROMFS") { readiness(romReady) }
                                 .accessibilityIdentifier("startup.status.romfs")
                             LabeledContent("DLC") {
@@ -261,6 +276,15 @@ struct LauncherDashboard: View {
                                 .accessibilityIdentifier("startup.status.dlc")
                             LabeledContent("Graphics package") { readiness(shadersReady) }
                                 .accessibilityIdentifier("startup.status.graphics")
+                            LabeledContent("Memory available") {
+                                HStack {
+                                    if memoryBytes > 0 && memoryBytes < dm_low_memory_threshold() {
+                                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+                                            .accessibilityLabel("Low available memory")
+                                    }
+                                    Text(memoryBytes > 0 ? ByteCountFormatter.string(fromByteCount: Int64(memoryBytes), countStyle: .memory) : NSLocalizedString("Unavailable", comment: "Resource status"))
+                                }
+                            }
                         } header: {
                             HStack {
                                 Text("Resources")
@@ -276,17 +300,6 @@ struct LauncherDashboard: View {
                             if let resourceStatus {
                                 Text(resourceStatus).font(.caption).foregroundStyle(.secondary)
                                     .accessibilityIdentifier("startup.resources.status")
-                            }
-                        }
-                        Section {
-                            LabeledContent("Memory available") {
-                                HStack {
-                                    if memoryBytes > 0 && memoryBytes < dm_low_memory_threshold() {
-                                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
-                                            .accessibilityLabel("Low available memory")
-                                    }
-                                    Text(memoryBytes > 0 ? ByteCountFormatter.string(fromByteCount: Int64(memoryBytes), countStyle: .memory) : NSLocalizedString("Unavailable", comment: "Resource status"))
-                                }
                             }
                         }
                         AboutSection(graphicsVersion: graphicsVersion, graphicsMetal: graphicsCompiler, buildInfo: buildInfo)
@@ -336,6 +349,11 @@ struct LauncherDashboard: View {
     }
 }
 
+enum LauncherSettingsDestination: String, Identifiable {
+    case graphics = "Game", saves = "Saves"
+    var id: String { rawValue }
+}
+
 // Keep both columns visible on compact phones as well as larger displays.
 struct LauncherSettingsPage: View {
     @ObservedObject var m: LauncherModel
@@ -347,6 +365,15 @@ struct LauncherSettingsPage: View {
     #if os(macOS)
     @AppStorage("window.show") private var showLauncherAtLaunch = true
     #endif
+
+    init(m: LauncherModel, gameBackground: Image? = nil, initialSection: String = "Game",
+         onPlay: (() -> Void)? = nil, close: @escaping () -> Void) {
+        self.m = m
+        self.gameBackground = gameBackground
+        self.onPlay = onPlay
+        self.close = close
+        _selection = State(initialValue: initialSection)
+    }
 
     private var sections: [String] {
         var result = m.sections.filter { !LauncherModel.isTouchSection($0) && $0 != "General" }
@@ -465,6 +492,29 @@ struct AboutSection: View {
         Bundle.main.object(forInfoDictionaryKey: key) as? String ?? buildInfo[key] ?? "unknown"
     }
 
+    private static let deviceAndSystem: String = {
+        #if os(iOS)
+        let key = "hw.machine"
+        var model = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] ?? UIDevice.current.model
+        let system = UIDevice.current.userInterfaceIdiom == .pad ? "iPadOS" : UIDevice.current.systemName
+        let version = UIDevice.current.systemVersion
+        #else
+        let key = "hw.model"
+        var model = "Mac"
+        let system = "macOS"
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        let version = "\(os.majorVersion).\(os.minorVersion)" + (os.patchVersion == 0 ? "" : ".\(os.patchVersion)")
+        #endif
+        #if !targetEnvironment(simulator)
+        var size = 0
+        if sysctlbyname(key, nil, &size, nil, 0) == 0, size > 0 {
+            var buffer = [CChar](repeating: 0, count: size)
+            if sysctlbyname(key, &buffer, &size, nil, 0) == 0 { model = String(cString: buffer) }
+        }
+        #endif
+        return "\(model) · \(system) \(version)"
+    }()
+
     static func shortCommit(_ commit: String) -> String {
         guard commit.range(of: "^[0-9a-fA-F]{6}", options: .regularExpression) != nil else { return "unknown" }
         return String(commit.prefix(6)) + (commit.hasSuffix("+dirty") ? "+dirty" : "")
@@ -481,6 +531,8 @@ struct AboutSection: View {
 
     var body: some View {
         Section("About") {
+            LabeledContent("Device / OS", value: Self.deviceAndSystem)
+                .accessibilityIdentifier("nxnative.about.device")
             LabeledContent("Commit", value: Self.shortCommit(info("DMCommit")))
             LabeledContent("Built", value: Self.localBuildTime(info("DMBuildTime")))
             if let version = graphicsVersion { LabeledContent("Graphics package", value: "v" + version) }

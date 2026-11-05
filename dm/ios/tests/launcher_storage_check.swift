@@ -37,6 +37,61 @@ private func checkSavePreviews(_ expect: (Bool, String) -> Void) {
     } catch { expect(false, "save preview fixture: \(error)") }
 }
 
+private func checkSaveLibraryImports(_ expect: (Bool, String) -> Void) {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let keys = ["DM_LAUNCHER_FILE", "DM_SAVES_ROOT", "DM_SAVE", "DM_SAVES_MANAGED", "DM_SAVE_SYNC"]
+    let previous = ProcessInfo.processInfo.environment
+    defer {
+        for key in keys { if let value = previous[key] { setenv(key, value, 1) } else { unsetenv(key) } }
+        try? FileManager.default.removeItem(at: folder)
+    }
+    do {
+        let fixture = folder.appendingPathComponent("launcher.json"), root = folder.appendingPathComponent("player")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data("{\"game\":\"010015100B514000\"}".utf8).write(to: fixture)
+        setenv("DM_LAUNCHER_FILE", fixture.path, 1); setenv("DM_SAVES_ROOT", root.path, 1)
+        unsetenv("DM_SAVE"); unsetenv("DM_SAVE_SYNC")
+        let library = SaveLibrary()
+        func json(_ object: Any) throws -> String { String(data: try JSONSerialization.data(withJSONObject: object), encoding: .utf8)! }
+        func write(_ path: String, _ value: String) throws {
+            let url = folder.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(value.utf8).write(to: url)
+        }
+        func perform(_ command: String, _ first: String = "", _ second: String = "") -> Bool {
+            var completed = false, succeeded = false
+            library.perform(command, first, second, language: "USen") { succeeded = $0; completed = true }
+            let limit = Date().addingTimeInterval(15)
+            while !completed && Date() < limit { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+            return completed && succeeded
+        }
+        try write("source/One/save/main", "first")
+        try write("source/Two/save/main", "second")
+        expect(perform("import-many", try json([folder.appendingPathComponent("source").path]), "{}"), "the shared save library imports a multi-save directory")
+        expect(library.importedCount == 2 && library.saves.count == 3 && library.current != "default", "multi-import reports its count and selects the returned new entry")
+        let original = library.current
+        try write("ambiguous/20261105/option.sav", "options")
+        try write("ambiguous/20261105/3/game_data.sav", "progress")
+        try write("ambiguous/README.txt", "save backup instructions")
+        let input = try json([folder.appendingPathComponent("ambiguous").path])
+        expect(perform("import-many", input, "{}"), "an ambiguous input returns a layout choice through the shared UI library")
+        expect(library.importLayout?.folder == "20261105" && library.current == original && library.saves.count == 3, "requesting a layout leaves the existing inventory and selection unchanged")
+        expect(library.importLayout?.root_files?.contains("README.txt") == true, "the layout preview includes files beside the outer folder")
+        guard let layout = library.importLayout else { return }
+        library.importLayout = nil
+        expect(perform("import-many", input, try json([layout.source: "inside"])), "the chosen inner layout can be imported")
+        let selected = library.saves.first { $0.id == library.current }
+        expect(library.importedCount == 1 && selected.map { FileManager.default.fileExists(atPath: $0.path + "/save/3/game_data.sav") } == true, "the selected layout keeps the actual game path without an extra wrapper")
+        let ids = Array(library.saves.prefix(2).map(\.id))
+        let archive = folder.appendingPathComponent("chosen.zip")
+        let selectedName = selected?.name
+        expect(perform("export-many", try json(ids), archive.path), "the shared library exports a selected subset as ZIP")
+        expect(perform("import-many", try json([archive.path]), "{}"), "the shared library reimports the multi-save ZIP")
+        expect(library.importedCount == 2 && library.saves.count == 6 && library.saves.first { $0.id == library.current }?.name == selectedName,
+               "ZIP reimport preserves the preferred entry while adding new copies")
+    } catch { expect(false, "save library fixture: \(error)") }
+}
+
 @_cdecl("dm_botw_rune_icon_snapshot")
 func mockRuneIconSnapshot(_ state: UnsafeMutableRawPointer?) -> Int32 { 0 }
 
@@ -62,6 +117,7 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
         var failed = 0
         func expect(_ c: Bool, _ what: String) { print((c ? "PASS " : "FAIL ") + what); if !c { failed += 1 } }
         checkSavePreviews(expect)
+        checkSaveLibraryImports(expect)
         expect(AboutSection.shortCommit("abcdef012345") == "abcdef", "About shows a six-character commit")
         expect(AboutSection.shortCommit("abcdef012345+dirty") == "abcdef+dirty", "About preserves the local-changes marker")
         expect(AboutSection.shortCommit("unknown") == "unknown", "About handles missing source metadata")
