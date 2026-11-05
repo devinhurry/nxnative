@@ -239,7 +239,7 @@ def pack(a):
         codesign = Path(codesign).resolve()
         minos = min_os(a.host)
         localizations = launcher_localizations() if a.title_id.upper() == '01007EF00011E000' else []
-        sources = [Path(__file__).resolve(), Path(build_info.__file__), HERE / 'launcher.c', HERE.parent / 'host/save_sync.c', HERE.parent / 'host/save_sync.h', HERE.parent / 'host/save_manager.m', HERE.parent / 'host/save_manager.h', HERE.parent / 'host/romfs_image.h', HERE.parent / 'tools/romfs.py', HERE.parent / 'tools/botw_touch_assets.py', HERE.parent / 'tools/botw_ui_audit.py', HERE.parent / 'tools/save_preview.py'] + swift_sources() + [HERE.parent / 'host' / name for name in ('botw_touch_layout.h', 'botw_touch_style.h', 'touchpad_geometry.h', 'dm_input.h', 'memory_mode.h', 'module.modulemap', 'aoc_files.h', 'launcher_settings.h')] + localizations
+        sources = [Path(__file__).resolve(), Path(build_info.__file__), HERE / 'launcher.c', HERE.parent / 'host/save_sync.c', HERE.parent / 'host/save_sync.h', HERE.parent / 'host/save_manager.m', HERE.parent / 'host/save_manager.h', HERE.parent / 'host/romfs_image.h', HERE.parent / 'tools/romfs.py', HERE.parent / 'tools/botw_touch_assets.py', HERE.parent / 'tools/botw_ui_audit.py', HERE.parent / 'tools/save_preview.py'] + swift_sources() + [HERE.parent / 'host' / name for name in ('botw_touch_layout.h', 'botw_touch_style.h', 'touchpad_geometry.h', 'dm_input.h', 'memory_mode.h', 'module.modulemap', 'aoc_files.h', 'launcher_settings.h', 'picture_lut.h')] + localizations
         from save_preview import rules_path
         preview_rules = rules_path(a.title_id)
         if preview_rules.is_file(): sources.append(preview_rules)

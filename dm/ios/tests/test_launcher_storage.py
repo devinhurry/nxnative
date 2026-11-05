@@ -20,10 +20,10 @@ class LauncherStorageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             tmp = Path(temporary)
             c = tmp / 'module.c'
-            c.write_text('#include "launcher_settings.h"\n#include "memory_mode.h"\n'
+            c.write_text('#include "picture_lut.h"\n#include "launcher_settings.h"\n#include "memory_mode.h"\n'
                          'int check(void) { return dm_low_memory_default(0); }\n')
             objc = tmp / 'module.m'
-            objc.write_text('#include "botw_touch_style.h"\n#include "touchpad_geometry.h"\n'
+            objc.write_text('#include "picture_lut.h"\n#include "botw_touch_style.h"\n#include "touchpad_geometry.h"\n'
                             '#include "botw_stick_settings.h"\n#include "botw_touch_layout.h"\nvoid check(void) {\n'
                             'NSString *icon = dm_botw_touch_button_icon_path(0); (void)icon;\n'
                             'dm_touchpad_stick_response response; (void)dm_botw_stick_settings_read(&response);\n'

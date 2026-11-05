@@ -59,6 +59,11 @@ struct Setting: Decodable, Identifiable {
 }
 struct SettingsFile: Decodable { let settings: [Setting] }
 
+struct PictureLUT: Identifiable, Equatable {
+    let file, name: String
+    var id: String { file }
+}
+
 struct TouchStickResponse {
     static let section = "Touch left stick"
     static let keys: Set<String> = ["DM_BOTW_MOVE_DEADZONE", "DM_BOTW_MOVE_CURVE", "DM_BOTW_MOVE_FULL", "DM_BOTW_PAD_STICK_SIZE_PT"]
@@ -240,6 +245,12 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var isRunning = false
     @Published var saveOperationBusy = false
     @Published private(set) var deferredSettings: Set<String> = []
+    @Published private(set) var pictureLUTName: String?
+    @Published private(set) var pictureLUTs: [PictureLUT] = []
+    @Published var picturePreviewFrame: CGImage?
+    private var pictureLUTFilename: String?
+    private let pictureLUTDirectory: URL
+    private let pictureLUTOverride: String?
 
     private let defaults: UserDefaults
     private let availableMemory: () -> UInt64
@@ -257,7 +268,8 @@ final class LauncherModel: ObservableObject {
     init(_ settings: [Setting], defaults: UserDefaults = .standard,
          availableMemory: @escaping () -> UInt64 = { dm_low_memory_available() },
          phoneGPUName: String? = LauncherModel.phoneGPUName,
-         preferredLanguages: [String] = Locale.preferredLanguages) {
+         preferredLanguages: [String] = Locale.preferredLanguages,
+         pictureLUTDirectory: URL? = nil) {
         self.defaults = defaults
         self.availableMemory = availableMemory
         let settings = settings.map { row -> Setting in
@@ -275,7 +287,29 @@ final class LauncherModel: ObservableObject {
         let env = ProcessInfo.processInfo.environment
         fromLaunch = Set((env["DM_ENV_LAUNCH_KEYS"] ?? "").split(separator: " ").map(String.init))
         fixed = fromLaunch.union((env["DM_ENV_FILE_KEYS"] ?? "").split(separator: " ").map(String.init))
+        self.pictureLUTDirectory = pictureLUTDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("NXNative", isDirectory: true).appendingPathComponent("LUTs", isDirectory: true)
+        pictureLUTOverride = fixed.contains("DM_PRESENT_LUT") ? env["DM_PRESENT_LUT"] : nil
         ignoreSaved = env["DM_SAVED_CHOICES"] == "0"
+        if let path = pictureLUTOverride, path != "none" {
+            let name = URL(fileURLWithPath: path).lastPathComponent
+            pictureLUTName = name
+            pictureLUTFilename = path
+            pictureLUTs = [PictureLUT(file: path, name: name)]
+        } else if pictureLUTOverride == nil, !ignoreSaved {
+            let selected = defaults.dictionary(forKey: "launcher.pictureLUT")
+            let saved = defaults.array(forKey: "launcher.pictureLUTs") as? [[String: String]]
+                ?? selected.map { [$0.compactMapValues { $0 as? String }] } ?? []
+            for item in saved {
+                guard let file = item["file"], file.hasSuffix(".cube"), UUID(uuidString: String(file.dropLast(5))) != nil,
+                      let name = item["name"], !pictureLUTs.contains(where: { $0.file == file }) else { continue }
+                pictureLUTs.append(PictureLUT(file: file, name: name))
+            }
+            let selectedFile = selected?["file"] as? String
+            if let lut = pictureLUTs.first(where: { $0.file == selectedFile }) {
+                pictureLUTFilename = lut.file; pictureLUTName = lut.name
+            }
+        }
         if ignoreSaved { fputs("launcher: saved choices ignored (DM_SAVED_CHOICES=0)\n", stderr) }
         if let s = settings.first(where: { $0.env == Self.lowMemoryKey }) {
             automaticLowMemoryValue = memoryDefault()
@@ -301,6 +335,82 @@ final class LauncherModel: ObservableObject {
         values.merge(touchSnapshot(values)) { _, migrated in migrated }
         alignFrameGeneration()
         loadTouchLayouts()
+    }
+
+    var pictureLUTLocked: Bool { fixed.contains("DM_PRESENT_LUT") || fixed.contains("DM_PRESENT_FILTER") }
+    var selectedPictureLUTID: String? { pictureLUTFilename }
+    func pictureLUTPath(for lut: PictureLUT) -> String {
+        pictureLUTOverride ?? pictureLUTDirectory.appendingPathComponent(lut.file).path
+    }
+    private var pictureLUTPath: String {
+        pictureLUTOverride ?? pictureLUTFilename.map { pictureLUTDirectory.appendingPathComponent($0).path } ?? "none"
+    }
+    private func persistPictureLUTs() {
+        guard !ignoreSaved else { return }
+        defaults.set(pictureLUTs.map { ["file": $0.file, "name": $0.name] }, forKey: "launcher.pictureLUTs")
+        if let lut = pictureLUTs.first(where: { $0.id == pictureLUTFilename }) {
+            defaults.set(["file": lut.file, "name": lut.name], forKey: "launcher.pictureLUT")
+        } else { defaults.removeObject(forKey: "launcher.pictureLUT") }
+    }
+    private func pictureLUTError(_ code: Int) -> NSError {
+        let message: String
+        switch code {
+        case DM_CUBE_TOO_LARGE: message = "The LUT file must be smaller than 32 MB."
+        case DM_CUBE_DIMENSION: message = "Use a 3D .cube LUT with 2 to 65 points per axis."
+        case DM_CUBE_VALUES: message = "The LUT contains invalid or non-finite colour values."
+        case DM_CUBE_IO: message = "The LUT file could not be read. Please import it again."
+        case DM_CUBE_MEMORY: message = "There is not enough memory to load this LUT."
+        default: message = "This is not a valid 3D .cube LUT. Combined 1D and 3D LUTs are not supported."
+        }
+        return NSError(domain: "PictureLUT", code: Int(code), userInfo: [NSLocalizedDescriptionKey: NSLocalizedString(message, comment: "LUT import error")])
+    }
+    func importPictureLUT(from source: URL) throws {
+        guard !pictureLUTLocked else { return }
+        guard source.pathExtension.lowercased() == "cube" else { throw pictureLUTError(DM_CUBE_FORMAT) }
+        let scoped = source.startAccessingSecurityScopedResource()
+        defer { if scoped { source.stopAccessingSecurityScopedResource() } }
+        if let size = try source.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > Int(DM_CUBE_MAX_BYTES) { throw pictureLUTError(DM_CUBE_TOO_LARGE) }
+        let data = try Data(contentsOf: source)
+        guard data.count <= Int(DM_CUBE_MAX_BYTES) else { throw pictureLUTError(DM_CUBE_TOO_LARGE) }
+        try FileManager.default.createDirectory(at: pictureLUTDirectory, withIntermediateDirectories: true)
+        let filename = UUID().uuidString + ".cube", destination = pictureLUTDirectory.appendingPathComponent(filename)
+        try data.write(to: destination, options: .atomic)
+        pictureLUTs.append(PictureLUT(file: filename, name: source.lastPathComponent))
+        do { try selectPictureLUT(filename) }
+        catch {
+            pictureLUTs.removeAll { $0.id == filename }
+            try? FileManager.default.removeItem(at: destination)
+            throw error
+        }
+    }
+    func selectPictureLUT(_ id: String) throws {
+        guard !fixed.contains("DM_PRESENT_FILTER"), let lut = pictureLUTs.first(where: { $0.id == id }) else { return }
+        let path = pictureLUTPath(for: lut)
+        var code = dm_cube_validate_file(path)
+        guard code == DM_CUBE_OK else { throw pictureLUTError(Int(code)) }
+        #if os(iOS) || DM_HOST_UI
+        if isRunning { code = dm_launcher_lut_apply(path) }
+        #endif
+        guard code == DM_CUBE_OK else { throw pictureLUTError(Int(code)) }
+        pictureLUTFilename = lut.file; pictureLUTName = lut.name
+        setenv("DM_PRESENT_LUT", path, 1)
+        if pictureLUTOverride == nil { persistPictureLUTs() }
+        if let mode = settings.first(where: { $0.env == "DM_PRESENT_FILTER" }) { setValue("custom", for: mode) }
+    }
+    func removePictureLUT(_ id: String? = nil) {
+        guard !pictureLUTLocked, let id = id ?? pictureLUTFilename,
+              let lut = pictureLUTs.first(where: { $0.id == id }) else { return }
+        if id == pictureLUTFilename {
+            #if os(iOS) || DM_HOST_UI
+            if isRunning { _ = dm_launcher_lut_apply("none") }
+            #endif
+            setenv("DM_PRESENT_LUT", "none", 1)
+            pictureLUTFilename = nil; pictureLUTName = nil
+            if values["DM_PRESENT_FILTER"] == "custom", let mode = settings.first(where: { $0.env == "DM_PRESENT_FILTER" }) { setValue("off", for: mode) }
+        }
+        pictureLUTs.removeAll { $0.id == id }
+        persistPictureLUTs()
+        try? FileManager.default.removeItem(at: pictureLUTDirectory.appendingPathComponent(lut.file))
     }
 
     private static func legacyTouchPoints(_ defaults: UserDefaults) -> [String: String] {
@@ -850,6 +960,7 @@ final class LauncherModel: ObservableObject {
     // differs from the game's default is stored. Memory and language keep explicit
     // manual overrides even at the automatic value; automatic choices are never saved.
     func apply() {
+        setenv("DM_PRESENT_LUT", pictureLUTPath, 1)
         for s in settings {
             let v = values[s.env] ?? s.def
             if fixed.contains(s.env) { fputs("launcher: \(s.env) kept at \(v) (\(fromLaunch.contains(s.env) ? "launch environment" : "env file"))\n", stderr); continue }
@@ -877,6 +988,7 @@ final class LauncherModel: ObservableObject {
 
     // DM_LAUNCHER=0: no screen, but the saved choices still apply (only DM_SAVED_CHOICES=0 ignores them); nothing is written
     func applySaved() {
+        setenv("DM_PRESENT_LUT", pictureLUTPath, 1)
         for s in settings where !fixed.contains(s.env) {
             let v = values[s.env] ?? s.def
             // Device defaults can differ from the compiled profile even when no
