@@ -583,11 +583,39 @@ static BOOL sm_is_native(NSString *path) {
     if (fd >= 0) { do { n = read(fd,magic,sizeof magic); } while (n < 0 && errno == EINTR); close(fd); }
     return n == (ssize_t)sizeof magic && !memcmp(magic,"DMSYNC1\n",sizeof magic);
 }
-// Explicit save/ containers and collection manifests are unambiguous. A lone
-// arbitrary directory is not: return both real layouts instead of guessing by name.
+// Recognize the progress-file pair used by BOTW's numbered save format. The
+// screenshot is optional; even a damaged caption must keep its game-owned path.
+static BOOL sm_progress_slot(NSString *path) {
+    for (NSString *file in @[@"game_data.sav",@"caption.sav"]) {
+        struct stat st;
+        if (lstat(sm_path(path,file).fileSystemRepresentation,&st) || !S_ISREG(st.st_mode)) return NO;
+    }
+    return YES;
+}
+static BOOL sm_numeric_folder(NSString *name) {
+    return name.length && [name rangeOfCharacterFromSet:[[NSCharacterSet characterSetWithCharactersInString:@"0123456789"] invertedSet]].location == NSNotFound;
+}
+static BOOL sm_numbered_save(NSString *path) {
+    for (NSString *name in sm_ids(path))
+        if (sm_numeric_folder(name) && sm_progress_slot(sm_path(path,name))) return YES;
+    return NO;
+}
+static BOOL sm_add_raw_import(NSString *path, NSString *source, NSString *name, NSMutableArray *entries, NSError **error) {
+    NSMutableDictionary *entry = [@{@"path":path,@"raw":@YES,@"name":name} mutableCopy];
+    if (sm_progress_slot(path)) {
+        // Picking 3/ in the directory picker must still produce save/3/.
+        // An archive of loose progress files has lost this identity; never guess it.
+        if (!sm_dir(source) || !sm_numeric_folder(source.lastPathComponent))
+            return sm_fail(error,@"These progress files need their numbered folder. Import the numbered directory itself or a package that keeps it.");
+        entry[@"subdir"] = source.lastPathComponent;
+    }
+    [entries addObject:entry]; return YES;
+}
+// Explicit containers, manifests and recognized game roots are unambiguous.
+// Other lone directories need a real layout choice rather than a name-based guess.
 static BOOL sm_known_container(NSString *path) {
     for (NSUInteger depth = 0; depth < 32; depth++) {
-        if (sm_has_save(path) || sm_exists(sm_path(path,@"library.json")) || sm_slots(path).count) return YES;
+        if (sm_has_save(path) || sm_exists(sm_path(path,@"library.json")) || sm_slots(path).count || sm_numbered_save(path) || sm_progress_slot(path)) return YES;
         NSArray *names = sm_children(path,nil);
         if (names.count != 1 || !sm_dir(sm_path(path,names[0]))) return NO;
         path = sm_path(path,names[0]);
@@ -638,6 +666,7 @@ static BOOL sm_detect_import(NSString *payload, NSString *source, NSString *fall
     if (sm_has_save(payload)) {
         [entries addObject:@{@"path":payload,@"raw":@NO,@"name":fallback}]; return YES;
     }
+    if (sm_numbered_save(payload)) return sm_add_raw_import(payload,source,fallback,entries,error);
     NSMutableArray<NSString *> *folders = [NSMutableArray array];
     for (NSString *name in names) if (sm_dir(sm_path(payload,name))) [folders addObject:name];
     if (folders.count == 1) {
@@ -663,7 +692,7 @@ static BOOL sm_detect_import(NSString *payload, NSString *source, NSString *fall
         }
         if ([choice isEqual:@"inside"]) return sm_detect_import(child,source,fallback,title,@"root",entries,layout,scratch,depth+1,error);
     }
-    [entries addObject:@{@"path":payload,@"raw":@YES,@"name":fallback}]; return YES;
+    return sm_add_raw_import(payload,source,fallback,entries,error);
 }
 static NSDictionary *sm_import_many(NSString *root, NSString *title, NSArray *sources, NSDictionary *choices, NSString *name, BOOL raw, NSError **error) {
     if (![sources isKindOfClass:NSArray.class] || !sources.count || sources.count > 1000 || ![choices isKindOfClass:NSDictionary.class]) {
@@ -697,7 +726,7 @@ static NSDictionary *sm_import_many(NSString *root, NSString *title, NSArray *so
                     payload = input;
                 }
                 NSMutableArray *entries = [NSMutableArray array];
-                if (raw) [entries addObject:@{@"path":payload,@"raw":@YES,@"name":source.lastPathComponent}];
+                if (raw) { if (!sm_add_raw_import(payload,source,source.lastPathComponent,entries,&failure)) return; }
                 else if (!sm_detect_import(payload,source,source.lastPathComponent.stringByDeletingPathExtension,title,choices[source] ?: choices[value],entries,&layout,job,0,&failure)) return;
                 if (layout) { ok = YES; return; }
                 for (NSDictionary *entry in entries) {
@@ -709,7 +738,9 @@ static NSDictionary *sm_import_many(NSString *root, NSString *title, NSArray *so
                     NSString *label = name.length ? name : ([info[@"name"] isKindOfClass:NSString.class] ? info[@"name"] : entry[@"name"]);
                     if (!sm_name(label,&failure)) return;
                     NSString *slot = NSUUID.UUID.UUIDString.lowercaseString, *stage = sm_path(sm_path(job,@"entries"),slot);
-                    if (!sm_mkdir(stage,&failure) || (isRaw ? !sm_copy_tree(from,sm_path(stage,@"save"),&failure) :
+                    NSString *target = sm_path(stage,@"save");
+                    if (entry[@"subdir"]) target = sm_path(target,entry[@"subdir"]);
+                    if (!sm_mkdir(stage,&failure) || (isRaw ? !sm_copy_tree(from,target,&failure) :
                         (!sm_copy_data(from,stage,&failure) || !sm_restore_names(info,stage,&failure)))) return;
                     NSMutableDictionary *record = [sm_info(title,label,@"import") mutableCopy]; record[@"import_batch"] = job.lastPathComponent;
                     if (!sm_write(sm_path(stage,@"info.json"),record,&failure)) return;

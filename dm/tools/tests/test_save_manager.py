@@ -340,12 +340,69 @@ class SaveManager(unittest.TestCase):
             self.assertEqual((self.save(slot) / '0/progress.dat').read_text(), 'progress')
             self.assertFalse((self.save(slot) / 'progress.dat').exists())
 
+    def test_recognized_numbered_progress_keeps_its_directory_through_wrappers(self):
+        files = {'3/game_data.sav': 'progress', '3/caption.sav': 'caption', '3/caption.jpg': 'image'}
+        self.call('list', game=OTHER_GAME)
+        self.put(self.save() / 'option.sav', 'existing progress')
+        for kind in ('zip', '7z'):
+            for index, prefix in enumerate(('', 'backup/', '20261106/', 'backup/20261106/', 'a/save/')):
+                with self.subTest(kind=kind, prefix=prefix):
+                    archive = self.compressed(kind, f'numbered-{kind}-{index}', {prefix + p: data for p, data in files.items()})
+                    for command in ('import', 'import-inside'):
+                        result = self.call(command, archive, game=OTHER_GAME)
+                        self.assertEqual(result['count'], 1)
+                        save = self.save(result['id'])
+                        for path, contents in files.items():
+                            self.assertEqual((save / path).read_text(), contents)
+                        self.assertEqual({p.relative_to(save).as_posix() for p in save.rglob('*') if p.is_file()}, set(files))
+                        self.assertFalse((save / 'game_data.sav').exists())
+        with_options = self.compressed('zip', 'with-options', {'option.sav': 'options', **files})
+        result = self.call('import', with_options, game=OTHER_GAME)
+        self.assertEqual((self.save(result['id']) / 'option.sav').read_text(), 'options')
+        self.assertEqual((self.save() / 'option.sav').read_text(), 'existing progress')
+
+    def test_selecting_a_numbered_progress_directory_preserves_its_name(self):
+        source = self.folder / 'external/3'
+        files = {'game_data.sav': 'progress', 'caption.sav': '', 'caption.jpg': 'image'}
+        for path, contents in files.items():
+            self.put(source / path, contents)
+        operations = [('import', (source,)), ('import-inside', (source,)), ('import-raw', (source,)),
+                      ('import-many', (json.dumps([str(source)]), '{}'))]
+        for command, args in operations:
+            with self.subTest(command=command):
+                result = self.call(command, *args, game=OTHER_GAME)
+                save = self.save(result['id'])
+                for path, contents in files.items():
+                    self.assertEqual((save / '3' / path).read_text(), contents)
+                    self.assertFalse((save / path).exists())
+        self.assertEqual((source / 'game_data.sav').read_text(), 'progress')
+
+    def test_loose_progress_files_require_their_numbered_parent_without_publishing(self):
+        self.call('list', game=OTHER_GAME)
+        self.put(self.save() / 'option.sav', 'existing progress')
+        before = self.call('list', game=OTHER_GAME)
+        files = {'game_data.sav': 'progress', 'caption.sav': 'caption', 'caption.jpg': 'image'}
+        for kind in ('zip', '7z'):
+            for index, prefix in enumerate(('', 'backup/', 'backup/inner/')):
+                archive = self.compressed(kind, f'loose-{index}', {prefix + p: data for p, data in files.items()})
+                message = self.call('import', archive, game=OTHER_GAME, success=False)
+                self.assertIn('numbered folder', message)
+                self.assertEqual(self.call('list', game=OTHER_GAME), before)
+        loose = self.folder / 'loose'
+        for path, contents in files.items():
+            self.put(loose / path, contents)
+        valid = self.compressed('zip', 'valid-first', {'option.sav': 'other progress'})
+        message = self.call('import-many', json.dumps([str(valid), str(loose)]), '{}', game=OTHER_GAME, success=False)
+        self.assertIn('numbered folder', message)
+        self.assertEqual(self.call('list', game=OTHER_GAME), before)
+        self.assertFalse(any((self.root / 'saves/staging').iterdir()))
+
     def test_single_folder_import_requires_a_real_layout_choice_without_publishing(self):
         self.call('list')
         self.put(self.save() / 'option.sav', 'existing')
         for kind in ('zip', '7z'):
             archive = self.compressed(kind, 'dated-' + kind, {
-                '20261105/option.sav': 'options', '20261105/3/game_data.sav': 'progress',
+                '20261105/option.sav': 'options', '20261105/3/progress.bin': 'progress',
                 '20261105/3/caption.sav': 'caption', '20261105/3/caption.jpg': 'image'})
             before = self.call('list')
             layout = self.call('import', archive)['needs_layout']
@@ -355,7 +412,7 @@ class SaveManager(unittest.TestCase):
             self.assertFalse(any((self.root / 'saves/staging').iterdir()))
             result = self.call('import-many', json.dumps([str(archive)]), json.dumps({str(archive): 'inside'}))
             self.assertEqual(result['count'], 1)
-            self.assertEqual((self.save(result['id']) / '3/game_data.sav').read_text(), 'progress')
+            self.assertEqual((self.save(result['id']) / '3/progress.bin').read_text(), 'progress')
             self.assertFalse((self.save(result['id']) / '20261105').exists())
         archive = self.compressed('zip', 'game-directory', {'game-folder/main': 'game-owned directory'})
         self.assertIn('needs_layout', self.call('import', archive))
