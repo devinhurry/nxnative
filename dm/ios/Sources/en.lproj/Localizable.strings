@@ -335,13 +335,11 @@
 "Manage saves" = "Manage saves";
 "Device / OS" = "Device / OS";
 "Importing save…" = "Importing save…";
-"Import .dmsync, ZIP, 7z or RAR files, or save folders. Extract password-protected or split archives first." = "Import .dmsync, ZIP, 7z or RAR files, or save folders. Extract password-protected or split archives first.";
 "New save" = "New save";
 "Duplicate save" = "Duplicate save";
 "Rename save" = "Rename save";
 "Save name" = "Save name";
 "Copy" = "Copy";
-"Select a save to use the next time you play. Default shares progress with older apps; other saves sync separately." = "Select a save to use the next time you play. Default shares progress with older apps; other saves sync separately.";
 "A custom save path is active. Manage that folder outside the app." = "A custom save path is active. Manage that folder outside the app.";
 "Close the game to switch or manage saves." = "Close the game to switch or manage saves.";
 "Save management is unavailable for this app." = "Save management is unavailable for this app.";
@@ -394,8 +392,6 @@
 "Use the files inside" = "Use the files inside";
 "Keep the outer folder" = "Keep the outer folder";
 "The archive contains one folder. Choose which layout matches your game save." = "The archive contains one folder. Choose which layout matches your game save.";
-"Select several import files, or import a ZIP containing multiple saves. Export saves lets you select some or all saves. Imports add new copies without replacing existing saves." = "Select several import files, or import a ZIP containing multiple saves. Export saves lets you select some or all saves. Imports add new copies without replacing existing saves.";
-"Exports are ZIP files. For manual restore, put each folder containing save/ directly inside saves/." = "Exports are ZIP files. For manual restore, put each folder containing save/ directly inside saves/.";
 "The interrupted import has invalid metadata. Its data has been kept." = "The interrupted import has invalid metadata. Its data has been kept.";
 "An interrupted import cannot be completed without replacing a save. Its data has been kept." = "An interrupted import cannot be completed without replacing a save. Its data has been kept.";
 "Cannot copy the save files." = "Cannot copy the save files.";
@@ -430,3 +426,4 @@
 "Compare original" = "Compare original";
 "Hide controls" = "Hide controls";
 "Show controls" = "Show controls";
+"Importing will not delete your current save." = "Importing will not delete your current save.";

@@ -11,6 +11,11 @@
 // This component fixture has no game frame or native rune pixels.
 int dm_botw_rune_icon_snapshot(dm_botw_rune_icon_state *out) { if (out) memset(out,0,sizeof *out); return 0; }
 void dm_launcher_grab_game_frame(void (^callback)(CGImageRef)) { if (callback) callback(NULL); }
+// The fixture has no renderer, as in launcher_storage_check.swift.
+void dm_launcher_grab_filter_frame(void (^callback)(CGImageRef)) { if (callback) callback(NULL); }
+CGImageRef dm_launcher_filter_preview(CGImageRef image, const char *mode, float strength, int width) { return NULL; }
+CGImageRef dm_launcher_lut_preview(CGImageRef image, const char *path, float strength, int width) { return NULL; }
+int dm_launcher_lut_apply(const char *path) { return 0; }
 
 int dm_mac_launcher(void);
 int dm_mac_show_game_settings(void *, void (*)(void));
@@ -91,6 +96,10 @@ static BOOL hasAXLabel(id node, NSString *label, NSString *role, NSHashTable *vi
     if (!node || depth > 128 || [visited containsObject:node]) return NO;
     [visited addObject:node];
     NSString *nodeLabel = axValue(node, @selector(accessibilityLabel));
+    if (![nodeLabel isKindOfClass:NSString.class] || !nodeLabel.length) {
+        id value = axValue(node, @selector(accessibilityValue));
+        if ([value isKindOfClass:NSString.class]) nodeLabel = value;
+    }
     NSString *nodeRole = axValue(node, @selector(accessibilityRole));
     if ((!label || ([nodeLabel isKindOfClass:NSString.class] && [nodeLabel isEqual:label])) &&
         (!role || [nodeRole isEqual:role])) return YES;
@@ -215,6 +224,42 @@ static void waitForSection(NSWindow *sheet, NSString *section, NSInteger index, 
     dispatch_async(dispatch_get_main_queue(), poll);
 }
 
+static void checkExportCount(NSWindow *selection, int count, void (^next)(void)) {
+    NSString *label = [NSString stringWithFormat:@"Selected: %d",count];
+    waitForCondition(selection,label,^{
+        NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
+        return hasAXLabel(selection,label,nil,nodes,0);
+    },^{ check(YES,label.UTF8String); next(); });
+}
+
+static void checkExportToggles(NSWindow *selection, NSUInteger step, void (^next)(void)) {
+    static const int counts[] = {2,1,2,0,1};
+    NSArray *labels = @[@"Test campaign",@"Select all saves",@"Select all saves",@"Default"];
+    checkExportCount(selection,counts[step],^{
+        if (step == 3) {
+            NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
+            check(disabledAX(selection,@"saves.export.confirm",nodes,0),"export is disabled with no saves selected");
+        }
+        if (step == 4) { next(); return; }
+        waitForPress(selection,nil,labels[step],NSAccessibilityCheckBoxRole,"export checkbox updates the selection",^{
+            checkExportToggles(selection,step+1,next);
+        });
+    });
+}
+
+static void checkFreshExportSelection(NSWindow *sheet, void (^next)(void)) {
+    waitForPress(sheet,@"saves.export-many",nil,nil,"batch export can be reopened",^{
+        waitForCondition(sheet,@"fresh export selection",^{ return (BOOL)(sheet.attachedSheet != nil); },^{
+            NSWindow *selection = sheet.attachedSheet;
+            checkExportCount(selection,2,^{
+                waitForPress(selection,nil,@"Cancel",NSAccessibilityButtonRole,"batch export can be cancelled",^{
+                    waitForCondition(sheet,@"export selection to close",^{ return (BOOL)(sheet.attachedSheet == nil); },next);
+                });
+            });
+        });
+    });
+}
+
 static void checkExportSelection(NSWindow *sheet, void (^next)(void)) {
     waitForPress(sheet,@"saves.export-many",nil,nil,"batch export opens from Saves",^{
         waitForCondition(sheet,@"export selection sheet",^{ return (BOOL)(sheet.attachedSheet != nil); },^{
@@ -224,8 +269,22 @@ static void checkExportSelection(NSWindow *sheet, void (^next)(void)) {
                 return hasAXLabel(selection,@"Select all saves",NSAccessibilityCheckBoxRole,nodes,0);
             },^{
                 check(YES,"batch export includes the select-all control");
-                waitForPress(selection,nil,@"Cancel",NSAccessibilityButtonRole,"batch export can be cancelled",^{
-                    waitForCondition(sheet,@"export selection to close",^{ return (BOOL)(sheet.attachedSheet == nil); },next);
+                if (getenv("DM_TEST_SCREENSHOT")) {
+                    NSBitmapImageRep *image = [selection.contentView bitmapImageRepForCachingDisplayInRect:selection.contentView.bounds];
+                    [selection.contentView cacheDisplayInRect:selection.contentView.bounds toBitmapImageRep:image];
+                    NSString *path = [@(getenv("DM_TEST_SCREENSHOT")).stringByDeletingLastPathComponent stringByAppendingPathComponent:@"export.png"];
+                    [[image representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:path atomically:YES];
+                }
+                checkExportToggles(selection,0,^{
+                    waitForPress(selection,@"saves.export.confirm",nil,NSAccessibilityButtonRole,"a selected subset can be exported",^{
+                        waitForCondition(sheet,@"native save panel",^{ return [NSApp.modalWindow isKindOfClass:NSSavePanel.class]; },^{
+                            check(YES,"the export selection reaches the native save panel");
+                            [(NSSavePanel *)NSApp.modalWindow cancel:nil];
+                            waitForCondition(sheet,@"save panel to close",^{
+                                return (BOOL)(![NSApp.modalWindow isKindOfClass:NSSavePanel.class] && sheet.attachedSheet == nil);
+                            },^{ checkFreshExportSelection(sheet,next); });
+                        });
+                    });
                 });
             });
         });

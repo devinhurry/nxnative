@@ -34,6 +34,11 @@ BOOL dm_startup_prepare(void) {
 // Component fixture only: native host setters are covered by t_launcher_settings.
 void dm_launcher_settings_pause(int on) { fprintf(stderr, "fixture: settings paused=%d\n", !!on); }
 void dm_launcher_grab_game_frame(void (^callback)(CGImageRef)) { callback(NULL); }
+// This launcher fixture has no renderer, as in launcher_storage_check.swift.
+void dm_launcher_grab_filter_frame(void (^callback)(CGImageRef)) { callback(NULL); }
+CGImageRef dm_launcher_filter_preview(CGImageRef image, const char *mode, float strength, int width) { return NULL; }
+CGImageRef dm_launcher_lut_preview(CGImageRef image, const char *path, float strength, int width) { return NULL; }
+int dm_launcher_lut_apply(const char *path) { return 0; }
 int dm_launcher_setting_is_live(const char *key) {
     return !strncmp(key, "DM_BOTW_", 8) || !strcmp(key, "DM_TOUCH_HAPTICS") || !strncmp(key, "DM_RUMBLE", 9);
 }

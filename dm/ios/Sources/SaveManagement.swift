@@ -219,6 +219,44 @@ private extension URL {
     func flatMapData() -> Data? { try? Data(contentsOf: self) }
 }
 
+private struct SaveExportSelection: Identifiable {
+    let id = UUID()
+    let saves: [ManagedSave]
+}
+
+private struct SaveExportSelectionPage: View {
+    let saves: [ManagedSave]
+    let onExport: ([String]) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var selected: Set<String>
+
+    init(saves: [ManagedSave], onExport: @escaping ([String]) -> Void) {
+        self.saves = saves
+        self.onExport = onExport
+        _selected = State(initialValue: Set(saves.map(\.id)))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Toggle("Select all saves", isOn: Binding(get: { selected.count == saves.count }, set: { selected = $0 ? Set(saves.map(\.id)) : [] }))
+                ForEach(saves) { save in
+                    Toggle(save.displayName, isOn: Binding(get: { selected.contains(save.id) }, set: { if $0 { selected.insert(save.id) } else { selected.remove(save.id) } }))
+                }
+                Text(String.localizedStringWithFormat(NSLocalizedString("Selected: %d", comment: "Export selection count"), selected.count))
+            }.navigationTitle("Export saves")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Export") {
+                            onExport(saves.map(\.id).filter { selected.contains($0) }); dismiss()
+                        }.disabled(selected.isEmpty).accessibilityIdentifier("saves.export.confirm")
+                    }
+                }
+        }.frame(minWidth: 280, minHeight: 330)
+    }
+}
+
 struct SaveManagementPage: View {
     @ObservedObject var launcher: LauncherModel
     @StateObject private var library = SaveLibrary()
@@ -234,8 +272,7 @@ struct SaveManagementPage: View {
     @State private var importScopes: [URL] = []
     @State private var importChoices: [String: String] = [:]
     @State private var retryImport = false
-    @State private var selectingExports = false
-    @State private var selectedExports: Set<String> = []
+    @State private var exportSelection: SaveExportSelection?
     @State private var pendingExports: [String]?
     private var language: String {
         launcher.values["DM_LANG"] ?? ProcessInfo.processInfo.environment["DM_LANG"]
@@ -255,18 +292,16 @@ struct SaveManagementPage: View {
                 } else if library.selectionError != nil {
                     Label("Choose a save to continue. Your progress has been kept.", systemImage: "info.circle").font(.callout)
                 }
-                HStack {
+                HStack(alignment: .top) {
                     Button { editID = ""; name = ""; editing = "create" } label: { Label("New save", systemImage: "plus") }
                         .accessibilityIdentifier("saves.new")
-                    Button { chooseImport() } label: { Label("Import…", systemImage: "square.and.arrow.down") }
-                        .accessibilityIdentifier("saves.import")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Button { chooseImport() } label: { Label("Import…", systemImage: "square.and.arrow.down") }
+                            .accessibilityIdentifier("saves.import")
+                        Text("Importing will not delete your current save.").font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }.buttonStyle(.bordered).disabled(locked || library.busy)
-                Button {
-                    selectedExports = Set(library.saves.map(\.id)); selectingExports = true
-                } label: { Label("Export saves…", systemImage: "square.and.arrow.up") }
-                    .disabled(locked || library.busy || library.saves.isEmpty).accessibilityIdentifier("saves.export-many")
-                Button { refresh() } label: { Label("Refresh saves", systemImage: "arrow.clockwise") }
-                    .disabled(library.busy).accessibilityIdentifier("saves.refresh")
                 if library.busy { ProgressView(LocalizedStringKey(library.activity)).accessibilityIdentifier("saves.busy") }
                 if library.importedCount > 0 { Text(String.localizedStringWithFormat(NSLocalizedString("Imported %d saves.", comment: "Save import result"), library.importedCount)).font(.callout).foregroundStyle(.secondary) }
                 ForEach(library.saves) { save in saveRow(save) }
@@ -277,12 +312,13 @@ struct SaveManagementPage: View {
                 }
                 #endif
             }
-        } header: { Text("Saves") } footer: {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Select a save to use the next time you play. Default shares progress with older apps; other saves sync separately.")
-                Text("Import .dmsync, ZIP, 7z or RAR files, or save folders. Extract password-protected or split archives first.")
-                Text("Exports are ZIP files. For manual restore, put each folder containing save/ directly inside saves/.")
-                Text("Select several import files, or import a ZIP containing multiple saves. Export saves lets you select some or all saves. Imports add new copies without replacing existing saves.")
+        } header: {
+            HStack {
+                Text("Saves")
+                Spacer()
+                Button { exportSelection = SaveExportSelection(saves: library.saves) } label: { Label("Export saves…", systemImage: "square.and.arrow.up") }
+                    .buttonStyle(.borderless).disabled(locked || library.busy || library.saves.isEmpty)
+                    .accessibilityIdentifier("saves.export-many")
             }
         }
         Section {
@@ -293,6 +329,8 @@ struct SaveManagementPage: View {
                 Text("Find this app under On My iPhone in Files.").font(.footnote)
                 #endif
             }
+            Button { refresh() } label: { Label("Refresh saves", systemImage: "arrow.clockwise") }
+                .disabled(library.busy).accessibilityIdentifier("saves.refresh")
             if !library.trash.isEmpty {
                 DisclosureGroup("Recently deleted", isExpanded: $showDeleted) {
                     ForEach(library.trash) { save in
@@ -339,24 +377,10 @@ struct SaveManagementPage: View {
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { library.importLayout = nil } } }
             }.frame(minWidth: 280, minHeight: 330)
         }
-        .sheet(isPresented: $selectingExports, onDismiss: {
+        .sheet(item: $exportSelection, onDismiss: {
             if let ids = pendingExports { pendingExports = nil; chooseExport(ids: ids) }
-        }) {
-            NavigationStack {
-                Form {
-                    Toggle("Select all saves", isOn: Binding(get: { selectedExports.count == library.saves.count }, set: { selectedExports = $0 ? Set(library.saves.map(\.id)) : [] }))
-                    ForEach(library.saves) { save in
-                        Toggle(save.displayName, isOn: Binding(get: { selectedExports.contains(save.id) }, set: { if $0 { selectedExports.insert(save.id) } else { selectedExports.remove(save.id) } }))
-                    }
-                    Text(String.localizedStringWithFormat(NSLocalizedString("Selected: %d", comment: "Export selection count"), selectedExports.count))
-                }.navigationTitle("Export saves")
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { selectingExports = false } }
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Export") { pendingExports = library.saves.map(\.id).filter { selectedExports.contains($0) }; selectingExports = false }.disabled(selectedExports.isEmpty)
-                        }
-                    }
-            }.frame(minWidth: 280, minHeight: 330)
+        }) { selection in
+            SaveExportSelectionPage(saves: selection.saves) { pendingExports = $0 }
         }
         #if os(iOS)
         .sheet(item: Binding(get: { exportURL.map { SaveExportURL(url: $0) } }, set: { if $0 == nil { clearExport() } })) { item in
