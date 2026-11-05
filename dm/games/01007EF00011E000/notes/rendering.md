@@ -2,6 +2,48 @@
 
 ## Rendering
 
+### Picture filters (current)
+
+The shared [final-picture filters](../../../../docs/reference/rendering.md#picture-filters-in-the-final-present)
+were checked on 2026-11-05 with this checkout's `scripts/run_mac.py --test`,
+the matching `b-c2cc5a7544c5` libraries and a copy of the outdoors save.
+Original, Vivid, Warm and Cool, then the true 33-cubed Cinematic LUT and an
+external CUBE selected as Custom LUT, reached the outdoor save and captured
+1280x720 final-present PNGs at frame 2,100. Each run exited normally without
+`[RED]` or crash lines. Source and shader preparation reused the existing
+extraction and translation outputs. The [fixed-aspect capture recipe](../../../../docs/reference/rendering.md#capturing-a-native-aspect-game-at-a-fixed-output-size)
+corrects the first screenshots, which squeezed a 2.1513-aspect camera into
+16:9. The replacement captures log a 1.7778 camera aspect; no image resizing
+was applied afterward. Their in-game clock and animated foliage can differ.
+
+All four styles, original/zero-strength identity, intensity blending, sRGB,
+alpha, letterbox, MetalFX and independent presentation regions pass the
+synthetic pixel fixture (1,086 checks), including custom-table axis order,
+input domains, trilinear interpolation and retained in-flight tables. The CUBE
+reader and shared launcher's import, persistence, live replacement and removal
+checks pass; 267 iPhone sources compile and the unsigned production project's
+synthetic compile/link build passes. The complete graphics suite,
+`make -C dm/gfx/tests GAME=01007EF00011E000 run`, also passes. These are not
+physical-iPhone appearance or performance results.
+
+The current-picture editor follow-up uses the same captured outdoor frame for
+its full preview, style thumbnails and original comparison. A native Mac
+settings session opened the new page, selected Cinematic and toggled Compare
+original; AppKit view captures record the actual interface. The comparison
+restores the original picture while retaining the selected style. The shared
+editor also passes 320-, 720- and 1,000-point layout checks. The production iOS
+project compiles and links the preview, unsigned; no phone UI acceptance is
+claimed. See the [shared preview mechanism](../../../../docs/reference/rendering.md#picture-filters-in-the-final-present).
+
+Only BOTW has a complete local Mac build eligible for `regress.py`. Its static
+`check --games 01007EF00011E000 --no-smoke` comparison passes: 19,592/19,592
+shaders on both revisions, no changed MSL, no new shader or interface failures.
+The chain lock and game shader libraries were not changed. The earlier
+installed-compiler mismatch did not prevent this completed cached comparison.
+Other games, physical iPhone play and the new LUT's frame-time overhead remain
+unchecked. The earlier 0.055 ms final-present timing is not a LUT measurement.
+Evidence is under `picture-filters-20261105/` in the game's work folder.
+
 #### Experimental MetalFX frame generation
 
 **MacNativeGames parity audit (2026-11-01, initial source comparison).** The current `expriment` worktree was compared with upstream main `92ec79bd10c006e1cb7ca32d7ac1d8f66c758a15`, fetched into `01007EF00011E000-work/framegen-parity-20261101/` with a source manifest. This is implementation coverage, not a same-device performance comparison. The original adapted source remains credited at its original revision. This table records the initial gaps; current implementation and functional acceptance are tracked in the [completion checklist](../../../../docs/framegen-parity.md):

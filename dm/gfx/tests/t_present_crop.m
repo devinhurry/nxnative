@@ -38,9 +38,244 @@ static int check_present_resize(id<MTLTexture> src, int w, int h) {
     id<MTLTexture> out=[g_dev newTextureWithDescriptor:d];res_add(out);res_commit();
     id<MTL4CommandAllocator> al=[g_dev newCommandAllocator];id<MTL4CommandBuffer> cb=[g_dev newCommandBuffer];id<MTLSharedEvent> ev=[g_dev newSharedEvent];
     if (!out || !al || !cb || !ev) MDIE("present command resource allocation failed");
-    [cb beginCommandBufferWithAllocator:al];int kind=present_encode_m4(cb,src,out,NULL,g_present_uv[0],&g_fx_present);[cb endCommandBuffer];
+    [cb beginCommandBufferWithAllocator:al];int kind=present_encode_m4(cb,src,out,NULL,g_present_uv[0],&g_fx_present,NULL);[cb endCommandBuffer];
     [g_q4 commit:&cb count:1];[g_q4 signalEvent:ev value:1];
     EXPECT("resize present completes",1,[ev waitUntilSignaledValue:1 timeoutMS:10000]);res_remove(out);return kind;
+}
+
+static void filter_render(id<MTLTexture> src, id<MTLTexture> dst, uint8_t pixels[512], int metal4) {
+    if (metal4) EXPECT("filtered capture completes", PRESENT_STANDARD, present_offscreen_wait(src, NULL, dst));
+    else {
+        id<MTLCommandBuffer> cb = [g_q commandBuffer];
+        EXPECT("filtered classic present encodes", 1, present_encode(cb, src, dst, NULL));
+        [cb commit]; [cb waitUntilCompleted];
+        EXPECT("filtered classic present completes", MTLCommandBufferStatusCompleted, cb.status);
+    }
+    [dst getBytes:pixels bytesPerRow:64 fromRegion:MTLRegionMake2D(0, 0, 16, 8) mipmapLevel:0];
+}
+
+static void check_filter_editor(void) {
+    uint8_t input[256],result[256],rendered[512];
+    for (int y=0;y<8;y++) for (int x=0;x<8;x++) {
+        int p=4*(y*8+x); input[p]=x*29; input[p+1]=y*31; input[p+2]=40+x*11+y*7; input[p+3]=255;
+    }
+    CGColorSpaceRef cs=CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGContextRef original=CGBitmapContextCreate(input,8,8,8,32,cs,kCGImageAlphaPremultipliedLast|kCGBitmapByteOrder32Big);
+    CGContextRef decoded=CGBitmapContextCreate(result,8,8,8,32,cs,kCGImageAlphaPremultipliedLast|kCGBitmapByteOrder32Big);
+    CGImageRef image=CGBitmapContextCreateImage(original);
+    MTLTextureDescriptor *d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:8 height:8 mipmapped:NO];
+    d.storageMode=MTLStorageModeShared; d.usage=MTLTextureUsageShaderRead; id<MTLTexture> src=[g_dev newTextureWithDescriptor:d];
+    d.width=16; d.usage=MTLTextureUsageRenderTarget; id<MTLTexture> dst=[g_dev newTextureWithDescriptor:d];
+    [src replaceRegion:MTLRegionMake2D(0,0,8,8) mipmapLevel:0 withBytes:input bytesPerRow:32];
+    res_add(src); res_add(dst); res_commit();
+    int saved_origin=atomic_load(&g_origin_ll),saved_fx=g_fx_mode; atomic_store(&g_origin_ll,0); g_fx_mode=0;
+    for (const char **mode=(const char *[]){"off","vivid","cinematic","warm","cool",NULL};*mode;mode++) {
+        for (int step=0;step<3;step++) {
+            float strength=step==1 ? .4f : step==2 ? 1 : 0; char value[32]; snprintf(value,sizeof value,"%g",strength);
+            setenv("DM_PRESENT_FILTER",*mode,1); setenv("DM_PRESENT_FILTER_STRENGTH",value,1); dm_present_filter_settings_changed();
+            filter_render(src,dst,rendered,0);
+            CGImageRef preview=dm_launcher_filter_preview(image,*mode,strength,8);
+            EXPECT("editor preview produces an image",1,preview!=NULL);
+            if (preview) {
+                CGContextDrawImage(decoded,CGRectMake(0,0,8,8),preview); int bad=0;
+                for (int y=0;y<8;y++) for (int x=0;x<8;x++) for (int c=0;c<4;c++)
+                    bad+=abs(result[4*(y*8+x)+c]-rendered[4*(y*16+x+4)+c])>1;
+                EXPECT("editor pixels match production shader and orientation",0,bad); CGImageRelease(preview);
+            }
+        }
+    }
+    setenv("DM_PRESENT_FILTER","cool",1); setenv("DM_PRESENT_FILTER_STRENGTH",".6",1); dm_present_filter_settings_changed();
+    dispatch_semaphore_t done=dispatch_semaphore_create(0); __block CGImageRef raw=NULL;
+    mtl_grab_next_present_unfiltered(^(CGImageRef frame) { if (frame) raw=CGImageRetain(frame); dispatch_semaphore_signal(done); });
+    grab_present(src,NULL,CGSizeMake(16,8));
+    EXPECT("editor raw snapshot completes",0,dispatch_semaphore_wait(done,dispatch_time(DISPATCH_TIME_NOW,10*NSEC_PER_SEC)));
+    EXPECT("editor raw snapshot excludes pillarboxes",8,raw ? CGImageGetWidth(raw) : 0);
+    if (raw) {
+        CGContextDrawImage(decoded,CGRectMake(0,0,8,8),raw); EXPECT("editor base frame is not already graded",0,memcmp(input,result,sizeof input));
+        CGImageRelease(raw);
+    }
+    EXPECT("preview never mutates the live filter choice",0,strcmp(getenv("DM_PRESENT_FILTER"),"cool"));
+    CGImageRef small=dm_launcher_filter_preview(image,"off",1,4);
+    EXPECT("thumbnail downscales without stretching",4,small ? CGImageGetHeight(small) : 0); CGImageRelease(small);
+    EXPECT("invalid preview modes are rejected",1,dm_launcher_filter_preview(image,"invalid",1,8)==NULL);
+    atomic_store(&g_origin_ll,saved_origin); g_fx_mode=saved_fx;
+    unsetenv("DM_PRESENT_FILTER"); unsetenv("DM_PRESENT_FILTER_STRENGTH"); dm_present_filter_settings_changed();
+    res_remove(src); res_remove(dst); CGImageRelease(image); CGContextRelease(original); CGContextRelease(decoded); CGColorSpaceRelease(cs);
+}
+
+static void check_custom_luts(void) {
+    char folder[]="/tmp/nxnative-lut-gpu-XXXXXX"; if (!mkdtemp(folder)) MDIE("cannot create LUT test directory");
+    char identity[512],swap[512],nonlinear[512],invalid[512];
+    snprintf(identity,sizeof identity,"%s/identity.cube",folder); snprintf(swap,sizeof swap,"%s/swap.cube",folder);
+    snprintf(nonlinear,sizeof nonlinear,"%s/nonlinear.cube",folder); snprintf(invalid,sizeof invalid,"%s/invalid.cube",folder);
+    for (int kind=0;kind<3;kind++) {
+        FILE *file=fopen(kind==0 ? identity : kind==1 ? swap : nonlinear,"w"); if (!file) MDIE("cannot write LUT fixture");
+        int n=kind==2 ? 3 : 2;
+        fprintf(file,"LUT_3D_SIZE %d\n",n);
+        if (kind==1) fputs("DOMAIN_MIN -1 -1 -1\nDOMAIN_MAX 1 1 1\n",file);
+        for (int b=0;b<n;b++) for (int g=0;g<n;g++) for (int r=0;r<n;r++) {
+            float x=(float)r/(n-1),y=(float)g/(n-1),z=(float)b/(n-1);
+            if (kind==2) fprintf(file,"%.8f %.8f %.8f\n",x*x,y*z,(x+z)*.5f);
+            else fprintf(file,"%.8f %.8f %.8f\n",kind==1 ? z : x,y,kind==1 ? x : z);
+        }
+        fclose(file);
+    }
+    FILE *bad=fopen(invalid,"w"); fputs("LUT_3D_SIZE 33\n0 0 0\n",bad); fclose(bad);
+    MTLTextureDescriptor *d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB width:8 height:8 mipmapped:NO];
+    d.storageMode=MTLStorageModeShared; d.usage=MTLTextureUsageShaderRead|MTLTextureUsagePixelFormatView;
+    id<MTLTexture> src=[g_dev newTextureWithDescriptor:d];
+    d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:16 height:8 mipmapped:NO];
+    d.storageMode=MTLStorageModeShared; d.usage=MTLTextureUsageRenderTarget;
+    id<MTLTexture> dst=[g_dev newTextureWithDescriptor:d]; res_add(src); res_add(dst); res_commit();
+    const uint8_t sample[]={64,128,192,85}; uint8_t input[256],output[512];
+    for (int i=0;i<64;i++) memcpy(input+4*i,sample,4);
+    [src replaceRegion:MTLRegionMake2D(0,0,8,8) mipmapLevel:0 withBytes:input bytesPerRow:32];
+    setenv("DM_PRESENT_FILTER","custom",1); setenv("DM_PRESENT_FILTER_STRENGTH","1",1);
+    int center=4*(3*16+7),saved_fx=g_fx_mode; g_fx_mode=0;
+    const uint8_t expected[][4]={{64,128,192,85},{224,192,160,85},{32,96,128,85}};
+    for (int kind=0;kind<3;kind++) {
+        EXPECT("custom CUBE parses and applies",DM_CUBE_OK,dm_launcher_lut_apply(kind==0 ? identity : kind==1 ? swap : nonlinear));
+        dm_present_filter_settings_changed();
+        for (int m4=0;m4<2;m4++) {
+            filter_render(src,dst,output,m4);
+            int different=0; for (int c=0;c<4;c++) different+=abs(output[center+c]-expected[kind][c])>1;
+            EXPECT("custom LUT axis order, domain and trilinear interpolation",0,different);
+            EXPECT("custom LUT preserves alpha exactly",sample[3],output[center+3]);
+        }
+    }
+    @autoreleasepool {
+        uint8_t tile[256],decoded[256];
+        for (int i=0;i<64;i++) { memcpy(tile+4*i,sample,3); tile[4*i+3]=255; }
+        CGColorSpaceRef cs=CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        CGContextRef source=CGBitmapContextCreate(tile,8,8,8,32,cs,kCGImageAlphaPremultipliedLast|kCGBitmapByteOrder32Big);
+        CGContextRef target=CGBitmapContextCreate(decoded,8,8,8,32,cs,kCGImageAlphaPremultipliedLast|kCGBitmapByteOrder32Big);
+        CGImageRef image=CGBitmapContextCreateImage(source);
+        DmPresentLUT *active=g_custom_lut; NSString *active_path=g_custom_lut_path;
+        uint64_t active_filter=atomic_load(&g_present_filter_value);
+        for (int kind=0;kind<3;kind++) {
+            CGImageRef preview=dm_launcher_lut_preview(image,kind==0 ? identity : kind==1 ? swap : nonlinear,1,8);
+            EXPECT("each library entry produces its own preview",1,preview!=NULL);
+            if (preview) {
+                CGContextDrawImage(target,CGRectMake(0,0,8,8),preview); int different=0;
+                for (int c=0;c<3;c++) different+=abs(decoded[c]-expected[kind][c])>1;
+                EXPECT("library thumbnail uses its own LUT axis/domain/interpolation",0,different);
+                CGImageRelease(preview);
+            }
+        }
+        EXPECT("invalid library preview is rejected",1,dm_launcher_lut_preview(image,invalid,1,8)==NULL);
+        EXPECT("library previews preserve the selected live table and path",1,g_custom_lut==active && [g_custom_lut_path isEqualToString:active_path] && !strcmp(getenv("DM_PRESENT_LUT"),active_path.UTF8String));
+        EXPECT("library previews preserve live mode and strength",1,atomic_load(&g_present_filter_value)==active_filter);
+        CGImageRelease(image); CGContextRelease(source); CGContextRelease(target); CGColorSpaceRelease(cs);
+    }
+    DmPresentLUT *previous=g_custom_lut;
+    EXPECT("invalid live import rejected",DM_CUBE_FORMAT,dm_launcher_lut_apply(invalid));
+    EXPECT("failed live import retains the previous LUT",1,g_custom_lut==previous);
+    previous=nil;
+    __weak DmPresentLUT *retired;
+    @autoreleasepool {
+        EXPECT("identity LUT restored",DM_CUBE_OK,dm_launcher_lut_apply(identity));
+        retired=g_custom_lut;
+        id<MTLBuffer> uniforms=[g_dev newBufferWithLength:PRESENT_UNIFORM_STRIDE*2 options:MTLResourceStorageModeShared];
+        id<MTL4CommandAllocator> allocator=[g_dev newCommandAllocator]; id<MTL4CommandBuffer> cb=[g_dev newCommandBuffer];
+        id<MTLSharedEvent> done=[g_dev newSharedEvent]; DmPresentLUT *left=nil,*right=nil;
+        res_add(uniforms); res_commit(); [cb beginCommandBufferWithAllocator:allocator];
+        EXPECT("first LUT pane recorded",PRESENT_STANDARD,present_encode_m4_region(cb,src,dst,NULL,uniforms,nil,(const float[]){0,0,.5f,1},0,0,&left));
+        EXPECT("LUT can change before the first GPU submission",DM_CUBE_OK,dm_launcher_lut_apply(nonlinear));
+        EXPECT("second LUT pane recorded",PRESENT_STANDARD,present_encode_m4_region(cb,src,dst,NULL,uniforms,nil,(const float[]){.5f,0,.5f,1},PRESENT_UNIFORM_STRIDE,1,&right));
+        EXPECT("LUT removal before GPU execution succeeds",DM_CUBE_OK,dm_launcher_lut_apply("none"));
+        EXPECT("in-flight LUT still retained",1,retired!=nil && left!=right);
+        [cb endCommandBuffer]; [g_q4 commit:&cb count:1]; [g_q4 signalEvent:done value:1];
+        EXPECT("replaced LUT frames complete",1,[done waitUntilSignaledValue:1 timeoutMS:10000]);
+        [dst getBytes:output bytesPerRow:64 fromRegion:MTLRegionMake2D(0,0,16,8) mipmapLevel:0];
+        int a=4*(3*16+3),b=4*(3*16+11),different=0;
+        for (int c=0;c<4;c++) different+=abs(output[a+c]-expected[0][c])>1 || abs(output[b+c]-expected[2][c])>1;
+        EXPECT("recorded panes retain their own LUT and domain",0,different);
+        res_remove(uniforms); left=nil; right=nil;
+    }
+    EXPECT("retired LUT released after GPU completion",1,retired==nil);
+    unsetenv("DM_PRESENT_FILTER"); unsetenv("DM_PRESENT_FILTER_STRENGTH"); unsetenv("DM_PRESENT_LUT"); dm_present_filter_settings_changed();
+    g_fx_mode=saved_fx; res_remove(src); res_remove(dst);
+    unlink(identity); unlink(swap); unlink(nonlinear); unlink(invalid); rmdir(folder);
+}
+
+static void check_picture_filters(void) {
+    // Check actual pixels, including gamma, alpha, black bars, both command
+    // paths and intensity interpolation. This uses no extracted game shaders.
+    const uint8_t samples[][4] = {{96,96,96,128}, {80,130,180,64}, {0,0,0,0}, {255,255,255,255}};
+    const char *modes[] = {"off", "vivid", "cinematic", "warm", "cool"};
+    int saved_fx = g_fx_mode; g_fx_mode = 0;
+    for (int srgb = 0; srgb < 2; srgb++) {
+        MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:srgb ? MTLPixelFormatRGBA8Unorm_sRGB : MTLPixelFormatRGBA8Unorm width:8 height:8 mipmapped:NO];
+        d.storageMode = MTLStorageModeShared; d.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
+        id<MTLTexture> src = [g_dev newTextureWithDescriptor:d];
+        d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:16 height:8 mipmapped:NO];
+        d.storageMode = MTLStorageModeShared; d.usage = MTLTextureUsageRenderTarget;
+        id<MTLTexture> dst = [g_dev newTextureWithDescriptor:d];
+        if (!src || !dst) MDIE("picture filter test texture allocation failed");
+        res_add(src); res_add(dst); res_commit();
+        for (int sample = 0; sample < 4; sample++) {
+            uint8_t input[256], original[512], full[512], output[512];
+            for (int i = 0; i < 64; i++) memcpy(input + i * 4, samples[sample], 4);
+            [src replaceRegion:MTLRegionMake2D(0,0,8,8) mipmapLevel:0 withBytes:input bytesPerRow:32];
+            setenv("DM_PRESENT_FILTER", "off", 1); setenv("DM_PRESENT_FILTER_STRENGTH", "1", 1);
+            dm_present_filter_settings_changed(); filter_render(src, dst, original, 0);
+            int center = 4 * (3 * 16 + 7);
+            EXPECT("original keeps display bytes and alpha, including sRGB", 0, memcmp(original + center, samples[sample], 4));
+            for (int mode = DM_FILTER_VIVID; mode <= DM_FILTER_COOL; mode++) {
+                setenv("DM_PRESENT_FILTER", modes[mode], 1); setenv("DM_PRESENT_FILTER_STRENGTH", "1", 1);
+                dm_present_filter_settings_changed(); filter_render(src, dst, full, 0);
+                const uint8_t *pixel = full + center;
+                if (sample == 0 && mode == DM_FILTER_WARM) EXPECT("warm neutral has red above blue", 1, pixel[0] > pixel[1] && pixel[1] > pixel[2]);
+                if (sample == 0 && mode == DM_FILTER_COOL) EXPECT("cool neutral has blue above red", 1, pixel[2] > pixel[1] && pixel[1] > pixel[0]);
+                if (sample == 1 && mode == DM_FILTER_VIVID) EXPECT("vivid increases colour separation", 1, pixel[2] - pixel[0] > samples[sample][2] - samples[sample][0]);
+                if (sample == 2 && mode == DM_FILTER_CINEMATIC) EXPECT("cinematic LUT keeps black", 0, pixel[0] | pixel[1] | pixel[2]);
+                if (sample == 3 && mode == DM_FILTER_CINEMATIC) EXPECT("cinematic LUT keeps white", 255, pixel[0] & pixel[1] & pixel[2]);
+                EXPECT("filter preserves source alpha", samples[sample][3], pixel[3]);
+                EXPECT("filter leaves letterbox black", 0, full[0] | full[1] | full[2]);
+                for (int metal4 = 0; metal4 < 2; metal4++) {
+                    filter_render(src, dst, output, metal4);
+                    int different = 0;
+                    for (int i = 0; i < 512; i++) different += abs(output[i] - full[i]) > 1;
+                    EXPECT("classic and M4 filter pixels agree", 0, different);
+                    setenv("DM_PRESENT_FILTER_STRENGTH", "0", 1); dm_present_filter_settings_changed();
+                    filter_render(src, dst, output, metal4);
+                    EXPECT("zero strength restores every original byte", 0, memcmp(output, original, sizeof original));
+                    setenv("DM_PRESENT_FILTER_STRENGTH", "0.5", 1); dm_present_filter_settings_changed();
+                    filter_render(src, dst, output, metal4);
+                    different = 0;
+                    for (int i = 0; i < 512; i++) different += abs(2 * output[i] - original[i] - full[i]) > 2;
+                    EXPECT("half strength blends original and filtered pixels", 0, different);
+                    setenv("DM_PRESENT_FILTER_STRENGTH", "1", 1); dm_present_filter_settings_changed();
+                }
+            }
+        }
+        uint8_t gray[256], panes[512];
+        for (int i = 0; i < 64; i++) memcpy(gray + i * 4, samples[0], 4);
+        [src replaceRegion:MTLRegionMake2D(0,0,8,8) mipmapLevel:0 withBytes:gray bytesPerRow:32];
+        id<MTLBuffer> uniforms = [g_dev newBufferWithLength:PRESENT_UNIFORM_STRIDE * 2 options:MTLResourceStorageModeShared];
+        id<MTL4CommandAllocator> allocator = [g_dev newCommandAllocator];
+        id<MTL4CommandBuffer> commands = [g_dev newCommandBuffer];
+        id<MTLSharedEvent> done = [g_dev newSharedEvent];
+        if (!uniforms || !allocator || !commands || !done) MDIE("picture filter test command allocation failed");
+        res_add(uniforms); res_commit();
+        [commands beginCommandBufferWithAllocator:allocator];
+        setenv("DM_PRESENT_FILTER", "warm", 1); dm_present_filter_settings_changed();
+        EXPECT("first filtered pane encodes", PRESENT_STANDARD, present_encode_m4_region(commands, src, dst, NULL, uniforms, nil, (const float[]){0,0,.5f,1}, 0, 0,NULL));
+        setenv("DM_PRESENT_FILTER", "cool", 1); dm_present_filter_settings_changed();
+        EXPECT("second filtered pane encodes", PRESENT_STANDARD, present_encode_m4_region(commands, src, dst, NULL, uniforms, nil, (const float[]){.5f,0,.5f,1}, PRESENT_UNIFORM_STRIDE, 1,NULL));
+        [commands endCommandBuffer]; [g_q4 commit:&commands count:1]; [g_q4 signalEvent:done value:1];
+        EXPECT("filtered panes finish", 1, [done waitUntilSignaledValue:1 timeoutMS:10000]);
+        [dst getBytes:panes bytesPerRow:64 fromRegion:MTLRegionMake2D(0,0,16,8) mipmapLevel:0];
+        int left = 4 * (3 * 16 + 3), right = 4 * (3 * 16 + 11);
+        EXPECT("recorded panes keep independent filter constants", 1, panes[left] > panes[left + 2] && panes[right] < panes[right + 2]);
+        res_remove(uniforms); res_remove(src); res_remove(dst);
+    }
+    setenv("DM_PRESENT_FILTER", "unknown", 1); setenv("DM_PRESENT_FILTER_STRENGTH", "nan", 1);
+    dm_present_filter_settings_changed(); float params[4];
+    EXPECT("invalid startup settings keep original at default strength", 0, present_filter_params(params));
+    EXPECT("invalid strength defaults to one", 1, params[1]);
+    unsetenv("DM_PRESENT_FILTER"); unsetenv("DM_PRESENT_FILTER_STRENGTH"); dm_present_filter_settings_changed();
+    g_fx_mode = saved_fx;
 }
 #endif
 
@@ -278,11 +513,20 @@ int main(int argc,char **argv) { @autoreleasepool {
     id<MTLTexture> src=[g_dev newTextureWithDescriptor:d];uint8_t px[8*8*4];
     for(int y=0;y<8;y++)for(int x=0;x<8;x++)memcpy(px+4*(y*8+x),colors[(x>=4)+2*(y>=4)],4);
     [src replaceRegion:MTLRegionMake2D(0,0,8,8) mipmapLevel:0 withBytes:px bytesPerRow:32];
+#ifndef CROP_LEGACY_HEADER
+    check_picture_filters();
+    check_custom_luts();
+    check_filter_editor();
+    setenv("DM_PRESENT_FILTER", "warm", 1); dm_present_filter_settings_changed();
+#endif
     check_seated_dock(src);
     check_seated_map_effect();
     check_seated_pipeline_cache();
     check_seated_downsample(src);
     check_seated_reflection();
+#ifndef CROP_LEGACY_HEADER
+    unsetenv("DM_PRESENT_FILTER"); dm_present_filter_settings_changed();
+#endif
     if (argc==2 && !strcmp(argv[1],"--seated")) { printf("== %d checks, %d failed ==\n",cases,failed); return failed!=0; }
     int zero[4]={0},tl[4]={0,0,4,4},tr[4]={4,0,4,4},bl[4]={0,4,4,4},br[4]={4,4,4,4},one[4]={3,3,1,1},inset[4]={1,1,4,4};
     check(src,"default whole frame 64 pixels",zero,8,8,-1);
@@ -300,10 +544,10 @@ int main(int argc,char **argv) { @autoreleasepool {
         MTLTextureDescriptor *target=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:8 height:8 mipmapped:NO];
         target.storageMode=MTLStorageModeShared; target.usage=MTLTextureUsageRenderTarget;
         id<MTLTexture> out=[g_dev newTextureWithDescriptor:target];
-        id<MTLBuffer> uv=[g_dev newBufferWithLength:32 options:MTLResourceStorageModeShared];
+        id<MTLBuffer> uv=[g_dev newBufferWithLength:PRESENT_UNIFORM_STRIDE options:MTLResourceStorageModeShared];
         id<MTL4CommandAllocator> al=[g_dev newCommandAllocator]; id<MTL4CommandBuffer> cb=[g_dev newCommandBuffer];
         id<MTLSharedEvent> event=[g_dev newSharedEvent]; res_add(src); res_add(out); res_add(uv); res_commit();
-        [cb beginCommandBufferWithAllocator:al]; present_encode_m4(cb,src,out,NULL,uv,nil); [cb endCommandBuffer];
+        [cb beginCommandBufferWithAllocator:al]; present_encode_m4(cb,src,out,NULL,uv,nil,NULL); [cb endCommandBuffer];
         [g_q4 commit:&cb count:1]; [g_q4 signalEvent:event value:1];
         EXPECT("Seated M4 fixed-aspect present completes",1,[event waitUntilSignaledValue:1 timeoutMS:10000]);
         uint8_t pixels[8*8*4]; [out getBytes:pixels bytesPerRow:32 fromRegion:MTLRegionMake2D(0,0,8,8) mipmapLevel:0];
@@ -353,10 +597,11 @@ int main(int argc,char **argv) { @autoreleasepool {
         res_add(big);res_commit();
         const int W=4*N,H=2*N;MTLTextureDescriptor *od=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:W height:H mipmapped:NO];
         od.storageMode=MTLStorageModePrivate;od.usage=MTLTextureUsageRenderTarget|MTLTextureUsageShaderRead;id<MTLTexture> out=[g_dev newTextureWithDescriptor:od];
-        const int crops[5][4]={{0},{8,8,48,48},{8,8,48,48},{8,8,48,48},{8,8,48,48}};
-        for (int mode=0;mode<5;mode++) {
+        const int crops[6][4]={{0},{8,8,48,48},{8,8,48,48},{8,8,48,48},{8,8,48,48},{8,8,48,48}};
+        for (int mode=0;mode<6;mode++) {
             g_fx_mode=mode==3?0:mode==4?2:1;atomic_store(&g_origin_ll,mode==2);
-            EXPECT("offscreen present reports the scaler actually used (scene mode never scales the final picture)",mode>=3?PRESENT_STANDARD:PRESENT_METALFX,present_offscreen_wait(big,crops[mode],out));
+            setenv("DM_PRESENT_FILTER", mode==5 ? "warm" : "off", 1); dm_present_filter_settings_changed();
+            EXPECT("offscreen present reports the scaler actually used (scene mode never scales the final picture)",mode==3||mode==4?PRESENT_STANDARD:PRESENT_METALFX,present_offscreen_wait(big,crops[mode],out));
             id<MTLBuffer> rb=[g_dev newBufferWithLength:W*H*4 options:MTLResourceStorageModeShared];id<MTLCommandBuffer> cb=[g_q commandBuffer];id<MTLBlitCommandEncoder> bl=[cb blitCommandEncoder];
             [bl copyFromTexture:out sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0) sourceSize:MTLSizeMake(W,H,1) toBuffer:rb destinationOffset:0 destinationBytesPerRow:W*4 destinationBytesPerImage:W*H*4];
             [bl endEncoding];[cb commit];[cb waitUntilCompleted];
@@ -365,11 +610,12 @@ int main(int argc,char **argv) { @autoreleasepool {
             int bars=0;for(int y=0;y<H;y++)for(int x=0;x<W;x++)if(x<64||x>=192)bars+=PX(x,y,0)||PX(x,y,1)||PX(x,y,2);
             EXPECT("  black bars beside the square picture, 0 lit pixels",0,bars);
             int bad=0;const int cxs[2]={64+32,64+96},cys[2]={32,96};
-            for(int q=0;q<4;q++){int x=cxs[q&1],y=cys[q>>1],sq=mode==2?q^2:q;const uint8_t *want=sq==2?(const uint8_t[4]){128,64,200,255}:colors[sq];
+            for(int q=0;q<4;q++){int x=cxs[q&1],y=cys[q>>1],sq=mode==2?q^2:q;const uint8_t *want=sq==2?(mode==5?(const uint8_t[4]){142,66,192,255}:(const uint8_t[4]){128,64,200,255}):colors[sq];
                 bad+=abs(PX(x,y,2)-want[0])>3||abs(PX(x,y,1)-want[1])>3||abs(PX(x,y,0)-want[2])>3;}
             EXPECT("  quadrant centres keep their colours, raw bytes of the sRGB source (4 checked)",0,bad);
         #undef PX
         }
+        unsetenv("DM_PRESENT_FILTER"); dm_present_filter_settings_changed();
         atomic_store(&g_origin_ll,0);g_fx_mode=1;
         MTLTextureDescriptor *smallD=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:32 height:32 mipmapped:NO];
         smallD.storageMode=MTLStorageModePrivate;smallD.usage=MTLTextureUsageRenderTarget;

@@ -5,6 +5,7 @@
 #include "front.h"
 #include "hle_haptics.h"
 #include "../gfx/nvn/framegen_policy.h"
+#include "../gfx/nvn/present_filter.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -111,7 +112,7 @@ static int known_key(const char *key) {
         "DM_BOTW_PORTRAIT_PAD_L_MODE",
         "DM_BOTW_PORTRAIT_PAD_DPAD_VISIBLE",
         "DM_FPS_TARGET", "DM_DYNAMIC_RESOLUTION", "DM_RENDER_SCALE", "DM_OPMODE",
-        "DM_PRESENT_UPSCALE", "DM_LANG", "DM_FULLSCREEN", "DM_SHOW_FPS",
+        "DM_PRESENT_UPSCALE", "DM_PRESENT_FILTER", "DM_PRESENT_FILTER_STRENGTH", "DM_LANG", "DM_FULLSCREEN", "DM_SHOW_FPS",
         "DM_TOUCH_HAPTICS", "DM_RUMBLE", "DM_RUMBLE_GAIN", "DM_RUMBLE_MIN",
         "DM_BOTW_MOVE_DEADZONE", "DM_BOTW_MOVE_CURVE", "DM_BOTW_MOVE_FULL",
         "DM_BOTW_PAD_BADGES", "DM_BOTW_PORTRAIT", "DM_BOTW_PORTRAIT_MOVE_DEADZONE",
@@ -159,6 +160,8 @@ static int parse_number(const char *s, float *out) {
 static int value_valid(const char *key, const char *value) {
     float v;
     if (!value || !*value) return 0;
+    if (!strcmp(key, "DM_PRESENT_FILTER")) return dm_present_filter_mode(value) >= 0;
+    if (!strcmp(key, "DM_PRESENT_FILTER_STRENGTH")) return dm_present_filter_strength(value, &v);
     if (!strcmp(key, "DM_MOTION_SOURCE")) return !strcmp(value, "auto") || !strcmp(value, "off") ||
         !strcmp(value, "controller") || !strcmp(value, "device");
     if (!strcmp(key, "DM_FRAMEGEN")) return !strcmp(value, "0") || dm_framegen_parse(value)>0;
@@ -187,6 +190,7 @@ static int value_valid(const char *key, const char *value) {
 
 int dm_launcher_setting_is_live(const char *key) {
     if (!known_key(key)) return -1;
+    if (!strcmp(key, "DM_PRESENT_FILTER") || !strcmp(key, "DM_PRESENT_FILTER_STRENGTH")) return 1;
     if (!strcmp(key, "DM_OPMODE") || !strcmp(key, "DM_MOTION_SOURCE")) return 1;
     if (!strcmp(key, "DM_FRAMEGEN")) return *DM_GAME_FRAMEGEN_SCENE ? dm_fps_state != NULL : 0;
     if ((!strcmp(key, "DM_FPS_TARGET") || !strcmp(key, "DM_RENDER_SCALE")) && dm_fps_state) return 1;
@@ -211,7 +215,8 @@ int dm_launcher_setting_apply(const char *key, const char *value) {
         if (!dm_fg_set_mode(0) || setenv("DM_FRAMEGEN","0",1)) return -1;
     }
     if (setenv(key, value, 1)) return -1;
-    if (!strcmp(key, "DM_OPMODE")) dm_set_opmode(atoi(value));
+    if (!strcmp(key, "DM_PRESENT_FILTER") || !strcmp(key, "DM_PRESENT_FILTER_STRENGTH")) dm_present_filter_settings_changed();
+    else if (!strcmp(key, "DM_OPMODE")) dm_set_opmode(atoi(value));
     else if (!strcmp(key, "DM_MOTION_SOURCE")) dm_motion_source_set(value);
     else if (!strcmp(key, "DM_FPS_TARGET")) {
         dm_fps_lock_setting_changed(atoi(value));

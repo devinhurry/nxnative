@@ -74,6 +74,15 @@ class LauncherSettingsTests(unittest.TestCase):
                 self.assertEqual(len(upscale), 1)
                 self.assertEqual(('scene' in [o[0] for o in upscale[0]['options']]), gid == BOTW)
 
+    def test_picture_filters_are_shared_and_keep_the_original_by_default(self):
+        for platform in ('mac', 'ios'):
+            for api, gid in [('nvn', BOTW), ('vulkan', '0100535012974000'), ('gl', '010014E00DB56000')]:
+                rows = build(gid, api, platform)
+                mode, strength = rows['DM_PRESENT_FILTER'], rows['DM_PRESENT_FILTER_STRENGTH']
+                self.assertEqual((mode['section'], mode['default']), ('Game', 'off'))
+                self.assertEqual(mode['options'], [['off', 'Original'], ['vivid', 'Vivid'], ['cinematic', 'Cinematic'], ['warm', 'Warm'], ['cool', 'Cool'], ['custom', 'Custom LUT']])
+                self.assertEqual((strength['kind'], strength['min'], strength['max'], strength['step'], strength['default']), ('range', 0, 1, .05, '1'))
+
     def test_frame_buffering_by_graphics_api(self):
         for api, gid in [('nvn', BOTW), ('vulkan', '0100535012974000'), ('gl', '010014E00DB56000'), ('', BOTW)]:
             with self.subTest(api=api):

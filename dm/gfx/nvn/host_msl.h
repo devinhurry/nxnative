@@ -5,3 +5,4 @@
 #import <Metal/Metal.h>
 
 id<MTLLibrary> host_msl_lib(id<MTLDevice> dev, id<MTL4Compiler> comp, const char *name, NSError **e);
+const char *host_msl_cinematic_cube(void);

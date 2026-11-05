@@ -43,6 +43,11 @@ void dm_launcher_grab_game_frame(void (^callback)(CGImageRef)) {
     if (mtl_grab_next_present) mtl_grab_next_present(callback);
     else callback(NULL);
 }
+void mtl_grab_next_present_unfiltered(void (^callback)(CGImageRef)) __attribute__((weak_import));
+void dm_launcher_grab_filter_frame(void (^callback)(CGImageRef)) {
+    if (mtl_grab_next_present_unfiltered) mtl_grab_next_present_unfiltered(callback);
+    else callback(NULL);
+}
 static uint64_t g_btn;
 static int g_w, g_a, g_s, g_d;
 static int g_rl, g_ru, g_rr, g_rd;   // arrow keys pressed with Shift held: the right stick (each goes back up as it went down, whatever Shift does meanwhile)
