@@ -122,6 +122,22 @@ static void check_seated_map_effect(void) {
     }
     res_remove(out);
 }
+static void check_seated_pipeline_cache(void) {
+    id<MTLRenderPipelineState> window=seated_texture_pipeline(SEATED_COPY,MTLPixelFormatRGBA8Unorm_sRGB);
+    id<MTLRenderPipelineState> small=seated_texture_pipeline(SEATED_COPY,MTLPixelFormatRGBA16Float);
+    id<MTLRenderPipelineState> alpha=seated_texture_pipeline(SEATED_ALPHA,MTLPixelFormatRGBA8Unorm_sRGB);
+    EXPECT("Seated copy pipelines keep their destination formats",1,
+        window!=nil && small!=nil && window!=small);
+    EXPECT("Seated copy and alpha pipelines remain distinct",1,alpha!=nil && alpha!=window);
+    for (int frame=0;frame<4;frame++) {
+        EXPECT("Seated window copy reuses its pipeline across alternating formats",1,
+            seated_texture_pipeline(SEATED_COPY,MTLPixelFormatRGBA8Unorm_sRGB)==window);
+        EXPECT("Seated downsample reuses its pipeline across alternating formats",1,
+            seated_texture_pipeline(SEATED_COPY,MTLPixelFormatRGBA16Float)==small);
+        EXPECT("Seated alpha composite reuses its separate pipeline",1,
+            seated_texture_pipeline(SEATED_ALPHA,MTLPixelFormatRGBA8Unorm_sRGB)==alpha);
+    }
+}
 static void check_seated_reflection(void) {
     // The upper quadrants remain byte-identical; their mirror is blurred and
     // dimmed below the fold, behind a sharp opaque patch in the dock texture.
@@ -238,6 +254,7 @@ int main(int argc,char **argv) { @autoreleasepool {
     [src replaceRegion:MTLRegionMake2D(0,0,8,8) mipmapLevel:0 withBytes:px bytesPerRow:32];
     check_seated_dock(src);
     check_seated_map_effect();
+    check_seated_pipeline_cache();
     check_seated_reflection();
     if (argc==2 && !strcmp(argv[1],"--seated")) { printf("== %d checks, %d failed ==\n",cases,failed); return failed!=0; }
     int zero[4]={0},tl[4]={0,0,4,4},tr[4]={4,0,4,4},bl[4]={0,4,4,4},br[4]={4,4,4,4},one[4]={3,3,1,1},inset[4]={1,1,4,4};

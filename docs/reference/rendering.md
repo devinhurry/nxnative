@@ -1423,6 +1423,14 @@ Digimon Story Cyber Sleuth: Complete Edition (Media.Vision's MVGL engine, SDK 6.
 
 Current implementation (2026-11-04; device acceptance pending): the profile's final canvas shader is a plain texture sample. Seated now places that completed native canvas into the upper picture rectangle with the host's ordinary image blit, then draws the reflection and isolated dock. It no longer changes the viewport of the game's canvas-copy draw. This keeps the guest's canvas coordinates and sampling separate from the destination pane; the camera continues to use that pane's displayed aspect. The copy clears unused pixels before drawing the upper picture. Frame-generation transfer metadata is still captured from the original final-copy state, and generated presents retain their existing upper-picture rectangle. No compilation or runtime checks were run for this revision, as requested; the reported compression remains a device acceptance item.
 
+### Seated pipelines retain each destination format
+
+- **Symptom:** steady Seated rendering repeatedly creates copy pipelines even though the window and reflection sizes stay unchanged.
+- **Cause:** the copy operation cached one pipeline and pixel format. The upper picture writes an RGBA8 window, while reflection downsampling writes RGBA16F; each frame replaced the same cache entry twice. The upper-picture host copy introduced this alternating-format use.
+- **Fix:** retain pipelines by both operation and destination format on the replay thread. Copy, alpha, blur and reflection keep their separate states, and both copy formats remain cached. Filtering, texture allocation and non-Seated rendering are unchanged.
+- **Check:** `t_present_crop` alternates the window and downsample formats across four simulated frames and checks pipeline identity, separate alpha state, reflection pixels and ordinary presentation. All 330 real-Metal checks pass. Current-checkout Mac Seated gameplay and a screenshot also confirm the picture, reflection and native map using cached game shaders; frame-rate impact is unmeasured. Game shader libraries and the translation chain are unchanged.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md).
+
 ### Native and legacy aspect correction are exclusive
 
 - **Symptom:** Seated gameplay and its minimap look vertically compressed on one computer but correct on another at the same revision. The affected launcher has *Picture shape* set to 1.43.
