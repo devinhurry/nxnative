@@ -542,17 +542,10 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
         return;
     }
     CGPoint c = self.dpadCenter;
-    float rect[4]; dm_aspect_touch_rect((float)self.bounds.size.width, (float)self.bounds.size.height, rect);
-    float region[4];
-    if (dm_aspect_region(1,region)) {
-        CGRect area=[self botwControlArea]; dm_touchpad_rect canvas=dm_botw_layout_canvas(area.size.width,area.size.height);
-        rect[0]=area.origin.x+canvas.x; rect[1]=area.origin.y+canvas.y; rect[2]=canvas.width; rect[3]=canvas.height;
-    }
-    if (dm_aspect_hud_y_scale()<1) dm_aspect_hud_rect(self.bounds.size.width,self.bounds.size.height,rect);
-    float x = (float)((c.x - rect[0]) / rect[2]);
-    float y = (float)((c.y + DM_BOTW_LOADOUT_Y_OFFSET_PT - rect[1]) / rect[3]);
-    float scale=dm_botw_layout_hud_scale(dm_botw_layout_scale(&_touchLayout,B_LEFT),rect[3],dm_aspect_hud_y_scale());
-    dm_botw_touch_hud_publish(1, x, y, scale);
+    float target[3]={0};
+    int valid=dm_aspect_touch_hud_target(self.bounds.size.width,self.bounds.size.height,c.x,c.y,
+        dm_botw_layout_scale(&_touchLayout,B_LEFT),target);
+    dm_botw_touch_hud_publish(valid,target[0],target[1],target[2]);
 }
 - (void)refreshTouchHudMode {
     if (botwTouchHudSupported() && (!_full || _tap)) {

@@ -11,7 +11,7 @@
 #define DM_BOTW_STROKE_ALPHA .30
 #define DM_BOTW_ICON_ALPHA .90
 #define DM_BOTW_STICK_ALPHA .15
-// Apply the loadout alignment correction in points before HUD normalization.
+// Calibrated against the small cross inside the loadout artwork on iPhone.
 #define DM_BOTW_LOADOUT_Y_OFFSET_PT (-14.0f)
 
 // Default anchors retain the original base-relative offsets. Explicit anchors

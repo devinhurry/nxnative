@@ -645,8 +645,13 @@ testing and artwork, while gameplay state decides when an added button appears.
 Choosing sticky equipment/rune switching or R/ZR camera dragging adds Cancel
 once. A later manual removal survives saving, reopening and layout import;
 rendering or retaining the same action choice does not add it again.
-When D-pad relocation is enabled, both frontends move the loadout target 14pt
-upward before HUD normalization, independently of screen size and button scale.
+Both frontends use the same `dm_aspect_touch_hud_target` mapping from the drawn
+D-pad centre to the native equipment target, including the 14pt upward artwork
+calibration that the user validated on iPhone. Pane bounds alone do not establish
+the visible small cross's centre, so the calibration must not be removed based
+only on those bounds. Ordinary Mac reproduction at 850x598 measured the published
+target at y=486pt against the D-pad's y=500pt, matching the configured correction.
+The reported larger Mac-only visual mismatch remains under investigation.
 On displays narrower than 16:9, including Duo landscape, equipment now receives
 the same HUD gain as hearts and the map before relocation. Its native pane
 position and basis are scaled together during Calculate; the touch matrix hook

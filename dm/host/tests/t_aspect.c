@@ -210,6 +210,36 @@ static void test_narrow_hud(void) {
     assert(*(float *)(weather+0x48)==1 && *(float *)(weather+0x4c)==1);
 }
 
+static void test_touch_hud_target(void) {
+    const float sizes[][2]={{932,430},{1280,720},{850,598},{390,844},{795,1100}};
+    const float scales[]={.65f,1,1.5f};
+    for (unsigned i=0;i<sizeof sizes/sizeof *sizes;i++) for (int seated=0;seated<2;seated++) {
+        float w=sizes[i][0],h=sizes[i][1],region[4];
+        dm_aspect_set_display(w/h); dm_aspect_set_seated(seated?.49f:0,seated?.51f:0);
+        dm_aspect_set_safe_area(w,h,40,30,40); dm_aspect_region(1,region);
+        float aw=w*region[2],ah=h*region[3];
+        dm_touchpad_rect canvas=dm_botw_layout_canvas(aw,ah);
+        dm_botw_touch_layout layout=dm_botw_layout_defaults_for(dm_botw_compact_mode(aw,ah,40,40));
+        for (unsigned n=0;n<sizeof scales/sizeof *scales;n++) {
+            layout.control[12].size=96*scales[n];
+            dm_touchpad_rect dpad=dm_botw_layout_control(&layout,12,aw,ah,40,30,40,0,canvas);
+            float x=w*region[0]+dpad.x+dpad.width*.5f,y=h*region[1]+dpad.y+dpad.height*.5f,target[3];
+            assert(dm_aspect_touch_hud_target(w,h,x,y,scales[n],target));
+            // Reconstruct screen points from the final HUD canvas. The iPhone
+            // artwork calibration remains 14pt for both frontends.
+            float rw=fminf(aw,ah*GAME_ASPECT),rh=fmaxf(ah,aw/GAME_ASPECT);
+            if (dm_aspect_control_ratio()>=GAME_ASPECT) rh=ah;
+            else rw=aw;
+            assert(fabsf((w*region[0]+(aw-rw)*.5f)+target[0]*rw-x)<.001f);
+            assert(fabsf((h*region[1]+(ah-rh)*.5f)+target[1]*rh-(y-14))<.001f);
+            assert(fabsf(target[2]*dm_aspect_hud_y_scale()*dm_aspect_hud_gain()*rh/430-
+                scales[n]*dm_aspect_hud_gain())<.001f);
+        }
+    }
+    float invalid[3]; assert(!dm_aspect_touch_hud_target(0,430,0,0,1,invalid));
+    dm_aspect_set_seated(0,0); dm_aspect_set_display(GAME_ASPECT); dm_aspect_set_safe_area(1280,720,0,0,0);
+}
+
 static void test_left_hud_stack(void) {
     uint8_t root[0x100],all[0x100],state[0x100],heart[0x100],equipment[0x100],champions[4][0x100];
     pane_init(root,"RootPane",0,1280,720); pane_init(all,"N_All_00",0,30,30); pane_child(root,all);
@@ -505,5 +535,6 @@ int main(void) {
     test_narrow_fullscreen_background();
     test_seated_regions();
     test_left_hud_stack();
+    test_touch_hud_target();
     free(g_mod[0].base); puts("aspect: camera, centered content/hit regions and independent fullscreen backgrounds passed");
 }

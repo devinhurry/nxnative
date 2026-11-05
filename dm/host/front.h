@@ -62,6 +62,8 @@ int dm_aspect_region(int controls, float rect[4]);
 void dm_aspect_set_display(float ratio);
 void dm_aspect_touch_rect(float w, float h, float rect[4]);
 void dm_aspect_hud_rect(float w, float h, float rect[4]);
+// Shared Mac/iOS mapping: D-pad centre plus the calibrated loadout artwork offset.
+int dm_aspect_touch_hud_target(float w, float h, float x, float y, float point_scale, float target[3]);
 void dm_aspect_set_safe_area(float w, float h, float left, float top, float right);
 float dm_aspect_hud_y_scale(void);
 float dm_aspect_hud_gain(void);

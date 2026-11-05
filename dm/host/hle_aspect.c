@@ -4,6 +4,7 @@
 #include "hle.h"
 #include "botw_rune_icon.h"
 #include "botw_touch_menu.h"
+#include "botw_touch_layout.h"
 #include "touchpad_geometry.h"
 #include <ctype.h>
 #include <math.h>
@@ -162,6 +163,24 @@ void dm_aspect_hud_rect(float w, float h, float rect[4]) {
     float scale = rect[2] / 1280, left = dm_aspect_hud_offset(0) * scale;
     rect[0] -= left;
     rect[2] += 2*left;
+}
+
+int dm_aspect_touch_hud_target(float w,float h,float x,float y,float point_scale,float target[3]) {
+    if (w<=0 || h<=0) return 0;
+    float rect[4],region[4]; dm_aspect_touch_rect(w,h,rect);
+    if (dm_aspect_region(1,region)) {
+        float rw=w*region[2],rh=h*region[3];
+        dm_touchpad_rect canvas=dm_botw_layout_canvas(rw,rh);
+        rect[0]=w*region[0]+canvas.x; rect[1]=h*region[1]+canvas.y;
+        rect[2]=canvas.width; rect[3]=canvas.height;
+    }
+    if (dm_aspect_hud_y_scale()<1) dm_aspect_hud_rect(w,h,rect);
+    if (rect[2]<=0 || rect[3]<=0) return 0;
+    // This is an artwork calibration validated on iPhone, distinct from the
+    // pane's geometric centre. Keep both frontends on the same conversion.
+    target[0]=(x-rect[0])/rect[2]; target[1]=(y+DM_BOTW_LOADOUT_Y_OFFSET_PT-rect[1])/rect[3];
+    target[2]=dm_botw_layout_hud_scale(point_scale,rect[3],dm_aspect_hud_y_scale());
+    return 1;
 }
 
 static void aspect_apply_projection(uint8_t *proj) {

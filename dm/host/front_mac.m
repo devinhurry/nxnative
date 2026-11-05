@@ -1520,18 +1520,12 @@ static void preview_refresh(void) {
     }
     [g_preview_view setPreviewActive:active];
     [g_preview_view setBotwMenuActive:active && !dm_botw_touch_controls_visible()];
-    float rect[4]; dm_aspect_touch_rect((float)g_preview_view.bounds.size.width, (float)g_preview_view.bounds.size.height, rect);
-    float region[4];
-    if (dm_aspect_region(1,region)) {
-        dm_touchpad_rect a=[g_preview_view controlArea],c=dm_botw_layout_canvas(a.width,a.height);
-        rect[0]=a.x+c.x; rect[1]=a.y+c.y; rect[2]=c.width; rect[3]=c.height;
-    }
-    if (dm_aspect_hud_y_scale()<1) dm_aspect_hud_rect(g_preview_view.bounds.size.width,g_preview_view.bounds.size.height,rect);
     dm_touchpad_point d = [g_preview_view dpadCenter];
     dm_botw_touch_hud_keep_native_loadout([g_preview_view keepNativeLoadout]);
-    if (active && rect[2] > 0 && rect[3] > 0)
-        dm_botw_touch_hud_publish(1, (d.x-rect[0])/rect[2], (d.y+DM_BOTW_LOADOUT_Y_OFFSET_PT-rect[1])/rect[3],
-            dm_botw_layout_hud_scale([g_preview_view layoutScale:12],rect[3],dm_aspect_hud_y_scale()));
+    float target[3];
+    if (active && dm_aspect_touch_hud_target(g_preview_view.bounds.size.width,g_preview_view.bounds.size.height,d.x,d.y,
+        [g_preview_view layoutScale:12],target))
+        dm_botw_touch_hud_publish(1,target[0],target[1],target[2]);
     else dm_botw_touch_hud_publish(0,0,0,1);
 }
 
