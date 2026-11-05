@@ -6,6 +6,8 @@
 
 #define HLOG(...) do { fprintf(stderr, "[dm] [msl] " __VA_ARGS__); fputc('\n', stderr); } while (0)
 
+const char *host_msl_cinematic_cube(void) { return k_host_cinematic_cube; }
+
 id<MTLLibrary> host_msl_lib(id<MTLDevice> dev, id<MTL4Compiler> comp, const char *name, NSError **e) {
     static os_unfair_lock lk = OS_UNFAIR_LOCK_INIT; static NSMutableDictionary<NSString *, id<MTLLibrary>> *libs; static int said;
     if (!dev || !name) return nil;

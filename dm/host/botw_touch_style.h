@@ -31,6 +31,12 @@ static inline CGImageRef CF_RETURNS_RETAINED dm_botw_rune_icon_image(const dm_bo
 #if __has_feature(blocks)
 // Reuse the present path's game-only capture; other graphics backends may omit it.
 void dm_launcher_grab_game_frame(void (^callback)(CGImageRef));
+// An upright, ungraded current game picture for the filter editor, without bars.
+void dm_launcher_grab_filter_frame(void (^callback)(CGImageRef));
+// Uses the same compiled shaders/LUT as presentation; call off the UI thread.
+CGImageRef CF_RETURNS_RETAINED dm_launcher_filter_preview(CGImageRef image, const char *mode, float strength, int max_width);
+// Preview a library entry without changing the currently selected live LUT.
+CGImageRef CF_RETURNS_RETAINED dm_launcher_lut_preview(CGImageRef image, const char *path, float strength, int max_width);
 #endif
 
 // MainShortCut's guide uses four pale round keys with triangular cutouts.

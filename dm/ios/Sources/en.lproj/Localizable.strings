@@ -1,4 +1,13 @@
 // Launcher and BOTW touch settings.
+"Picture filter" = "Picture filter";
+"Filter strength" = "Filter strength";
+"Original" = "Original";
+"Vivid" = "Vivid";
+"Cinematic" = "Cinematic";
+"Warm" = "Warm";
+"Cool" = "Cool";
+"Changes the final picture, including the game's text, map and HUD." = "Changes the final picture, including the game's text, map and HUD.";
+"0% keeps the original picture; 100% applies the full selected filter." = "0% keeps the original picture; 100% applies the full selected filter.";
 "Built" = "Built";
 "Touch controls" = "Touch controls";
 "I know I can double-tap with three fingers" = "I know I can double-tap with three fingers";
@@ -402,3 +411,22 @@
 "The archive mixes save folders with other folders. Import those folders separately." = "The archive mixes save folders with other folders. Import those folders separately.";
 "Choose valid saves to export." = "Choose valid saves to export.";
 "Choose a new ZIP file outside the managed saves directory." = "Choose a new ZIP file outside the managed saves directory.";
+"Custom LUT" = "Custom LUT";
+"No LUT imported" = "No LUT imported";
+"Import .cube\U2026" = "Import .cube\U2026";
+"Remove LUT" = "Remove LUT";
+"Remove LUT?" = "Remove LUT?";
+"Use a creative SDR LUT. Camera Log conversion LUTs expect different input colours." = "Use a creative SDR LUT. Camera Log conversion LUTs expect different input colours.";
+"Unable to import LUT" = "Unable to import LUT";
+"The LUT file must be smaller than 32 MB." = "The LUT file must be smaller than 32 MB.";
+"Use a 3D .cube LUT with 2 to 65 points per axis." = "Use a 3D .cube LUT with 2 to 65 points per axis.";
+"The LUT contains invalid or non-finite colour values." = "The LUT contains invalid or non-finite colour values.";
+"The LUT file could not be read. Please import it again." = "The LUT file could not be read. Please import it again.";
+"There is not enough memory to load this LUT." = "There is not enough memory to load this LUT.";
+"This is not a valid 3D .cube LUT. Combined 1D and 3D LUTs are not supported." = "This is not a valid 3D .cube LUT. Combined 1D and 3D LUTs are not supported.";
+"Current game picture" = "Current game picture";
+"Current picture preview" = "Current picture preview";
+"Start the game to preview its current picture." = "Start the game to preview its current picture.";
+"Compare original" = "Compare original";
+"Hide controls" = "Hide controls";
+"Show controls" = "Show controls";

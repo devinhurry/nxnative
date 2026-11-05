@@ -28,6 +28,8 @@ static int framegen_ui_canvas(void);
 #include "../tex/nvn_deswizzle_gpu.h"
 #include "nvn_builtin.h"
 #include "host_msl.h"
+#include "present_filter.h"
+#include "../../host/picture_lut.h"
 #include "nvn_dirty.h"
 #include "nvn_depth_clear.h"
 #include "nvn_refl.h"
@@ -139,6 +141,9 @@ static int g_vbuf_cache = 1;   // DM_NVN_VBUF_CACHE=0 restores the uncached path
 static uint64_t g_vt_addr[31]; static uint32_t g_vt_valid;
 static uint64_t g_vbuf_resolve, g_vbuf_reuse, g_vbuf_set, g_vbuf_skip, g_vbuf_copies, g_vbuf_copy_bytes;   // copies: vertex streams at addresses not 4-byte aligned (vbuf_unaligned)
 static id<MTL4ArgumentTable> g_present_args;
+// Crop, filter and optional LUT domain, with independent constants
+// for the full canvas and the generated picture over a Seated dock.
+enum { PRESENT_UNIFORM_STRIDE = 128 };
 static id<MTLBuffer> g_present_uv[3];
 static uint64_t g_present_alloc_fence[3];
 // Under g_pq_mu: per present allocator, the newest ticket its commit feedback reported done on the GPU. present_now resets an allocator only once this reaches the ticket that
@@ -523,11 +528,11 @@ void mtl_init(void) {
     g_ot = rec_table([g_dev newArgumentTableWithDescriptor:atd error:&ate]); if (!g_ot) MDIE("failed to create the object argument table: %s", ate.localizedDescription.UTF8String);
     g_up_ct = [g_dev newArgumentTableWithDescriptor:atd error:&ate]; if (!g_up_ct) MDIE("failed to create the upload compute argument table: %s", ate.localizedDescription.UTF8String);
     MTL4ArgumentTableDescriptor *pad = [MTL4ArgumentTableDescriptor new];
-    pad.maxTextureBindCount = 1; pad.maxSamplerStateBindCount = 1; pad.maxBufferBindCount = 1;
+    pad.maxTextureBindCount = 2; pad.maxSamplerStateBindCount = 1; pad.maxBufferBindCount = 1;
     g_present_args = [g_dev newArgumentTableWithDescriptor:pad error:&ate];
     if (!g_present_args) MDIE("failed to create the present argument table: %s", ate.localizedDescription.UTF8String);
     for (int i = 0; i < 3; i++) {
-        g_present_uv[i] = [g_dev newBufferWithLength:sizeof(float) * 16 options:MTLResourceStorageModeShared];
+        g_present_uv[i] = [g_dev newBufferWithLength:PRESENT_UNIFORM_STRIDE * 2 options:MTLResourceStorageModeShared];
         if (!g_present_uv[i]) MDIE("failed to create present UV buffer[%d]", i);
         res_add(g_present_uv[i]);
     }
@@ -12945,8 +12950,185 @@ void mtl_exec(const uint8_t *p) {
 }
 
 // ---------- Present: draw the swapchain texture to the CAMetalLayer; optional screenshot ----------
-static id<MTLRenderPipelineState> g_blit_pso; static MTLPixelFormat g_blit_fmt;
+static id<MTLRenderPipelineState> g_blit_pso, g_present_filter_pso, g_present_lut_pso; static MTLPixelFormat g_blit_fmt;
 static id<MTLSamplerState> g_blit_samp;
+static _Atomic uint64_t g_present_filter_value;
+static pthread_once_t g_present_filter_once = PTHREAD_ONCE_INIT;
+
+@interface DmPresentLUT : NSObject {
+@public NSData *pixels; id<MTLTexture> texture; unsigned size; float minimum[3], scale[3];
+}
+@end
+@implementation DmPresentLUT
+- (void)dealloc { if (texture) res_remove(texture); }
+@end
+static DmPresentLUT *g_custom_lut, *g_cinematic_lut;
+static NSString *g_custom_lut_path;
+static os_unfair_lock g_custom_lut_lock=OS_UNFAIR_LOCK_INIT;
+static pthread_once_t g_cinematic_lut_once=PTHREAD_ONCE_INIT;
+
+static DmPresentLUT *present_lut_make(dm_cube *cube) {
+    DmPresentLUT *lut=[DmPresentLUT new]; lut->size=cube->size;
+    size_t count=(size_t)cube->size*cube->size*cube->size*4;
+    NSMutableData *data=[NSMutableData dataWithLength:count*sizeof(_Float16)];
+    if (!data) return nil;
+    _Float16 *half=data.mutableBytes;
+    for (size_t i=0;i<count;i++) half[i]=(_Float16)cube->rgba[i];
+    lut->pixels=data;
+    for (int c=0;c<3;c++) { lut->minimum[c]=cube->min[c]; lut->scale[c]=1/(cube->max[c]-cube->min[c]); }
+    return lut;
+}
+int dm_launcher_lut_apply(const char *path) {
+    int clear=!path || !*path || !strcmp(path,"none");
+    DmPresentLUT *lut=nil;
+    if (!clear) {
+        dm_cube cube; int error=dm_cube_read_file(path,&cube); if (error) return error;
+        lut=present_lut_make(&cube); free(cube.rgba); if (!lut) return DM_CUBE_MEMORY;
+    }
+    if (setenv("DM_PRESENT_LUT",clear ? "none" : path,1)) return DM_CUBE_MEMORY;
+    os_unfair_lock_lock(&g_custom_lut_lock);
+    g_custom_lut=lut; g_custom_lut_path=clear ? @"none" : @(path);
+    os_unfair_lock_unlock(&g_custom_lut_lock);
+    return DM_CUBE_OK;
+}
+static void present_cinematic_lut_load(void) {
+    const char *text=host_msl_cinematic_cube(); dm_cube cube;
+    int error=dm_cube_parse(text,strlen(text),&cube);
+    if (error) MDIE("built-in cinematic CUBE is invalid (%d)",error);
+    g_cinematic_lut=present_lut_make(&cube); free(cube.rgba);
+    if (!g_cinematic_lut) MDIE("cannot allocate the cinematic LUT");
+}
+static DmPresentLUT *present_lut_texture(DmPresentLUT *lut,int mode) {
+    if (!lut) return nil;
+    @synchronized(lut) {
+        if (!lut->texture) {
+            MTLTextureDescriptor *d=[MTLTextureDescriptor new]; d.textureType=MTLTextureType3D;
+            d.pixelFormat=MTLPixelFormatRGBA16Float; d.width=d.height=d.depth=lut->size;
+            d.storageMode=MTLStorageModeShared; d.usage=MTLTextureUsageShaderRead;
+            lut->texture=[g_dev newTextureWithDescriptor:d];
+            if (!lut->texture) MDIE("cannot allocate a %u-point picture LUT",lut->size);
+            [lut->texture replaceRegion:MTLRegionMake3D(0,0,0,lut->size,lut->size,lut->size) mipmapLevel:0 slice:0
+                             withBytes:lut->pixels.bytes bytesPerRow:lut->size*8 bytesPerImage:lut->size*lut->size*8];
+            res_add(lut->texture); res_commit();
+            MLOG("picture LUT: %s, %u x %u x %u RGBA16Float",mode==DM_FILTER_CINEMATIC ? "cinematic (TEAL LOOK FOR REC 709 V2)" : "custom",lut->size,lut->size,lut->size);
+        }
+    }
+    return lut;
+}
+static DmPresentLUT *present_lut_for_mode(int mode) {
+    DmPresentLUT *lut=nil;
+    if (mode==DM_FILTER_CINEMATIC) { pthread_once(&g_cinematic_lut_once,present_cinematic_lut_load); lut=g_cinematic_lut; }
+    else if (mode==DM_FILTER_CUSTOM) { os_unfair_lock_lock(&g_custom_lut_lock); lut=g_custom_lut; os_unfair_lock_unlock(&g_custom_lut_lock); }
+    return present_lut_texture(lut,mode);
+}
+static void present_lut_domain(DmPresentLUT *lut,float *uniforms) {
+    if (lut) { memcpy(uniforms,lut->minimum,3*sizeof(float)); memcpy(uniforms+4,lut->scale,3*sizeof(float)); }
+}
+
+static void present_filter_load(void) {
+    float params[2] = {DM_FILTER_OFF, 1};
+    const char *mode = getenv("DM_PRESENT_FILTER"), *strength = getenv("DM_PRESENT_FILTER_STRENGTH");
+    int selected = dm_present_filter_mode(mode);
+    if (selected >= 0) params[0] = (float)selected;
+    else if (mode && *mode) MLOG("[RED] DM_PRESENT_FILTER: expected off, vivid, cinematic, warm, cool or custom; keeping original");
+    const char *path=getenv("DM_PRESENT_LUT");
+    if (path && *path) {
+        os_unfair_lock_lock(&g_custom_lut_lock); int changed=![g_custom_lut_path isEqualToString:@(path)]; os_unfair_lock_unlock(&g_custom_lut_lock);
+        if (changed) { int error=dm_launcher_lut_apply(path); if (error) MLOG("[RED] custom picture LUT cannot load (%d); keeping the previous table",error); }
+    }
+    if (strength && !dm_present_filter_strength(strength, &params[1]))
+        MLOG("[RED] DM_PRESENT_FILTER_STRENGTH: expected a finite value from 0 to 1; keeping 1");
+    uint64_t bits;
+    memcpy(&bits, params, sizeof bits);
+    atomic_store_explicit(&g_present_filter_value, bits, memory_order_relaxed);
+}
+void dm_present_filter_settings_changed(void) {
+    pthread_once(&g_present_filter_once, present_filter_load);
+    present_filter_load();
+}
+static int present_filter_params(float params[4]) {
+    pthread_once(&g_present_filter_once, present_filter_load);
+    uint64_t bits = atomic_load_explicit(&g_present_filter_value, memory_order_relaxed);
+    memcpy(params, &bits, sizeof bits);
+    params[2] = params[3] = 0;
+    return params[0] != DM_FILTER_OFF && params[1] > 0;
+}
+static int present_filter_override(float params[4],const float *filter) {
+    if (!filter) return present_filter_params(params);
+    params[0]=filter[0]; params[1]=filter[1]; params[2]=params[3]=0;
+    return params[0]!=DM_FILTER_OFF && params[1]>0;
+}
+// Settings render a frozen, upright SDR frame through the actual present shader.
+// A separate classic queue/cache avoids changing the live present's state.
+static CGImageRef CF_RETURNS_RETAINED present_filter_preview(CGImageRef image,const char *mode,float strength,int max_width,const char *path) {
+    int selected=dm_present_filter_mode(mode);
+    if (!g_dev || !image || selected<0 || !isfinite(strength) || strength<0 || strength>1 || max_width<1) return NULL;
+    static dispatch_queue_t serial; static dispatch_once_t once;
+    dispatch_once(&once,^{serial=dispatch_queue_create("nxnative.filter-preview",DISPATCH_QUEUE_SERIAL);});
+    __block CGImageRef result=NULL;
+    dispatch_sync(serial,^{ @autoreleasepool {
+        static id<MTLCommandQueue> queue; static id<MTLRenderPipelineState> pipelines[3]; static id<MTLSamplerState> sampler;
+        if (!queue) queue=[g_dev newCommandQueue];
+        NSUInteger iw=CGImageGetWidth(image),ih=CGImageGetHeight(image),w=MIN(iw,(NSUInteger)MIN(max_width,1280));
+        if (!iw || !ih || !w || !queue) return;
+        NSUInteger h=MAX(1,(NSUInteger)llround((double)ih*w/iw)),row=w*4;
+        NSMutableData *data=[NSMutableData dataWithLength:row*h];
+        CGColorSpaceRef cs=CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        CGContextRef context=data ? CGBitmapContextCreate(data.mutableBytes,w,h,8,row,cs,kCGImageAlphaPremultipliedFirst|kCGBitmapByteOrder32Little) : NULL;
+        CGColorSpaceRelease(cs); if (!context) return;
+        CGContextDrawImage(context,CGRectMake(0,0,w,h),image);
+        MTLTextureDescriptor *d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:w height:h mipmapped:NO];
+        d.storageMode=MTLStorageModeShared; d.usage=MTLTextureUsageShaderRead;
+        id<MTLTexture> source=[g_dev newTextureWithDescriptor:d];
+        d.usage=MTLTextureUsageRenderTarget; id<MTLTexture> output=[g_dev newTextureWithDescriptor:d];
+        if (!source || !output) { CGContextRelease(context); return; }
+        [source replaceRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0 withBytes:data.bytes bytesPerRow:row];
+        int filtered=selected!=DM_FILTER_OFF && strength>0;
+        DmPresentLUT *lut=nil;
+        if (filtered && path) {
+            dm_cube cube; int error=dm_cube_read_file(path,&cube);
+            if (error) { CGContextRelease(context); return; }
+            lut=present_lut_make(&cube); free(cube.rgba);
+            if (!lut) { CGContextRelease(context); return; }
+            lut=present_lut_texture(lut,DM_FILTER_CUSTOM);
+        } else if (filtered) lut=present_lut_for_mode(selected);
+        int kind=lut ? 2 : filtered ? 1 : 0;
+        if (!pipelines[kind]) {
+            NSError *error=nil; id<MTLLibrary> library=host_msl_lib(g_dev,nil,"present",&error);
+            MTLRenderPipelineDescriptor *p=[MTLRenderPipelineDescriptor new];
+            p.vertexFunction=[library newFunctionWithName:@"vs"];
+            p.fragmentFunction=[library newFunctionWithName:kind==2 ? @"fs_lut" : kind==1 ? @"fs_filter" : @"fs"];
+            p.colorAttachments[0].pixelFormat=MTLPixelFormatBGRA8Unorm;
+            if (library) pipelines[kind]=[g_dev newRenderPipelineStateWithDescriptor:p error:&error];
+            if (!pipelines[kind]) { MLOG("filter preview pipeline unavailable: %s",error.localizedDescription.UTF8String); CGContextRelease(context); return; }
+        }
+        if (!sampler) { MTLSamplerDescriptor *s=[MTLSamplerDescriptor new]; s.minFilter=s.magFilter=MTLSamplerMinMagFilterLinear;
+            s.sAddressMode=s.tAddressMode=s.rAddressMode=MTLSamplerAddressModeClampToEdge; sampler=[g_dev newSamplerStateWithDescriptor:s]; }
+        float uv[20]={0,0,1,1,.5f/w,.5f/h,1-.5f/w,1-.5f/h,selected,strength}; present_lut_domain(lut,uv+12);
+        MTLRenderPassDescriptor *pass=[MTLRenderPassDescriptor renderPassDescriptor]; pass.colorAttachments[0].texture=output;
+        pass.colorAttachments[0].loadAction=MTLLoadActionDontCare; pass.colorAttachments[0].storeAction=MTLStoreActionStore;
+        id<MTLCommandBuffer> cb=[queue commandBuffer]; id<MTLRenderCommandEncoder> encoder=[cb renderCommandEncoderWithDescriptor:pass];
+        if (!encoder || !sampler) { CGContextRelease(context); return; }
+        [encoder setRenderPipelineState:pipelines[kind]]; [encoder setFragmentTexture:source atIndex:0];
+        if (lut) [encoder setFragmentTexture:lut->texture atIndex:1];
+        [encoder setFragmentSamplerState:sampler atIndex:0]; [encoder setFragmentBytes:uv length:sizeof uv atIndex:0];
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3]; [encoder endEncoding];
+        [cb commit]; [cb waitUntilCompleted];
+        if (cb.status==MTLCommandBufferStatusCompleted) {
+            [output getBytes:data.mutableBytes bytesPerRow:row fromRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0];
+            result=CGBitmapContextCreateImage(context);
+        }
+        CGContextRelease(context);
+    }});
+    return result;
+}
+CGImageRef CF_RETURNS_RETAINED dm_launcher_filter_preview(CGImageRef image,const char *mode,float strength,int max_width) {
+    return present_filter_preview(image,mode,strength,max_width,NULL);
+}
+CGImageRef CF_RETURNS_RETAINED dm_launcher_lut_preview(CGImageRef image,const char *path,float strength,int max_width) {
+    if (!path || !*path || !strcmp(path,"none")) return NULL;
+    return present_filter_preview(image,"custom",strength,max_width,path);
+}
 static uint64_t g_present_n;
 uint64_t mtl_present_count(void) { return g_present_n; }   // Actual present count (heat attribution DM_HEAT computes the present frame rate)
 void mtl_res_snapshot(mtl_res_count *out) {
@@ -12986,21 +13168,30 @@ void mtl_res_counts(uint32_t tick, const char *why) {
 static struct { uint64_t frame; char path[1024]; } g_shotq[SHOTQ_MAX]; static int g_nshotq;
 static pthread_mutex_t g_shotq_mu = PTHREAD_MUTEX_INITIALIZER;
 static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4]);
+static int present_encode_filter(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4], const float *filter);
 enum { PRESENT_FAILED, PRESENT_STANDARD, PRESENT_METALFX };
 static int present_offscreen_m4(id<MTLTexture> src, const int crop[4], id<MTLTexture> out, void (^done)(int));
+static int present_offscreen_m4_filter(id<MTLTexture> src, const int crop[4], id<MTLTexture> out, const float *filter, void (^done)(int));
+static int present_crop_rect(id<MTLTexture> src, const int crop[4], NSUInteger r[4]);
+static MTLViewport present_game_viewport(double cw, double ch, double dw, double dh);
 static int present_offscreen_wait(id<MTLTexture> src, const int crop[4], id<MTLTexture> out);
 // Game picture needed by the whole-window screenshot (front end window_shot; no longer does drawViewHierarchy on a Metal layer with the display link attached): at the next present, the present thread draws the same frame
 // with the same encoding as the present into an offscreen texture of the view's size, and after the GPU finishes hands out a CGImage in the completion callback. Guarded by g_shotq_mu
 static void (^g_grab_cb)(CGImageRef img);
-void mtl_grab_next_present(void (^cb)(CGImageRef img)) { pthread_mutex_lock(&g_shotq_mu); g_grab_cb = [cb copy]; pthread_mutex_unlock(&g_shotq_mu); }
+static int g_grab_unfiltered;
+void mtl_grab_next_present(void (^cb)(CGImageRef img)) { pthread_mutex_lock(&g_shotq_mu); g_grab_cb = [cb copy]; g_grab_unfiltered=0; pthread_mutex_unlock(&g_shotq_mu); }
+void mtl_grab_next_present_unfiltered(void (^cb)(CGImageRef img)) { pthread_mutex_lock(&g_shotq_mu); g_grab_cb = [cb copy]; g_grab_unfiltered=1; pthread_mutex_unlock(&g_shotq_mu); }
 static void grab_present(id<MTLTexture> src, const int crop[4], CGSize sz) {
-    pthread_mutex_lock(&g_shotq_mu); void (^cb)(CGImageRef) = g_grab_cb; g_grab_cb = nil; pthread_mutex_unlock(&g_shotq_mu);
+    pthread_mutex_lock(&g_shotq_mu); void (^cb)(CGImageRef) = g_grab_cb; int unfiltered=g_grab_unfiltered; g_grab_cb = nil; pthread_mutex_unlock(&g_shotq_mu);
     if (!cb) return;
     size_t w = (size_t)sz.width, h = (size_t)sz.height, row = w * 4;
     MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:w height:h mipmapped:NO];
     d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead; d.storageMode = MTLStorageModePrivate;
     id<MTLTexture> out = w && h ? [g_dev newTextureWithDescriptor:d] : nil; id<MTLBuffer> buf = out ? [g_dev newBufferWithLength:row * h options:MTLResourceStorageModeShared] : nil;
     if (!buf) { MLOG("[RED] full-window screenshot: cannot create output (%zux%zu)", w, h); cb(NULL); return; }
+    NSUInteger rect[4]; if (!present_crop_rect(src,crop,rect)) { cb(NULL); return; }
+    MTLViewport viewport=present_game_viewport(rect[2],rect[3],w,h);
+    CGRect image_rect=CGRectMake(viewport.originX,viewport.originY,viewport.width,viewport.height);
     // GPU completion starts the readback, keeping the present thread free. Each capture owns its scaler and textures until completion.
     void (^readback)(int) = ^(int ok) {
         if (!ok) { cb(NULL); return; }
@@ -13010,14 +13201,17 @@ static void grab_present(id<MTLTexture> src, const int crop[4], CGSize sz) {
         [cb2 addCompletedHandler:^(id<MTLCommandBuffer> c) { (void)c;
             CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
             CGContextRef ctx = CGBitmapContextCreate(buf.contents, w, h, 8, row, cs, kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little);
-            CGImageRef img = ctx ? CGBitmapContextCreateImage(ctx) : NULL; cb(img);
+            CGImageRef img = ctx ? CGBitmapContextCreateImage(ctx) : NULL;
+            CGImageRef content = img && unfiltered ? CGImageCreateWithImageInRect(img,image_rect) : NULL;
+            cb(unfiltered ? content : img); CGImageRelease(content);
             CGImageRelease(img); CGContextRelease(ctx); CGColorSpaceRelease(cs); }];
         [cb2 commit];
     };
-    if (g_q4) { if (!present_offscreen_m4(src, crop, out, readback)) cb(NULL); }
+    const float original[2]={0,0}; const float *filter=unfiltered ? original : NULL;
+    if (g_q4) { if (!present_offscreen_m4_filter(src, crop, out, filter, readback)) cb(NULL); }
     else {
         id<MTLCommandBuffer> draw = q_cb();
-        if (!present_encode(draw, src, out, crop)) { cb(NULL); return; }
+        if (!present_encode_filter(draw, src, out, crop, filter)) { cb(NULL); return; }
         [draw addCompletedHandler:^(id<MTLCommandBuffer> c) { readback(c.status == MTLCommandBufferStatusCompleted); }]; [draw commit];
     }
 }
@@ -13287,12 +13481,12 @@ int mtl_display_hz(void) {
 static _Atomic uint64_t g_present_stall_ns;   // For unit tests: an extra pause before each present on the present thread (simulating a drawable that stays unavailable)
 static CAMetalLayer *g_present_layer_resident;
 void mtl_present_test_stall(uint64_t ns) { g_present_stall_ns = ns; }
-static id<MTLRenderPipelineState> texture_blit_pipeline(MTLPixelFormat format,int alpha) {
+static id<MTLRenderPipelineState> texture_blit_pipeline(MTLPixelFormat format,int alpha,int filtered) {
         NSError *e = nil;
         id<MTLLibrary> lib = host_lib("present", &e);
         if (!lib) MDIE("present shader compile failed %s", e.localizedDescription.UTF8String);
         MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
-        pd.vertexFunction = [lib newFunctionWithName:@"vs"]; pd.fragmentFunction = [lib newFunctionWithName:@"fs"];
+        pd.vertexFunction = [lib newFunctionWithName:@"vs"]; pd.fragmentFunction = [lib newFunctionWithName:filtered==2 ? @"fs_lut" : filtered ? @"fs_filter" : @"fs"];
         pd.colorAttachments[0].pixelFormat = format;
         if (alpha) {
             pd.colorAttachments[0].blendingEnabled=YES;
@@ -13309,7 +13503,9 @@ static id<MTLSamplerState> texture_blit_sampler(void) {
 }
 static void present_pipeline(MTLPixelFormat format) {
     if (!g_blit_pso || g_blit_fmt != format) {
-        g_blit_pso=texture_blit_pipeline(format,0); g_blit_fmt=format;
+        g_blit_pso=texture_blit_pipeline(format,0,0); g_blit_fmt=format;
+        g_present_filter_pso=texture_blit_pipeline(format,0,1);
+        g_present_lut_pso=texture_blit_pipeline(format,0,2);
         g_blit_samp=texture_blit_sampler();
     }
 }
@@ -13392,7 +13588,7 @@ static id<MTLRenderPipelineState> seated_texture_pipeline(int kind,MTLPixelForma
     NSNumber *key=@(((uint64_t)kind<<32)|(uint64_t)format);
     id<MTLRenderPipelineState> ps=cache[key];
     if (!ps) {
-        ps=kind>=SEATED_BLUR ? seated_reflection_pipeline(format,kind==SEATED_REFLECTION) : texture_blit_pipeline(format,kind==SEATED_ALPHA);
+        ps=kind>=SEATED_BLUR ? seated_reflection_pipeline(format,kind==SEATED_REFLECTION) : texture_blit_pipeline(format,kind==SEATED_ALPHA,0);
         cache[key]=ps;
     }
     return ps;
@@ -13587,6 +13783,15 @@ static MTLViewport present_viewport(double cw, double ch, double dw, double dh) 
     if (fabs((dw / dh) / (cw / ch) - 1) < 0.01) vp = (MTLViewport){0, 0, dw, dh, 0, 1};
     return vp;
 }
+static MTLViewport present_game_viewport(double cw,double ch,double dw,double dh) {
+    MTLViewport vp=present_viewport(cw,ch,dw,dh);
+    if (dm_aspect_native()) {
+        float region[4],cr=dm_aspect_region(1,region) ? 0 : dm_aspect_custom_ratio();
+        if (cr>0) { double w=fmin(dw,dh*cr),h=w/cr; vp=(MTLViewport){floor((dw-w)/2),floor((dh-h)/2),round(w),round(h),0,1}; }
+        else vp=(MTLViewport){0,0,dw,dh,0,1};
+    }
+    return vp;
+}
 // The valid source rectangle of a present (x, y, width, height; the crop of nvnWindowSetCrop, zero = the whole texture); 0 when it lies outside the texture
 static int present_crop_rect(id<MTLTexture> src, const int crop[4], NSUInteger r[4]) {
     r[0] = 0; r[1] = 0; r[2] = src.width; r[3] = src.height;
@@ -13597,7 +13802,7 @@ static int present_crop_rect(id<MTLTexture> src, const int crop[4], NSUInteger r
     }
     r[0] = crop[0]; r[1] = crop[1]; r[2] = crop[2]; r[3] = crop[3]; return 1;
 }
-static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4]) {
+static int present_encode_filter(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4],const float *filter) {
     NSUInteger r[4]; if (!present_crop_rect(src, crop, r)) return 0;
     NSUInteger cx = r[0], cy = r[1], cw = r[2], ch = r[3];
     static uint64_t last_crop[8]; uint64_t meta[8] = {src.width, src.height, cx, cy, cw, ch, dst.width, dst.height};
@@ -13609,12 +13814,7 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTex
     // Keep the game picture's aspect ratio and center it, leaving black bars in the rest (no stretching when the screen ratio differs from the game's, e.g. iPhone about 19.5:9 versus the game's 16:9);
     // when the ratio difference is < 1% (the remainder from the game width being a multiple of 8 in the full-screen setup, e.g. 1952x900 versus 2868x1320 differs by 0.17%) fill directly, leaving no few-pixel border
     double dw = dst.width, dh = dst.height;
-    MTLViewport vp = present_viewport(cw, ch, dw, dh);
-    if (dm_aspect_native()) {
-        float region[4],cr = dm_aspect_region(1,region) ? 0 : dm_aspect_custom_ratio();
-        if (cr > 0) { double w = fmin(dw, dh * cr), h = w / cr; vp = (MTLViewport){floor((dw - w) / 2), floor((dh - h) / 2), round(w), round(h), 0, 1}; }
-        else vp = (MTLViewport){0, 0, dw, dh, 0, 1};   // native display: the camera holds the wide view, the canvas is stretched (UI squeezed in draw)
-    }
+    MTLViewport vp = present_game_viewport(cw, ch, dw, dh);
     int full = vp.originX == 0 && vp.originY == 0 && vp.width == dw && vp.height == dh;
     static double last_vp[4];   // Log one line when the viewport changes (used by the real-device screen-level acceptance screen_check.py to check the aspect ratio)
     if (memcmp(last_vp, &vp, sizeof last_vp)) { memcpy(last_vp, &vp, sizeof last_vp);
@@ -13624,14 +13824,22 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTex
     rp.colorAttachments[0].storeAction = MTLStoreActionStore;
     id<MTLRenderCommandEncoder> en = [cb renderCommandEncoderWithDescriptor:rp];
     [en setViewport:vp];
-    [en setRenderPipelineState:g_blit_pso]; [en setFragmentTexture:present_raw_src(src) atIndex:0]; [en setFragmentSamplerState:g_blit_samp atIndex:0];
-    float uv[8] = {(float)cx / src.width, (float)cy / src.height, (float)cw / src.width, (float)ch / src.height,
+    float uv[20] = {(float)cx / src.width, (float)cy / src.height, (float)cw / src.width, (float)ch / src.height,
                    (cx + 0.5f) / src.width, (cy + 0.5f) / src.height, (cx + cw - 0.5f) / src.width, (cy + ch - 0.5f) / src.height};
+    int filtered = present_filter_override(uv + 8,filter);
+    DmPresentLUT *lut=filtered ? present_lut_for_mode((int)uv[8]) : nil;
+    present_lut_domain(lut,uv+12);
+    [en setRenderPipelineState:lut ? g_present_lut_pso : filtered ? g_present_filter_pso : g_blit_pso];
+    if (lut) [en setFragmentTexture:lut->texture atIndex:1];
+    [en setFragmentTexture:present_raw_src(src) atIndex:0]; [en setFragmentSamplerState:g_blit_samp atIndex:0];
     if (atomic_load_explicit(&g_origin_ll, memory_order_relaxed)) { uv[1] += uv[3]; uv[3] = -uv[3]; }   // lower-left origin: the window image is stored bottom-up
     [en setFragmentBytes:uv length:sizeof uv atIndex:0];
     [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [en endEncoding];
     return 1;
+}
+static int present_encode(id<MTLCommandBuffer> cb,id<MTLTexture> src,id<MTLTexture> dst,const int crop[4]) {
+    return present_encode_filter(cb,src,dst,crop,NULL);
 }
 // ---------- Upscaling in the present (DM_PRESENT_UPSCALE) ----------
 // Opt-in spatial scaling of the valid content to its letterboxed viewport. Copy the crop to an origin-aligned texture, scale in perceptual mode (present_raw_src supplies gamma
@@ -13869,18 +14077,15 @@ static int up_mfx_encode(NvShader *cs) {
 // (fx: the scaler state to use, nil = bilinear). uvb: the pass's crop constants (one buffer per present allocator, written by the CPU)
 // A recorded pane uses window coordinates. Each pass has its own UV offset so
 // overlay encoding cannot overwrite the base pass's constants before GPU use.
-static int present_encode_m4_region(id<MTL4CommandBuffer> cb,id<MTLTexture> src,id<MTLTexture> dst,const int crop[4],
-                                    id<MTLBuffer> uvb,fx_state *fx,const float region[4],size_t offset,int load) {
+static int present_encode_m4_region_filter(id<MTL4CommandBuffer> cb,id<MTLTexture> src,id<MTLTexture> dst,const int crop[4],
+                                    id<MTLBuffer> uvb,fx_state *fx,const float region[4],size_t offset,int load,DmPresentLUT *__strong *used_lut,const float *filter) {
+    if (used_lut) *used_lut=nil;
     NSUInteger r[4]; if (!present_crop_rect(src, crop, r)) return 0;
     present_pipeline(dst.pixelFormat);
     double dw = dst.width, dh = dst.height;
-    MTLViewport vp = present_viewport(r[2], r[3], dw, dh);
+    MTLViewport vp = present_game_viewport(r[2], r[3], dw, dh);
     if (region) {
         vp=(MTLViewport){dw*region[0],dh*region[1],dw*region[2],dh*region[3],0,1};
-    } else if (dm_aspect_native()) {
-        float region[4],cr = dm_aspect_region(1,region) ? 0 : dm_aspect_custom_ratio();
-        if (cr > 0) { double w = fmin(dw, dh * cr), h = w / cr; vp = (MTLViewport){floor((dw - w) / 2), floor((dh - h) / 2), round(w), round(h), 0, 1}; }
-        else vp = (MTLViewport){0, 0, dw, dh, 0, 1};   // native display: the camera holds the wide view, the canvas is stretched (UI squeezed in draw)
     }
     int full = vp.originX == 0 && vp.originY == 0 && vp.width == dw && vp.height == dh;
     id<MTLTexture> tex = present_raw_src(src), up = fx && fx_mode() == 1 ? fx_encode(fx, cb, tex, r, vp, dst.pixelFormat,
@@ -13900,9 +14105,14 @@ static int present_encode_m4_region(id<MTL4CommandBuffer> cb,id<MTLTexture> src,
     float *uv = (float *)((uint8_t *)uvb.contents+offset); NSUInteger tw = tex.width, th = tex.height, cx = r[0], cy = r[1], cw = r[2], ch = r[3];
     uv[0] = (float)cx / tw; uv[1] = (float)cy / th; uv[2] = (float)cw / tw; uv[3] = (float)ch / th;
     uv[4] = (cx + 0.5f) / tw; uv[5] = (cy + 0.5f) / th; uv[6] = (cx + cw - 0.5f) / tw; uv[7] = (cy + ch - 0.5f) / th;
+    int filtered = present_filter_override(uv + 8,filter);
+    DmPresentLUT *lut=filtered ? present_lut_for_mode((int)uv[8]) : nil;
+    if (used_lut) *used_lut=lut;
+    present_lut_domain(lut,uv+12);
+    if (lut) [g_present_args setTexture:lut->texture.gpuResourceID atIndex:1];
     if (atomic_load_explicit(&g_origin_ll, memory_order_relaxed)) { uv[1] += uv[3]; uv[3] = -uv[3]; }   // lower-left origin: the window image is stored bottom-up
     [g_present_args setAddress:uvb.gpuAddress+offset atIndex:0];
-    [en setViewport:vp]; [en setRenderPipelineState:g_blit_pso];
+    [en setViewport:vp]; [en setRenderPipelineState:lut ? g_present_lut_pso : filtered ? g_present_filter_pso : g_blit_pso];
     if (region) {
         NSUInteger x=lround(vp.originX),y=lround(vp.originY);
         [en setScissorRect:(MTLScissorRect){x,y,lround(vp.originX+vp.width)-x,lround(vp.originY+vp.height)-y}];
@@ -13911,31 +14121,39 @@ static int present_encode_m4_region(id<MTL4CommandBuffer> cb,id<MTLTexture> src,
     m4_end(en);
     return up ? PRESENT_METALFX : PRESENT_STANDARD;
 }
-static int present_encode_m4(id<MTL4CommandBuffer> cb,id<MTLTexture> src,id<MTLTexture> dst,const int crop[4],id<MTLBuffer> uvb,fx_state *fx) {
-    return present_encode_m4_region(cb,src,dst,crop,uvb,fx,NULL,0,0);
+static int present_encode_m4_region(id<MTL4CommandBuffer> cb,id<MTLTexture> src,id<MTLTexture> dst,const int crop[4],
+                                    id<MTLBuffer> uvb,fx_state *fx,const float region[4],size_t offset,int load,DmPresentLUT *__strong *used_lut) {
+    return present_encode_m4_region_filter(cb,src,dst,crop,uvb,fx,region,offset,load,used_lut,NULL);
+}
+static int present_encode_m4(id<MTL4CommandBuffer> cb,id<MTLTexture> src,id<MTLTexture> dst,const int crop[4],id<MTLBuffer> uvb,fx_state *fx,DmPresentLUT *__strong *used_lut) {
+    return present_encode_m4_region(cb,src,dst,crop,uvb,fx,NULL,0,0,used_lut);
 }
 // The present's picture drawn into an offscreen texture (out: private, render target) the way present_now draws it into the drawable, MetalFX included, on the Metal 4 queue;
 // returns whether it was submitted. Completion reports the encoding kind, or PRESENT_FAILED on a GPU error. Resources remain resident and retained until GPU completion.
-static int present_offscreen_m4(id<MTLTexture> src, const int crop[4], id<MTLTexture> out, void (^done)(int)) {
+static int present_offscreen_m4_filter(id<MTLTexture> src, const int crop[4], id<MTLTexture> out,const float *filter, void (^done)(int)) {
     id<MTL4CommandAllocator> al = [g_dev newCommandAllocator]; id<MTL4CommandBuffer> cb = [g_dev newCommandBuffer];
-    id<MTLBuffer> uvb = [g_dev newBufferWithLength:sizeof(float) * 8 options:MTLResourceStorageModeShared];
+    id<MTLBuffer> uvb = [g_dev newBufferWithLength:PRESENT_UNIFORM_STRIDE options:MTLResourceStorageModeShared];
     if (!al || !cb || !uvb) { MLOG("[RED] offscreen present: no command allocator or buffer"); return 0; }
     id<MTLTexture> raw = present_raw_src(src);
     fx_state fx = {0};
     res_add(out); res_add(uvb); res_commit();
     [cb beginCommandBufferWithAllocator:al];
-    int kind = present_encode_m4(cb, raw, out, crop, uvb, &fx);
+    DmPresentLUT *lut=nil;
+    int kind = present_encode_m4_region_filter(cb,raw,out,crop,uvb,&fx,NULL,0,0,&lut,filter);
     [cb endCommandBuffer];
     if (!kind) { res_remove(out); res_remove(uvb); res_remove(fx.in); res_remove(fx.out); return 0; }
     MTL4CommitOptions *options = [MTL4CommitOptions new];
     [options addFeedbackHandler:^(id<MTL4CommitFeedback> f) {
-        (void)al; (void)cb; (void)raw; (void)fx.sc;   // keep the Metal 4 commands, source view and scaler alive too
+        (void)al; (void)cb; (void)raw; (void)fx.sc; (void)lut;   // retain sampled LUTs through GPU completion, including live replacements
         res_remove(out); res_remove(uvb); res_remove(fx.in); res_remove(fx.out);
         if (f.error) MLOG("[RED] offscreen present: %s", f.error.description.UTF8String);
         done(f.error ? PRESENT_FAILED : kind);
     }];
     [g_q4 commit:&cb count:1 options:options];
     return 1;
+}
+static int present_offscreen_m4(id<MTLTexture> src,const int crop[4],id<MTLTexture> out,void (^done)(int)) {
+    return present_offscreen_m4_filter(src,crop,out,NULL,done);
 }
 // Diagnostic readback and tests wait for the same asynchronous capture used by whole-window screenshots. A timeout leaves cleanup with the GPU completion handler.
 static int present_offscreen_wait(id<MTLTexture> src, const int crop[4], id<MTLTexture> out) {
@@ -14113,18 +14331,18 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     [g_q4 waitForDrawable:dr];
     id<MTL4CommandBuffer> cb = g_present_cb[alloc_i];
     [cb beginCommandBufferWithAllocator:g_present_alloc4[alloc_i]];
-    int kind;
+    int kind; DmPresentLUT *lut_base=nil,*lut_overlay=nil;
     if (picture && picture[2]>0 && picture[3]>0) {
         // The real snapshot already contains the native dock and blurred
         // reflection. Interpolate only the upper game picture; keep that same
         // lower pane for both members of the pair, including its HUD edges.
         const float full[4]={0,0,1,1};
-        kind=present_encode_m4_region(cb,tex_mtl(t),dr.texture,real_crop,g_present_uv[alloc_i],&g_fx_present,full,0,0);
+        kind=present_encode_m4_region(cb,tex_mtl(t),dr.texture,real_crop,g_present_uv[alloc_i],&g_fx_present,full,0,0,&lut_base);
         if (kind && fg_slot>=0) {
-            int overlay=present_encode_m4_region(cb,src,dr.texture,crop,g_present_uv[alloc_i],&g_fx_present_picture,picture,32,1);
+            int overlay=present_encode_m4_region(cb,src,dr.texture,crop,g_present_uv[alloc_i],&g_fx_present_picture,picture,PRESENT_UNIFORM_STRIDE,1,&lut_overlay);
             kind=overlay ? MAX(kind,overlay) : 0;
         }
-    } else kind=present_encode_m4(cb,src,dr.texture,crop,g_present_uv[alloc_i],&g_fx_present);
+    } else kind=present_encode_m4(cb,src,dr.texture,crop,g_present_uv[alloc_i],&g_fx_present,&lut_base);
     if (!kind) { [cb endCommandBuffer]; [g_q4 signalDrawable:dr]; return 0; }
     int fx_kind = kind == PRESENT_METALFX;
     [cb endCommandBuffer];
@@ -14136,6 +14354,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     int profile_present=dm_fg_profile_on();
     double present_submit=profile_present ? CACurrentMediaTime() : 0;
     [o addFeedbackHandler:^(id<MTL4CommitFeedback> f) {
+        (void)lut_base; (void)lut_overlay;
         if (f.error) MLOG("[RED] display command buffer error: %s", f.error.description.UTF8String);
         if (release_slot >= 0) dm_fg_display_done(release_slot);
         if (fg_slot>=0) dm_fg_display_done(fg_slot);

@@ -1,4 +1,13 @@
 // Launcher and BOTW touch settings.
+"Picture filter" = "\U753B\U9762\U6EE4\U955C";
+"Filter strength" = "\U6EE4\U955C\U5F3A\U5EA6";
+"Original" = "\U539F\U753B";
+"Vivid" = "\U9C9C\U8273";
+"Cinematic" = "\U7535\U5F71";
+"Warm" = "\U6696\U8272";
+"Cool" = "\U51B7\U8272";
+"Changes the final picture, including the game's text, map and HUD." = "\U8C03\U6574\U6700\U7EC8\U753B\U9762\UFF0C\U5305\U62EC\U6E38\U620F\U91CC\U7684\U6587\U5B57\U3001\U5730\U56FE\U548C\U72B6\U6001\U4FE1\U606F\U3002";
+"0% keeps the original picture; 100% applies the full selected filter." = "0% \U4FDD\U7559\U539F\U753B\UFF0C100% \U5B8C\U6574\U5E94\U7528\U6240\U9009\U6EE4\U955C\U3002";
 "Built" = "构建时间";
 "Touch controls" = "触控提示";
 "I know I can double-tap with three fingers" = "我知道可以三指双击";
@@ -402,3 +411,22 @@
 "The archive mixes save folders with other folders. Import those folders separately." = "\U538b\U7f29\U5305\U4e2d\U540c\U65f6\U6709\U5b58\U6863\U76ee\U5f55\U548c\U5176\U4ed6\U76ee\U5f55\Uff0c\U8bf7\U5206\U522b\U5bfc\U5165\U3002";
 "Choose valid saves to export." = "\U8bf7\U9009\U62e9\U6709\U6548\U7684\U5b58\U6863\U8fdb\U884c\U5bfc\U51fa\U3002";
 "Choose a new ZIP file outside the managed saves directory." = "\U8bf7\U5728\U5b58\U6863\U7ba1\U7406\U76ee\U5f55\U4e4b\U5916\U9009\U62e9\U4e00\U4e2a\U65b0\U7684 ZIP \U6587\U4ef6\U3002";
+"Custom LUT" = "\U81EA\U5B9A\U4E49 LUT";
+"No LUT imported" = "\U5C1A\U672A\U5BFC\U5165 LUT";
+"Import .cube\U2026" = "\U5BFC\U5165 .cube\U2026";
+"Remove LUT" = "\U79FB\U9664 LUT";
+"Remove LUT?" = "\U79FB\U9664 LUT\UFF1F";
+"Use a creative SDR LUT. Camera Log conversion LUTs expect different input colours." = "\U8BF7\U4F7F\U7528\U9002\U7528\U4E8E SDR \U753B\U9762\U7684\U521B\U610F\U8C03\U8272 LUT\U3002\U76F8\U673A Log \U8F6C\U6362 LUT \U9700\U8981\U4E0D\U540C\U7684\U8F93\U5165\U8272\U5F69\U3002";
+"Unable to import LUT" = "\U65E0\U6CD5\U5BFC\U5165 LUT";
+"The LUT file must be smaller than 32 MB." = "LUT \U6587\U4EF6\U4E0D\U80FD\U8D85\U8FC7 32 MB\U3002";
+"Use a 3D .cube LUT with 2 to 65 points per axis." = "\U8BF7\U4F7F\U7528\U6BCF\U4E2A\U7EF4\U5EA6\U4E3A 2 \U81F3 65 \U4E2A\U91C7\U6837\U70B9\U7684 3D .cube LUT\U3002";
+"The LUT contains invalid or non-finite colour values." = "LUT \U542B\U6709\U65E0\U6548\U6216\U975E\U6709\U9650\U7684\U8272\U5F69\U6570\U503C\U3002";
+"The LUT file could not be read. Please import it again." = "\U65E0\U6CD5\U8BFB\U53D6 LUT \U6587\U4EF6\UFF0C\U8BF7\U91CD\U65B0\U5BFC\U5165\U3002";
+"There is not enough memory to load this LUT." = "\U53EF\U7528\U5185\U5B58\U4E0D\U8DB3\UFF0C\U65E0\U6CD5\U8F7D\U5165\U6B64 LUT\U3002";
+"This is not a valid 3D .cube LUT. Combined 1D and 3D LUTs are not supported." = "\U8FD9\U4E0D\U662F\U6709\U6548\U7684 3D .cube LUT\U3002\U6682\U4E0D\U652F\U6301\U7EC4\U5408\U5728\U4E00\U8D77\U7684 1D \U548C 3D LUT\U3002";
+"Current game picture" = "\U5F53\U524D\U6E38\U620F\U753B\U9762";
+"Current picture preview" = "\U5F53\U524D\U753B\U9762\U9884\U89C8";
+"Start the game to preview its current picture." = "\U8FDB\U5165\U6E38\U620F\U540E\UFF0C\U53EF\U4F7F\U7528\U5F53\U524D\U753B\U9762\U9884\U89C8\U6EE4\U955C\U3002";
+"Compare original" = "\U5BF9\U6BD4\U539F\U753B";
+"Hide controls" = "\U9690\U85CF\U9009\U9879";
+"Show controls" = "\U663E\U793A\U9009\U9879";

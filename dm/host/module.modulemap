@@ -6,6 +6,7 @@ module DmTouchPad {
     header "memory_mode.h"
     header "launcher_settings.h"
     header "save_manager.h"
+    header "picture_lut.h"
     header "aoc_files.h"
     module Artwork {
         requires objc

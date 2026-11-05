@@ -97,19 +97,30 @@ func mockRuneIconSnapshot(_ state: UnsafeMutableRawPointer?) -> Int32 { 0 }
 
 @_cdecl("dm_launcher_grab_game_frame")
 func launcherGrabGameFrame(_ callback: @convention(block) (CGImage?) -> Void) { callback(nil) }
+@_cdecl("dm_launcher_grab_filter_frame")
+func launcherGrabFilterFrame(_ callback: @convention(block) (CGImage?) -> Void) { callback(nil) }
+@_cdecl("dm_launcher_filter_preview")
+func launcherFilterPreview(_ image: CGImage?, _ mode: UnsafePointer<CChar>, _ strength: Float, _ width: Int32) -> CGImage? { nil }
+@_cdecl("dm_launcher_lut_preview")
+func launcherLUTPreview(_ image: CGImage?, _ path: UnsafePointer<CChar>, _ strength: Float, _ width: Int32) -> CGImage? { nil }
 #if DM_HOST_UI
 private var nativeApplied: [String: String] = [:]
 @_cdecl("dm_launcher_settings_pause")
 func mockNativeSettingsPause(_ on: Int32) {}
 @_cdecl("dm_launcher_setting_is_live")
 func mockNativeSettingIsLive(_ key: UnsafePointer<CChar>) -> Int32 {
-    ["DM_BOTW_MOVE_CURVE", "DM_RUMBLE", "DM_FPS_TARGET", "DM_FRAMEGEN", "DM_SHOW_FPS"].contains(String(cString: key)) ? 1 : 0
+    ["DM_BOTW_MOVE_CURVE", "DM_RUMBLE", "DM_FPS_TARGET", "DM_FRAMEGEN", "DM_SHOW_FPS", "DM_PRESENT_FILTER", "DM_PRESENT_FILTER_STRENGTH"].contains(String(cString: key)) ? 1 : 0
 }
 @_cdecl("dm_launcher_setting_apply")
 func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<CChar>) -> Int32 {
     guard mockNativeSettingIsLive(key) == 1 else { return 0 }
     nativeApplied[String(cString: key)] = String(cString: value)
     return setenv(key, value, 1) == 0 ? 1 : -1
+}
+@_cdecl("dm_launcher_lut_apply")
+func mockNativeLUTApply(_ path: UnsafePointer<CChar>) -> Int32 {
+    nativeApplied["DM_PRESENT_LUT"] = String(cString: path)
+    return 0
 }
 #endif
 @main struct Check {
@@ -488,6 +499,99 @@ func mockNativeSettingApply(_ key: UnsafePointer<CChar>, _ value: UnsafePointer<
             }
         }
         setenv("DM_ENV_FILE_KEYS", "", 1); setenv("DM_ENV_LAUNCH_KEYS", "", 1)
+        for list in [file.settings, mac.settings] {
+            let filter = list.first { $0.env == "DM_PRESENT_FILTER" }!
+            let strength = list.first { $0.env == "DM_PRESENT_FILTER_STRENGTH" }!
+            let model = LauncherModel(list, defaults: d)
+            model.beginRuntime()
+            for mode in ["vivid", "cinematic", "warm", "cool", "off"] {
+                model.binding(filter).wrappedValue = mode
+                model.binding(strength).wrappedValue = "0.50"
+                #if DM_HOST_UI
+                expect(nativeApplied[filter.env] == mode && model.appliesImmediately(filter), "picture filters apply through the live settings owner")
+                #endif
+                let restored = LauncherModel(list, defaults: d)
+                expect(restored.values[filter.env] == mode && restored.values[strength.env] == "0.50", "filter and strength survive reopening on both platforms")
+            }
+            model.reset(keys: [filter.env, strength.env])
+            expect(model.values[filter.env] == "off" && model.values[strength.env] == "1", "reset restores the original picture and default strength")
+            expect(d.string(forKey: "launcher." + filter.env) == nil && d.string(forKey: "launcher." + strength.env) == nil, "reset clears saved filter choices")
+        }
+        do {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("picture-lut-" + UUID().uuidString)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root); unsetenv("DM_PRESENT_LUT") }
+            let source = root.appendingPathComponent("My cinema.cube"), folder = root.appendingPathComponent("private")
+            let identity = "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n"
+            try identity.write(to: source, atomically: true, encoding: .utf8)
+            let lutModel = LauncherModel(file.settings, defaults: d, pictureLUTDirectory: folder)
+            lutModel.beginRuntime()
+            try lutModel.importPictureLUT(from: source)
+            let copied = String(cString: getenv("DM_PRESENT_LUT"))
+            expect(copied != source.path && FileManager.default.fileExists(atPath: copied) && lutModel.pictureLUTName == "My cinema.cube",
+                   "LUT import owns a private copy while preserving the original filename")
+            expect(lutModel.values["DM_PRESENT_FILTER"] == "custom", "valid LUT import selects the custom filter")
+            #if DM_HOST_UI
+            expect(nativeApplied["DM_PRESENT_LUT"] == copied && nativeApplied["DM_PRESENT_FILTER"] == "custom", "LUT import applies through the live renderer")
+            #endif
+            let restored = LauncherModel(file.settings, defaults: d, pictureLUTDirectory: folder)
+            restored.applySaved()
+            expect(restored.pictureLUTName == "My cinema.cube" && String(cString: getenv("DM_PRESENT_LUT")) == copied && restored.values["DM_PRESENT_FILTER"] == "custom",
+                   "custom LUT survives reopening and startup without the settings window")
+            d.removeObject(forKey: "launcher.pictureLUTs")
+            let migrated = LauncherModel(file.settings, defaults: d, pictureLUTDirectory: folder)
+            expect(migrated.pictureLUTs.count == 1 && migrated.selectedPictureLUTID == lutModel.selectedPictureLUTID,
+                   "the previous single-LUT preference becomes a library entry without losing its selection")
+            setenv("DM_ENV_LAUNCH_KEYS", "DM_PRESENT_LUT", 1); setenv("DM_PRESENT_LUT", "none", 1)
+            let overridden = LauncherModel(file.settings, defaults: d, pictureLUTDirectory: folder)
+            overridden.applySaved()
+            expect(overridden.pictureLUTLocked && overridden.pictureLUTName == nil && String(cString: getenv("DM_PRESENT_LUT")) == "none",
+                   "an explicit no-LUT launch override hides the saved file without changing it")
+            setenv("DM_ENV_LAUNCH_KEYS", "", 1); setenv("DM_PRESENT_LUT", copied, 1)
+            let invalid = root.appendingPathComponent("invalid.cube")
+            try "LUT_3D_SIZE 33\n0 0 0\n".write(to: invalid, atomically: true, encoding: .utf8)
+            do { try lutModel.importPictureLUT(from: invalid); expect(false, "invalid LUT must be rejected") }
+            catch {
+                let storedFiles = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+                expect(lutModel.pictureLUTName == "My cinema.cube" && String(cString: getenv("DM_PRESENT_LUT")) == copied &&
+                       storedFiles.count == 1,
+                       "failed LUT import keeps the previous selection and removes the rejected private copy")
+            }
+            let firstID = lutModel.selectedPictureLUTID!
+            let second = root.appendingPathComponent("Second cinema.cube"), third = root.appendingPathComponent("Third cinema.cube")
+            try identity.write(to: second, atomically: true, encoding: .utf8)
+            try identity.write(to: third, atomically: true, encoding: .utf8)
+            try lutModel.importPictureLUT(from: second)
+            let secondID = lutModel.selectedPictureLUTID!, secondCopy = String(cString: getenv("DM_PRESENT_LUT"))
+            try lutModel.importPictureLUT(from: third)
+            let thirdID = lutModel.selectedPictureLUTID!
+            expect(lutModel.pictureLUTs.count == 3 && FileManager.default.fileExists(atPath: copied),
+                   "adding more LUTs keeps every previously imported file")
+            let library = LauncherModel(file.settings, defaults: d, pictureLUTDirectory: folder)
+            expect(library.pictureLUTs == lutModel.pictureLUTs && library.selectedPictureLUTID == thirdID,
+                   "all LUT entries and the selected one survive reopening")
+            try lutModel.selectPictureLUT(firstID)
+            expect(lutModel.selectedPictureLUTID == firstID && String(cString: getenv("DM_PRESENT_LUT")) == copied,
+                   "selecting an earlier LUT reuses its saved copy")
+            #if DM_HOST_UI
+            expect(nativeApplied["DM_PRESENT_LUT"] == copied, "switching library entries updates the live renderer")
+            #endif
+            lutModel.removePictureLUT(secondID)
+            expect(lutModel.pictureLUTs.count == 2 && lutModel.selectedPictureLUTID == firstID &&
+                   String(cString: getenv("DM_PRESENT_LUT")) == copied && !FileManager.default.fileExists(atPath: secondCopy),
+                   "deleting an inactive LUT keeps the current filter and deletes only that entry")
+            lutModel.removePictureLUT(firstID)
+            expect(lutModel.pictureLUTName == nil && lutModel.values["DM_PRESENT_FILTER"] == "off" && !FileManager.default.fileExists(atPath: copied),
+                   "removing a LUT restores original output and deletes only its private copy")
+            expect(FileManager.default.fileExists(atPath: source.path) && d.dictionary(forKey: "launcher.pictureLUT") == nil,
+                   "LUT removal preserves the user's original file and clears the saved selection")
+            let remaining = LauncherModel(file.settings, defaults: d, pictureLUTDirectory: folder)
+            expect(remaining.pictureLUTs.count == 1 && remaining.pictureLUTs[0].id == thirdID && remaining.values["DM_PRESENT_FILTER"] == "off",
+                   "deleting the selected LUT restores Original while preserving the rest of the library")
+            lutModel.removePictureLUT(thirdID)
+            expect(lutModel.pictureLUTs.isEmpty && FileManager.default.fileExists(atPath: second.path) && FileManager.default.fileExists(atPath: third.path),
+                   "clearing the library preserves every source file")
+        } catch { expect(false, "LUT import storage check: \(error)") }
         memoryDefaults.set("0", forKey: "launcher.DM_LOW_MEMORY")
         let runtimeModel = model(8 * gib)
         runtimeModel.beginRuntime()

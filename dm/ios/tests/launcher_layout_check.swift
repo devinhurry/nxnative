@@ -10,7 +10,7 @@ func checkLauncherLayout(_ model: LauncherModel, defaults: UserDefaults) -> Int 
         if !condition { failed += 1 }
     }
     var backgroundCalls = 0
-    withGameSettingsBackground { image in
+    withGameSettingsBackground(model) { image in
         backgroundCalls += 1
         expect(image == nil, "settings open without a game frame in the launcher-only fixture")
     }
@@ -31,6 +31,11 @@ func checkLauncherLayout(_ model: LauncherModel, defaults: UserDefaults) -> Int 
         let page = fitting(LauncherSettingsPage(m: model, close: {}), width: width)
         expect(page.width.isFinite && page.width <= width && page.height <= 540,
                "shared settings page fits the native window at \(width)pt")
+    }
+    for width: CGFloat in [320, 720, 1000] {
+        let filter = fitting(PictureFilterSettingsView(m: model, close: {}, back: {}), width: width)
+        expect(filter.width.isFinite && filter.width <= width && filter.height <= 540,
+               "current-picture filter editor fits at \(width)pt")
     }
     return failed
 }

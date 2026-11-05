@@ -10,5 +10,5 @@ gen/mac-ui-toolchain: FORCE
 	(xcrun swiftc --version; xcrun --sdk macosx --show-sdk-build-version) > "$$mac_ui_stamp"; \
 	if cmp -s "$$mac_ui_stamp" $@; then rm "$$mac_ui_stamp"; else mv "$$mac_ui_stamp" $@; fi
 
-$(MAC_UI_OBJECT): $(MAC_UI_SOURCES) ../mac/host_ui.mk ../mac/min_os.mk module.modulemap launcher_settings.h save_manager.h memory_mode.h aoc_files.h romfs_image.h botw_touch_layout.h botw_stick_settings.h touchpad_geometry.h dm_input.h gen/mac-ui-toolchain
+$(MAC_UI_OBJECT): $(MAC_UI_SOURCES) ../mac/host_ui.mk ../mac/min_os.mk module.modulemap launcher_settings.h save_manager.h picture_lut.h memory_mode.h aoc_files.h romfs_image.h botw_touch_layout.h botw_stick_settings.h touchpad_geometry.h dm_input.h gen/mac-ui-toolchain
 	xcrun swiftc -sdk "$(MAC_UI_SDK)" -target arm64-apple-macos$(MACOS_MIN) -O -swift-version 5 -D DM_HOST_UI -parse-as-library -whole-module-optimization -emit-object -module-name DmMacLauncher -module-cache-path gen/mac-ui-module-cache -I. -o $@ $(MAC_UI_SOURCES)
