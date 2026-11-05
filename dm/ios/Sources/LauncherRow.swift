@@ -397,6 +397,26 @@ struct LauncherSettingsPage: View {
 
     private func sectionTitle(_ section: String) -> String { section == "Game" ? "Graphics" : section }
 
+    // Keep this row separate so SwiftUI does not infer it with the whole settings page.
+    private func pictureFilterRow(_ row: Setting) -> some View {
+        let mode = m.values[row.env] ?? "off"
+        let name: String
+        if mode == "custom", let lutName = m.pictureLUTName {
+            name = lutName
+        } else {
+            let key = row.options?.first { $0[0] == mode }?[1] ?? "Original"
+            name = NSLocalizedString(key, comment: "Filter name")
+        }
+        return Button { pictureFilterPage = true } label: {
+            HStack {
+                Text(LocalizedStringKey(row.label))
+                Spacer()
+                Text(verbatim: name).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                Image(systemName: "chevron.right").font(.caption)
+            }.contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityIdentifier("DM_PRESENT_FILTER")
+    }
+
     private var sectionList: some View {
         #if os(macOS)
         List(sections, id: \.self, selection: Binding<String?>(get: { selection }, set: { if let section = $0 { selection = section } })) { section in
@@ -471,20 +491,7 @@ struct LauncherSettingsPage: View {
                                     let rows = m.rows(in: selection)
                                     ForEach((rows.filter { $0.env == "DM_SHOW_FPS" } + rows.filter { $0.env != "DM_SHOW_FPS" }).filter { $0.env != "DM_PRESENT_FILTER_STRENGTH" }) { row in
                                         if row.env == "DM_PRESENT_FILTER" {
-                                            Button { pictureFilterPage = true } label: {
-                                                HStack {
-                                                    Text(LocalizedStringKey(row.label))
-                                                    Spacer()
-                                                    Group {
-                                                        if m.values[row.env] == "custom", let name = m.pictureLUTName {
-                                                            Text(verbatim: name)
-                                                        } else {
-                                                            Text(LocalizedStringKey(row.options?.first { $0[0] == m.values[row.env] }?[1] ?? "Original"))
-                                                        }
-                                                    }.foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                                                    Image(systemName: "chevron.right").font(.caption)
-                                                }.contentShape(Rectangle())
-                                            }.buttonStyle(.plain).accessibilityIdentifier("DM_PRESENT_FILTER")
+                                            pictureFilterRow(row)
                                         } else { SettingRow(s: row, m: m) }
                                     }
                                     #if os(macOS)
