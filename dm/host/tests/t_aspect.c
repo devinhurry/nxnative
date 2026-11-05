@@ -211,7 +211,7 @@ static void test_narrow_hud(void) {
 }
 
 static void test_touch_hud_target(void) {
-    const float sizes[][2]={{932,430},{1280,720},{850,598},{390,844},{795,1100}};
+    const float sizes[][2]={{932,430},{1280,720},{951,669},{850,598},{390,844},{320,844},{795,1100}};
     const float scales[]={.65f,1,1.5f};
     for (unsigned i=0;i<sizeof sizes/sizeof *sizes;i++) for (int seated=0;seated<2;seated++) {
         float w=sizes[i][0],h=sizes[i][1],region[4];
@@ -225,15 +225,14 @@ static void test_touch_hud_target(void) {
             dm_touchpad_rect dpad=dm_botw_layout_control(&layout,12,aw,ah,40,30,40,0,canvas);
             float x=w*region[0]+dpad.x+dpad.width*.5f,y=h*region[1]+dpad.y+dpad.height*.5f,target[3];
             assert(dm_aspect_touch_hud_target(w,h,x,y,scales[n],target));
-            // Reconstruct screen points from the final HUD canvas. The iPhone
-            // artwork calibration remains 14pt for both frontends.
+            // Reconstruct screen points from the final HUD canvas. Relocation
+            // keeps the D-pad centre and the native HUD's screen-size scaling.
             float rw=fminf(aw,ah*GAME_ASPECT),rh=fmaxf(ah,aw/GAME_ASPECT);
             if (dm_aspect_control_ratio()>=GAME_ASPECT) rh=ah;
             else rw=aw;
             assert(fabsf((w*region[0]+(aw-rw)*.5f)+target[0]*rw-x)<.001f);
-            assert(fabsf((h*region[1]+(ah-rh)*.5f)+target[1]*rh-(y-14))<.001f);
-            assert(fabsf(target[2]*dm_aspect_hud_y_scale()*dm_aspect_hud_gain()*rh/430-
-                scales[n]*dm_aspect_hud_gain())<.001f);
+            assert(fabsf((h*region[1]+(ah-rh)*.5f)+target[1]*rh-y)<.001f);
+            assert(fabsf(target[2]-scales[n])<.001f);
         }
     }
     float invalid[3]; assert(!dm_aspect_touch_hud_target(0,430,0,0,1,invalid));
