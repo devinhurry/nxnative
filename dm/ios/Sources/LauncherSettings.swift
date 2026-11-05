@@ -112,6 +112,7 @@ struct BotwTouchControl: Identifiable, Hashable {
         if id == 8 { keys.insert(env("HIT", portrait: portrait)) }
         if id == 4 { keys.insert(option("ALPHA", portrait: portrait)) }
         if id == 7 || id == 9 { keys.insert(option("DRAG_MODE", portrait: portrait)) }
+        if id == 12 { keys.insert(option("SHOW_BUTTONS", portrait: portrait)) }
         return keys
     }
 
@@ -744,6 +745,7 @@ final class LauncherModel: ObservableObject {
         }
         result.badges = Int32(number(botwTouchKey("DM_BOTW_PAD_BADGES", portrait: portrait)))
         result.dpad_visible = Int32(number(botwTouchKey("DM_BOTW_PAD_DPAD_VISIBLE", portrait: portrait), 1))
+        result.dpad_show_buttons = Int32(number(botwTouchKey("DM_BOTW_PAD_DPAD_SHOW_BUTTONS", portrait: portrait)))
         result.cancel_enabled = Int32(number(BotwTouchControl.cancel.visibilityKey(portrait: portrait), 1))
         withUnsafeMutableBytes(of: &result.added) { bytes in
             let flags = bytes.bindMemory(to: Int32.self)

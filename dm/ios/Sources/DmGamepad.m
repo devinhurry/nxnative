@@ -851,7 +851,8 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
         }
         if (released) [self recompute];
     }
-    if (_tap || !_full || _padOff || (botw && _touchLayout.dpad_visible && dm_botw_touch_loadout_visible())) mask = 0;
+    if (_tap || !_full || _padOff || (botw &&
+        !dm_botw_layout_dpad_artwork_visible(&_touchLayout,dm_botw_touch_loadout_visible()))) mask = 0;
     for (int b = B_LEFT; b <= B_DOWN; b++) _key[b].hidden = !(mask & (1ull << b));
 }
 

@@ -1406,7 +1406,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         else [self drawButtonIcon:dm_botw_touch_bow_active() && control<18 ? control+5 : control center:at radius:r.width*.5f];
     }
     dm_touchpad_point fc = [self faceCenter];
-    if (!_touchLayout.dpad_visible || !dm_botw_touch_loadout_visible()) {
+    if (dm_botw_layout_dpad_artwork_visible(&_touchLayout,dm_botw_touch_loadout_visible())) {
         dm_touchpad_point d = self.dpadCenter;
         for (int b=12;b<16;b++)
             if (self.botwDpadMask & (1ull<<b))
