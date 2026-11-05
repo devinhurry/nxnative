@@ -305,16 +305,34 @@ unrelated layout. No GPU tests were repeated during the exclusive measurement pa
 adds a decorative reflection behind the lower HUD and controls, following the
 [low-resolution frame reuse approach](https://www.mux.com/blog/what-the-iphone-duo-means-for-web-development).
 The final upper picture is downsampled into two private RGBA16F textures, at most
-384 pixels on their longer side and sized by the displayed aspect. Horizontal
-and vertical Gaussian passes smooth the small image before enlargement; the
-last pass mirrors it, dims linear light to 40% below the fold and fades toward
-the bottom. The fold center is the mirror axis. Its reserved band gets a soft
+256 pixels on their longer side and sized by the displayed aspect. Horizontal
+and vertical Gaussian passes use 13 bilinear samples each to smooth the small
+image before enlargement; the last pass mirrors it, dims linear light to 40%
+below the fold and fades toward the bottom. The fold center is the mirror
+axis. Its reserved band gets a soft
 background transition, while content and touch geometry still avoid it. A
 pixel-aligned scissor keeps the background from spilling into the upper picture.
 The native lower HUD composites afterward; virtual controls remain a separate
 frontend layer. No input regions, button layout, other game or non-Seated
 rendering path changes. Scratch images retire behind the existing submission
 fence; there is no CPU readback, duplicate scene or translation-chain change.
+
+Quality trial (2026-11-05): reducing the scratch size from 384 to 256 also
+reduces Gaussian sigma from 6 to 4 and support from +/-18 to +/-12 texels,
+preserving the displayed blur radius. RGBA16F precision and update cadence
+are unchanged. All 330 real-Metal present checks pass; frame-time and device
+thermal improvements have not been measured. Current-checkout Mac Seated
+gameplay with cached game shaders produced the preview in the external game
+work folder's `seated-blur-256-20261105/`; visual acceptance is pending.
+
+Quality can be adjusted with `DM_SEATED_REFLECTION_SIZE` (longest side,
+64..1024 pixels; default 256) and `DM_SEATED_REFLECTION_SAMPLES` (odd sample
+count per axis, 5..33; default 13). They are read on first use; restart the game
+after changing them. The host calculates Gaussian weights once and scales
+sample offsets to retain the displayed blur radius. `384` / `19` reproduces
+the earlier quality; `192` / `9` is a lighter option. Invalid values log the
+fallback and use the corresponding default. Neither option changes game
+shader libraries or the translation chain.
 
 Validation: 285 real-Metal checks pass, including 88 focused Seated checks under
 Metal validation (both origins, fixed-aspect side bars, short lower panes,
