@@ -136,21 +136,21 @@ int main(void) {
     memcpy(&basis, target + BOTW_TOUCH_MATRIX, sizeof basis);
     assert(basis == 1);
 
-    // Retain hearts/map magnification on narrow displays (including Duo
-    // landscape), without moving the cross-guide away from the D-pad target.
+    // Retain the native HUD's screen-size scaling, including shrinking on
+    // narrow phones, without moving the cross-guide away from the D-pad target.
     const float point_cases[][3]={{430,1,1},{669,(951.f/669)/(16.f/9),(16.f/9)/(951.f/669)},
+        {844,(390.f/844)/(16.f/9),16.f/9},{844,(320.f/844)/(16.f/9),16.f/9},
         {1024,.421875f,16.f/9},{1100,795.f/1100/(16.f/9),16.f/9},
         {540,795.f/540/(16.f/9),540.f/(795.f*9/16)}};
     for (unsigned i=0;i<sizeof point_cases/sizeof *point_cases;i++) {
         float height=point_cases[i][0]; hud_y_scale=point_cases[i][1]; hud_gain=point_cases[i][2];
-        float point_scale=dm_botw_layout_hud_scale(1,height,hud_y_scale);
-        dm_botw_touch_hud_publish(1,.25f,.75f,point_scale);
+        dm_botw_touch_hud_publish(1,.25f,.75f,1);
         float ybasis=hud_y_scale*hud_gain;
         matrix_translation(target,-509*hud_gain,210*ybasis);
         memcpy(target+BOTW_TOUCH_MATRIX,&hud_gain,4); memcpy(target+BOTW_TOUCH_MATRIX+0x14,&ybasis,4);
         calculate_entry(target); calculated_matrix(target);
         memcpy(&basis,target+BOTW_TOUCH_MATRIX+0x14,4);
-        assert(fabsf(basis*height/720-430.f/720*hud_gain)<.001f);
+        assert(fabsf(basis*height/720-ybasis*height/720)<.001f);
         float tx,ty,xbasis;
         memcpy(&tx,target+BOTW_TOUCH_MATRIX+0x0c,4); memcpy(&ty,target+BOTW_TOUCH_MATRIX+0x1c,4);
         memcpy(&xbasis,target+BOTW_TOUCH_MATRIX,4);

@@ -11,8 +11,8 @@
 #define DM_BOTW_STROKE_ALPHA .30
 #define DM_BOTW_ICON_ALPHA .90
 #define DM_BOTW_STICK_ALPHA .15
-// Calibrated against the small cross inside the loadout artwork on iPhone.
-#define DM_BOTW_LOADOUT_Y_OFFSET_PT (-14.0f)
+// Extra screen-point correction after anchoring the native cross-guide.
+#define DM_BOTW_LOADOUT_Y_OFFSET_PT (0.0f)
 
 // Default anchors retain the original base-relative offsets. Explicit anchors
 // store actual side and bottom edge distances in x/y, independent of defaults.
@@ -162,11 +162,6 @@ static inline float dm_botw_layout_unit(const dm_botw_touch_layout *layout,float
 static inline float dm_botw_layout_scale(const dm_botw_touch_layout *layout,int id) {
     float base=id<4 ? 54 : id==4 || id==8 ? 154 : id==6 ? 48 : id==12 ? 96 : 52;
     return layout->control[id].size/base;
-}
-static inline float dm_botw_layout_hud_scale(float point_scale,float canvas_height,float canvas_y_scale) {
-    // Native equipment artwork is authored for the old 430pt reference.
-    // Normalize the canvas conversion, retaining the hearts/map HUD gain.
-    return point_scale*430/(canvas_height*canvas_y_scale);
 }
 static inline dm_touchpad_rect dm_botw_layout_canvas(float width,float height) {
     float w=fminf(width,height*16.f/9),h=w*9.f/16;

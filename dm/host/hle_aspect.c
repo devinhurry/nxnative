@@ -176,10 +176,12 @@ int dm_aspect_touch_hud_target(float w,float h,float x,float y,float point_scale
     }
     if (dm_aspect_hud_y_scale()<1) dm_aspect_hud_rect(w,h,rect);
     if (rect[2]<=0 || rect[3]<=0) return 0;
-    // This is an artwork calibration validated on iPhone, distinct from the
-    // pane's geometric centre. Keep both frontends on the same conversion.
+    // Keep both frontends on the same cross-guide anchor.
     target[0]=(x-rect[0])/rect[2]; target[1]=(y+DM_BOTW_LOADOUT_Y_OFFSET_PT-rect[1])/rect[3];
-    target[2]=dm_botw_layout_hud_scale(point_scale,rect[3],dm_aspect_hud_y_scale());
+    // Pane calculation already applies the hearts/map HUD scale. Only add
+    // the user's D-pad size multiplier; a fixed-point normalization cancels
+    // the HUD's screen-size scaling on narrow displays.
+    target[2]=point_scale;
     return 1;
 }
 

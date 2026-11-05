@@ -646,19 +646,20 @@ Choosing sticky equipment/rune switching or R/ZR camera dragging adds Cancel
 once. A later manual removal survives saving, reopening and layout import;
 rendering or retaining the same action choice does not add it again.
 Both frontends use the same `dm_aspect_touch_hud_target` mapping from the drawn
-D-pad centre to the native equipment target, including the 14pt upward artwork
-calibration that the user validated on iPhone. Pane bounds alone do not establish
-the visible small cross's centre, so the calibration must not be removed based
-only on those bounds. Ordinary Mac reproduction at 850x598 measured the published
-target at y=486pt against the D-pad's y=500pt, matching the configured correction.
-The reported larger Mac-only visual mismatch remains under investigation.
+D-pad centre to the native equipment target. **Current, 2026-11-06:** the extra
+vertical correction is 0pt after the user confirmed that removing the former
+14pt upward correction aligns the current Mac preview. The earlier iPhone
+calibration predates the current scaling changes; updated device appearance
+remains to be checked.
 On displays narrower than 16:9, including Duo landscape, equipment now receives
 the same HUD gain as hearts and the map before relocation. Its native pane
 position and basis are scaled together during Calculate; the touch matrix hook
-then anchors the scaled cross-guide to the D-pad target. Frontend point-size
-normalization retains that gain instead of dividing it away. Focused host tests
-cover the 951x669 Duo ratio, portrait and Seated canvases; device appearance
-remains to be checked.
+then anchors the scaled cross-guide to the D-pad target. Relocation adds only
+the user's D-pad size multiplier. The old 430pt normalization cancelled the
+native screen-size scaling, keeping equipment large when hearts and the map
+shrank on narrow phones; it has been removed. The upper-left loadout already
+used the native scale and is unchanged. Focused host tests cover the 951x669
+Duo ratio, 320/390pt-wide portrait views and Seated canvases.
 
 The four native `Pa_SinJu_00` through `Pa_SinJu_03` Champion panels share the
 hearts' picture aspect, scale, edge offset and vertical origin. A visible
