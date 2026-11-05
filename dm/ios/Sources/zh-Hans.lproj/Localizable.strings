@@ -335,13 +335,11 @@
 "Manage saves" = "\U5b58\U6863\U7ba1\U7406";
 "Device / OS" = "\U8bbe\U5907\U4e0e\U7cfb\U7edf";
 "Importing save…" = "\U6b63\U5728\U5bfc\U5165\U5b58\U6863\U2026";
-"Import .dmsync, ZIP, 7z or RAR files, or save folders. Extract password-protected or split archives first." = "\U652f\U6301\U5bfc\U5165 .dmsync\U3001ZIP\U30017z\U3001RAR \U6216\U5b58\U6863\U6587\U4ef6\U5939\U3002\U5bc6\U7801\U5305\U548c\U5206\U5377\U5305\U8bf7\U5148\U89e3\U538b\U3002";
 "New save" = "\U65b0\U5efa\U5b58\U6863";
 "Duplicate save" = "\U590d\U5236\U5b58\U6863";
 "Rename save" = "\U91cd\U547d\U540d\U5b58\U6863";
 "Save name" = "\U5b58\U6863\U540d\U79f0";
 "Copy" = "\U526f\U672c";
-"Select a save to use the next time you play. Default shares progress with older apps; other saves sync separately." = "\U9009\U62e9\U4e0b\U6b21\U6e38\U620f\U4f7f\U7528\U7684\U5b58\U6863\U3002\U9ed8\U8ba4\U5b58\U6863\U4e0e\U65e7\U7248\U5171\U4eab\U8fdb\U5ea6\Uff0c\U5176\U4f59\U5b58\U6863\U5206\U522b\U540c\U6b65\U3002";
 "A custom save path is active. Manage that folder outside the app." = "\U5f53\U524d\U4f7f\U7528\U81ea\U5b9a\U4e49\U5b58\U6863\U8def\U5f84\Uff0c\U8bf7\U5728\U5e94\U7528\U5916\U7ba1\U7406\U8be5\U6587\U4ef6\U5939\U3002";
 "Close the game to switch or manage saves." = "\U8bf7\U5148\U9000\U51fa\U6e38\U620f\Uff0c\U518d\U5207\U6362\U6216\U7ba1\U7406\U5b58\U6863\U3002";
 "Save management is unavailable for this app." = "\U6b64\U5e94\U7528\U6682\U65f6\U65e0\U6cd5\U7ba1\U7406\U5b58\U6863\U3002";
@@ -394,8 +392,6 @@
 "Use the files inside" = "\U53bb\U6389\U5916\U5c42\U6587\U4ef6\U5939";
 "Keep the outer folder" = "\U4fdd\U7559\U5916\U5c42\U6587\U4ef6\U5939";
 "The archive contains one folder. Choose which layout matches your game save." = "\U538b\U7f29\U5305\U5185\U53ea\U6709\U4e00\U4e2a\U6587\U4ef6\U5939\U3002\U8bf7\U6839\U636e\U4e0b\U65b9\U771f\U5b9e\U6587\U4ef6\U540d\Uff0c\U9009\U62e9\U5e94\U4fdd\U7559\U54ea\U4e00\U5c42\U3002";
-"Select several import files, or import a ZIP containing multiple saves. Export saves lets you select some or all saves. Imports add new copies without replacing existing saves." = "\U53ef\U4e00\U6b21\U9009\U62e9\U591a\U4e2a\U6587\U4ef6\Uff0c\U6216\U5bfc\U5165\U5305\U542b\U591a\U4efd\U5b58\U6863\U7684 ZIP\U3002\U6279\U91cf\U5bfc\U51fa\U65f6\U53ef\U52fe\U9009\U90e8\U5206\U6216\U5168\U90e8\U5b58\U6863\U3002\U5bfc\U5165\U4f1a\U65b0\U589e\U526f\U672c\Uff0c\U4e0d\U4f1a\U8986\U76d6\U5df2\U6709\U5b58\U6863\U3002";
-"Exports are ZIP files. For manual restore, put each folder containing save/ directly inside saves/." = "\U5bfc\U51fa\U683c\U5f0f\U4e3a ZIP\U3002\U624b\U52a8\U6062\U590d\U65f6\Uff0c\U5c06\U6bcf\U4e2a\U5305\U542b save/ \U7684\U5b58\U6863\U6587\U4ef6\U5939\U76f4\U63a5\U653e\U5230 saves/ \U4e0b\U3002";
 "The interrupted import has invalid metadata. Its data has been kept." = "\U672a\U5b8c\U6210\U7684\U5bfc\U5165\U4fe1\U606f\U5df2\U635f\U574f\Uff0c\U76f8\U5173\U6570\U636e\U5df2\U4fdd\U7559\U3002";
 "An interrupted import cannot be completed without replacing a save. Its data has been kept." = "\U672a\U5b8c\U6210\U7684\U5bfc\U5165\U4e0e\U5df2\U6709\U5b58\U6863\U51b2\U7a81\Uff0c\U76f8\U5173\U6570\U636e\U5df2\U4fdd\U7559\U3002";
 "Cannot copy the save files." = "\U65e0\U6cd5\U590d\U5236\U5b58\U6863\U6587\U4ef6\U3002";
@@ -430,3 +426,4 @@
 "Compare original" = "\U5BF9\U6BD4\U539F\U753B";
 "Hide controls" = "\U9690\U85CF\U9009\U9879";
 "Show controls" = "\U663E\U793A\U9009\U9879";
+"Importing will not delete your current save." = "\U5bfc\U5165\U4e0d\U4f1a\U5220\U9664\U5f53\U524d\U5b58\U6863";
