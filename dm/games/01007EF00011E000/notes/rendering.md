@@ -306,7 +306,7 @@ adds a decorative reflection behind the lower HUD and controls, following the
 [low-resolution frame reuse approach](https://www.mux.com/blog/what-the-iphone-duo-means-for-web-development).
 The final upper picture is downsampled into two private RGBA16F textures, at most
 256 pixels on their longer side and sized by the displayed aspect. Horizontal
-and vertical Gaussian passes use 13 bilinear samples each to smooth the small
+and vertical Gaussian passes use 18 bilinear samples each to smooth the small
 image before enlargement; the last pass mirrors it, dims linear light to 40%
 below the fold and fades toward the bottom. The fold center is the mirror
 axis. Its reserved band gets a soft
@@ -317,7 +317,7 @@ frontend layer. No input regions, button layout, other game or non-Seated
 rendering path changes. Scratch images retire behind the existing submission
 fence; there is no CPU readback, duplicate scene or translation-chain change.
 
-Quality trial (2026-11-05): reducing the scratch size from 384 to 256 also
+Initial quality trial (2026-11-05): reducing the scratch size from 384 to 256 also
 reduces Gaussian sigma from 6 to 4 and support from +/-18 to +/-12 texels,
 preserving the displayed blur radius. RGBA16F precision and update cadence
 are unchanged. All 330 real-Metal present checks pass; frame-time and device
@@ -326,13 +326,50 @@ gameplay with cached game shaders produced the preview in the external game
 work folder's `seated-blur-256-20261105/`; visual acceptance is pending.
 
 Quality can be adjusted with `DM_SEATED_REFLECTION_SIZE` (longest side,
-64..1024 pixels; default 256) and `DM_SEATED_REFLECTION_SAMPLES` (odd sample
-count per axis, 5..33; default 13). They are read on first use; restart the game
+64..1024 pixels; default 256) and `DM_SEATED_REFLECTION_SAMPLES` (sample
+count per axis, 5..33; default 18). They are read on first use; restart the game
 after changing them. The host calculates Gaussian weights once and scales
 sample offsets to retain the displayed blur radius. `384` / `19` reproduces
 the earlier quality; `192` / `9` is a lighter option. Invalid values log the
 fallback and use the corresponding default. Neither option changes game
 shader libraries or the translation chain.
+
+The default was increased to 18 samples per axis after the initial 13-sample
+preview. Even counts use symmetric half-texel Gaussian positions and omit the
+center sample; odd counts retain it. The count names actual texture reads per
+axis, including the center when present.
+
+GPU measurement (2026-11-05): current-checkout Mac gameplay on Apple M2,
+handheld mode, 30 fps, frame generation off, 640x448pt Seated window and
+256x88 RGBA16F intermediates, with 18 reads per blur axis. The existing
+`DM_NVN_GPUPROF=every:30` counter heap sampled 30 steady frames from 2100
+through 2970. The other running test game was paused during sampling and
+resumed immediately afterward. The four consecutive reflection encoders were
+identified by their shared pass number, three 256x88 RGBA16F destinations,
+then the native sRGB destination. Mean GPU durations: downsample 0.02786 ms,
+horizontal blur 0.02685 ms, vertical blur 0.02646 ms, composite 0.03090 ms;
+their sum is 0.11207 ms. First reflection start to last reflection end,
+including gaps, averages 0.13866 ms (median 0.14235, p95 0.14980, maximum
+0.15350). These are measured GPU spans, not an on/off whole-frame performance
+comparison or an iPhone result. All 330 present checks pass with the new
+default; the 13-sample path and invalid-value fallback each pass 133 focused
+checks. Raw logs, screenshot, `reflection-times.csv` and `measurement.json`
+are in the external game work folder's `seated-reflection-18-20261105/`.
+
+Downsample follow-up (2026-11-05): the small-image copy now uses a cached
+compute pipeline instead of a render pass. It retains the same bilinear
+sample, source crop, edge clamp, sRGB decode and RGBA16F intermediate, with
+the 18-sample Gaussian passes unchanged. A direct GPU comparison of cropped
+copies, including 1x1 and partial-threadgroup destinations, and the present
+fixtures pass all 334 checks. Current-checkout Mac gameplay uses cached game
+shaders. In a second 30-frame isolated sample on the same M2 and layout,
+frames 7080..7950, mean downsample time is 0.01316 ms (p95 0.01396), versus
+the prior render copy's 0.02786 ms. The entire reflection span averages
+0.13265 ms (p95 0.13743); the runs are separate measurements, not a paired
+whole-frame benchmark. Both other test games were temporarily paused for
+this sample and restored. Raw logs, screenshot, `reflection-times.csv` and
+`measurement.json` are in `seated-compute-downsample-20261105/` in the
+external game work folder. The translation chain is unchanged.
 
 Validation: 285 real-Metal checks pass, including 88 focused Seated checks under
 Metal validation (both origins, fixed-aspect side bars, short lower panes,

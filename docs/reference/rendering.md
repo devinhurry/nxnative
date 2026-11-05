@@ -1431,6 +1431,14 @@ Current implementation (2026-11-04; device acceptance pending): the profile's fi
 - **Check:** `t_present_crop` alternates the window and downsample formats across four simulated frames and checks pipeline identity, separate alpha state, reflection pixels and ordinary presentation. All 330 real-Metal checks pass. Current-checkout Mac Seated gameplay and a screenshot also confirm the picture, reflection and native map using cached game shaders; frame-rate impact is unmeasured. Game shader libraries and the translation chain are unchanged.
 - **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md).
 
+### Seated reflection downsampling uses a compute dispatch
+
+- **Symptom:** shrinking the decorative reflection image costs about as much GPU time as an 18-sample Gaussian pass despite using only one bilinear texture sample.
+- **Cause:** the small image used a full render pass, including the raster pipeline and attachment setup, for a simple per-pixel copy.
+- **Fix:** a cached compute pipeline writes the same bilinear samples into the RGBA16F intermediate with identical crop, edge clamp and color conversion. Keep the Gaussian passes, mirror geometry, precision and update cadence. Only the Seated reflection path changes; there is no game shader retranslation.
+- **Check:** `t_present_crop` compares compute and raster copies for cropped sources, partial threadgroups and a 1x1 target, then exercises the existing reflection and presentation cases; all 334 checks pass. Current-checkout Mac GPU measurements and their limits are recorded in [Breath of the Wild's rendering note](../../dm/games/01007EF00011E000/notes/rendering.md).
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md).
+
 ### Native and legacy aspect correction are exclusive
 
 - **Symptom:** Seated gameplay and its minimap look vertically compressed on one computer but correct on another at the same revision. The affected launcher has *Picture shape* set to 1.43.
