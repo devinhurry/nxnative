@@ -137,11 +137,13 @@ taps. Exact diagonal ties now select the horizontal direction; the centre dead
 zone and touch-down locking stay unchanged. Other games retain eight-way input,
 and physical controller input is unchanged. Focused geometry checks cover cardinal
 and diagonal taps, both sides of a sector boundary, dead zones and resized pads.
-The D-pad's **Show buttons** option keeps its direction glyphs visible alongside
-the native loadout in both touch frontends. It defaults off, persists separately
-in normal/compact banks and travels with exported layouts. It only changes
-artwork visibility; quick-switch suppression, D-pad hiding and loadout alignment
-retain their existing rules.
+**Current, 2026-11-06:** the D-pad's **Show buttons** option has been removed.
+Its direction glyphs hide while the native loadout is visible, with menu and
+hidden-D-pad direction guides retaining their existing behavior. Layout import
+ignores unfamiliar fields, control names and options before typed decoding,
+including removed settings and values in an unfamiliar format. Export includes
+only recognized fields. Invalid known values, malformed files, unsupported
+schema versions and size limits still reject the import atomically.
 `inventory-touch-20261025/run23/ios-shield/` records the rendered idle/drag states
 and passing input/release checks. The movement stick's base anchor is 10 frontend points
 up/right of its ordinary home, before the configured default vertical offset of 0.023 canvas height. Its idle artwork is a white circle with four inner

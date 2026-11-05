@@ -265,10 +265,10 @@ func mockNativeLUTApply(_ path: UnsafePointer<CChar>) -> Int32 {
                BotwTouchControl.all.first { $0.id == 6 }!.keys.contains("DM_BOTW_PAD_L_ICON_MODE"),
                "L icon choice saves independently per bank and defaults to the current rune")
         expect(savedEditor.touchSettingsExport.contains("DM_BOTW_PAD_L_ICON_MODE=1"), "layout export includes L icon display choice")
-        expect(savedEditor.touchLayout(portrait: false).dpad_show_buttons == 1 && savedEditor.touchLayout(portrait: true).dpad_show_buttons == 0 &&
-               savedEditor.touchSettingsExport.contains("DM_BOTW_PAD_DPAD_SHOW_BUTTONS=1") &&
-               BotwTouchControl.all.first { $0.id == 12 }!.keys.contains("DM_BOTW_PAD_DPAD_SHOW_BUTTONS"),
-               "D-pad artwork choice persists per bank, exports and participates in control reset")
+        expect(!savedEditor.touchSettingsExport.contains("DPAD_SHOW_BUTTONS") &&
+               !BotwTouchControl.all.first { $0.id == 12 }!.keys.contains("DM_BOTW_PAD_DPAD_SHOW_BUTTONS") &&
+               !file.settings.contains { $0.env.hasSuffix("_DPAD_SHOW_BUTTONS") },
+               "removed D-pad artwork options are ignored by drafts and excluded from settings and export")
         expect(savedEditor.values["DM_BOTW_PAD_WEAPON_ENABLED"] == "1" && savedEditor.values["DM_BOTW_PAD_WEAPON_MODE"] == "2" &&
                savedEditor.values["DM_BOTW_PAD_DPAD_VISIBLE"] == "0" && savedEditor.values["DM_BOTW_PORTRAIT_PAD_WEAPON_ENABLED"] == "0",
                "added buttons, switch modes and D-pad visibility save only in the edited bank")
@@ -782,8 +782,9 @@ private func checkTouchLayoutPresets(_ settings: [Setting]) -> Int {
     let manySourceDefaults = UserDefaults(suiteName: suite + ".many-source")!
     let manyTargetDefaults = UserDefaults(suiteName: suite + ".many-target")!
     let shieldDefaults = UserDefaults(suiteName: suite + ".shield-range")!
+    let unknownDefaults = UserDefaults(suiteName: suite + ".unknown-fields")!
     defer {
-        for suffix in [".source", ".target", ".fallback", ".fixed", ".export-area", ".many-source", ".many-target", ".shield-range"] {
+        for suffix in [".source", ".target", ".fallback", ".fixed", ".export-area", ".many-source", ".many-target", ".shield-range", ".unknown-fields"] {
             UserDefaults(suiteName: suite + suffix)?.removePersistentDomain(forName: suite + suffix)
         }
     }
@@ -917,6 +918,44 @@ private func checkTouchLayoutPresets(_ settings: [Setting]) -> Int {
                Set(target.touchLayouts.map(\.name)).count == target.touchLayouts.count,
                "multi-layout import remains additive and resolves all existing name collisions")
 
+        // Unknown entries may use formats this build cannot decode. Known
+        // geometry and options must still survive an import/export round trip.
+        let unknownTarget = LauncherModel(settings, defaults: unknownDefaults)
+        var extended = try JSONSerialization.jsonObject(with: one) as! [String: Any]
+        extended["futureRoot"] = ["enabled": true]
+        var extendedLayouts = extended["layouts"] as! [[String: Any]]
+        extendedLayouts[0]["futureLayout"] = 42
+        for (bankName, portrait) in [("normal", false), ("compact", true)] {
+            var bank = extendedLayouts[0][bankName] as! [String: Any]
+            var controls = bank["controls"] as! [String: Any]
+            controls["FUTURE_CONTROL"] = ["anchor": "future", "sizePt": "unrecognized"]
+            var knownControl = controls["L"] as! [String: Any]
+            knownControl["futureGeometry"] = [1, 2, 3]
+            controls["L"] = knownControl
+            var options = bank["options"] as! [String: Any]
+            options[botwTouchKey("DM_BOTW_PAD_DPAD_SHOW_BUTTONS", portrait: portrait)] = "1"
+            options[botwTouchKey("DM_BOTW_PAD_FUTURE", portrait: portrait)] = ["enabled": true]
+            bank["controls"] = controls; bank["options"] = options; bank["futureBank"] = false
+            extendedLayouts[0][bankName] = bank
+        }
+        extended["layouts"] = extendedLayouts
+        expect(try unknownTarget.importTouchLayouts(JSONSerialization.data(withJSONObject: extended), normalArea: normal, compactArea: compact) == 1,
+               "unknown fields, controls, option formats and removed options are ignored in both banks")
+        unknownTarget.selectTouchLayout(unknownTarget.touchLayouts.last!.id)
+        let roundTrip = try unknownTarget.exportTouchLayouts(all: false)
+        let knownFile = try JSONDecoder().decode(BotwTouchLayoutsFile.self, from: roundTrip)
+        expect(knownFile.layouts[0].normal?.controls["L"]?.size == originalL?.size &&
+               knownFile.layouts[0].normal?.options["DM_BOTW_PAD_ICON_ALPHA"] == "0.810" &&
+               !String(decoding: roundTrip, as: UTF8.self).contains("future") &&
+               !String(decoding: roundTrip, as: UTF8.self).contains("FUTURE") &&
+               !String(decoding: roundTrip, as: UTF8.self).contains("DPAD_SHOW_BUTTONS"),
+               "export retains recognized geometry and options while dropping unfamiliar fields")
+        let unknownOnly: [String: Any] = ["schemaVersion": 1, "game": "01007EF00011E000", "layouts": [
+            ["name": "Unknown fields only", "normal": ["controls": ["FUTURE_CONTROL": false], "options": ["FUTURE_OPTION": [1, 2]]]]
+        ]]
+        expect(try unknownTarget.importTouchLayouts(JSONSerialization.data(withJSONObject: unknownOnly), normalArea: normal, compactArea: compact) == 1,
+               "a bank containing only unfamiliar entries imports with the normal defaults")
+
         func rejectedAtomically(_ data: Data, _ message: String) throws {
             let before = try target.exportTouchLayouts(all: true), selection = target.selectedTouchLayoutID
             let savedBefore = targetDefaults.data(forKey: "launcher.botwTouchLayouts"), valuesBefore = target.values
@@ -934,6 +973,15 @@ private func checkTouchLayoutPresets(_ settings: [Setting]) -> Int {
         invalid.normal!.options["DM_BOTW_PAD_L_MODE"] = "9"
         var invalidBatch = oneFile; invalidBatch.layouts.append(invalid)
         try rejectedAtomically(encoder.encode(invalidBatch), "a bad mode after a valid layout rejects the whole import atomically")
+        var malformedKnown = extended
+        var malformedLayouts = extendedLayouts
+        var malformedBank = malformedLayouts[0]["normal"] as! [String: Any]
+        var malformedControls = malformedBank["controls"] as! [String: Any]
+        malformedControls["L"] = ["anchor": "right", "sidePt": 10, "bottomPt": 20, "sizePt": "invalid"]
+        malformedBank["controls"] = malformedControls; malformedLayouts[0]["normal"] = malformedBank
+        malformedKnown["layouts"] = malformedLayouts
+        try rejectedAtomically(JSONSerialization.data(withJSONObject: malformedKnown),
+                               "a malformed recognized control still rejects the import atomically alongside unknown entries")
         var oldFile = oneFile
         oldFile.layouts[0].normal!.options.removeValue(forKey: "DM_BOTW_PAD_ZL_HIT_PT")
         oldFile.layouts[0].normal!.controls["ZL"]!.size = 100

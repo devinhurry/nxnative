@@ -147,12 +147,8 @@ int main(void) {
             assert(dm_launcher_setting_apply(icon,"0.5")==-1);
             unsetenv(icon);
             const char *show=portrait ? "DM_BOTW_PORTRAIT_PAD_DPAD_SHOW_BUTTONS" : "DM_BOTW_PAD_DPAD_SHOW_BUTTONS";
-            assert(dm_launcher_setting_is_live(show)==1);
-            assert(dm_launcher_setting_apply(show,"1")==1 && !strcmp(getenv(show),"1"));
-            assert(dm_launcher_setting_apply(show,"0")==1);
-            assert(dm_launcher_setting_apply(show,"2")==-1);
-            assert(dm_launcher_setting_apply(show,"0.5")==-1);
-            unsetenv(show);
+            assert(dm_launcher_setting_is_live(show)==-1);
+            assert(dm_launcher_setting_apply(show,"1")==-1);
             const char *key=portrait ? "DM_BOTW_PORTRAIT_PAD_ZL_HIT_PT" : "DM_BOTW_PAD_ZL_HIT_PT";
             assert(dm_launcher_setting_is_live(key)==1);
             assert(dm_launcher_setting_apply(key,"80")==1 && !strcmp(getenv(key),"80"));

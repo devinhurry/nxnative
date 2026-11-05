@@ -22,7 +22,7 @@ enum { DM_BOTW_WEAPON=16, DM_BOTW_SHIELD=17, DM_BOTW_FOOD=18, DM_BOTW_WHISTLE=19
        DM_BOTW_CANCEL=20, DM_BOTW_CONTROL_COUNT=21 };
 typedef struct {
     dm_botw_control_transform control[DM_BOTW_CONTROL_COUNT];
-    int badges, portrait, dpad_visible, dpad_show_buttons, cancel_enabled, added[4], switch_mode[2], rune_mode, rune_icon_mode;
+    int badges, portrait, dpad_visible, cancel_enabled, added[4], switch_mode[2], rune_mode, rune_icon_mode;
     int trigger_drag[2]; // R, ZR: cancel outside or drag the camera.
     float fill_gray, fill_alpha, stroke_gray, stroke_alpha, icon_alpha;
     float shield_hit_size, stick_alpha;
@@ -123,9 +123,9 @@ static inline int dm_botw_layout_read_for(dm_botw_touch_layout *out,int portrait
     if (!dm_botw_layout_number(key,0,1,&badges) || (badges!=0 && badges!=1)) return 0;
     out->badges=(int)badges;
     const char *names[]={"DPAD_VISIBLE","WEAPON_ENABLED","SHIELD_ENABLED","FOOD_ENABLED","WHISTLE_ENABLED",
-        "WEAPON_MODE","SHIELD_MODE","L_MODE","R_DRAG_MODE","ZR_DRAG_MODE","L_ICON_MODE","CANCEL_ENABLED","DPAD_SHOW_BUTTONS"};
+        "WEAPON_MODE","SHIELD_MODE","L_MODE","R_DRAG_MODE","ZR_DRAG_MODE","L_ICON_MODE","CANCEL_ENABLED"};
     int *options[]={&out->dpad_visible,&out->added[0],&out->added[1],&out->added[2],&out->added[3],
-        &out->switch_mode[0],&out->switch_mode[1],&out->rune_mode,&out->trigger_drag[0],&out->trigger_drag[1],&out->rune_icon_mode,&out->cancel_enabled,&out->dpad_show_buttons};
+        &out->switch_mode[0],&out->switch_mode[1],&out->rune_mode,&out->trigger_drag[0],&out->trigger_drag[1],&out->rune_icon_mode,&out->cancel_enabled};
     for (unsigned i=0;i<sizeof options/sizeof *options;i++) {
         float v=*options[i]; snprintf(key,sizeof key,"%s%s",prefix,names[i]);
         if (!dm_botw_layout_number(key,0,i<5 || i>=8 ? 1 : 2,&v) || v!=floorf(v)) return 0;
@@ -147,7 +147,7 @@ static inline uint64_t dm_botw_layout_dpad_mask(const dm_botw_touch_layout *layo
         vertical_required ? DM_BTN_UP | DM_BTN_DOWN : 0;
 }
 static inline int dm_botw_layout_dpad_artwork_visible(const dm_botw_touch_layout *layout, int loadout_visible) {
-    return !layout->dpad_visible || layout->dpad_show_buttons || !loadout_visible;
+    return !layout->dpad_visible || !loadout_visible;
 }
 static inline int dm_botw_layout_control_visible(const dm_botw_touch_layout *layout,int id) {
     if (id==12) return layout->dpad_visible;

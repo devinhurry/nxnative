@@ -171,13 +171,13 @@ class LauncherSettingsTests(unittest.TestCase):
         for control in ('WEAPON', 'SHIELD', 'L'):
             expected[f'DM_BOTW_PAD_{control}_MODE'] = '0'
         expected['DM_BOTW_PAD_DPAD_VISIBLE'] = '1'
-        expected['DM_BOTW_PAD_DPAD_SHOW_BUTTONS'] = '0'
         for field, value in [('ZL_HIT_PT', '215.600'), ('STROKE_GRAY', '0.570'), ('STROKE_ALPHA', '0.300'),
                              ('FILL_GRAY', '0.350'), ('FILL_ALPHA', '0.140'), ('ICON_ALPHA', '0.900'),
                              ('STICK_ALPHA', '0.150'), ('R_DRAG_MODE', '0'), ('ZR_DRAG_MODE', '0'), ('L_ICON_MODE', '0')]:
             expected[f'DM_BOTW_PAD_{field}'] = value
         for platform in ('mac', 'ios'):
             botw = build(BOTW, 'nvn', platform)
+            self.assertFalse(any(key.endswith('_DPAD_SHOW_BUTTONS') for key in botw))
             self.assertEqual({key: row['default'] for key, row in botw.items() if key.startswith('DM_BOTW_PAD_')}, expected)
             for key in expected:
                 if key.endswith('_PT'):

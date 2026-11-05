@@ -80,15 +80,10 @@ int main(void) {
         uint64_t directions=DM_BTN_LEFT|DM_BTN_UP|DM_BTN_RIGHT|DM_BTN_DOWN;
         assert(dm_botw_layout_dpad_mask(&editor,0)==directions);
         assert(dm_botw_layout_dpad_mask(&editor,1)==directions);
-        assert(!editor.dpad_show_buttons && !dm_botw_layout_dpad_artwork_visible(&editor,1));
+        assert(!dm_botw_layout_dpad_artwork_visible(&editor,1));
         assert(dm_botw_layout_dpad_artwork_visible(&editor,0));
-        editor.dpad_show_buttons=1;
-        assert(dm_botw_layout_dpad_artwork_visible(&editor,1));
-        const char *show=compact ? "DM_BOTW_PORTRAIT_PAD_DPAD_SHOW_BUTTONS" : "DM_BOTW_PAD_DPAD_SHOW_BUTTONS";
-        setenv(show,"1",1); assert(dm_botw_layout_read_for(&saved,compact) && saved.dpad_show_buttons);
-        assert(dm_botw_layout_read_for(&saved,!compact) && !saved.dpad_show_buttons);
-        setenv(show,"2",1); assert(!dm_botw_layout_read_for(&saved,compact)); unsetenv(show);
         editor.dpad_visible=0;
+        assert(dm_botw_layout_dpad_artwork_visible(&editor,1));
         assert(!dm_botw_layout_dpad_mask(&editor,0));
         assert(dm_botw_layout_dpad_mask(&editor,1)==(DM_BTN_UP|DM_BTN_DOWN));
         assert(dm_botw_layout_control_visible(&editor,DM_BOTW_CANCEL));
