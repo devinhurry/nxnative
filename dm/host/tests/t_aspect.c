@@ -226,12 +226,12 @@ static void test_touch_hud_target(void) {
             float x=w*region[0]+dpad.x+dpad.width*.5f,y=h*region[1]+dpad.y+dpad.height*.5f,target[3];
             assert(dm_aspect_touch_hud_target(w,h,x,y,scales[n],target));
             // Reconstruct screen points from the final HUD canvas. Relocation
-            // applies the 14pt correction without changing native HUD scaling.
+            // applies the configured point correction without changing native HUD scaling.
             float rw=fminf(aw,ah*GAME_ASPECT),rh=fmaxf(ah,aw/GAME_ASPECT);
             if (dm_aspect_control_ratio()>=GAME_ASPECT) rh=ah;
             else rw=aw;
             assert(fabsf((w*region[0]+(aw-rw)*.5f)+target[0]*rw-x)<.001f);
-            assert(fabsf((h*region[1]+(ah-rh)*.5f)+target[1]*rh-(y-14))<.001f);
+            assert(fabsf((h*region[1]+(ah-rh)*.5f)+target[1]*rh-(y+DM_BOTW_LOADOUT_Y_OFFSET_PT))<.001f);
             assert(fabsf(target[2]-scales[n])<.001f);
         }
     }

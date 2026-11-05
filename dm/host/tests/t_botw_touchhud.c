@@ -187,6 +187,36 @@ int main(void) {
     calculated_matrix(target2);
     expect_translation(target2, 45, -36);
 
+    // Air: native N_Pos_00 moves down 20 guest units after the parent is
+    // relocated. At 111.5pt D-pad size on a 420pt screen that used to miss
+    // the host target by 13.55pt. Recompute from native matrices every frame.
+    uint8_t position[0x100]={0}; pane_name(position,"N_Pos_00"); set_pane_parent(position,target2);
+    const float shifts[]={0,-20,8};
+    for (int narrow_case=0;narrow_case<2;narrow_case++) for (unsigned i=0;i<3;i++) {
+        hud_y_scale=narrow_case ? .3f : 1; hud_gain=narrow_case ? 16.f/9 : 1;
+        float sy=hud_y_scale*hud_gain, s=111.5f/96, x=.430156f, y=.556945f;
+        dm_botw_touch_hud_publish(1,x,y,s);
+        scaled_matrix(target2,hud_gain,-509*hud_gain,210*sy);
+        memcpy(target2+BOTW_TOUCH_MATRIX+0x14,&sy,4);
+        calculate_entry(target2); calculated_matrix(target2);
+        float parent_matrix[8]; memcpy(parent_matrix,target2+BOTW_TOUCH_MATRIX,sizeof parent_matrix);
+        float local_y=shifts[i]; memcpy(position+BOTW_TOUCH_POSITION+4,&local_y,4);
+        scaled_matrix(position,parent_matrix[0],parent_matrix[3],parent_matrix[7]+local_y*parent_matrix[5]);
+        memcpy(position+BOTW_TOUCH_MATRIX+0x14,parent_matrix+5,4);
+        calculated_matrix(position);
+        float actual[8]; memcpy(actual,position+BOTW_TOUCH_MATRIX,sizeof actual);
+        assert(fabsf(actual[3]-45*actual[0]-(x*1280-640))<.001f);
+        assert(fabsf(actual[7]+36*actual[5]-(360-y*720))<.001f);
+        assert(*(float *)(position+BOTW_TOUCH_POSITION+4)==local_y);
+    }
+    // Hidden D-pad keeps native positioning; it still observes touch menus.
+    dm_botw_touch_hud_keep_native_loadout(1);
+    scaled_matrix(position,1,12,34); calculated_matrix(position); expect_translation(position,12,34);
+    dm_botw_touch_hud_keep_native_loadout(0);
+    dm_botw_touch_hud_publish(0,0,0,1);
+    scaled_matrix(position,1,56,78); calculated_matrix(position); expect_translation(position,56,78);
+    hud_y_scale=hud_gain=1; dm_botw_touch_hud_publish(1,.5f,.5f,1);
+
     // Match the runtime AppMap tree: a visible N_InOut_00 / N_Cut_00
     // viewport (166x166 collapsed, 1500x720 expanded) contains a 192x192
     // capture pane. N_Cut_01 is its sibling marker/compass subtree.

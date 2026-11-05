@@ -658,11 +658,28 @@ Choosing sticky equipment/rune switching or R/ZR camera dragging adds Cancel
 once. A later manual removal survives saving, reopening and layout import;
 rendering or retaining the same action choice does not add it again.
 Both frontends use the same `dm_aspect_touch_hud_target` mapping from the drawn
-D-pad centre to the native equipment target. **Current, 2026-11-06:** the extra
-vertical correction is -14pt, restored at the user's request for comparison
-with their manual calibration. This parameter change preserves the current
-screen-size scaling and anchor calculation; updated device appearance remains
-to be checked.
+D-pad centre to the native equipment target. **Resolved in code, 2026-11-06;
+iPhone acceptance pending:** the user's Air log shows `N_Pos_00` changing
+local Y from 0 to -20 after `N_MainAll_00` was relocated. At the logged 420pt
+height and 111.5pt D-pad size, this adds `20*(111.5/96)*(420/720)=13.55pt`
+downward, explaining the former -14pt manual correction. The parent stayed at
+its expected native translation (-509,210); its child added another native
+HUD origin that the fixed cross-guide anchor had not accounted for. The host
+now sets the composed `N_Pos_00` origin to the relocated parent's origin,
+preserving the game's local state, the composed basis and parent animation.
+This applies only while relocating the loadout; hidden D-pad and controller
+layouts retain native placement. The extra point correction remains 0pt.
+Focused tests cover the observed displacement, narrow HUD scaling and native
+placement restoration. A current-source `run_mac.py --test` run at 912x420pt,
+111.5pt D-pad size and console operation mode reached the gameplay HUD; its
+first and 60th samples retained local Y=0. The requested frame-2000 screenshot
+was not reached before the 150s test limit. The user later observed that the
+offset is absent without Champion abilities, associating it with native HUD
+state rather than the platform. The exact guest setter was not traced;
+operation mode alone does not reproduce the change. Temporary loadout
+diagnostic logging has been removed.
+The required regression harness check was blocked because it found no
+supported Mac build under the local games folder.
 On displays narrower than 16:9, including Duo landscape, equipment now receives
 the same HUD gain as hearts and the map before relocation. Its native pane
 position and basis are scaled together during Calculate; the touch matrix hook
