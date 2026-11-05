@@ -13348,19 +13348,27 @@ static id<MTLRenderPipelineState> seated_reflection_pipeline(MTLPixelFormat form
     if (!ps) MDIE("Seated reflection pipeline failed: %s",error.localizedDescription.UTF8String);
     return ps;
 }
+static id<MTLRenderPipelineState> seated_texture_pipeline(int kind,MTLPixelFormat format) {
+    // Window copies and RGBA16F reflection downsampling share COPY. Retain
+    // both formats so alternating destinations cannot evict each other's PSO.
+    static NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *cache;
+    if (!cache) cache=[NSMutableDictionary new];
+    NSNumber *key=@(((uint64_t)kind<<32)|(uint64_t)format);
+    id<MTLRenderPipelineState> ps=cache[key];
+    if (!ps) {
+        ps=kind>=SEATED_BLUR ? seated_reflection_pipeline(format,kind==SEATED_REFLECTION) : texture_blit_pipeline(format,kind==SEATED_ALPHA);
+        cache[key]=ps;
+    }
+    return ps;
+}
 static void seated_texture_encode(id<MTL4CommandBuffer> cb,id<MTLTexture> source,id<MTLTexture> target,
                                   const float region[4],MTLGPUAddress constants,int kind) {
     MTLViewport viewport={target.width*region[0],target.height*region[1],target.width*region[2],target.height*region[3],0,1};
     NSUInteger x=lround(viewport.originX),y=lround(viewport.originY);
     MTLScissorRect clip={x,y,lround(viewport.originX+viewport.width)-x,lround(viewport.originY+viewport.height)-y};
     if (!clip.width || !clip.height) return;
-    static id<MTLRenderPipelineState> ps[4]; static MTLPixelFormat format[4];
+    id<MTLRenderPipelineState> ps=seated_texture_pipeline(kind,target.pixelFormat);
     static id<MTLSamplerState> sampler; static id<MTL4ArgumentTable> table;
-    if (!ps[kind] || format[kind]!=target.pixelFormat) {
-        if (ps[kind]) defer_obj_unref(ps[kind]);
-        ps[kind]=kind>=SEATED_BLUR ? seated_reflection_pipeline(target.pixelFormat,kind==SEATED_REFLECTION) : texture_blit_pipeline(target.pixelFormat,kind==SEATED_ALPHA);
-        format[kind]=target.pixelFormat;
-    }
     if (!table) {
         NSError *e=nil; MTL4ArgumentTableDescriptor *ad=[MTL4ArgumentTableDescriptor new];
         ad.maxTextureBindCount=ad.maxSamplerStateBindCount=ad.maxBufferBindCount=1;
@@ -13382,7 +13390,7 @@ static void seated_texture_encode(id<MTL4CommandBuffer> cb,id<MTLTexture> source
     [table setAddress:constants atIndex:0];
     // A full-screen triangle must not spill across a pane's pixel boundary.
     [en setViewport:viewport]; [en setScissorRect:clip];
-    [en setRenderPipelineState:ps[kind]]; [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [en setRenderPipelineState:ps]; [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     m4_end(en);
 }
 // Reflect the upper picture, never the dock or virtual controls. All four
