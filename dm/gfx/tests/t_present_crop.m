@@ -138,6 +138,32 @@ static void check_seated_pipeline_cache(void) {
             seated_texture_pipeline(SEATED_ALPHA,MTLPixelFormatRGBA8Unorm_sRGB)==alpha);
     }
 }
+static void check_seated_downsample(id<MTLTexture> source) {
+    // Compare the compute scaler with the existing raster copy, including
+    // a cropped source and destinations smaller than a full threadgroup.
+    const int sizes[2][2]={{5,3},{1,1}};
+    for (int k=0;k<2;k++) {
+        int w=sizes[k][0],h=sizes[k][1]; id<MTLTexture> out[2];
+        MTLTextureDescriptor *d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float width:w height:h mipmapped:NO];
+        d.storageMode=MTLStorageModeShared; d.usage=MTLTextureUsageShaderRead|MTLTextureUsageShaderWrite|MTLTextureUsageRenderTarget;
+        for (int i=0;i<2;i++) { out[i]=[g_dev newTextureWithDescriptor:d]; res_add(out[i]); }
+        id<MTLBuffer> uv=[g_dev newBufferWithLength:32 options:MTLResourceStorageModeShared];
+        const float values[8]={.125f,.125f,.75f,.75f,.5f/8,.5f/8,1-.5f/8,1-.5f/8},full[4]={0,0,1,1};
+        memcpy(uv.contents,values,sizeof values); res_add(uv); res_commit();
+        id<MTL4CommandAllocator> al=[g_dev newCommandAllocator]; id<MTL4CommandBuffer> cb=[g_dev newCommandBuffer];
+        id<MTLSharedEvent> event=[g_dev newSharedEvent]; [cb beginCommandBufferWithAllocator:al];
+        seated_texture_encode(cb,source,out[0],full,uv.gpuAddress,SEATED_COPY);
+        seated_downsample_encode(cb,source,out[1],uv.gpuAddress); [cb endCommandBuffer];
+        [g_q4 commit:&cb count:1]; [g_q4 signalEvent:event value:1];
+        EXPECT("Compute downsample GPU completes",1,[event waitUntilSignaledValue:1 timeoutMS:10000]);
+        __fp16 pixels[2][5*3*4];
+        for (int i=0;i<2;i++) [out[i] getBytes:pixels[i] bytesPerRow:w*8 fromRegion:MTLRegionMake2D(0,0,w,h) mipmapLevel:0];
+        int mismatch=0;
+        for (int i=0;i<w*h*4;i++) mismatch+=fabsf((float)pixels[0][i]-(float)pixels[1][i])>1.f/1024;
+        EXPECT("Compute downsample matches cropped raster copy",0,mismatch);
+        res_remove(out[0]); res_remove(out[1]); res_remove(uv);
+    }
+}
 static void check_seated_reflection(void) {
     // The upper quadrants remain byte-identical; their mirror is blurred and
     // dimmed below the fold, behind a sharp opaque patch in the dock texture.
@@ -255,6 +281,7 @@ int main(int argc,char **argv) { @autoreleasepool {
     check_seated_dock(src);
     check_seated_map_effect();
     check_seated_pipeline_cache();
+    check_seated_downsample(src);
     check_seated_reflection();
     if (argc==2 && !strcmp(argv[1],"--seated")) { printf("== %d checks, %d failed ==\n",cases,failed); return failed!=0; }
     int zero[4]={0},tl[4]={0,0,4,4},tr[4]={4,0,4,4},bl[4]={0,4,4,4},br[4]={4,4,4,4},one[4]={3,3,1,1},inset[4]={1,1,4,4};

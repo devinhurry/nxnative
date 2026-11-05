@@ -13316,45 +13316,50 @@ static void present_pipeline(MTLPixelFormat format) {
 // native, so cached menus and 3D UI never accumulate a second region transform.
 // Composite the dock on the final swapchain before its ordinary snapshot/present.
 enum { SEATED_COPY, SEATED_ALPHA, SEATED_BLUR, SEATED_REFLECTION };
-static int seated_reflection_env(const char *name,int fallback,int minimum,int maximum,int odd) {
+static int seated_reflection_env(const char *name,int fallback,int minimum,int maximum) {
     const char *value=getenv(name); if (!value) return fallback;
     char *end; long n=strtol(value,&end,10);
-    if (end==value || *end || n<minimum || n>maximum || (odd && !(n&1))) {
-        MLOG("%s=%s is invalid; expected %s%d..%d, using %d",name,value,odd ? "an odd integer in " : "an integer in ",minimum,maximum,fallback);
+    if (end==value || *end || n<minimum || n>maximum) {
+        MLOG("%s=%s is invalid; expected an integer in %d..%d, using %d",name,value,minimum,maximum,fallback);
         return fallback;
     }
     return (int)n;
 }
 static int seated_reflection_size(void) {
     static int size;
-    if (!size) size=seated_reflection_env("DM_SEATED_REFLECTION_SIZE",256,64,1024,0);
+    if (!size) size=seated_reflection_env("DM_SEATED_REFLECTION_SIZE",256,64,1024);
     return size;
 }
-static id<MTLRenderPipelineState> seated_reflection_pipeline(MTLPixelFormat format,int reflection) {
+static id<MTLLibrary> seated_reflection_library(void) {
     static id<MTLLibrary> lib;
     if (!lib) {
         // Build paired Gaussian weights once. Rescale offsets so changing
         // size or sample density retains the displayed sigma of 4/256.
         // The native target view performs the final sRGB encode.
-        int samples=seated_reflection_env("DM_SEATED_REFLECTION_SAMPLES",13,5,33,1),pairs=(samples-1)/2,radius=2*pairs;
-        double sigma=radius/3.,divisor=2*sigma*sigma,total=1;
+        int samples=seated_reflection_env("DM_SEATED_REFLECTION_SAMPLES",18,5,33),pairs=samples/2,radius=2*pairs,centered=samples&1;
+        // Even counts use a symmetric half-texel grid without a center tap.
+        double sigma=radius/3.,divisor=2*sigma*sigma,total=centered,first=centered ? 1 : .5;
         double step=(double)seated_reflection_size()*12/(256*radius);
-        for (int i=1;i<=radius;i++) total+=2*exp(-(double)i*i/divisor);
+        for (int i=0;i<radius;i++) { double x=first+i; total+=2*exp(-x*x/divisor); }
         NSMutableString *weights=[NSMutableString string],*offsets=[NSMutableString string];
-        for (int i=1;i<radius;i+=2) {
-            double a=exp(-(double)i*i/divisor),b=exp(-(double)(i+1)*(i+1)/divisor);
-            [weights appendFormat:@"%s%.9f",i==1 ? "" : ",",(a+b)/total];
-            [offsets appendFormat:@"%s%.9f",i==1 ? "" : ",",step*(i*a+(i+1)*b)/(a+b)];
+        for (int i=0;i<radius;i+=2) {
+            double x=first+i,a=exp(-x*x/divisor),b=exp(-(x+1)*(x+1)/divisor);
+            [weights appendFormat:@"%s%.9f",i ? "," : "",(a+b)/total];
+            [offsets appendFormat:@"%s%.9f",i ? "," : "",step*(x*a+(x+1)*b)/(a+b)];
         }
+        NSString *center=centered ? [NSString stringWithFormat:@"t.sample(s,clamp(uv,c.edge.xy,c.edge.zw)).rgb*%.9f",1/total] : @"float3(0)";
         MLOG("Seated reflection: %d px longest side, %d samples per axis (DM_SEATED_REFLECTION_SIZE / DM_SEATED_REFLECTION_SAMPLES)",seated_reflection_size(),samples);
         NSString *msl=[NSString stringWithFormat:@"#include <metal_stdlib>\nusing namespace metal;\n"
             "struct V { float4 p [[position]]; float2 uv; };\n"
             "vertex V vs(uint id [[vertex_id]]) { float2 uv=float2((id<<1)&2,id&2); return {float4(uv*float2(2,-2)+float2(-1,1),0,1),uv}; }\n"
             "struct C { float4 rect; float4 edge; float4 effect; };\n"
+            "kernel void downsample(uint2 p [[thread_position_in_grid]], texture2d<float> t [[texture(0)]], texture2d<half,access::write> out [[texture(1)]], sampler s [[sampler(0)]], constant C& c [[buffer(0)]]) {\n"
+            "uint2 size=uint2(out.get_width(),out.get_height()); if (any(p>=size)) return;\n"
+            "float2 uv=(float2(p)+0.5)/float2(size); out.write(half4(t.sample(s,clamp(uv*c.rect.zw+c.rect.xy,c.edge.xy,c.edge.zw),level(0))),p); }\n"
             "constant float weights[%d]={%@};\n"
             "constant float offsets[%d]={%@};\n"
             "float3 filtered(texture2d<float> t, sampler s, float2 uv, constant C& c) {\n"
-            "float3 v=t.sample(s,clamp(uv,c.edge.xy,c.edge.zw)).rgb*%.9f;\n"
+            "float3 v=%@;\n"
             "for (uint i=0;i<%d;i++) { float2 d=c.effect.xy*offsets[i];\n"
             "v+=(t.sample(s,clamp(uv+d,c.edge.xy,c.edge.zw)).rgb+t.sample(s,clamp(uv-d,c.edge.xy,c.edge.zw)).rgb)*weights[i]; } return v; }\n"
             "fragment float4 blur(V in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]], constant C& c [[buffer(0)]]) { return float4(filtered(t,s,in.uv*c.rect.zw+c.rect.xy,c),1); }\n"
@@ -13362,10 +13367,14 @@ static id<MTLRenderPipelineState> seated_reflection_pipeline(MTLPixelFormat form
             "float y=c.effect.z>0 ? 1-in.uv.y : in.uv.y; float depth=max(0.0,(y-c.effect.x)/(1-c.effect.x));\n"
             "float gain=c.effect.y>0 ? mix(1.0,c.effect.w,smoothstep(0.0,c.effect.y,y)) : c.effect.w;\n"
             "float3 v=t.sample(s,clamp(in.uv*c.rect.zw+c.rect.xy,c.edge.xy,c.edge.zw)).rgb; return float4(v*gain*(1-smoothstep(0.0,1.0,depth)),1); }\n",
-            pairs,weights,pairs,offsets,1/total,pairs];
+            pairs,weights,pairs,offsets,center,pairs];
         NSError *error=nil; lib=[g_dev newLibraryWithSource:msl options:nil error:&error];
         if (!lib) MDIE("Seated reflection shader failed: %s",error.localizedDescription.UTF8String);
     }
+    return lib;
+}
+static id<MTLRenderPipelineState> seated_reflection_pipeline(MTLPixelFormat format,int reflection) {
+    id<MTLLibrary> lib=seated_reflection_library();
     MTLRenderPipelineDescriptor *pd=[MTLRenderPipelineDescriptor new];
     pd.vertexFunction=[lib newFunctionWithName:@"vs"];
     pd.fragmentFunction=[lib newFunctionWithName:reflection ? @"reflection" : @"blur"];
@@ -13419,6 +13428,30 @@ static void seated_texture_encode(id<MTL4CommandBuffer> cb,id<MTLTexture> source
     [en setRenderPipelineState:ps]; [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     m4_end(en);
 }
+static void seated_downsample_encode(id<MTL4CommandBuffer> cb,id<MTLTexture> source,id<MTLTexture> target,MTLGPUAddress constants) {
+    static id<MTLComputePipelineState> ps;
+    static id<MTLSamplerState> sampler; static id<MTL4ArgumentTable> table;
+    if (!ps) {
+        NSError *e=nil;
+        ps=[g_dev newComputePipelineStateWithFunction:[seated_reflection_library() newFunctionWithName:@"downsample"] error:&e];
+        if (!ps) MDIE("Seated downsample pipeline failed: %s",e.localizedDescription.UTF8String);
+        MTL4ArgumentTableDescriptor *ad=[MTL4ArgumentTableDescriptor new];
+        ad.maxTextureBindCount=2; ad.maxSamplerStateBindCount=ad.maxBufferBindCount=1;
+        table=rec_table([g_dev newArgumentTableWithDescriptor:ad error:&e]);
+        if (!table) MDIE("Seated downsample has no argument table: %s",e.localizedDescription.UTF8String);
+        sampler=texture_blit_sampler();
+    }
+    id<MTL4ComputeCommandEncoder> en=[cb computeCommandEncoder];
+    if (!en) MDIE("Seated downsample has no compute encoder");
+    [en barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:resource_vis()];
+    gp_begin(en,'C',nil);
+    [en setArgumentTable:table];
+    [table setTexture:source.gpuResourceID atIndex:0]; [table setTexture:target.gpuResourceID atIndex:1];
+    [table setSamplerState:sampler.gpuResourceID atIndex:0]; [table setAddress:constants atIndex:0];
+    [en setComputePipelineState:ps]; g_gp_disp++;
+    [en dispatchThreads:MTLSizeMake(target.width,target.height,1) threadsPerThreadgroup:MTLSizeMake(16,8,1)];
+    m4_end(en);
+}
 // Reflect the upper picture, never the dock or virtual controls. All four
 // passes stay on the replay queue: no CPU readback, second scene, or present
 // thread state. Replaced scratch textures retire behind the submission fence.
@@ -13431,7 +13464,7 @@ static void seated_reflection_encode(id<MTL4CommandBuffer> cb,id<MTLTexture> tar
     NSUInteger w=MAX(1,lround(size*fmin(1,aspect))),h=MAX(1,lround(size*fmin(1,1/aspect)));
     if (!images[0] || images[0].width!=w || images[0].height!=h) {
         MTLTextureDescriptor *d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float width:w height:h mipmapped:NO];
-        d.storageMode=MTLStorageModePrivate; d.usage=MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget;
+        d.storageMode=MTLStorageModePrivate; d.usage=MTLTextureUsageShaderRead|MTLTextureUsageShaderWrite|MTLTextureUsageRenderTarget;
         for (int i=0;i<2;i++) {
             if (images[i]) defer_obj_release(images[i]);
             images[i]=[g_dev newTextureWithDescriptor:d];
@@ -13458,7 +13491,7 @@ static void seated_reflection_encode(id<MTL4CommandBuffer> cb,id<MTLTexture> tar
     };
     memcpy((uint8_t *)buffer.contents+offset,constants,sizeof constants); res_commit();
     const float full[4]={0,0,1,1}; MTLGPUAddress gpu=buffer.gpuAddress+offset;
-    seated_texture_encode(cb,target,images[0],full,gpu,SEATED_COPY);
+    seated_downsample_encode(cb,target,images[0],gpu);
     seated_texture_encode(cb,images[0],images[1],full,gpu+32,SEATED_BLUR);
     seated_texture_encode(cb,images[1],images[0],full,gpu+80,SEATED_BLUR);
     seated_texture_encode(cb,images[0],target,reflected,gpu+128,SEATED_REFLECTION);
