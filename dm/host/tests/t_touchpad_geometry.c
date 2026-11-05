@@ -49,6 +49,24 @@ static void test_directional_ownership(void) {
     assert(dm_touchpad_dpad_buttons(cx, cy + r, cx, cy, r) == DM_BTN_DOWN);
     assert(dm_touchpad_dpad_buttons(cx + r, cy - r, cx, cy, r) == (DM_BTN_RIGHT | DM_BTN_UP));
     assert(dm_touchpad_dpad_buttons(cx, cy, cx, cy, r) == 0); // native centre dead region
+
+    // BOTW equipment/rune actions accept one direction, including diagonal taps.
+    const struct { float dx,dy; uint64_t buttons; } cardinal[] = {
+        {1,0,DM_BTN_RIGHT},{0,-1,DM_BTN_UP},{-1,0,DM_BTN_LEFT},{0,1,DM_BTN_DOWN},
+        {1,-1,DM_BTN_RIGHT},{-1,-1,DM_BTN_LEFT},{-1,1,DM_BTN_LEFT},{1,1,DM_BTN_RIGHT},
+        {.9f,-1,DM_BTN_UP},{1,-.9f,DM_BTN_RIGHT},{-.9f,1,DM_BTN_DOWN},{-1,.9f,DM_BTN_LEFT}
+    };
+    const float radii[]={24,48,72};
+    for (unsigned i=0;i<sizeof radii/sizeof *radii;i++) {
+        float radius=radii[i];
+        for (unsigned n=0;n<sizeof cardinal/sizeof *cardinal;n++) {
+            uint64_t bits=dm_touchpad_dpad_cardinal_buttons(cx+cardinal[n].dx*radius,
+                cy+cardinal[n].dy*radius,cx,cy,radius);
+            assert(bits==cardinal[n].buttons && !(bits & (bits-1)));
+        }
+        assert(dm_touchpad_dpad_cardinal_buttons(cx,cy,cx,cy,radius)==0);
+        assert(dm_touchpad_dpad_cardinal_buttons(cx+radius*.1f,cy-radius*.1f,cx,cy,radius)==0);
+    }
 }
 
 static void test_stick_shaping(void) {

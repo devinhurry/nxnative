@@ -1191,9 +1191,12 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     return dm_touchpad_face_buttons((float)p.x, (float)p.y, (float)c.x, (float)c.y,
                                     (float)self.faceGap, (float)(self.faceR * 1.25));
 }
-- (uint64_t)dpadAt:(CGPoint)p {   // 8 directions: 45° each, diagonals press two keys; a small centre circle counts as none
+- (uint64_t)dpadAt:(CGPoint)p {
     CGPoint c = self.dpadCenter;
-    return dm_touchpad_dpad_buttons((float)p.x, (float)p.y, (float)c.x, (float)c.y, (float)self.dpadR) & self.botwDpadMask;
+    uint64_t bits = !strcmp(DM_GAME_ID,"01007EF00011E000") ?
+        dm_touchpad_dpad_cardinal_buttons((float)p.x,(float)p.y,(float)c.x,(float)c.y,(float)self.dpadR) :
+        dm_touchpad_dpad_buttons((float)p.x,(float)p.y,(float)c.x,(float)c.y,(float)self.dpadR);
+    return bits & self.botwDpadMask;
 }
 - (CGPoint)knobOffset:(int)i {   // knob offset from the stick centre (clamped to the stick radius)
     if (!_stick[i]) return CGPointZero;

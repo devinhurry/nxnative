@@ -317,6 +317,15 @@ static inline uint64_t dm_touchpad_dpad_buttons(float x, float y, float center_x
     return bits;
 }
 
+static inline uint64_t dm_touchpad_dpad_cardinal_buttons(float x, float y, float center_x,
+                                                        float center_y, float radius) {
+    float dx=x-center_x, dy=y-center_y;
+    if (hypotf(dx,dy)<radius*.25f) return 0;
+    // Nearest cardinal direction; exact diagonal ties consistently go horizontal.
+    if (fabsf(dx)>=fabsf(dy)) return dx<0 ? DM_BTN_LEFT : DM_BTN_RIGHT;
+    return dy<0 ? DM_BTN_UP : DM_BTN_DOWN;
+}
+
 static inline void dm_touchpad_stick_axis_with_deadzone(float dx, float dy, float radius,
                                          int full_tilt, float dead_ratio, int32_t *x, int32_t *y) {
     float d = hypotf(dx, dy), dead = radius * dead_ratio;
