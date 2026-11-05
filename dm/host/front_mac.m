@@ -944,7 +944,9 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
 }
 - (uint64_t)dpadAtTop:(dm_touchpad_point)p {
     dm_touchpad_point c = [self dpadCenter];
-    uint64_t bits = dm_touchpad_dpad_buttons(p.x, p.y, c.x, c.y, self.dpadRadius);
+    uint64_t bits = !strcmp(DM_GAME_ID,"01007EF00011E000") ?
+        dm_touchpad_dpad_cardinal_buttons(p.x,p.y,c.x,c.y,self.dpadRadius) :
+        dm_touchpad_dpad_buttons(p.x,p.y,c.x,c.y,self.dpadRadius);
     return _menuMode ? bits : bits & self.botwDpadMask;
 }
 - (void)publishButtons {

@@ -12,7 +12,7 @@
 #define DM_BOTW_ICON_ALPHA .90
 #define DM_BOTW_STICK_ALPHA .15
 // Extra screen-point correction after anchoring the native cross-guide.
-#define DM_BOTW_LOADOUT_Y_OFFSET_PT (0.0f)
+#define DM_BOTW_LOADOUT_Y_OFFSET_PT (-14.0f)
 
 // Default anchors retain the original base-relative offsets. Explicit anchors
 // store actual side and bottom edge distances in x/y, independent of defaults.

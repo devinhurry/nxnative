@@ -130,6 +130,13 @@ even if it returns to its origin. Holds and release-only movement cannot seed
 a double tap. `inventory-touch-20261025/run36-goddess-buttons/ios/` verifies
 these paths, all six round icon buttons, palette values and ordinary-mode
 restoration with zero UIKit failures. Mac packaging tests cover all seven assets, including the default L icon.
+**Current, 2026-11-06:** BOTW virtual D-pad taps select the nearest single cardinal
+direction in both UIKit and Mac preview, including menu fallback controls. The
+former eight-way angular sectors emitted two equipment/rune actions on diagonal
+taps. Exact diagonal ties now select the horizontal direction; the centre dead
+zone and touch-down locking stay unchanged. Other games retain eight-way input,
+and physical controller input is unchanged. Focused geometry checks cover cardinal
+and diagonal taps, both sides of a sector boundary, dead zones and resized pads.
 `inventory-touch-20261025/run23/ios-shield/` records the rendered idle/drag states
 and passing input/release checks. The movement stick's base anchor is 10 frontend points
 up/right of its ordinary home, before the configured default vertical offset of 0.023 canvas height. Its idle artwork is a white circle with four inner
@@ -647,10 +654,10 @@ once. A later manual removal survives saving, reopening and layout import;
 rendering or retaining the same action choice does not add it again.
 Both frontends use the same `dm_aspect_touch_hud_target` mapping from the drawn
 D-pad centre to the native equipment target. **Current, 2026-11-06:** the extra
-vertical correction is 0pt after the user confirmed that removing the former
-14pt upward correction aligns the current Mac preview. The earlier iPhone
-calibration predates the current scaling changes; updated device appearance
-remains to be checked.
+vertical correction is -14pt, restored at the user's request for comparison
+with their manual calibration. This parameter change preserves the current
+screen-size scaling and anchor calculation; updated device appearance remains
+to be checked.
 On displays narrower than 16:9, including Duo landscape, equipment now receives
 the same HUD gain as hearts and the map before relocation. Its native pane
 position and basis are scaled together during Calculate; the touch matrix hook
