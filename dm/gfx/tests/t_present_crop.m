@@ -13,6 +13,8 @@ int gate_obs_present(int id) { (void)id; return 0; }
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
 module_t *g_mod; int g_nmod;
+static int test_relocate_loadout;
+int dm_botw_touch_hud_relocates_loadout(void) { return test_relocate_loadout; }
 void svc_thread_dump(void) {}
 uint64_t now_ns(void) { return bp_now(); }
 static int g_layer_crop[4];   // what the vi layer crop (hle_vi.c) answers: x, y, w, h, all 0 = none
@@ -449,6 +451,10 @@ int main(int argc,char **argv) { @autoreleasepool {
     EXPECT("4:3 layout corrected vertically", 1, ui_squeeze_scale(layout, &ux, &uy, 0));
     EXPECT("4:3 UI x unchanged", 1000, lround(ux * 1000)); EXPECT("4:3 UI y scale", 1333, lround(uy * 1000));
     if (!strcmp(DM_GAME_ID,"01007EF00011E000")) {
+        EXPECT("native top-left rune stays with the upper picture",0,ui_dock_scope(NVN_UI_RUNE));
+        test_relocate_loadout=1;
+        EXPECT("relocated rune follows equipment into the control pane",1,ui_dock_scope(NVN_UI_RUNE));
+        test_relocate_loadout=0;
         const float narrow[]={4.f/3,9.f/16};
         for (unsigned i=0;i<sizeof narrow/sizeof *narrow;i++) {
             dm_aspect_set_display(narrow[i]);

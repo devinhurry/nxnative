@@ -28,6 +28,9 @@ void dm_botw_rune_icon_draw_begin(uint8_t *pane) { (void)pane; }
 void dm_botw_rune_icon_draw_end(void) {}
 static int test_touch_active;
 int dm_botw_touch_hud_active(void) { return test_touch_active; }
+static int test_keep_native_loadout, test_loadout_visible=1;
+int dm_botw_touch_hud_relocates_loadout(void) { return test_touch_active && !test_keep_native_loadout; }
+int dm_botw_touch_loadout_visible(void) { return test_loadout_visible; }
 static int have_gate = 1;
 void gate_obs_read_set(int id, void (*fn)(const uint64_t *)) {
     if (id == OBS_ASPECT_PROJECTION) callback = fn;
@@ -103,13 +106,13 @@ static void test_edge_hud(void) {
     dm_aspect_set_display(21.f/10); dm_aspect_set_safe_area(1512, 720, 0, 0, 0);
     for (int i=0;i<20;i++) { dm_aspect_ui_pane(heart); dm_aspect_ui_pane(sensor); }
     assert(fabsf(*(float *)(heart+0x30)+548)<.001f && *(float *)(heart+0x50)==312);
-    assert(fabsf(*(float *)(sensor+0x30)-508)<.001f && *(float *)(sensor+0x50)==582);
+    assert(*(float *)(sensor+0x30)==392 && *(float *)(sensor+0x50)==582); // map cluster hook owns edge translation
     dm_aspect_ui_pane(glyph); assert(*(float *)(glyph+0x30)==20 && *(float *)(glyph+0x50)==32);
     uint64_t regs[31]={0}; regs[21]=(uintptr_t)glyph; draw_callback(regs);
     assert(dm_aspect_ui_hud_drawing() && !dm_aspect_ui_background_drawing());
     draw_end_callback(regs); assert(!dm_aspect_ui_hud_drawing());
     test_touch_active=1; dm_aspect_ui_pane(sensor); assert(*(float *)(sensor+0x30)==392);
-    test_touch_active=0; dm_aspect_ui_pane(sensor); assert(fabsf(*(float *)(sensor+0x30)-508)<.001f);
+    test_touch_active=0; dm_aspect_ui_pane(sensor); assert(*(float *)(sensor+0x30)==392);
     uint8_t map[0x100],inout[0x100],ornaments[0x100],cut[0x100],sibling[0x100],picture[0x100];
     pane_init(map,"RootPane",0,1280,720); pane_init(inout,"N_InOut_00",0,30,30); pane_child(map,inout);
     pane_init(ornaments,"N_InOut_01",0,30,30); pane_child(map,ornaments);
@@ -141,12 +144,13 @@ static void test_edge_hud(void) {
     dm_aspect_set_display(GAME_ASPECT); dm_aspect_ui_pane(upper); assert(*(float *)(upper+0x50)==1280);
 }
 static void test_narrow_hud(void) {
-    uint8_t root[0x100],all[0x100],state[0x100],heart[0x100],glyph[0x100],menu[0x100];
+    uint8_t root[0x100],all[0x100],state[0x100],heart[0x100],glyph[0x100],menu[0x100],equipment[0x100];
     pane_init(root,"RootPane",0,1280,720); pane_init(all,"N_All_00",0,30,30); pane_child(root,all);
     pane_init(state,"N_State_00",0,40,40); pane_child(all,state);
     pane_init(heart,"Pa_HeartGauge_00",-434,312,50); pane_child(state,heart); *(float *)(heart+0x34)=300;
     pane_init(glyph,"P_Heart_00",0,32,32); pane_child(heart,glyph);
     pane_init(menu,"T_Text_00",0,100,40); *(float *)(menu+0x34)=123;
+    pane_init(equipment,"N_MainAll_00",-509,14,254); pane_child(all,equipment); *(float *)(equipment+0x34)=210;
     uint8_t weather[0x100],weather_body[0x100],weather_icon[0x100];
     pane_init(weather,"Pa_Weather_00",0,899.5f,644); pane_child(all,weather);
     pane_init(weather_body,"N_InOut_00",362,30,30); pane_child(weather,weather_body);
@@ -160,7 +164,7 @@ static void test_narrow_hud(void) {
     pane_init(fade,"RootPane",0,1280,720); pane_init(logo,"N_LogoInOut_00",0,30,40); pane_child(fade,logo);
     pane_init(upper,"P_Capture_00",0,1280,275); pane_child(logo,upper);
     pane_init(black,"P_Black_00",0,1280,445); pane_child(fade,black);
-    const float ratios[]={4.f/3,9.f/16}; uint64_t regs[31]={0};
+    const float ratios[]={951.f/669,4.f/3,9.f/16}; uint64_t regs[31]={0};
     for (unsigned i=0;i<sizeof ratios/sizeof *ratios;i++) {
         float ratio=ratios[i], f=ratio/GAME_ASPECT, gain=GAME_ASPECT*fminf(1,1/ratio), rect[4];
         float sy=f*gain;
@@ -175,6 +179,15 @@ static void test_narrow_hud(void) {
         assert(fabsf(*(float *)(heart+0x48)-gain)<.001f && fabsf(*(float *)(heart+0x4c)-sy)<.001f);
         assert(*(float *)(heart+0x50)==312);
         assert(fabsf(*(float *)(inout+0x48)-gain)<.001f && fabsf(*(float *)(inout+0x4c)-sy)<.001f);
+        test_touch_active=1;
+        for (int n=0;n<10;n++) dm_aspect_ui_pane(equipment);
+        assert(fabsf(*(float *)(equipment+0x30)-(-509*gain))<.001f);
+        assert(fabsf(*(float *)(equipment+0x34)-210*sy)<.001f);
+        assert(fabsf(*(float *)(equipment+0x48)-gain)<.001f && fabsf(*(float *)(equipment+0x4c)-sy)<.001f);
+        test_touch_active=0; dm_aspect_ui_pane(equipment);
+        assert(fabsf(*(float *)(equipment+0x30)-(*(float *)(heart+0x30)-75*gain))<.001f);
+        assert(fabsf(*(float *)(equipment+0x34)-(*(float *)(heart+0x34)-(25+10+98.35f)*sy))<.001f);
+        assert(fabsf(*(float *)(equipment+0x48)-gain)<.001f && fabsf(*(float *)(equipment+0x4c)-sy)<.001f);
         dm_aspect_hud_rect(720*ratio,720,rect); assert(fabsf(rect[1])<.001f && fabsf(rect[3]-720)<.001f);
         dm_aspect_touch_rect(720*ratio,720,rect); assert(rect[1]>0 && fabsf(rect[3]-720*f)<.001f);
         assert(fabsf(dm_aspect_hud_top()-(360-20*sy-40))<.001f);
@@ -195,6 +208,48 @@ static void test_narrow_hud(void) {
     assert(*(float *)(heart+0x34)==300 && *(float *)(heart+0x48)==1 && *(float *)(heart+0x4c)==1);
     assert(*(float *)(inout+0x48)==1 && *(float *)(inout+0x4c)==1);
     assert(*(float *)(weather+0x48)==1 && *(float *)(weather+0x4c)==1);
+}
+
+static void test_left_hud_stack(void) {
+    uint8_t root[0x100],all[0x100],state[0x100],heart[0x100],equipment[0x100],champions[4][0x100];
+    pane_init(root,"RootPane",0,1280,720); pane_init(all,"N_All_00",0,30,30); pane_child(root,all);
+    pane_init(state,"N_State_00",0,40,40); pane_child(all,state);
+    pane_init(heart,"Pa_HeartGauge_00",-434,312,50); *(float *)(heart+0x34)=310; pane_child(state,heart);
+    pane_init(equipment,"N_MainAll_00",-509,14,254); *(float *)(equipment+0x34)=210; pane_child(all,equipment);
+    for (int i=0;i<4;i++) {
+        char name[16]; snprintf(name,sizeof name,"Pa_SinJu_%02d",i);
+        pane_init(champions[i],name,-557,128,124); *(float *)(champions[i]+0x34)=190-i*50;
+        pane_child(all,champions[i]);
+    }
+    const float sizes[][2]={{932,430},{1280,720},{951,669},{669,951},{795,1100}};
+    for (unsigned s=0;s<sizeof sizes/sizeof *sizes;s++) for (int safe=0;safe<2;safe++) {
+        float w=sizes[s][0],h=sizes[s][1];
+        dm_aspect_set_display(w/h); dm_aspect_set_safe_area(w,h,safe?40:0,safe?30:0,0);
+        dm_aspect_ui_pane(heart);
+        float sy=*(float *)(heart+0x4c),sx=*(float *)(heart+0x48);
+        float heart_bottom=*(float *)(heart+0x34)-25*sy;
+        for (int mode=0;mode<4;mode++) {
+            test_touch_active=mode!=0; test_keep_native_loadout=mode==2;
+            test_loadout_visible=mode!=3;
+            int at_top=!dm_botw_touch_hud_relocates_loadout() && test_loadout_visible;
+            dm_aspect_ui_pane(equipment);
+            if (at_top) {
+                assert(fabsf(*(float *)(equipment+0x30)-(*(float *)(heart+0x30)-75*sx))<.001f);
+                assert(fabsf(heart_bottom-(*(float *)(equipment+0x34)+98.35f*sy)-10*sy)<.001f);
+            }
+            float bottom=at_top ? *(float *)(equipment+0x34)+19.854f*sy : heart_bottom;
+            for (int i=0;i<4;i++) {
+                for (int n=0;n<10;n++) dm_aspect_ui_pane(champions[i]);
+                float y=*(float *)(champions[i]+0x34);
+                assert(fabsf(bottom-(y+30*sy)-10*sy)<.001f);
+                assert(fabsf(*(float *)(champions[i]+0x30)-(*(float *)(heart+0x30)-123*sx))<.001f);
+                assert(*(float *)(champions[i]+0x48)==sx && *(float *)(champions[i]+0x4c)==sy);
+                bottom=y-30*sy;
+            }
+        }
+    }
+    test_touch_active=test_keep_native_loadout=0; test_loadout_visible=1;
+    dm_aspect_set_display(GAME_ASPECT); dm_aspect_set_safe_area(1280,720,0,0,0);
 }
 
 static void test_narrow_fullscreen_background(void) {
@@ -267,7 +322,7 @@ static void test_seated_regions(void) {
         assert(fabsf(*(float *)(sensor+0x48)-gain)<.001f);
         assert(*(float *)(weather+0x48)==1 && *(float *)(weather+0x4c)==1);
         test_touch_active=0; regs[21]=(uintptr_t)equipment; draw_callback(regs);
-        assert(!dm_aspect_ui_hud_drawing()); draw_end_callback(regs);
+        assert(dm_aspect_ui_hud_drawing()==1); draw_end_callback(regs); // controller equipment stays in the upper picture
         dm_aspect_set_seated(0,0); dm_aspect_set_display(GAME_ASPECT); dm_aspect_set_safe_area(1280,720,0,0,0);
         dm_aspect_ui_pane(sensor); assert(*(float *)(sensor+0x48)==1 && *(float *)(sensor+0x4c)==1);
         assert(!dm_aspect_region(1,dock) && dock[0]==0 && dock[1]==0 && dock[2]==1 && dock[3]==1);
@@ -449,5 +504,6 @@ int main(void) {
     test_narrow_hud();
     test_narrow_fullscreen_background();
     test_seated_regions();
+    test_left_hud_stack();
     free(g_mod[0].base); puts("aspect: camera, centered content/hit regions and independent fullscreen backgrounds passed");
 }

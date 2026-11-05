@@ -137,6 +137,7 @@ void dm_aspect_install(void);
 void dm_look_install(void);
 void dm_botw_touch_hud_install(void);
 int dm_botw_touch_hud_active(void);  // true only for the current BOTW 1.9 build while the touch-only HUD is active
+int dm_botw_touch_hud_relocates_loadout(void);
 uint64_t now_ns(void);
 uint64_t guest_ns(void);              // Guest clock (hle_os.c; does not advance while frozen, guest_clock_freeze)
 uint64_t guest_ticks(void);           // The guest's system counter on that clock: 19.2 MHz, or 31.25 MHz for the Switch 2 (hle_os.c)

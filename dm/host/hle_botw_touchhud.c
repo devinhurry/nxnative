@@ -42,6 +42,13 @@ int dm_botw_touch_hud_active(void) {
         strcmp(dm_main_build(), BOTW_BUILD)) return 0;
     return atomic_load_explicit(&g_touchhud_active, memory_order_acquire);
 }
+int dm_botw_touch_hud_relocates_loadout(void) {
+    if (!dm_botw_touch_hud_active()) return 0;
+    pthread_mutex_lock(&g_touchhud_mu);
+    int relocate=!g_touchhud.keep_native_loadout;
+    pthread_mutex_unlock(&g_touchhud_mu);
+    return relocate;
+}
 void dm_botw_touch_hud_keep_native_loadout(int keep) {
     pthread_mutex_lock(&g_touchhud_mu);
     g_touchhud.keep_native_loadout=!!keep;
@@ -331,17 +338,23 @@ static int touchhud_update_cluster_delta(uint8_t *pane) {
     float left, bottom, right, top;
     if (!transform_bounds(pane, &left, &bottom, &right, &top)) return 0;
     float region[4],gain=dm_aspect_map_gain(); int seated=dm_aspect_region(1,region);
+    int touch=dm_botw_touch_hud_active();
     pthread_mutex_lock(&g_touchhud_mu);
     g_touchhud.map_dx = seated ? 59*gain-(left+right)*.5f :
         640.0f + dm_aspect_hud_offset(1) - gain*dm_touchpad_botw_map_right_inset(dm_aspect_ui_point_scale()/gain) - right;
     float safe=dm_aspect_hud_safe_right();
-    if (!seated && safe>0) {
-        if (dm_botw_touch_hud_active()) {
+    if (!seated) {
+        if (touch && safe>0) {
             float padding=DM_TP_BOTW_MENU_EDGE*gain+DM_TP_BOTW_EDGE_EXTRA*dm_aspect_ui_point_scale();
             g_touchhud.map_dx += padding-safe;
-        } else g_touchhud.map_dx=640+dm_aspect_hud_offset(1)-safe-right;
+        } else if (!touch) {
+            // Without Plus, only the ordinary HUD edge margin is needed.
+            float margin=dm_touchpad_botw_edge_margin(safe,
+                DM_TP_BOTW_HEART_EDGE*gain+DM_TP_BOTW_EDGE_EXTRA*dm_aspect_ui_point_scale());
+            g_touchhud.map_dx=640+dm_aspect_hud_offset(1)-margin-right;
+        }
     }
-    int relocate=dm_botw_touch_hud_active() || dm_aspect_hud_y_scale()<1 || seated;
+    int relocate=touch || dm_aspect_hud_y_scale()<1 || seated;
     g_touchhud.map_dy = relocate ? dm_aspect_hud_top() - top : 0;
     g_touchhud.delta_valid = 1;
     pthread_mutex_unlock(&g_touchhud_mu);
@@ -387,9 +400,9 @@ static void botw_touchhud_pane(const uint64_t *regs) {
     dm_aspect_ui_pane((uint8_t *)(uintptr_t)regs[0]);
     float region[4]; int seated=dm_aspect_region(1,region);
     int touch=dm_botw_touch_hud_available(), narrow=dm_aspect_hud_y_scale()<1;
-    if (!touch && !narrow && !seated && dm_aspect_hud_safe_right()==0) return;
+    if (!touch && !narrow && !seated && !dm_aspect_native() && dm_aspect_hud_safe_right()==0) return;
     if (touch) dm_botw_touch_menu_pane(regs, 0);
-    int map_active=atomic_load_explicit(&g_touchhud_active,memory_order_acquire) || narrow || seated || dm_aspect_hud_safe_right()>0;
+    int map_active=dm_aspect_native() || atomic_load_explicit(&g_touchhud_active,memory_order_acquire) || narrow || seated || dm_aspect_hud_safe_right()>0;
     uint8_t *pane = (uint8_t *)(uintptr_t)regs[0];
     if (!pane) return;
     // The child matrix hook may not run when a parent becomes hidden. Invalidate
@@ -463,12 +476,12 @@ static void botw_touchhud_pane(const uint64_t *regs) {
 static void botw_touchhud_matrix(const uint64_t *regs) {
     float region[4]; int seated=dm_aspect_region(1,region);
     int touch=dm_botw_touch_hud_available(), narrow=dm_aspect_hud_y_scale()<1;
-    if (!touch && !narrow && !seated && dm_aspect_hud_safe_right()==0) return;
+    if (!touch && !narrow && !seated && !dm_aspect_native() && dm_aspect_hud_safe_right()==0) return;
     if (touch) dm_botw_touch_menu_pane(regs, 1);
     uint8_t *pane = (uint8_t *)(uintptr_t)regs[19];
     if (!pane) return;
     int active = atomic_load_explicit(&g_touchhud_active, memory_order_acquire);
-    int map_active=active || narrow || seated || dm_aspect_hud_safe_right()>0;
+    int map_active=dm_aspect_native() || active || narrow || seated || dm_aspect_hud_safe_right()>0;
     if (active && main_shortcut_rune_pane(pane)) {
         rune_icon_record(pane);
         return;
@@ -484,22 +497,20 @@ static void botw_touchhud_matrix(const uint64_t *regs) {
         active = active && !g_touchhud.keep_native_loadout;
         pthread_mutex_unlock(&g_touchhud_mu);
         if (active) {
-            // Preserve the animated N_Pos_00 parent delta by translating the
-            // freshly composed equipment matrix to the iOS virtual D-pad.
+            // Aspect scaling has already reached both the position and basis,
+            // just like hearts/map. Relocate only after that native calculation.
             float xscale=dm_aspect_hud_gain(), yscale=dm_aspect_hud_y_scale()*xscale;
-            float dx = x * 1280.0f - 640.0f + 554.0f*xscale;
-            float dy = 360.0f - y * 720.0f - 246.0f*yscale;
-            tx*=xscale; ty*=yscale;
-            tx += dx; ty += dy;
+            float dx = tx + 554.0f*xscale, dy = ty - 246.0f*yscale;
             if (scale != 1) {
-                // Scale the equipment group about its relocated center.
                 for (int row = 0; row < 2; row++) for (int col = 0; col < 3; col++) {
                     float value; size_t off = BOTW_TOUCH_MATRIX + row*16 + col*4;
                     memcpy(&value,pane+off,4); value *= scale; memcpy(pane+off,&value,4);
                 }
-                float cx=x*1280-640, cy=360-y*720;
-                tx=cx+(tx-cx)*scale; ty=cy+(ty-cy)*scale;
             }
+            // Keep native animation deltas, with the scaled cross-guide at the
+            // frontend target rather than scaling its new screen position.
+            tx = x*1280-640 + dx*scale;
+            ty = 360-y*720 + dy*scale;
             memcpy(pane + BOTW_TOUCH_MATRIX + 0x0c, &tx, sizeof tx);
             memcpy(pane + BOTW_TOUCH_MATRIX + 0x1c, &ty, sizeof ty);
         }

@@ -163,10 +163,10 @@ static inline float dm_botw_layout_scale(const dm_botw_touch_layout *layout,int 
     float base=id<4 ? 54 : id==4 || id==8 ? 154 : id==6 ? 48 : id==12 ? 96 : 52;
     return layout->control[id].size/base;
 }
-static inline float dm_botw_layout_hud_scale(float point_scale,float canvas_height,float native_y_scale) {
+static inline float dm_botw_layout_hud_scale(float point_scale,float canvas_height,float canvas_y_scale) {
     // Native equipment artwork is authored for the old 430pt reference.
-    // Cancel the game's HUD-to-view scale so its size follows the point D-pad.
-    return point_scale*430/(canvas_height*native_y_scale);
+    // Normalize the canvas conversion, retaining the hearts/map HUD gain.
+    return point_scale*430/(canvas_height*canvas_y_scale);
 }
 static inline dm_touchpad_rect dm_botw_layout_canvas(float width,float height) {
     float w=fminf(width,height*16.f/9),h=w*9.f/16;

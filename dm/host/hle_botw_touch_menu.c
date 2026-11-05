@@ -5523,11 +5523,11 @@ void dm_botw_touch_menu_selector(const uint64_t *regs) {
     // screen state and calls no guest helper; map queries still require a
     // live active BOTW touch HUD and revalidate the object on the UI thread.
     atomic_store_explicit(&g_validated_box_cursor_manager, manager, memory_order_release);
-    // When touch mode is off, controller input follows the native selector
-    // without any additional guest virtual/native calls.
-    if (!dm_botw_touch_hud_active()) return;
     uint64_t frame = menu_render_frame();
     selector_publish_menu_presentation(manager, frame);
+    // Passive HUD visibility also drives the controller's left-column layout.
+    // Controller input still makes no additional guest virtual/native calls.
+    if (!dm_botw_touch_hud_active()) return;
     uintptr_t control = selector_read_ptr(manager, 0x20);
     uintptr_t native_group_getter = (uintptr_t)(main->base + 0xf6e2c8);
     uintptr_t native_screen_shown = (uintptr_t)(main->base + 0xf6e08c);
