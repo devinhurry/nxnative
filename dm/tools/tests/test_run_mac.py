@@ -62,6 +62,16 @@ class MacLauncherTests(unittest.TestCase):
             self.assertEqual(captured['DM_FPS_TARGET'], '30')
             self.assertEqual(captured['DM_OPMODE'], '1')
 
+    def test_external_save_keeps_game_cache_directory(self):
+        g = game_profile()
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            base = root / 'build'
+            plan = dict(game=g, base=base, romfs=root, msl=root, patched=root)
+            with redirect_stdout(io.StringIO()):
+                run_mac.launch_host(plan, run_mac.parser().parse_args([]), {'DM_SAVE': str(root/'external/save')}, REPO,
+                                    exec_call=lambda exe, argv, env: self.assertTrue(Path(env['DM_PSO_USER']).parent.is_dir()))
+
     def test_touch_safe_area_option(self):
         from contextlib import redirect_stderr
         args=run_mac.parser().parse_args(['--touch-preview','--touch-safe-area','62, 0,0,21'])
@@ -110,6 +120,8 @@ class MacLauncherTests(unittest.TestCase):
                 self.assertEqual(exe,str(plan['work']/'tools/dmhost'))
                 self.assertEqual(argv[1],str(plan['patched']))
                 self.assertEqual(env['DM_SAVE'],str(root/'chosen save'))
+                self.assertEqual(env['DM_PSO_USER'],str(root.resolve()/'run/pso_user.tsv'))
+                self.assertEqual(env['DM_PSO_ARCHIVE'],str(root.resolve()/'run/pso_archive'))
             with redirect_stdout(io.StringIO()) as output:
                 for _ in range(2):
                     run_mac.launch(plan,args,{'DM_SAVE':str(root/'chosen save'),'UNRELATED_SETTING':'not a runtime setting'},REPO,
@@ -229,6 +241,8 @@ class MacLauncherTests(unittest.TestCase):
             path, argv, env = execute.call_args.args
             self.assertEqual(path, str(host.resolve())); self.assertEqual(argv[1], str(patched.resolve()))
             self.assertEqual(env['DM_SAVE'], str(root/'my save'))
+            cache = {key: env[key] for key in ('DM_PSO_USER', 'DM_PSO_ARCHIVE')}
+            self.assertEqual(cache, dict(DM_PSO_USER=str(root.resolve()/'run/pso_user.tsv'), DM_PSO_ARCHIVE=str(root.resolve()/'run/pso_archive')))
             self.assertEqual(env['DM_NVN_SHMAP'], plan['runtime_env']['DM_NVN_SHMAP'])
             self.assertNotEqual(env['DM_NVN_SHMAP'], str(g.table('shader_map.tsv')))
             self.assertEqual(env['DM_TOUCH_PREVIEW'], '1'); self.assertEqual(env['DM_FULLSCREEN'], '0')
@@ -241,6 +255,7 @@ class MacLauncherTests(unittest.TestCase):
                 run_mac.launch(plan, args, {'DM_SAVE': str(root/'my save')}, REPO,
                                rewrite_call=rewrite, host_call=make, exec_call=execute)
             copied = Path(execute.call_args.args[2]['DM_SAVE'])
+            self.assertEqual({key: execute.call_args.args[2][key] for key in cache}, cache)
             self.assertEqual(copied.parent.parent, (root / 'run/save-copies').resolve())
             self.assertFalse(copied.is_symlink())
             self.assertEqual((copied/'game_data.sav').read_bytes(), b'original progress')
@@ -251,8 +266,13 @@ class MacLauncherTests(unittest.TestCase):
             with redirect_stdout(io.StringIO()):
                 run_mac.launch(plan, args, {}, REPO, rewrite_call=rewrite, host_call=make, exec_call=execute)
             another = Path(execute.call_args.args[2]['DM_SAVE'])
+            self.assertEqual({key: execute.call_args.args[2][key] for key in cache}, cache)
             self.assertNotEqual(copied, another)
             self.assertEqual((another/'game_data.sav').read_bytes(), b'original progress')
+            overrides = dict(DM_PSO_USER=str(root/'custom/pso_user.tsv'), DM_PSO_ARCHIVE='off')
+            with redirect_stdout(io.StringIO()):
+                run_mac.launch(plan, args, overrides, REPO, rewrite_call=rewrite, host_call=make, exec_call=execute)
+            self.assertEqual({key: execute.call_args.args[2][key] for key in cache}, overrides)
             for invalid, message in ((str(root), 'copy destination'), (str(root/'missing'), 'not a folder'), ('', 'not a folder')):
                 args.save_copy = invalid
                 with redirect_stdout(io.StringIO()), self.assertRaisesRegex(run_mac.LaunchError, message):

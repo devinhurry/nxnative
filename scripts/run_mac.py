@@ -444,6 +444,9 @@ def launch_host(plan, args, env, repo, exec_call=None, prepared_host=None):
         prepare(plan['romfs'], icons)
         env['DM_BOTW_TOUCH_ICONS'] = str(icons)
     env.setdefault('DM_SAVE', str(plan['base'] / 'run' / 'save'))
+    # Pipeline caches belong to the game build, independently of the selected save.
+    env.setdefault('DM_PSO_USER', str(plan['base'] / 'run' / 'pso_user.tsv'))
+    env.setdefault('DM_PSO_ARCHIVE', str(plan['base'] / 'run' / 'pso_archive'))
     if getattr(args, 'save_copy', None) is not None:
         source = _path(args.save_copy)
         if not source or not source.is_dir(): raise LaunchError(f'save source is not a folder: {args.save_copy}')
@@ -471,6 +474,7 @@ def launch_host(plan, args, env, repo, exec_call=None, prepared_host=None):
                 env['DM_WINDOW_SIZE'] = f'1600x{round(1600 / ratio)}'
             except (ValueError, ZeroDivisionError) as e: raise LaunchError(f'invalid DM_ASPECT_RATIO: {env["DM_ASPECT_RATIO"]}') from e
     env['DM_ENV_LAUNCH_KEYS'] = ' '.join(sorted(k for k in explicit_settings if k.startswith('DM_')))
+    (plan['base'] / 'run').mkdir(parents=True, exist_ok=True)
     Path(env['DM_SAVE']).mkdir(parents=True, exist_ok=True)
     Path(env['DM_TEMP']).mkdir(parents=True, exist_ok=True)
     exe = prepared_host or repo / 'dm/host/dmhost'
