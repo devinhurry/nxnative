@@ -482,6 +482,17 @@ static void botw_touchhud_matrix(const uint64_t *regs) {
     if (!pane) return;
     int active = atomic_load_explicit(&g_touchhud_active, memory_order_acquire);
     int map_active=dm_aspect_native() || active || narrow || seated || dm_aspect_hud_safe_right()>0;
+    // N_Pos_00 applies the game's native HUD placement after our parent
+    // relocation, moving the cross-guide away from the frontend target.
+    // Its origin must inherit the relocated parent directly. Keep the native
+    // local state and composed basis; descendants still animate and scale.
+    if (active && pane_parent(pane) && pane_named(pane,"N_Pos_00") &&
+        (uintptr_t)pane_parent(pane)==atomic_load_explicit(&g_touchhud_pane,memory_order_acquire) &&
+        dm_botw_touch_hud_relocates_loadout()) {
+        uint8_t *parent=pane_parent(pane);
+        memcpy(pane+BOTW_TOUCH_MATRIX+0x0c,parent+BOTW_TOUCH_MATRIX+0x0c,4);
+        memcpy(pane+BOTW_TOUCH_MATRIX+0x1c,parent+BOTW_TOUCH_MATRIX+0x1c,4);
+    }
     if (active && main_shortcut_rune_pane(pane)) {
         rune_icon_record(pane);
         return;
