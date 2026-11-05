@@ -492,6 +492,8 @@ DM_SCREEN_ASPECT_SITES	diagnostic	`=<mask>` with DM_SCREEN_ASPECT: which of the 
 DM_SCREEN_FOV	diagnostic	`off` with DM_SCREEN_ASPECT: the scene keeps the game's vertical angle (narrower sides) instead of 16:9's sides with more above and below
 DM_SCREEN_HUD	diagnostic	`=<edge>,<listed>,<full width>,<full height>[,<tallest>]` with DM_SCREEN_ASPECT: the layout rules' distances and sizes in the 1280x720 space (default 280,100,1270,710,1300)
 DM_SCREEN_MATCH	switch	`0` keeps the screen's refresh rate in fullscreen; by default a Mac screen whose rate is not a multiple of the game's frame rate switches to one that is (144 → 120 Hz)
+DM_SEATED_REFLECTION_SAMPLES	player	Seated reflection texture samples per blur axis: odd integer 5..33, default 13. Sample spacing preserves the displayed blur radius when quality changes. Read on first use; restart the game after changing it. Invalid values use the default. No game shader retranslation is needed.
+DM_SEATED_REFLECTION_SIZE	player	Seated reflection intermediate image's longest side in pixels: 64..1024, default 256. Aspect and displayed blur radius stay unchanged. Read on first use; restart the game after changing it. Invalid values use the default.
 DM_SF_TRACE	diagnostic	`=1` logs every request on the game's own HIPC client sessions that the host answers (`hle_sf.c`)
 DM_SHAKE_G	switch	`=<G>`: on iOS, the acceleration beyond gravity above which a flick of the phone shakes the controller's six-axis sensor (default 1.5)
 DM_SHARED_FONT	path	Font file served for every shared-font type except the Nintendo extension (default `$DM_FONT_DIR/standard.ttf`, then macOS's Arial Unicode)

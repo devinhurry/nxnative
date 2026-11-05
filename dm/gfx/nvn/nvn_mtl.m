@@ -13316,27 +13316,53 @@ static void present_pipeline(MTLPixelFormat format) {
 // native, so cached menus and 3D UI never accumulate a second region transform.
 // Composite the dock on the final swapchain before its ordinary snapshot/present.
 enum { SEATED_COPY, SEATED_ALPHA, SEATED_BLUR, SEATED_REFLECTION };
+static int seated_reflection_env(const char *name,int fallback,int minimum,int maximum,int odd) {
+    const char *value=getenv(name); if (!value) return fallback;
+    char *end; long n=strtol(value,&end,10);
+    if (end==value || *end || n<minimum || n>maximum || (odd && !(n&1))) {
+        MLOG("%s=%s is invalid; expected %s%d..%d, using %d",name,value,odd ? "an odd integer in " : "an integer in ",minimum,maximum,fallback);
+        return fallback;
+    }
+    return (int)n;
+}
+static int seated_reflection_size(void) {
+    static int size;
+    if (!size) size=seated_reflection_env("DM_SEATED_REFLECTION_SIZE",256,64,1024,0);
+    return size;
+}
 static id<MTLRenderPipelineState> seated_reflection_pipeline(MTLPixelFormat format,int reflection) {
     static id<MTLLibrary> lib;
     if (!lib) {
-        // Sigma-6 Gaussian over +/-18 texels, with paired bilinear taps.
-        // Both axes filter the small image before enlargement; the native
-        // target view performs the final sRGB encode.
-        NSString *msl=@"#include <metal_stdlib>\nusing namespace metal;\n"
+        // Build paired Gaussian weights once. Rescale offsets so changing
+        // size or sample density retains the displayed sigma of 4/256.
+        // The native target view performs the final sRGB encode.
+        int samples=seated_reflection_env("DM_SEATED_REFLECTION_SAMPLES",13,5,33,1),pairs=(samples-1)/2,radius=2*pairs;
+        double sigma=radius/3.,divisor=2*sigma*sigma,total=1;
+        double step=(double)seated_reflection_size()*12/(256*radius);
+        for (int i=1;i<=radius;i++) total+=2*exp(-(double)i*i/divisor);
+        NSMutableString *weights=[NSMutableString string],*offsets=[NSMutableString string];
+        for (int i=1;i<radius;i+=2) {
+            double a=exp(-(double)i*i/divisor),b=exp(-(double)(i+1)*(i+1)/divisor);
+            [weights appendFormat:@"%s%.9f",i==1 ? "" : ",",(a+b)/total];
+            [offsets appendFormat:@"%s%.9f",i==1 ? "" : ",",step*(i*a+(i+1)*b)/(a+b)];
+        }
+        MLOG("Seated reflection: %d px longest side, %d samples per axis (DM_SEATED_REFLECTION_SIZE / DM_SEATED_REFLECTION_SAMPLES)",seated_reflection_size(),samples);
+        NSString *msl=[NSString stringWithFormat:@"#include <metal_stdlib>\nusing namespace metal;\n"
             "struct V { float4 p [[position]]; float2 uv; };\n"
             "vertex V vs(uint id [[vertex_id]]) { float2 uv=float2((id<<1)&2,id&2); return {float4(uv*float2(2,-2)+float2(-1,1),0,1),uv}; }\n"
             "struct C { float4 rect; float4 edge; float4 effect; };\n"
-            "constant float weights[9]={0.128730854,0.112145708,0.087490720,0.061125088,0.038243137,0.021427025,0.010750829,0.004830484,0.001943589};\n"
-            "constant float offsets[9]={1.489584840,3.475713571,5.461879674,7.448104233,9.434407975,11.420811147,13.407333400,15.393993678,17.380810117};\n"
+            "constant float weights[%d]={%@};\n"
+            "constant float offsets[%d]={%@};\n"
             "float3 filtered(texture2d<float> t, sampler s, float2 uv, constant C& c) {\n"
-            "float3 v=t.sample(s,clamp(uv,c.edge.xy,c.edge.zw)).rgb*0.066625132;\n"
-            "for (uint i=0;i<9;i++) { float2 d=c.effect.xy*offsets[i];\n"
+            "float3 v=t.sample(s,clamp(uv,c.edge.xy,c.edge.zw)).rgb*%.9f;\n"
+            "for (uint i=0;i<%d;i++) { float2 d=c.effect.xy*offsets[i];\n"
             "v+=(t.sample(s,clamp(uv+d,c.edge.xy,c.edge.zw)).rgb+t.sample(s,clamp(uv-d,c.edge.xy,c.edge.zw)).rgb)*weights[i]; } return v; }\n"
             "fragment float4 blur(V in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]], constant C& c [[buffer(0)]]) { return float4(filtered(t,s,in.uv*c.rect.zw+c.rect.xy,c),1); }\n"
             "fragment float4 reflection(V in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]], constant C& c [[buffer(0)]]) {\n"
             "float y=c.effect.z>0 ? 1-in.uv.y : in.uv.y; float depth=max(0.0,(y-c.effect.x)/(1-c.effect.x));\n"
             "float gain=c.effect.y>0 ? mix(1.0,c.effect.w,smoothstep(0.0,c.effect.y,y)) : c.effect.w;\n"
-            "float3 v=t.sample(s,clamp(in.uv*c.rect.zw+c.rect.xy,c.edge.xy,c.edge.zw)).rgb; return float4(v*gain*(1-smoothstep(0.0,1.0,depth)),1); }\n";
+            "float3 v=t.sample(s,clamp(in.uv*c.rect.zw+c.rect.xy,c.edge.xy,c.edge.zw)).rgb; return float4(v*gain*(1-smoothstep(0.0,1.0,depth)),1); }\n",
+            pairs,weights,pairs,offsets,1/total,pairs];
         NSError *error=nil; lib=[g_dev newLibraryWithSource:msl options:nil error:&error];
         if (!lib) MDIE("Seated reflection shader failed: %s",error.localizedDescription.UTF8String);
     }
@@ -13401,7 +13427,8 @@ static void seated_reflection_encode(id<MTL4CommandBuffer> cb,id<MTLTexture> tar
     static id<MTLTexture> images[2];
     // The native swapchain is stretched at presentation. Size the scratch image
     // by the displayed picture's aspect so blur stays uniform on both axes.
-    NSUInteger w=MAX(1,lround(384*fmin(1,aspect))),h=MAX(1,lround(384*fmin(1,1/aspect)));
+    int size=seated_reflection_size();
+    NSUInteger w=MAX(1,lround(size*fmin(1,aspect))),h=MAX(1,lround(size*fmin(1,1/aspect)));
     if (!images[0] || images[0].width!=w || images[0].height!=h) {
         MTLTextureDescriptor *d=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float width:w height:h mipmapped:NO];
         d.storageMode=MTLStorageModePrivate; d.usage=MTLTextureUsageShaderRead|MTLTextureUsageRenderTarget;
