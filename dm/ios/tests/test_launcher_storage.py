@@ -79,7 +79,7 @@ class LauncherStorageTests(unittest.TestCase):
                 subprocess.run(['xcrun', 'clang', '-fobjc-arc', '-Wno-deprecated-declarations', '-c', str(REPO / 'dm/host' / source), '-o', str(obj)], check=True)
                 objects.append(str(obj))
             compile_result = subprocess.run(['xcrun', '-sdk', 'macosx', 'swiftc', '-swift-version', '5', '-D', 'DM_HOST_UI', '-parse-as-library', '-module-cache-path', str(tmp / 'module-cache'),
-                            '-I', str(REPO / 'dm/host'), '-o', str(exe), *objects, str(REPO / 'dm/ios/Sources/LauncherSettings.swift'), str(REPO / 'dm/ios/Sources/LauncherRow.swift'), str(REPO / 'dm/ios/Sources/BotwTouchSettings.swift'), str(REPO / 'dm/ios/Sources/SaveManagement.swift'), str(REPO / 'dm/mac/Launcher.swift'),
+                            '-I', str(REPO / 'dm/host'), '-o', str(exe), '-larchive', *objects, str(REPO / 'dm/ios/Sources/LauncherSettings.swift'), str(REPO / 'dm/ios/Sources/LauncherRow.swift'), str(REPO / 'dm/ios/Sources/BotwTouchSettings.swift'), str(REPO / 'dm/ios/Sources/SaveManagement.swift'), str(REPO / 'dm/mac/Launcher.swift'),
                             str(Path(__file__).with_name('launcher_layout_check.swift')), str(Path(__file__).with_name('launcher_storage_check.swift'))], capture_output=True, text=True, timeout=300)
             self.assertEqual(compile_result.returncode, 0, compile_result.stdout + compile_result.stderr)
             r = subprocess.run([str(exe), str(tmp / 'launcher.json'), str(tmp / 'launcher_mac.json')], capture_output=True, text=True, timeout=60)

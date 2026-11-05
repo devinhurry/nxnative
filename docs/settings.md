@@ -2,7 +2,9 @@
 
 The screen before the game starts shows resource readiness, available memory and About information. Import ROM and graphics packages from the left panel, then press **Play**. **Settings** opens a separate two-column page: section titles on the left and their options on the right. Both columns remain visible on compact phones. The Controls section combines controller options, motion, saved touch layouts, normal/compact editors, left-stick parameters and the compact-portrait switch. The former Game section is displayed as Graphics. Editors open as a second page using the full width. The Mac launcher uses the same status-and-settings layout.
 
-**About** at the bottom shows the build time in the device's local time zone and date format, on both iPhone and Mac.
+**Manage saves** at the top of the dashboard's right panel opens **Settings > Saves** directly. The same page remains available from Settings. The Resources group below it includes available memory alongside ROMFS, DLC and graphics readiness.
+
+**About** at the bottom shows the hardware model identifier and operating system version, plus the build time in the device's local time zone and date format, on both iPhone and Mac.
 
 Opening **Settings** during a game pauses gameplay and silences game audio until the page closes. Returning from another app keeps the game paused while Settings remains open.
 
@@ -355,7 +357,11 @@ In BOTW `--touch-preview`, **Command-Shift-comma** mirrors the iPhone's three-fi
 
 ## Cloud saves
 
-Open **Settings > Saves** to select, create, duplicate, rename, import, export or restore a save. Switching changes the whole save set used at the next launch. During gameplay the list is read-only. Imports accept a `.dmsync` archive, a folder containing `save/`, or a folder of raw game save files; the imported copy becomes current and the original stays intact. Export writes a portable `.dmsync` archive.
+Open **Settings > Saves** to select, create, duplicate, rename, import, export or restore a save. Switching changes the complete save set used at the next launch. During gameplay the list is read-only. Imports accept `.dmsync`, ZIP, 7z and RAR archives and save folders. Select several sources at once, or import one package containing multiple saves. Every imported save gets a new ID; existing entries, including Default, remain intact. Names are retained when metadata is present. The imported copy becomes current; for a multi-save library backup, the original selection is mapped to its imported copy. Extract password-protected and split archives first.
+
+Archives with an explicit `save/` directory, or several `<name>/save/` entries, are recognized automatically. When an archive contains one arbitrary folder without an explicit save boundary, including one beside README.txt or other files, the page shows actual file names in two layouts. Choose **Use the files inside** to discard an enclosing backup folder, or **Keep the outer folder** when it belongs to the game's own save. Numeric names are handled the same way. No save is added until the choice and all input validation are complete.
+
+A row's **Export** action writes that one complete save to an ordinary ZIP. **Export saves** lets you select some or all library entries and writes one multi-save ZIP. All entries are selected initially, with a **Select all saves** toggle. Filenames include the game ID, save name (or `saves` for a batch), and export time. A single-save ZIP has one folder containing `info.json`, `save/` and optional `save_device/`. A multi-save ZIP has `saves/library.json` plus a separate folder for each entry. Import either ZIP directly. For manual restore, put each folder that contains `save/` directly under the local `saves/`, then refresh. Exports exclude Recently deleted and historical conflict backups.
 
 For manual installs, unzip the game files to `saves/<custom name>/save/` in this game's data folder, then choose **Refresh saves**. Metadata is optional. On the Mac use **Open saves folder**; on the iPhone use this app under **On My iPhone** in Files. The previous `saves/slots/` layout migrates automatically.
 

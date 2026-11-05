@@ -13,8 +13,14 @@ int dm_saves_prepare(const char *root, const char *title, char *save, size_t siz
 // JSON (free it), or NULL with a readable error. Mutations require the game closed.
 // Commands: list, inspect (read-only, allowed during play), create(name),
 // copy(id,name), select(id), rename(id,name),
-// import(path,name), import-raw(path,name), export(id,path), delete(id), restore(id),
+// import(path,name), import-raw(path,name), import-root(path,name),
+// import-inside(path,name), import-many(JSON paths,JSON layout choices),
+// export(id,path), export-many(JSON IDs,path; [] means all), delete(id), restore(id),
 // refresh (discover cloud slots), sync(id).
+// Export destinations ending in .zip use ordinary ZIP; other names retain the
+// legacy .dmsync archive. The cloud always retains its existing .dmsync format.
+// Import returns needs_layout instead of publishing when an outer directory is
+// ambiguous. Retry with root/inside, or a source-path choice in import-many.
 char *dm_saves_command(const char *root, const char *title, const char *command,
                        const char *arg1, const char *arg2, char *error, size_t error_size);
 #ifdef __cplusplus

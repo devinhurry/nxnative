@@ -215,6 +215,23 @@ static void waitForSection(NSWindow *sheet, NSString *section, NSInteger index, 
     dispatch_async(dispatch_get_main_queue(), poll);
 }
 
+static void checkExportSelection(NSWindow *sheet, void (^next)(void)) {
+    waitForPress(sheet,@"saves.export-many",nil,nil,"batch export opens from Saves",^{
+        waitForCondition(sheet,@"export selection sheet",^{ return (BOOL)(sheet.attachedSheet != nil); },^{
+            NSWindow *selection = sheet.attachedSheet;
+            waitForCondition(selection,@"export selection controls",^{
+                NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
+                return hasAXLabel(selection,@"Select all saves",NSAccessibilityCheckBoxRole,nodes,0);
+            },^{
+                check(YES,"batch export includes the select-all control");
+                waitForPress(selection,nil,@"Cancel",NSAccessibilityButtonRole,"batch export can be cancelled",^{
+                    waitForCondition(sheet,@"export selection to close",^{ return (BOOL)(sheet.attachedSheet == nil); },next);
+                });
+            });
+        });
+    });
+}
+
 static void settingsClosed(void) {
     check(!settings_paused && pause_opens == 1 && pause_closes == 1, "closing settings releases its pause exactly once");
     NSWindow *game = NSApp.mainWindow;
@@ -272,6 +289,7 @@ int main(void) { @autoreleasepool {
                         check(hasAXLabel(sheet, nil, NSAccessibilityCheckBoxRole, nodes, 0), "startup controls include the native rumble toggle");
                         check(applied == 0, "startup does not invoke running-game setters");
                         waitForSection(sheet, @"Saves", 3, "Saves replaces the cloud-only settings section", ^{
+                        checkExportSelection(sheet, ^{
                         waitForPress(sheet, @"saves.select.Test campaign", nil, nil, "a manually added save can be selected", ^{
                         waitForCondition(sheet, @"selected save on disk", ^{
                             NSString *root = @(getenv("DM_SAVES_ROOT"));
@@ -288,6 +306,7 @@ int main(void) { @autoreleasepool {
                         waitForPress(sheet, nil, @"Done", NSAccessibilityButtonRole, "startup editor Done responds", ^{
                             waitForPress(window, nil, @"Play", NSAccessibilityButtonRole,
                                          "Play leaves the launcher", ^{});
+                        });
                         });
                         });
                         });

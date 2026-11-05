@@ -113,14 +113,24 @@ private struct SaveInventory: Decodable {
     var slots: [ManagedSave]
     var trash: [ManagedSave]
 }
+struct SaveImportLayout: Decodable, Identifiable {
+    let source: String
+    let folder: String
+    let files: [String]
+    let root_files: [String]?
+    var id: String { source }
+}
 
 final class SaveLibrary: ObservableObject {
     @Published var saves: [ManagedSave] = []
     @Published var trash: [ManagedSave] = []
     @Published var current: String?
     @Published var busy = false
+    @Published var activity = "Reading saves…"
     @Published var error: String?
     @Published var selectionError: String?
+    @Published var importLayout: SaveImportLayout?
+    @Published var importedCount = 0
     let root: URL?
     let title: String?
     let externalSave: Bool
@@ -158,14 +168,22 @@ final class SaveLibrary: ObservableObject {
     func perform(_ command: String = "list", _ first: String = "", _ second: String = "", language: String, readOnly: Bool = false, owner: LauncherModel? = nil,
                  completion: ((Bool) -> Void)? = nil) {
         guard !busy, let root, let title else { completion?(false); return }
+        activity = command.hasPrefix("import") ? "Importing save…" : command.hasPrefix("export") ? "Exporting save…" : "Reading saves…"
         busy = true; error = nil; owner?.saveOperationBusy = true
+        importedCount = 0
         let rules = rules
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = Result { () -> SaveInventory in
+            let result = Result { () -> (SaveInventory?, SaveImportLayout?, Int) in
+                var count = 0
                 if command != "list" {
                     let data = try Self.command(root: root, title: title, command, first, second)
-                    if ["create", "copy", "import", "import-raw"].contains(command),
-                       let object = try JSONSerialization.jsonObject(with: data) as? [String: Any], let id = object["id"] as? String {
+                    let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                    if let layout = object?["needs_layout"] {
+                        let data = try JSONSerialization.data(withJSONObject: layout)
+                        return (nil, try JSONDecoder().decode(SaveImportLayout.self, from: data), 0)
+                    }
+                    if command.hasPrefix("import") { count = object?["count"] as? Int ?? 1 }
+                    if (command.hasPrefix("import") || ["create", "copy"].contains(command)), let id = object?["id"] as? String {
                         _ = try Self.command(root: root, title: title, "select", id)
                     }
                 }
@@ -178,16 +196,19 @@ final class SaveLibrary: ObservableObject {
                     if ($0.id == inventory.current) != ($1.id == inventory.current) { return $0.id == inventory.current }
                     return ($0.date ?? .distantPast) > ($1.date ?? .distantPast)
                 }
-                return inventory
+                return (inventory, nil, count)
             }
             DispatchQueue.main.async {
                 self.busy = false
                 owner?.saveOperationBusy = false
                 switch result {
-                case .success(let inventory):
-                    self.current = inventory.current; self.saves = inventory.slots; self.trash = inventory.trash; self.selectionError = inventory.selection_error
+                case .success(let (inventory, layout, count)):
+                    if let inventory {
+                        self.current = inventory.current; self.saves = inventory.slots; self.trash = inventory.trash; self.selectionError = inventory.selection_error
+                    }
+                    self.importLayout = layout; self.importedCount = count
                     completion?(true)
-                case .failure(let error): self.error = error.localizedDescription; completion?(false)
+                case .failure(let error): self.error = NSLocalizedString(error.localizedDescription, comment: "Save management error"); completion?(false)
                 }
             }
         }
@@ -209,6 +230,13 @@ struct SaveManagementPage: View {
     @State private var importing = false
     @State private var exportURL: URL?
     @State private var showDeleted = false
+    @State private var importURLs: [URL] = []
+    @State private var importScopes: [URL] = []
+    @State private var importChoices: [String: String] = [:]
+    @State private var retryImport = false
+    @State private var selectingExports = false
+    @State private var selectedExports: Set<String> = []
+    @State private var pendingExports: [String]?
     private var language: String {
         launcher.values["DM_LANG"] ?? ProcessInfo.processInfo.environment["DM_LANG"]
             ?? Bundle.main.object(forInfoDictionaryKey: "DMLanguage") as? String ?? "USen"
@@ -233,9 +261,14 @@ struct SaveManagementPage: View {
                     Button { chooseImport() } label: { Label("Import…", systemImage: "square.and.arrow.down") }
                         .accessibilityIdentifier("saves.import")
                 }.buttonStyle(.bordered).disabled(locked || library.busy)
+                Button {
+                    selectedExports = Set(library.saves.map(\.id)); selectingExports = true
+                } label: { Label("Export saves…", systemImage: "square.and.arrow.up") }
+                    .disabled(locked || library.busy || library.saves.isEmpty).accessibilityIdentifier("saves.export-many")
                 Button { refresh() } label: { Label("Refresh saves", systemImage: "arrow.clockwise") }
                     .disabled(library.busy).accessibilityIdentifier("saves.refresh")
-                if library.busy { ProgressView("Reading saves…").accessibilityIdentifier("saves.busy") }
+                if library.busy { ProgressView(LocalizedStringKey(library.activity)).accessibilityIdentifier("saves.busy") }
+                if library.importedCount > 0 { Text(String.localizedStringWithFormat(NSLocalizedString("Imported %d saves.", comment: "Save import result"), library.importedCount)).font(.callout).foregroundStyle(.secondary) }
                 ForEach(library.saves) { save in saveRow(save) }
                 #if os(macOS)
                 if let root = library.root {
@@ -245,7 +278,12 @@ struct SaveManagementPage: View {
                 #endif
             }
         } header: { Text("Saves") } footer: {
-            Text("Select a save to use the next time you play. Default shares progress with older apps; other saves sync separately.")
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Select a save to use the next time you play. Default shares progress with older apps; other saves sync separately.")
+                Text("Import .dmsync, ZIP, 7z or RAR files, or save folders. Extract password-protected or split archives first.")
+                Text("Exports are ZIP files. For manual restore, put each folder containing save/ directly inside saves/.")
+                Text("Select several import files, or import a ZIP containing multiple saves. Export saves lets you select some or all saves. Imports add new copies without replacing existing saves.")
+            }
         }
         Section {
             DisclosureGroup("Add a save folder manually") {
@@ -281,11 +319,44 @@ struct SaveManagementPage: View {
             Button("Delete", role: .destructive) { if let save = deleting { perform("delete", save.id) }; deleting = nil }
             Button("Cancel", role: .cancel) { deleting = nil }
         } message: { Text("You can restore it from Recently deleted. Its cloud copy is kept.") }
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.folder, .data], allowsMultipleSelection: false) { result in
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.folder, .data, .zip] + ["7z", "rar", "dmsync"].compactMap { UTType(filenameExtension: $0) }, allowsMultipleSelection: true) { result in
             switch result {
-            case .success(let urls): if let url = urls.first { importSave(url) }
+            case .success(let urls): importSaves(urls)
             case .failure(let error): library.error = error.localizedDescription
             }
+        }
+        .sheet(item: $library.importLayout, onDismiss: {
+            if retryImport { retryImport = false; runImport() } else { finishImport() }
+        }) { layout in
+            NavigationStack {
+                Form {
+                    Text("The archive contains one folder. Choose which layout matches your game save.")
+                    Section {
+                        layoutButton("Use the files inside", layout: layout, choice: "inside", lines: ["save/"] + layout.files.map { "  " + $0 })
+                        layoutButton("Keep the outer folder", layout: layout, choice: "root", lines: outerLayoutLines(layout))
+                    }
+                }.navigationTitle("Choose the save folder")
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { library.importLayout = nil } } }
+            }.frame(minWidth: 280, minHeight: 330)
+        }
+        .sheet(isPresented: $selectingExports, onDismiss: {
+            if let ids = pendingExports { pendingExports = nil; chooseExport(ids: ids) }
+        }) {
+            NavigationStack {
+                Form {
+                    Toggle("Select all saves", isOn: Binding(get: { selectedExports.count == library.saves.count }, set: { selectedExports = $0 ? Set(library.saves.map(\.id)) : [] }))
+                    ForEach(library.saves) { save in
+                        Toggle(save.displayName, isOn: Binding(get: { selectedExports.contains(save.id) }, set: { if $0 { selectedExports.insert(save.id) } else { selectedExports.remove(save.id) } }))
+                    }
+                    Text(String.localizedStringWithFormat(NSLocalizedString("Selected: %d", comment: "Export selection count"), selectedExports.count))
+                }.navigationTitle("Export saves")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { selectingExports = false } }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Export") { pendingExports = library.saves.map(\.id).filter { selectedExports.contains($0) }; selectingExports = false }.disabled(selectedExports.isEmpty)
+                        }
+                    }
+            }.frame(minWidth: 280, minHeight: 330)
         }
         #if os(iOS)
         .sheet(item: Binding(get: { exportURL.map { SaveExportURL(url: $0) } }, set: { if $0 == nil { clearExport() } })) { item in
@@ -341,34 +412,70 @@ struct SaveManagementPage: View {
         library.perform(command, first, second, language: language, owner: launcher, completion: completion)
     }
     private func refresh() {
+        guard importURLs.isEmpty && library.importLayout == nil else { return }
         if !locked { configureSaveCloud() }
         library.perform(locked ? "list" : "refresh", language: language, readOnly: locked, owner: launcher)
     }
     private func chooseImport() { importing = true }
-    private func importSave(_ url: URL) {
-        let scope = url.startAccessingSecurityScopedResource()
-        let wrapped = FileManager.default.fileExists(atPath: url.appendingPathComponent("save").path) || FileManager.default.fileExists(atPath: url.appendingPathComponent("save_device").path)
-        let isFolder = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
-        perform(isFolder && !wrapped ? "import-raw" : "import", url.path) { _ in if scope { url.stopAccessingSecurityScopedResource() } }
+    private func importSaves(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        importURLs = urls; importChoices = [:]
+        importScopes = urls.filter { $0.startAccessingSecurityScopedResource() }
+        runImport()
+    }
+    private func json(_ object: Any) -> String { String(data: (try? JSONSerialization.data(withJSONObject: object)) ?? Data(), encoding: .utf8) ?? "" }
+    private func runImport() {
+        perform("import-many", json(importURLs.map(\.path)), json(importChoices)) { _ in
+            if library.importLayout == nil { finishImport() }
+        }
+    }
+    private func finishImport() {
+        importScopes.forEach { $0.stopAccessingSecurityScopedResource() }
+        importScopes = []; importURLs = []; importChoices = [:]
+    }
+    private func outerLayoutLines(_ layout: SaveImportLayout) -> [String] {
+        let root = layout.root_files ?? [layout.folder + "/"]
+        return ["save/"] + root.flatMap { name in
+            ["  " + name] + (name == layout.folder + "/" ? layout.files.map { "    " + $0 } : [])
+        }
+    }
+    private func layoutButton(_ title: LocalizedStringKey, layout: SaveImportLayout, choice: String, lines: [String]) -> some View {
+        Button {
+            importChoices[layout.source] = choice; retryImport = true; library.importLayout = nil
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title).font(.headline)
+                Text(lines.joined(separator: "\n")).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 6)
+        }.buttonStyle(.plain)
     }
     private func chooseExport(_ save: ManagedSave) {
+        chooseExport(ids: [save.id], name: save.displayName)
+    }
+    private func chooseExport(ids: [String], name: String? = nil) {
+        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian); formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let filename = "nxnative-\(library.title ?? "save")-\(safeFilename(name ?? "saves"))-\(formatter.string(from: Date())).zip"
+        let command = name == nil ? "export-many" : "export"
+        let argument = name == nil ? json(ids) : (ids.first ?? "")
         #if os(macOS)
-        let panel = NSSavePanel(); panel.nameFieldStringValue = safeFilename(save.displayName) + ".dmsync"
-        panel.allowedContentTypes = [UTType(filenameExtension: "dmsync") ?? .data]
-        if panel.runModal() == .OK, let url = panel.url { perform("export", save.id, url.path) }
+        let panel = NSSavePanel(); panel.nameFieldStringValue = filename
+        panel.allowedContentTypes = [.zip]
+        if panel.runModal() == .OK, let url = panel.url { perform(command, argument, url.path) }
         #else
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         do { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true) }
         catch { library.error = error.localizedDescription; return }
-        let url = folder.appendingPathComponent(safeFilename(save.displayName) + ".dmsync")
-        perform("export", save.id, url.path) { ok in
+        let url = folder.appendingPathComponent(filename)
+        perform(command, argument, url.path) { ok in
             if ok { exportURL = url } else { try? FileManager.default.removeItem(at: folder) }
         }
         #endif
     }
     private func safeFilename(_ name: String) -> String {
-        let cleaned = name.components(separatedBy: CharacterSet(charactersIn: "/\\:")).joined(separator: "-")
-        return cleaned.isEmpty ? "Save" : String(cleaned.prefix(100))
+        var cleaned = name.components(separatedBy: CharacterSet(charactersIn: "/\\:")).joined(separator: "-")
+        while cleaned.utf8.count > 60 { cleaned.removeLast() }
+        return cleaned.isEmpty ? "Save" : cleaned
     }
     private func clearExport() { if let url = exportURL { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }; exportURL = nil }
 }
