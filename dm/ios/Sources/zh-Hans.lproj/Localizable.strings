@@ -236,6 +236,8 @@
 "%d available" = "已就绪（%d 项）";
 "Applies immediately." = "立即生效。";
 "Applies next time you start the game." = "下次启动游戏生效。";
+"Applies immediately" = "\U7ACB\U5373\U751F\U6548";
+"After restart" = "\U91CD\U542F\U751F\U6548";
 "Select a control, then drag to move or pinch to resize. Changes apply immediately." = "选中控件后，拖动可移动位置，双指缩放可调整大小。修改立即生效。";
 "About" = "关于";
 "Repository" = "仓库";

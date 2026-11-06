@@ -117,11 +117,7 @@ struct SettingRow: View {
         if s.env == "DM_FPS_TARGET" {
             text += (text.isEmpty ? "" : "\n\n") + NSLocalizedString("Frame generation is unavailable above 60 fps.", comment: "Frame rate limit")
         }
-        guard locked else {
-            guard m.isRunning else { return text }
-            let timing = NSLocalizedString(m.appliesImmediately(s) ? "Applies immediately." : "Applies next time you start the game.", comment: "Setting application timing")
-            return (text.isEmpty ? "" : text + " · ") + timing
-        }
+        guard locked else { return text }
         return (text.isEmpty ? "" : text + " · ") + NSLocalizedString(m.fromLaunch.contains(m.lockingKey(s) ?? s.env) ? "Set at launch" : "Set by an env file", comment: "Locked launcher setting")
     }
     private var rangeValue: Binding<Double> {
@@ -129,6 +125,14 @@ struct SettingRow: View {
                 set: { m.setValue(String(format: "%.2f", $0), for: s) })
     }
     private var percentage: String { m.rangeLabel(s, rangeValue.wrappedValue) }
+
+    @ViewBuilder private var timingLabel: some View {
+        if m.isRunning && !locked {
+            Text(LocalizedStringKey(m.appliesImmediately(s) ? "Applies immediately" : "After restart"))
+                .font(.caption).foregroundStyle(.secondary).fixedSize()
+                .accessibilityIdentifier(s.env + ".timing")
+        }
+    }
 
     private var settingLabel: some View {
         HStack(spacing: 6) {
@@ -146,6 +150,7 @@ struct SettingRow: View {
                 HStack {
                     settingLabel
                     Spacer()
+                    timingLabel
                     Toggle(LocalizedStringKey(s.label), isOn: Binding(get: { m.frameGenerationEnabled }, set: { enabled in
                         m.setValue(enabled ? (m.values["DM_FPS_TARGET"] ?? "60") : "0", for: s)
                     })).labelsHidden()
@@ -163,6 +168,7 @@ struct SettingRow: View {
                     HStack {
                         settingLabel
                         Spacer()
+                        timingLabel
                         Text(percentage).monospacedDigit().foregroundStyle(.secondary)
                     }
                     Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
@@ -175,6 +181,7 @@ struct SettingRow: View {
                 HStack {
                     settingLabel
                     Spacer()
+                    timingLabel
                     Toggle(LocalizedStringKey(s.label), isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.setValue($0 ? s.onValue : s.offValue, for: s) }))
                         .labelsHidden().disabled(locked)
                         .accessibilityLabel(Text(LocalizedStringKey(s.label)))
@@ -187,11 +194,14 @@ struct SettingRow: View {
     @ViewBuilder private var choiceRow: some View {
         if (2...4).contains(s.options?.count ?? 0) {
             ViewThatFits(in: .horizontal) {
-                HStack { settingLabel; Spacer(minLength: 16); choices.pickerStyle(.segmented).fixedSize() }
-                VStack(alignment: .leading, spacing: 10) { settingLabel; choices.pickerStyle(.segmented) }
+                HStack { settingLabel; Spacer(minLength: 16); timingLabel; choices.pickerStyle(.segmented).fixedSize() }
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack { settingLabel; Spacer(minLength: 4); timingLabel }
+                    choices.pickerStyle(.segmented)
+                }
             }
         } else {
-            HStack { settingLabel; Spacer(); choices.pickerStyle(.menu).fixedSize() }
+            HStack { settingLabel; Spacer(); timingLabel; choices.pickerStyle(.menu).fixedSize() }
         }
     }
 
@@ -201,8 +211,11 @@ struct SettingRow: View {
         let expanded = moreFrameRates ?? !["30", "60"].contains(value)
         return VStack(alignment: .leading, spacing: 8) {
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { settingLabel; Spacer(minLength: 4); frameRateControls(value: value, extended: extended, expanded: expanded).fixedSize() }
-                VStack(alignment: .leading, spacing: 10) { settingLabel; frameRateControls(value: value, extended: extended, expanded: expanded) }
+                HStack(spacing: 8) { settingLabel; Spacer(minLength: 4); timingLabel; frameRateControls(value: value, extended: extended, expanded: expanded).fixedSize() }
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack { settingLabel; Spacer(minLength: 4); timingLabel }
+                    frameRateControls(value: value, extended: extended, expanded: expanded)
+                }
             }
             if extended && expanded {
                 HStack {
