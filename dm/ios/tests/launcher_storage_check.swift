@@ -2,6 +2,7 @@
 // stored, Reset to tested defaults followed by Play forgets the choices, an env file's values are kept. Arguments: the iOS and the Mac launcher.json of Breath of the Wild (settings.py, GFXAPI=nvn)
 import Foundation
 import CoreGraphics
+import Combine
 
 private func checkSavePreviews(_ expect: (Bool, String) -> Void) {
     let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -58,9 +59,9 @@ private func checkSaveLibraryImports(_ expect: (Bool, String) -> Void) {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data(value.utf8).write(to: url)
         }
-        func perform(_ command: String, _ first: String = "", _ second: String = "") -> Bool {
+        func perform(_ command: String, _ first: String = "", _ second: String = "", owner: LauncherModel? = nil) -> Bool {
             var completed = false, succeeded = false
-            library.perform(command, first, second, language: "USen") { succeeded = $0; completed = true }
+            library.perform(command, first, second, language: "USen", owner: owner) { succeeded = $0; completed = true }
             let limit = Date().addingTimeInterval(15)
             while !completed && Date() < limit { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
             return completed && succeeded
@@ -82,13 +83,53 @@ private func checkSaveLibraryImports(_ expect: (Bool, String) -> Void) {
         expect(perform("import-many", input, try json([layout.source: "inside"])), "the chosen inner layout can be imported")
         let selected = library.saves.first { $0.id == library.current }
         expect(library.importedCount == 1 && selected.map { FileManager.default.fileExists(atPath: $0.path + "/save/3/game_data.sav") } == true, "the selected layout keeps the actual game path without an extra wrapper")
-        let ids = Array(library.saves.prefix(2).map(\.id))
+        let ids = library.saves.filter { $0.id == library.current }.map(\.id)
+            + library.saves.filter { $0.id != library.current }.prefix(1).map(\.id)
         let archive = folder.appendingPathComponent("chosen.zip")
         let selectedName = selected?.name
         expect(perform("export-many", try json(ids), archive.path), "the shared library exports a selected subset as ZIP")
         expect(perform("import-many", try json([archive.path]), "{}"), "the shared library reimports the multi-save ZIP")
         expect(library.importedCount == 2 && library.saves.count == 6 && library.saves.first { $0.id == library.current }?.name == selectedName,
                "ZIP reimport preserves the preferred entry while adding new copies")
+
+        let suite = "nxnative.save-switch-test." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let owner = LauncherModel([], defaults: defaults, pictureLUTDirectory: folder.appendingPathComponent("luts"))
+        let order = library.saves.map(\.id), count = library.importedCount
+        let image = CGContext(data: nil, width: 2, height: 2, bitsPerComponent: 8, bytesPerRow: 8,
+                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!.makeImage()!
+        library.saves[0].progress = SaveProgress(date: Date(timeIntervalSince1970: 1700000000), location: "Test village", image: image)
+        var inventories = 0, busyStates: [Bool] = [], ownerChanges = 0
+        let subscriptions = [library.$saves.dropFirst().sink { _ in inventories += 1 },
+                             library.$busy.dropFirst().sink { busyStates.append($0) },
+                             owner.objectWillChange.sink { _ in ownerChanges += 1 }]
+        defer { subscriptions.forEach { $0.cancel() } }
+        for id in ["default", order[0], "default", order[0]] {
+            var done = false, ok = false
+            library.perform("select", id, language: "USen", owner: owner) { ok = $0; done = true }
+            expect(!library.busy && !owner.saveOperationBusy && owner.saveSelectionPending,
+                   "switching protects Play without publishing a loading state")
+            var overlapping: Bool?
+            library.perform("refresh", language: "USen", owner: owner) { overlapping = $0 }
+            expect(overlapping == false, "a switch serializes other save operations without disabling their appearance")
+            let anotherPage = SaveLibrary()
+            overlapping = nil
+            anotherPage.perform("select", id, language: "USen", owner: owner) { overlapping = $0 }
+            expect(overlapping == false && !anotherPage.busy, "another save page cannot start an overlapping switch")
+            let limit = Date().addingTimeInterval(15)
+            while !done && Date() < limit { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+            let disk = try JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("saves/current.json"))) as? [String: Any]
+            expect(done && ok && library.current == id && disk?["slot_id"] as? String == id && !owner.saveSelectionPending,
+                   "repeated switches update the checkmark only after the selection is stored")
+        }
+        expect(inventories == 0 && busyStates.isEmpty && ownerChanges == 0 && library.saves.map(\.id) == order,
+               "switching never refreshes or reorders the library or dims the launcher")
+        expect(library.saves[0].progress?.image === image && library.saves[0].progress?.location == "Test village" && library.importedCount == count,
+               "switching preserves the existing preview image, caption and import notice")
+        let current = library.current
+        expect(!perform("select", "missing-save", owner: owner) && library.current == current && library.error != nil && !owner.saveSelectionPending,
+               "a failed switch keeps the previous selection and reports the error")
     } catch { expect(false, "save library fixture: \(error)") }
 }
 

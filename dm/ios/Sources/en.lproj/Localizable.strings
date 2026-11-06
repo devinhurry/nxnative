@@ -332,6 +332,10 @@
 "More frame rates" = "More frame rates";
 "Frame generation is unavailable above 60 fps." = "Frame generation is unavailable above 60 fps.";
 "Saves" = "Saves";
+"Save settings" = "Save settings";
+"Save list" = "Save list";
+"Import saves" = "Import saves";
+"Show explanation" = "Show explanation";
 "Manage saves" = "Manage saves";
 "Device / OS" = "Device / OS";
 "Importing save…" = "Importing save…";

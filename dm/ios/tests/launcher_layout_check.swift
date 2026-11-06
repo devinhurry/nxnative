@@ -28,6 +28,8 @@ func checkLauncherLayout(_ model: LauncherModel, defaults: UserDefaults) -> Int 
         let dashboard = fitting(LauncherView(m: model, done: { _ in }), width: width)
         expect(dashboard.width.isFinite && dashboard.width <= width && dashboard.height <= 540,
                "status dashboard fits the native window at \(width)pt")
+    }
+    for width: CGFloat in [320, 430, 720, 1000] {
         let page = fitting(LauncherSettingsPage(m: model, close: {}), width: width)
         expect(page.width.isFinite && page.width <= width && page.height <= 540,
                "shared settings page fits the native window at \(width)pt")

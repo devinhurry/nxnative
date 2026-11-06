@@ -332,6 +332,10 @@
 "More frame rates" = "\U66F4\U591A\U5E27\U7387";
 "Frame generation is unavailable above 60 fps." = "\U8D85\U8FC7 60 fps \U65F6\U65E0\U6CD5\U542F\U7528\U8865\U5E27\U3002";
 "Saves" = "\U5b58\U6863";
+"Save settings" = "\U5b58\U6863\U8bbe\U7f6e";
+"Save list" = "\U5b58\U6863\U5217\U8868";
+"Import saves" = "\U5bfc\U5165\U5b58\U6863";
+"Show explanation" = "\U67e5\U770b\U8bf4\U660e";
 "Manage saves" = "\U5b58\U6863\U7ba1\U7406";
 "Device / OS" = "\U8bbe\U5907\U4e0e\U7cfb\U7edf";
 "Importing save…" = "\U6b63\U5728\U5bfc\U5165\U5b58\U6863\U2026";

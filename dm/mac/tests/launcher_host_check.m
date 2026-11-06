@@ -64,6 +64,12 @@ static BOOL pressAX(id node, NSString *identifier, NSString *label, NSString *ro
         @try { if ([node accessibilityPerformPress]) return YES; }
         @catch (__unused NSException *exception) { }
     }
+    // AppKit's accessibility segment objects expose the informal AXPress action.
+    if (matches && [axValue(node,@selector(accessibilityActionNames)) containsObject:NSAccessibilityPressAction] &&
+        [node respondsToSelector:@selector(accessibilityPerformAction:)]) {
+        @try { [node accessibilityPerformAction:NSAccessibilityPressAction]; return YES; }
+        @catch (__unused NSException *exception) { }
+    }
     for (id child in axChildren(node))
         if (pressAX(child, identifier, label, role, visited, depth + 1)) return YES;
     return NO;
@@ -119,7 +125,17 @@ static BOOL disabledAX(id node, NSString *identifier, NSHashTable *visited, NSUI
 
 static BOOL sectionHeadingVisible(NSWindow *sheet, NSString *section) {
     NSHashTable *visited = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
-    return hasAXLabel(sheet, [section isEqual:@"Touch"] ? @"BOTW touch settings" : section, NSAccessibilityHeadingRole, visited, 0);
+    NSString *title = [section isEqual:@"Touch"] ? @"BOTW touch settings" : [section isEqual:@"Saves"] ? @"Save settings" : section;
+    return hasAXLabel(sheet, title, NSAccessibilityHeadingRole, visited, 0);
+}
+
+static void captureWindow(NSWindow *window, NSString *filename) {
+    if (!getenv("DM_TEST_SCREENSHOT")) return;
+    NSBitmapImageRep *image = [window.contentView bitmapImageRepForCachingDisplayInRect:window.contentView.bounds];
+    [window.contentView cacheDisplayInRect:window.contentView.bounds toBitmapImageRep:image];
+    NSString *path = @(getenv("DM_TEST_SCREENSHOT"));
+    if (filename) path = [path.stringByDeletingLastPathComponent stringByAppendingPathComponent:filename];
+    [[image representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:path atomically:YES];
 }
 
 static void dumpAX(id node, int depth, NSHashTable *visited) {
@@ -150,6 +166,7 @@ static void stopRunLoop(void) {
 
 static void waitFailed(NSWindow *root, NSString *what) {
     fprintf(stderr, "FAIL: timed out waiting for %s; accessibility hierarchy follows\n", what.UTF8String);
+    captureWindow(root,@"failure.png");
     dumpHierarchy(root);
     check(NO, what.UTF8String);
     timed_out = 1;
@@ -269,12 +286,7 @@ static void checkExportSelection(NSWindow *sheet, void (^next)(void)) {
                 return hasAXLabel(selection,@"Select all saves",NSAccessibilityCheckBoxRole,nodes,0);
             },^{
                 check(YES,"batch export includes the select-all control");
-                if (getenv("DM_TEST_SCREENSHOT")) {
-                    NSBitmapImageRep *image = [selection.contentView bitmapImageRepForCachingDisplayInRect:selection.contentView.bounds];
-                    [selection.contentView cacheDisplayInRect:selection.contentView.bounds toBitmapImageRep:image];
-                    NSString *path = [@(getenv("DM_TEST_SCREENSHOT")).stringByDeletingLastPathComponent stringByAppendingPathComponent:@"export.png"];
-                    [[image representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:path atomically:YES];
-                }
+                captureWindow(selection,@"export.png");
                 checkExportToggles(selection,0,^{
                     waitForPress(selection,@"saves.export.confirm",nil,NSAccessibilityButtonRole,"a selected subset can be exported",^{
                         waitForCondition(sheet,@"native save panel",^{ return [NSApp.modalWindow isKindOfClass:NSSavePanel.class]; },^{
@@ -286,6 +298,97 @@ static void checkExportSelection(NSWindow *sheet, void (^next)(void)) {
                         });
                     });
                 });
+            });
+        });
+    });
+}
+
+static void saveRowFrames(id node, NSMutableDictionary *frames, NSHashTable *visited, NSUInteger depth) {
+    if (!node || depth > 128 || [visited containsObject:node]) return;
+    [visited addObject:node];
+    NSString *identifier = axValue(node,@selector(accessibilityIdentifier));
+    if ([identifier hasPrefix:@"saves.select."] || [identifier hasPrefix:@"saves.actions."])
+        frames[identifier] = [NSValue valueWithRect:[node accessibilityFrame]];
+    for (id child in axChildren(node)) saveRowFrames(child,frames,visited,depth+1);
+}
+
+static NSDictionary *saveFrames(NSWindow *sheet) {
+    NSMutableDictionary *frames = [NSMutableDictionary dictionary];
+    saveRowFrames(sheet,frames,[NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality],0);
+    return frames;
+}
+
+static id findAXIdentifier(id node, NSString *identifier, NSHashTable *visited, NSUInteger depth) {
+    if (!node || depth > 128 || [visited containsObject:node]) return nil;
+    [visited addObject:node];
+    if ([axValue(node,@selector(accessibilityIdentifier)) isEqual:identifier]) return node;
+    for (id child in axChildren(node)) {
+        id found = findAXIdentifier(child,identifier,visited,depth+1);
+        if (found) return found;
+    }
+    return nil;
+}
+
+static void checkSaveSwitches(NSWindow *sheet, NSUInteger step, NSDictionary *frames, void (^next)(void)) {
+    NSArray *ids = @[@"Test campaign",@"default",@"Test campaign",@"default",@"Test campaign"];
+    if (step == ids.count) { next(); return; }
+    NSString *slot = ids[step], *identifier = [@"saves.select." stringByAppendingString:slot];
+    waitForPress(sheet,identifier,nil,nil,"an existing save can be selected",^{
+        waitForCondition(sheet,@"save selection to settle",^{
+            NSData *data = [NSData dataWithContentsOfFile:[@(getenv("DM_SAVES_ROOT")) stringByAppendingPathComponent:@"saves/current.json"]];
+            NSDictionary *selection = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+            NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
+            id row = findAXIdentifier(sheet,identifier,nodes,0);
+            NSString *label = axValue(row,@selector(accessibilityLabel));
+            return (BOOL)([selection[@"slot_id"] isEqual:slot] &&
+                [label containsString:@"Current save"]);
+        },^{
+            NSDictionary *after = saveFrames(sheet);
+            check(frames.count >= 4 && [frames isEqualToDictionary:after],"switching keeps every save row and menu in place");
+            NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
+            check(!disabledAX(sheet,@"saves.select.default",nodes,0),"switching leaves save rows enabled without dimming");
+            nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
+            check(!findAXIdentifier(sheet,@"saves.busy",nodes,0),"switching adds no loading row");
+            checkSaveSwitches(sheet,step+1,frames,next);
+        });
+    });
+}
+
+static NSWindow *explanationWindow(void) {
+    for (NSWindow *window in NSApp.windows) {
+        if (!window.visible) continue;
+        NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
+        if (findAXIdentifier(window,@"DM_PRESENT_UPSCALE.help.text",nodes,0)) return window;
+    }
+    return nil;
+}
+
+static BOOL segmentSelected(NSView *view, NSString *label) {
+    if ([view isKindOfClass:NSSegmentedControl.class]) {
+        NSSegmentedControl *control = (NSSegmentedControl *)view;
+        if (control.selectedSegment >= 0 && [[control labelForSegment:control.selectedSegment] isEqual:label]) return YES;
+    }
+    for (NSView *child in view.subviews) if (segmentSelected(child,label)) return YES;
+    return NO;
+}
+
+static void checkSettingsChoices(NSWindow *sheet, NSUInteger step, void (^next)(void)) {
+    NSArray *options = @[@"Handheld",@"Docked",@"Scene MetalFX",@"Standard"];
+    if (step < options.count) {
+        waitForPress(sheet,nil,options[step],nil,"a short option list is selectable inline",^{
+            waitForCondition(sheet,@"selected segment",^{ return segmentSelected(sheet.contentView,options[step]); },^{
+                check(YES,"the native segmented control updates its selected value");
+                checkSettingsChoices(sheet,step+1,next);
+            });
+        });
+        return;
+    }
+    waitForPress(sheet,@"DM_PRESENT_UPSCALE.help",nil,nil,"the info button opens the setting explanation",^{
+        waitForCondition(sheet,@"setting explanation popover",^{ return (BOOL)(explanationWindow() != nil); },^{
+            check(YES,"long setting text appears in a popover");
+            captureWindow(explanationWindow(),@"explanation.png");
+            waitForPress(sheet,@"DM_PRESENT_UPSCALE.help",nil,nil,"the info button closes its explanation",^{
+                waitForCondition(sheet,@"setting explanation to close",^{ return (BOOL)(explanationWindow() == nil); },next);
             });
         });
     });
@@ -305,6 +408,9 @@ static void settingsClosed(void) {
 int main(void) { @autoreleasepool {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
+    const char *appearance = getenv("DM_TEST_APPEARANCE");
+    [NSApplication sharedApplication].appearance = [NSAppearance appearanceNamed:
+        appearance && !strcmp(appearance,"light") ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua];
     NSString *domain = NSBundle.mainBundle.bundleIdentifier;
     [NSUserDefaults.standardUserDefaults removePersistentDomainForName:domain];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
@@ -342,6 +448,8 @@ int main(void) { @autoreleasepool {
                     if (!interpolationSwitch) dumpHierarchy(sheet);
                     check(interpolationSwitch,
                           "interpolation is a separate switch beside frame rate");
+                checkSettingsChoices(sheet,0,^{
+                    captureWindow(sheet,@"graphics.png");
                 waitForSection(sheet, @"Controls", 1, "startup Controls navigation responds", ^{
                     {
                         NSHashTable *nodes = [NSHashTable hashTableWithOptions:NSHashTableObjectPointerPersonality];
@@ -349,19 +457,9 @@ int main(void) { @autoreleasepool {
                         check(applied == 0, "startup does not invoke running-game setters");
                         waitForSection(sheet, @"Saves", 3, "Saves replaces the cloud-only settings section", ^{
                         checkExportSelection(sheet, ^{
-                        waitForPress(sheet, @"saves.select.Test campaign", nil, nil, "a manually added save can be selected", ^{
-                        waitForCondition(sheet, @"selected save on disk", ^{
-                            NSString *root = @(getenv("DM_SAVES_ROOT"));
-                            NSData *data = [NSData dataWithContentsOfFile:[root stringByAppendingPathComponent:@"saves/current.json"]];
-                            NSDictionary *selection = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-                            return [selection[@"slot_id"] isEqual:@"Test campaign"];
-                        }, ^{
+                        checkSaveSwitches(sheet,0,saveFrames(sheet),^{
                         check(YES, "the save switch persists before Play");
-                        if (getenv("DM_TEST_SCREENSHOT")) {
-                            NSBitmapImageRep *image = [sheet.contentView bitmapImageRepForCachingDisplayInRect:sheet.contentView.bounds];
-                            [sheet.contentView cacheDisplayInRect:sheet.contentView.bounds toBitmapImageRep:image];
-                            [[image representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:@(getenv("DM_TEST_SCREENSHOT")) atomically:YES];
-                        }
+                        captureWindow(sheet,nil);
                         waitForPress(sheet, nil, @"Done", NSAccessibilityButtonRole, "startup editor Done responds", ^{
                             waitForPress(window, nil, @"Play", NSAccessibilityButtonRole,
                                          "Play leaves the launcher", ^{});
@@ -369,8 +467,8 @@ int main(void) { @autoreleasepool {
                         });
                         });
                         });
-                        });
                     }
+                });
                 });
                 });
                 });
