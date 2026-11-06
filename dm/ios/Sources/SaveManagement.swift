@@ -318,9 +318,10 @@ struct SaveManagementPage: View {
                 } else if library.selectionError != nil {
                     Label("Choose a save to continue. Your progress has been kept.", systemImage: "info.circle").font(.callout)
                 }
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: 8) { newSaveButton; importSaveButton; exportSavesButton }
-                    VStack(alignment: .leading, spacing: 8) { newSaveButton; importSaveButton; exportSavesButton }
+                HStack(alignment: .top, spacing: 8) {
+                    newSaveButton.frame(minWidth: 0, maxWidth: .infinity)
+                    importSaveButton.frame(minWidth: 0, maxWidth: .infinity)
+                    exportSavesButton.frame(minWidth: 0, maxWidth: .infinity)
                 }.buttonStyle(.bordered).controlSize(.small).buttonBorderShape(.roundedRectangle(radius: 8))
                     .disabled(locked || library.busy)
                 if library.busy { ProgressView(LocalizedStringKey(library.activity)).accessibilityIdentifier("saves.busy") }
@@ -418,23 +419,26 @@ struct SaveManagementPage: View {
 
     private var newSaveButton: some View {
         Button { editID = ""; name = ""; editing = "create" } label: {
-            Label("New save", systemImage: "plus").font(.subheadline.weight(.medium)).fixedSize()
+            Label("New save", systemImage: "plus").font(.subheadline.weight(.medium))
+                .lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: .infinity, minHeight: 22)
         }.accessibilityIdentifier("saves.new")
     }
 
     private var importSaveButton: some View {
         VStack(alignment: .leading, spacing: 4) {
             Button { chooseImport() } label: {
-                Label("Import saves", systemImage: "square.and.arrow.down").font(.subheadline.weight(.medium)).fixedSize()
+                Label("Import saves", systemImage: "square.and.arrow.down").font(.subheadline.weight(.medium))
+                    .lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: .infinity, minHeight: 22)
             }.accessibilityIdentifier("saves.import")
             Text("Importing will not delete your current save.").font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 160, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private var exportSavesButton: some View {
         Button { exportSelection = SaveExportSelection(saves: library.saves) } label: {
-            Label("Export saves", systemImage: "square.and.arrow.up").font(.subheadline.weight(.medium)).fixedSize()
+            Label("Export saves", systemImage: "square.and.arrow.up").font(.subheadline.weight(.medium))
+                .lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: .infinity, minHeight: 22)
         }.disabled(library.saves.isEmpty).accessibilityIdentifier("saves.export-many")
     }
 
