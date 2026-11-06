@@ -834,7 +834,7 @@ struct PictureFilterSettingsView: View {
                     .accessibilityIdentifier("pictureFilter.controls")
             }
         }
-        .preferredColorScheme(.dark)
+        .environment(\.colorScheme, .dark)
         .foregroundStyle(.white)
         .tint(.white).accentColor(.white)
         .accessibilityElement(children: .contain)
