@@ -555,6 +555,7 @@ struct LauncherSettingsPage: View {
             }
         }
         .formStyle(.grouped)
+        .contentMargins(.top, selection == "Controls" ? nil : 8, for: .scrollContent)
         .scrollContentBackground(.hidden)
         .background(launcherSettingsBackground)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -799,7 +800,7 @@ struct PictureFilterSettingsView: View {
                 Button("Done", action: close)
             }
             .font(.subheadline).buttonStyle(.borderless).padding(12)
-            .background(Color.black.opacity(0.45).ignoresSafeArea(edges: .top))
+            .background(Color.black.opacity(0.45).ignoresSafeArea(edges: [.top, .horizontal]))
             .accessibilityIdentifier("pictureFilter.navigation")
         }
         .overlay(alignment: .bottom) {
@@ -816,11 +817,13 @@ struct PictureFilterSettingsView: View {
                     }
                     filterCards
                 }.padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 4)
-                    .background(Color.black.opacity(0.45).ignoresSafeArea(edges: .bottom))
+                    .background(Color.black.opacity(0.45).ignoresSafeArea(edges: [.bottom, .horizontal]))
                     .accessibilityIdentifier("pictureFilter.controls")
             }
         }
         .preferredColorScheme(.dark)
+        .foregroundStyle(.white)
+        .tint(.white).accentColor(.white)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("pictureFilter.editor")
         .task(id: previewID) {

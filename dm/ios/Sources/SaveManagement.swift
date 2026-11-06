@@ -319,17 +319,22 @@ struct SaveManagementPage: View {
                     Label("Choose a save to continue. Your progress has been kept.", systemImage: "info.circle").font(.callout)
                 }
                 ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: 12) { newSaveButton; importSaveButton; exportSavesButton }
-                    VStack(spacing: 12) { newSaveButton; importSaveButton; exportSavesButton }
-                }.buttonStyle(.bordered).controlSize(.large).buttonBorderShape(.roundedRectangle(radius: 12))
+                    HStack(alignment: .top, spacing: 8) { newSaveButton; importSaveButton; exportSavesButton }
+                    VStack(alignment: .leading, spacing: 8) { newSaveButton; importSaveButton; exportSavesButton }
+                }.buttonStyle(.bordered).controlSize(.small).buttonBorderShape(.roundedRectangle(radius: 8))
                     .disabled(locked || library.busy)
                 if library.busy { ProgressView(LocalizedStringKey(library.activity)).accessibilityIdentifier("saves.busy") }
                 if library.importedCount > 0 { Text(String.localizedStringWithFormat(NSLocalizedString("Imported %d saves.", comment: "Save import result"), library.importedCount)).font(.callout).foregroundStyle(.secondary) }
             }
-        }.listRowBackground(launcherSettingsGroup)
+        }
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
         if !library.saves.isEmpty {
             Section("Save list") {
-                ForEach(library.saves) { save in saveRow(save) }
+                ForEach(library.saves) { save in
+                    saveRow(save).listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+                }
             }
             .listRowBackground(launcherSettingsGroup)
         }
@@ -364,6 +369,7 @@ struct SaveManagementPage: View {
         CloudSavesSection().listRowBackground(launcherSettingsGroup).disabled(launcher.isRunning || library.busy)
         }
         .formStyle(.grouped)
+        .contentMargins(.top, 8, for: .scrollContent)
         .scrollContentBackground(.hidden)
         .background(launcherSettingsBackground)
         .task { refresh() }
@@ -412,36 +418,33 @@ struct SaveManagementPage: View {
 
     private var newSaveButton: some View {
         Button { editID = ""; name = ""; editing = "create" } label: {
-            Label("New save", systemImage: "plus").font(.headline)
-                .fixedSize().frame(minWidth: 100, maxWidth: .infinity, minHeight: 40)
+            Label("New save", systemImage: "plus").font(.subheadline.weight(.medium)).fixedSize()
         }.accessibilityIdentifier("saves.new")
     }
 
     private var importSaveButton: some View {
-        VStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             Button { chooseImport() } label: {
-                Label("Import saves", systemImage: "square.and.arrow.down").font(.headline)
-                    .fixedSize().frame(minWidth: 100, maxWidth: .infinity, minHeight: 40)
+                Label("Import saves", systemImage: "square.and.arrow.down").font(.subheadline.weight(.medium)).fixedSize()
             }.accessibilityIdentifier("saves.import")
             Text("Importing will not delete your current save.").font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 160, alignment: .leading)
         }
     }
 
     private var exportSavesButton: some View {
         Button { exportSelection = SaveExportSelection(saves: library.saves) } label: {
-            Label("Export saves", systemImage: "square.and.arrow.up").font(.headline)
-                .fixedSize().frame(minWidth: 100, maxWidth: .infinity, minHeight: 40)
+            Label("Export saves", systemImage: "square.and.arrow.up").font(.subheadline.weight(.medium)).fixedSize()
         }.disabled(library.saves.isEmpty).accessibilityIdentifier("saves.export-many")
     }
 
     private func saveRow(_ save: ManagedSave) -> some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: 8) {
             Button { if save.id != library.current { perform("select", save.id) } } label: {
-                HStack(spacing: 12) {
+                HStack(spacing: 8) {
                     ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 16) { thumbnail(save).frame(width: 124, height: 70); summary(save).frame(minWidth: 135, maxWidth: .infinity, alignment: .leading) }
-                        VStack(alignment: .leading, spacing: 10) { thumbnail(save).aspectRatio(16 / 9, contentMode: .fit); summary(save) }
+                        HStack(spacing: 10) { thumbnail(save).frame(width: 96, height: 54); summary(save).frame(minWidth: 100, maxWidth: .infinity, alignment: .leading) }
+                        HStack(spacing: 8) { thumbnail(save).frame(width: 64, height: 36); summary(save).frame(maxWidth: .infinity, alignment: .leading) }
                     }
                     Image(systemName: "checkmark").font(.title3.weight(.semibold)).foregroundStyle(launcherTint)
                         .frame(width: 24).opacity(save.id == library.current ? 1 : 0)
@@ -463,7 +466,7 @@ struct SaveManagementPage: View {
                 #endif
                 .menuIndicator(.hidden)
                 .disabled(locked || library.busy).accessibilityLabel("Save actions").accessibilityIdentifier("saves.actions." + save.id)
-        }.padding(.vertical, 8)
+        }.padding(.vertical, 2)
     }
 
     private func thumbnail(_ save: ManagedSave) -> some View {
@@ -473,11 +476,11 @@ struct SaveManagementPage: View {
         }.clipped().clipShape(RoundedRectangle(cornerRadius: 7))
     }
     private func summary(_ save: ManagedSave) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(save.displayName).font(.title3.weight(.semibold)).lineLimit(2)
+        VStack(alignment: .leading, spacing: 2) {
+            Text(save.displayName).font(.headline).lineLimit(1)
             if save.cloud_pending { Text("Downloads when you play").font(.caption).foregroundStyle(.secondary) }
             else if let date = save.date {
-                if let location = save.progress?.location { Text(location).font(.subheadline).lineLimit(2) }
+                if let location = save.progress?.location { Text(location).font(.caption).lineLimit(1) }
                 Text(date, format: .dateTime.year().month().day().hour().minute()).font(.caption).foregroundStyle(.secondary)
                 if save.progress?.hardMode == true { Text("Master Mode").font(.caption).foregroundStyle(.secondary) }
             } else { Text("No saved progress yet").font(.caption).foregroundStyle(.secondary) }
