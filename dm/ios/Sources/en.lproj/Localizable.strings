@@ -236,6 +236,8 @@
 "%d available" = "%d available";
 "Applies immediately." = "Applies immediately.";
 "Applies next time you start the game." = "Applies next time you start the game.";
+"Applies immediately" = "Applies immediately";
+"After restart" = "After restart";
 "Select a control, then drag to move or pinch to resize. Changes apply immediately." = "Select a control, then drag to move or pinch to resize. Changes apply immediately.";
 "About" = "About";
 "Repository" = "Repository";
