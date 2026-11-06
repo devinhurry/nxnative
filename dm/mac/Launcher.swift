@@ -102,9 +102,14 @@ struct CloudSavesSection: View {
 
     var body: some View {
         Section {
-            LabeledContent("Cloud saves") {
+            LabeledContent {
                 Text(fixed.map { "\(Self.shown($0)) (env.txt)" } ?? (folder.isEmpty ? "Off" : Self.shown(folder)))
                     .foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Cloud saves")
+                    SettingsInfoButton(title: "Cloud saves", message: NSLocalizedString("Choose the iCloud Drive folder the iPhone app uses for this game. The save comes in when the game starts and goes out after each save; a save that is replaced is kept in the save's -backups folder.", comment: "Cloud save explanation"), id: "cloudSaves")
+                }
             }
             if fixed == nil {
                 HStack {
@@ -112,8 +117,6 @@ struct CloudSavesSection: View {
                     if !folder.isEmpty { Button("Turn off") { folder = ""; configureSaveCloud() } }
                 }
             }
-        } footer: {
-            Text("Choose the iCloud Drive folder the iPhone app uses for this game. The save comes in when the game starts and goes out after each save; a save that is replaced is kept in the save's -backups folder.")
         }
     }
 

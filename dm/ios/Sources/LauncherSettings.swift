@@ -244,6 +244,8 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var selectedTouchLayoutID = ""
     @Published private(set) var isRunning = false
     @Published var saveOperationBusy = false
+    // Selection blocks Play without dimming the launcher while it is persisted.
+    var saveSelectionPending = false
     @Published private(set) var deferredSettings: Set<String> = []
     @Published private(set) var pictureLUTName: String?
     @Published private(set) var pictureLUTs: [PictureLUT] = []

@@ -4,11 +4,75 @@ import SwiftUI
 import Darwin
 #if os(iOS)
 import UIKit
+#else
+import AppKit
 #endif
 import DmTouchPad
 import UniformTypeIdentifiers
 
-let launcherTint = Color(red: 66.0 / 255, green: 102.0 / 255, blue: 134.0 / 255)
+private func launcherColor(light: UInt32, dark: UInt32) -> Color {
+    #if os(macOS)
+    return Color(nsColor: NSColor(name: nil) { appearance in
+        let rgb = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+        return NSColor(srgbRed: CGFloat((rgb >> 16) & 255) / 255, green: CGFloat((rgb >> 8) & 255) / 255,
+                       blue: CGFloat(rgb & 255) / 255, alpha: 1)
+    })
+    #else
+    return Color(uiColor: UIColor { traits in
+        let rgb = traits.userInterfaceStyle == .dark ? dark : light
+        return UIColor(red: CGFloat((rgb >> 16) & 255) / 255, green: CGFloat((rgb >> 8) & 255) / 255,
+                       blue: CGFloat(rgb & 255) / 255, alpha: 1)
+    })
+    #endif
+}
+
+let launcherTint = launcherColor(light: 0x5365c5, dark: 0x8995ed)
+let launcherSettingsBackground = launcherColor(light: 0xf2f2f7, dark: 0x090a0f)
+let launcherSettingsSidebar = launcherColor(light: 0xf2f2f7, dark: 0x0d0e14)
+let launcherSettingsGroup = launcherColor(light: 0xffffff, dark: 0x1b1c22)
+
+struct SettingsInfoButton: View {
+    let title: String
+    let message: String
+    let id: String
+    @State private var showing = false
+
+    var body: some View {
+        Button { showing.toggle() } label: {
+            Image(systemName: "info.circle").foregroundStyle(.secondary)
+        }.buttonStyle(.borderless).accessibilityLabel("Show explanation")
+            .accessibilityHint(Text(LocalizedStringKey(title))).accessibilityIdentifier(id + ".help")
+            .popover(isPresented: $showing) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(LocalizedStringKey(title)).font(.headline)
+                    Text(message).font(.callout).textSelection(.enabled).accessibilityIdentifier(id + ".help.text")
+                }.padding(20).frame(idealWidth: 280, maxWidth: 340, alignment: .leading)
+                    .presentationCompactAdaptation(.popover)
+            }
+    }
+}
+
+#if os(macOS)
+private struct SettingsSidebarHighlight: NSViewRepresentable {
+    final class AttachmentView: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); applyStyle() }
+        func applyStyle() {
+            var ancestor = superview
+            while let view = ancestor {
+                if let table = view as? NSTableView {
+                    // The row draws its tint; native selection still handles keyboard navigation.
+                    table.selectionHighlightStyle = .none
+                    return
+                }
+                ancestor = view.superview
+            }
+        }
+    }
+    func makeNSView(context: Context) -> AttachmentView { AttachmentView() }
+    func updateNSView(_ view: AttachmentView, context: Context) { view.applyStyle() }
+}
+#endif
 
 // Only the game process links the frame-capture adapter; the standalone Mac launcher does not.
 #if os(iOS) || DM_HOST_UI
@@ -49,7 +113,10 @@ struct SettingRow: View {
 
     private var locked: Bool { m.lockingKey(s) != nil }
     private var note: String {
-        let text = NSLocalizedString(s.note, comment: "Launcher setting description")
+        var text = NSLocalizedString(s.note, comment: "Launcher setting description")
+        if s.env == "DM_FPS_TARGET" {
+            text += (text.isEmpty ? "" : "\n\n") + NSLocalizedString("Frame generation is unavailable above 60 fps.", comment: "Frame rate limit")
+        }
         guard locked else {
             guard m.isRunning else { return text }
             let timing = NSLocalizedString(m.appliesImmediately(s) ? "Applies immediately." : "Applies next time you start the game.", comment: "Setting application timing")
@@ -64,9 +131,11 @@ struct SettingRow: View {
     private var percentage: String { m.rangeLabel(s, rangeValue.wrappedValue) }
 
     private var settingLabel: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 6) {
             Text(LocalizedStringKey(s.label))
-            if !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary) }
+            if !note.isEmpty {
+                SettingsInfoButton(title: s.label, message: note, id: s.env)
+            }
         }
     }
 
@@ -74,19 +143,21 @@ struct SettingRow: View {
         Group {
             switch s.kind {
             case "choice" where s.env == "DM_FRAMEGEN":
-                Toggle(isOn: Binding(get: { m.frameGenerationEnabled }, set: { enabled in
-                    m.setValue(enabled ? (m.values["DM_FPS_TARGET"] ?? "60") : "0", for: s)
-                })) {
+                HStack {
                     settingLabel
+                    Spacer()
+                    Toggle(LocalizedStringKey(s.label), isOn: Binding(get: { m.frameGenerationEnabled }, set: { enabled in
+                        m.setValue(enabled ? (m.values["DM_FPS_TARGET"] ?? "60") : "0", for: s)
+                    })).labelsHidden()
+                        .accessibilityIdentifier(s.env)
+                        .accessibilityLabel(Text(LocalizedStringKey(s.label)))
+                        .accessibilityHint(note)
+                        .disabled(locked || !m.canEnableFrameGeneration)
                 }
-                .accessibilityIdentifier(s.env)
-                .accessibilityLabel(Text(LocalizedStringKey(s.label)))
-                .accessibilityHint(note)
-                .disabled(!m.canEnableFrameGeneration)
             case "choice" where s.env == "DM_FPS_TARGET":
                 frameRateRow
             case "choice":
-                choices.pickerStyle(.menu)
+                choiceRow
             case "range":
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -95,17 +166,33 @@ struct SettingRow: View {
                         Text(percentage).monospacedDigit().foregroundStyle(.secondary)
                     }
                     Slider(value: rangeValue, in: (s.min ?? 0)...(s.max ?? 1), step: s.step ?? 0.05)
+                        .disabled(locked)
                         .accessibilityLabel(Text(LocalizedStringKey(s.label)))
                         .accessibilityValue(percentage)
                         .accessibilityIdentifier(s.env)
                 }
             default:
-                Toggle(isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.setValue($0 ? s.onValue : s.offValue, for: s) })) {
+                HStack {
                     settingLabel
+                    Spacer()
+                    Toggle(LocalizedStringKey(s.label), isOn: Binding(get: { (m.values[s.env] ?? s.def) == s.onValue }, set: { m.setValue($0 ? s.onValue : s.offValue, for: s) }))
+                        .labelsHidden().disabled(locked)
+                        .accessibilityLabel(Text(LocalizedStringKey(s.label)))
+                        .accessibilityHint(note).accessibilityIdentifier(s.env)
                 }
             }
         }
-        .disabled(locked)
+    }
+
+    @ViewBuilder private var choiceRow: some View {
+        if (2...4).contains(s.options?.count ?? 0) {
+            ViewThatFits(in: .horizontal) {
+                HStack { settingLabel; Spacer(minLength: 16); choices.pickerStyle(.segmented).fixedSize() }
+                VStack(alignment: .leading, spacing: 10) { settingLabel; choices.pickerStyle(.segmented) }
+            }
+        } else {
+            HStack { settingLabel; Spacer(); choices.pickerStyle(.menu).fixedSize() }
+        }
     }
 
     private var frameRateRow: some View {
@@ -113,59 +200,55 @@ struct SettingRow: View {
         let extended = (s.options?.count ?? 0) > 2
         let expanded = moreFrameRates ?? !["30", "60"].contains(value)
         return VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                settingLabel
-                Spacer(minLength: 4)
-                if extended {
-                    HStack(spacing: 4) {
-                        ForEach(["30", "60"], id: \.self) { rate in
-                            Button { m.setValue(rate, for: s) } label: {
-                                Text(rate).monospacedDigit().frame(minWidth: 24)
-                            }
-                            .buttonStyle(.bordered).controlSize(.small)
-                            .tint(value == rate ? launcherTint : .secondary)
-                            .accessibilityLabel("\(rate) fps")
-                            .accessibilityIdentifier("DM_FPS_TARGET.\(rate)")
-                        }
-                        Button {
-                            withAnimation { moreFrameRates = !expanded }
-                        } label: {
-                            HStack(spacing: 3) {
-                                Text("More frame rates")
-                                Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                            }.font(.caption).fixedSize()
-                        }
-                        .buttonStyle(.borderless)
-                        .accessibilityIdentifier("DM_FPS_TARGET.more")
-                    }
-                } else {
-                    choices.labelsHidden().pickerStyle(.segmented).frame(width: 180)
-                }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { settingLabel; Spacer(minLength: 4); frameRateControls(value: value, extended: extended, expanded: expanded).fixedSize() }
+                VStack(alignment: .leading, spacing: 10) { settingLabel; frameRateControls(value: value, extended: extended, expanded: expanded) }
             }
             if extended && expanded {
                 HStack {
                     Slider(value: Binding(get: { Double(m.values[s.env] ?? s.def) ?? 30 },
                                           set: { m.setValue(String(Int($0.rounded())), for: s) }),
                            in: 20...120, step: 5)
+                        .disabled(locked)
                         .accessibilityLabel(Text("Frame rate"))
                         .accessibilityValue("\(value) fps")
                         .accessibilityIdentifier("DM_FPS_TARGET.slider")
                     Text("\(value) fps").monospacedDigit().font(.subheadline).frame(minWidth: 58, alignment: .trailing)
                 }
-                Text("Frame generation is unavailable above 60 fps.")
-                    .font(.footnote).foregroundStyle(.secondary)
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(s.env)
     }
 
+    @ViewBuilder private func frameRateControls(value: String, extended: Bool, expanded: Bool) -> some View {
+        if extended {
+            HStack(spacing: 4) {
+                ForEach(["30", "60"], id: \.self) { rate in
+                    Button { m.setValue(rate, for: s) } label: {
+                        Text(rate).monospacedDigit().frame(minWidth: 24)
+                    }
+                    .buttonStyle(.bordered).controlSize(.small).disabled(locked)
+                    .tint(value == rate ? launcherTint : .secondary)
+                    .accessibilityLabel("\(rate) fps").accessibilityIdentifier("DM_FPS_TARGET.\(rate)")
+                }
+                Button { withAnimation { moreFrameRates = !expanded } } label: {
+                    HStack(spacing: 3) {
+                        Text("More frame rates")
+                        Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                    }.font(.caption).fixedSize()
+                }.buttonStyle(.borderless).accessibilityIdentifier("DM_FPS_TARGET.more")
+            }
+        } else {
+            choices.pickerStyle(.segmented).frame(maxWidth: 180)
+        }
+    }
+
     private var choices: some View {
         Picker(selection: m.binding(s)) {
             ForEach(s.options ?? [], id: \.[0]) { Text(LocalizedStringKey($0[1])).tag($0[0]) }
-        } label: {
-            settingLabel
-        }
+        } label: { Text(LocalizedStringKey(s.label)) }
+        .labelsHidden().disabled(locked).accessibilityLabel(Text(LocalizedStringKey(s.label)))
         .accessibilityIdentifier(s.env)
     }
 }
@@ -333,7 +416,6 @@ struct LauncherDashboard: View {
         } message: {
             Text("Touch UI cannot cover every game screen. If a button does not respond, double-tap with three fingers to temporarily show the virtual gamepad and continue. Please report the issue to the developer.")
         }
-        .preferredColorScheme(.dark)
         .tint(launcherTint).accentColor(launcherTint)
     }
 
@@ -354,7 +436,7 @@ struct LauncherDashboard: View {
     }
 
     private func startPlay() {
-        guard !model.saveOperationBusy else { return }
+        guard !model.saveOperationBusy, !model.saveSelectionPending else { return }
         if model.needsTouchFallbackNotice && shouldShowTouchNotice() { showTouchNotice = true }
         else { onPlay() }
     }
@@ -368,6 +450,7 @@ enum LauncherSettingsDestination: String, Identifiable {
 // Keep both columns visible on compact phones as well as larger displays.
 struct LauncherSettingsPage: View {
     @ObservedObject var m: LauncherModel
+    @Environment(\.colorScheme) private var colorScheme
     var gameBackground: Image? = nil
     var onPlay: (() -> Void)? = nil
     let close: () -> Void
@@ -396,6 +479,20 @@ struct LauncherSettingsPage: View {
     }
 
     private func sectionTitle(_ section: String) -> String { section == "Game" ? "Graphics" : section }
+    private var detailTitle: String { selection == "Saves" ? "Save settings" : sectionTitle(selection) }
+
+    private func sectionIcon(_ section: String) -> String {
+        switch section {
+        case "Game": return "display"
+        case "Controls": return "gamecontroller"
+        case "Performance": return "speedometer"
+        case "Audio": return "speaker.wave.2"
+        case "Touch": return "hand.tap"
+        case "Saves": return "externaldrive"
+        case "General": return "gearshape"
+        default: return "slider.horizontal.3"
+        }
+    }
 
     // Keep this row separate so SwiftUI does not infer it with the whole settings page.
     private func pictureFilterRow(_ row: Setting) -> some View {
@@ -435,14 +532,14 @@ struct LauncherSettingsPage: View {
             if selection == "Controls" && m.touchStickResponse != nil {
                 BotwTouchSettingsMenu(m: m) { touchPage = $0 }
             }
-            Section(LocalizedStringKey(sectionTitle(selection))) {
+            Section {
                 ForEach(settingsRows, content: settingOption)
                 #if os(macOS)
                 if selection == "Game" && ProcessInfo.processInfo.environment["DM_TOUCH_PREVIEW"] != "1" {
                     Toggle("Show this window at launch", isOn: $showLauncherAtLaunch).toggleStyle(.checkbox)
                 }
                 #endif
-            }
+            }.listRowBackground(launcherSettingsGroup)
             Section {
                 Button("Reset to tested defaults") { m.reset() }.disabled(!m.changed)
             }
@@ -458,38 +555,66 @@ struct LauncherSettingsPage: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .background(launcherSettingsBackground)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityIdentifier("settings.options")
     }
 
-    private var sectionList: some View {
+    private func sectionLabel(_ section: String, compact: Bool) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: sectionIcon(section)).font(.title3).frame(width: 24)
+            if !compact {
+                Text(LocalizedStringKey(sectionTitle(section))).font(.headline).lineLimit(1).minimumScaleFactor(0.85)
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).opacity(section == selection ? 1 : 0.4)
+            }
+        }
+        .foregroundStyle(section == selection ? (colorScheme == .dark ? Color.black : Color.white) : Color.primary)
+        .padding(.horizontal, 14).padding(.vertical, 14)
+        .contentShape(Rectangle())
+        .background(section == selection ? launcherTint : launcherSettingsGroup, in: RoundedRectangle(cornerRadius: 12))
+        .background(launcherSettingsSidebar)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(LocalizedStringKey(sectionTitle(section))))
+        .accessibilityIdentifier("settings.section." + section)
+    }
+
+    private func sectionList(compact: Bool) -> some View {
+        Group {
         #if os(macOS)
         List(sections, id: \.self, selection: Binding<String?>(get: { selection }, set: { if let section = $0 { selection = section } })) { section in
-            HStack {
-                Text(LocalizedStringKey(sectionTitle(section)))
-                Spacer(minLength: 0)
-                if section == selection { Image(systemName: "chevron.right").font(.caption) }
-            }
-            .contentShape(Rectangle())
-            .tag(section)
-            .accessibilityIdentifier("settings.section." + section)
+            sectionLabel(section, compact: compact).tag(section)
+                .background(SettingsSidebarHighlight())
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                .listRowSeparator(.hidden).listRowBackground(Color.clear)
         }
         #else
         List(sections, id: \.self) { section in
-            Button { selection = section } label: {
-                HStack {
-                    Text(LocalizedStringKey(sectionTitle(section)))
-                    Spacer(minLength: 0)
-                    if section == selection { Image(systemName: "chevron.right").font(.caption) }
-                }
-                .foregroundStyle(section == selection ? launcherTint : Color.primary)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("settings.section." + section)
-            .listRowBackground(section == selection ? launcherTint.opacity(0.12) : Color.clear)
+            Button { selection = section } label: { sectionLabel(section, compact: compact) }
+                .buttonStyle(.plain)
+            .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+            .listRowSeparator(.hidden).listRowBackground(Color.clear)
         }
         #endif
+        }
+        .listStyle(.plain)
+        .contentMargins(.horizontal, compact ? 8 : 16, for: .scrollContent)
+        #if os(iOS)
+        .listRowSpacing(2)
+        #endif
+        .scrollContentBackground(.hidden)
+    }
+
+    private var detailHeader: some View {
+        HStack {
+            Text(LocalizedStringKey(detailTitle)).font(.title3.weight(.semibold))
+                .lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
+                .accessibilityAddTraits(.isHeader)
+            Button("Done", action: close).font(.headline).buttonStyle(.plain)
+                .foregroundStyle(launcherTint).frame(minWidth: 44, minHeight: 44)
+                .accessibilityIdentifier("settings.done")
+        }.padding(.horizontal, 24).frame(height: 64)
     }
 
     var body: some View {
@@ -503,29 +628,32 @@ struct LauncherSettingsPage: View {
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("settings.touch.page." + touchPage.identifier)
             } else {
+            let compact = geometry.size.width < 600
             VStack(spacing: 0) {
-                HStack {
-                    if touchPage != nil {
-                        Button { touchPage = nil } label: { Label("Back", systemImage: "chevron.left") }
-                            .accessibilityIdentifier("settings.back")
-                    }
-                    Text(LocalizedStringKey(touchPage?.rawValue ?? "Settings")).font(.headline)
-                    Spacer()
-                    Button("Done", action: close).accessibilityIdentifier("settings.done")
-                }.padding(.horizontal, 16).padding(.vertical, 10)
-                Divider()
                 if let touchPage {
+                    HStack {
+                        Button { self.touchPage = nil } label: { Label("Back", systemImage: "chevron.left") }
+                            .accessibilityIdentifier("settings.back")
+                        Text(LocalizedStringKey(touchPage.rawValue)).font(.headline)
+                        Spacer()
+                        Button("Done", action: close).accessibilityIdentifier("settings.done")
+                    }.padding(.horizontal, 24).frame(height: 64)
+                    Divider()
                     BotwStickSettingsView(m: m)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .accessibilityIdentifier("settings.touch.page." + touchPage.identifier)
                 } else {
                     HStack(spacing: 0) {
-                        sectionList
-                            .listStyle(.sidebar)
-                            .frame(width: min(220, max(140, geometry.size.width * 0.24)))
-                            .accessibilityIdentifier("settings.sections")
+                        VStack(alignment: .leading, spacing: 0) {
+                            Group {
+                                if compact { Image(systemName: "gearshape").font(.title2).accessibilityLabel("Settings") }
+                                else { Text("Settings").font(.title2.bold()) }
+                            }.padding(.horizontal, compact ? 18 : 20).frame(height: 64)
+                            sectionList(compact: compact).accessibilityIdentifier("settings.sections")
+                        }.frame(width: compact ? 80 : min(250, geometry.size.width * 0.26))
+                            .background(launcherSettingsSidebar)
                         Divider()
-                        settingsOptions
+                        VStack(spacing: 0) { detailHeader; settingsOptions }
                     }
                 }
             }
@@ -535,7 +663,7 @@ struct LauncherSettingsPage: View {
         .onDisappear { m.picturePreviewFrame = nil }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("launcher.settings.page")
-        .preferredColorScheme(.dark)
+        .background(launcherSettingsBackground)
         .tint(launcherTint).accentColor(launcherTint)
     }
 }

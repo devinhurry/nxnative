@@ -56,6 +56,7 @@ struct CloudSavesSection: View {
         Section {
             HStack {
                 Text("Cloud saves")
+                SettingsInfoButton(title: "Cloud saves", message: NSLocalizedString("Choose a folder in iCloud Drive, and the same one in the Mac app's Cloud saves. The save comes in when the game starts and goes out after each save; a save that is replaced is kept in save-backups.", comment: "Cloud save explanation"), id: "cloudSaves")
                 Spacer()
                 Text(folder.isEmpty ? "Off" : (folder as NSString).lastPathComponent)
                     .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
@@ -80,9 +81,7 @@ struct CloudSavesSection: View {
                 }
             }
         } footer: {
-            Text(note.isEmpty
-                 ? "Choose a folder in iCloud Drive, and the same one in the Mac app's Cloud saves. The save comes in when the game starts and goes out after each save; a save that is replaced is kept in save-backups."
-                 : note)
+            if !note.isEmpty { Text(LocalizedStringKey(note)) }
         }
         .onAppear(perform: refresh)
     }
@@ -168,7 +167,6 @@ private struct LauncherView: View {
                 onRefresh: { refreshResources() })
                 .toolbar(.hidden, for: .navigationBar)
         }
-        .preferredColorScheme(.dark)
         .fullScreenCover(item: $settingsDestination, onDismiss: {
             if startAfterSettings { startAfterSettings = false; finishStart() }
         }) { destination in
@@ -293,7 +291,7 @@ public func dmShowGameSettings(_ viewController: UnsafeMutableRawPointer, _ done
             host = nil
             presented.dismiss(animated: false) { dm_launcher_settings_pause(0); done() }
         }
-        let controller = DmHostingController(rootView: page.preferredColorScheme(.dark))
+        let controller = DmHostingController(rootView: page)
         controller.modalPresentationStyle = .fullScreen
         controller.isModalInPresentation = true
         host = controller
