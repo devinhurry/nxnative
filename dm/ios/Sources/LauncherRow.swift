@@ -692,9 +692,9 @@ struct PictureFilterSettingsView: View {
     private var cardBarHeight: CGFloat {
         // macOS can reserve a legacy scroller gutter only when the row overflows.
         #if os(macOS)
-        return 73 + captionHeight + NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
+        return 63 + captionHeight + NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
         #else
-        return 73 + captionHeight
+        return 63 + captionHeight
         #endif
     }
 
@@ -716,7 +716,7 @@ struct PictureFilterSettingsView: View {
 
     private func card(id: String, name: String, selected: Bool = false, symbol: String? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 4) {
+            VStack(spacing: 3) {
                 Group {
                     if let symbol {
                         Rectangle().fill(.secondary.opacity(0.15))
@@ -725,11 +725,11 @@ struct PictureFilterSettingsView: View {
                         Image(decorative: image, scale: 1).resizable().scaledToFill()
                     } else { Rectangle().fill(.secondary.opacity(0.15)).overlay { Image(systemName: "photo") } }
                 }
-                .frame(width: 112, height: 63).clipped()
+                .frame(width: 96, height: 54).clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(selected ? launcherTint : .clear, lineWidth: 3))
                 Text(name).font(.caption).lineLimit(1).truncationMode(.middle).frame(height: captionHeight)
-            }.frame(width: 112)
+            }.frame(width: 96)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(name)
@@ -754,7 +754,7 @@ struct PictureFilterSettingsView: View {
                         }.disabled(filter.map { m.lockingKey($0) != nil } ?? true)
                         Button(role: .destructive) { lutToRemove = lut } label: {
                             Image(systemName: "trash").font(.system(size: 12, weight: .semibold))
-                                .frame(width: 26, height: 26).background(.ultraThinMaterial, in: Circle())
+                                .frame(width: 26, height: 26).background(Color.black.opacity(0.55), in: Circle())
                                 .frame(width: 44, height: 44)
                         }
                         .buttonStyle(.plain).disabled(m.pictureLUTLocked)
@@ -770,50 +770,54 @@ struct PictureFilterSettingsView: View {
     }
 
     var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                Color.black
-                if let image = comparing ? m.picturePreviewFrame : preview ?? m.picturePreviewFrame {
-                    Image(decorative: image, scale: 1).resizable().scaledToFit()
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .accessibilityLabel("Current game picture")
-                } else {
-                    ContentUnavailableView("Current picture preview", systemImage: "photo",
-                                           description: Text("Start the game to preview its current picture."))
-                }
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if let image = comparing ? m.picturePreviewFrame : preview ?? m.picturePreviewFrame {
+                GeometryReader { canvas in
+                    Image(decorative: image, scale: 1).resizable().scaledToFill()
+                        .frame(width: canvas.size.width, height: canvas.size.height).clipped()
+                        .accessibilityLabel("Current game picture").accessibilityIdentifier("pictureFilter.image")
+                }.ignoresSafeArea()
+            } else {
+                ContentUnavailableView("Current picture preview", systemImage: "photo",
+                                       description: Text("Start the game to preview its current picture."))
             }
-            .overlay(alignment: .top) {
-                HStack {
-                    Button(action: back) { Label("Back", systemImage: "chevron.left") }
-                        .accessibilityIdentifier("pictureFilter.back")
-                    Text("Picture filter").font(.headline)
-                    Spacer(minLength: 4)
-                    Button { comparing.toggle() } label: { Image(systemName: comparing ? "circle.fill" : "circle.lefthalf.filled") }
-                        .accessibilityLabel("Compare original")
-                        .accessibilityAddTraits(comparing ? .isSelected : [])
-                        .accessibilityIdentifier("pictureFilter.compare")
-                    Button { controlsVisible.toggle() } label: { Image(systemName: "slider.horizontal.3") }
-                        .accessibilityLabel(controlsVisible ? "Hide controls" : "Show controls")
-                    Button("Done", action: close)
-                }
-                .font(.subheadline).buttonStyle(.borderless).padding(12)
-                .background(.ultraThinMaterial)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .top) {
+            HStack {
+                Button(action: back) { Label("Back", systemImage: "chevron.left") }
+                    .accessibilityIdentifier("pictureFilter.back")
+                Text("Picture filter").font(.headline)
+                Spacer(minLength: 4)
+                Button { comparing.toggle() } label: { Image(systemName: comparing ? "circle.fill" : "circle.lefthalf.filled") }
+                    .accessibilityLabel("Compare original")
+                    .accessibilityAddTraits(comparing ? .isSelected : [])
+                    .accessibilityIdentifier("pictureFilter.compare")
+                Button { controlsVisible.toggle() } label: { Image(systemName: "slider.horizontal.3") }
+                    .accessibilityLabel(controlsVisible ? "Hide controls" : "Show controls")
+                Button("Done", action: close)
             }
-            .overlay(alignment: .bottom) {
-                if controlsVisible {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if let strengthRow {
-                            HStack {
-                                Text("Filter strength")
-                                Slider(value: Binding(get: { Double(strength) }, set: { m.setValue(String(format: "%.2f", $0), for: strengthRow) }), in: 0...1, step: 0.01)
-                                    .accessibilityLabel("Filter strength").accessibilityIdentifier(strengthRow.env)
-                                    .disabled(m.lockingKey(strengthRow) != nil)
-                                Text("\(Int((strength * 100).rounded()))%").monospacedDigit().frame(width: 44)
-                            }.font(.caption)
-                        }
-                        filterCards
-                    }.padding(12).background(.ultraThinMaterial)
-                }
+            .font(.subheadline).buttonStyle(.borderless).padding(12)
+            .background(Color.black.opacity(0.45).ignoresSafeArea(edges: .top))
+            .accessibilityIdentifier("pictureFilter.navigation")
+        }
+        .overlay(alignment: .bottom) {
+            if controlsVisible {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let strengthRow {
+                        HStack {
+                            Text("Filter strength")
+                            Slider(value: Binding(get: { Double(strength) }, set: { m.setValue(String(format: "%.2f", $0), for: strengthRow) }), in: 0...1, step: 0.01)
+                                .accessibilityLabel("Filter strength").accessibilityIdentifier(strengthRow.env)
+                                .disabled(m.lockingKey(strengthRow) != nil)
+                            Text("\(Int((strength * 100).rounded()))%").monospacedDigit().frame(width: 44)
+                        }.font(.caption)
+                    }
+                    filterCards
+                }.padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 4)
+                    .background(Color.black.opacity(0.45).ignoresSafeArea(edges: .bottom))
+                    .accessibilityIdentifier("pictureFilter.controls")
             }
         }
         .preferredColorScheme(.dark)
