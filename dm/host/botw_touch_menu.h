@@ -5,7 +5,8 @@
 enum { DM_BOTW_MENU_MAX_SLOTS = 20, DM_BOTW_MENU_MAX_CATEGORIES = 8,
        DM_BOTW_MENU_MAX_POPUP_ROWS = 8,
        DM_BOTW_MENU_MAX_FOOTER_ACTIONS = 16, // six footer slots, eight inline actions and two header actions
-       DM_BOTW_MENU_MAX_GENERIC_TARGETS = 128 };
+       DM_BOTW_MENU_MAX_GENERIC_TARGETS = 128,
+       DM_BOTW_MENU_MAX_DUNGEON_MARKERS = 11 };
 
 enum {
     DM_BOTW_MENU_BEGIN = 0,
@@ -39,7 +40,7 @@ float dm_botw_touch_quick_select_top(void);
 int dm_botw_touch_bow_active(void);
 // Open Pause inventory and select a native category when its live owner is ready.
 void dm_botw_touch_menu_open_category(int category);
-// A live Hero's Path map exposes only the virtual direction keys, not combat controls.
+// Hero's Path and an input-owning Divine Beast map expose virtual direction keys.
 int dm_botw_touch_menu_dpad_visible(void);
 
 // Diagnostic for DM_CTL ("panes <hex root> [max depth]"): log the live pane tree
@@ -115,6 +116,10 @@ typedef struct {
     int map_visible;
     int scope_visible; // MainScreen's live telescope guide bar, alongside gameplay controls.
     int hero_path;
+    int menu_dpad_visible; // The active Divine Beast map accepts virtual directions.
+    uintptr_t dungeon_screen; // Live AppMapDungeon owner of map rotation.
+    int dungeon_marker_count, dungeon_marker_selected;
+    float dungeon_markers[DM_BOTW_MENU_MAX_DUNGEON_MARKERS][2]; // Native projected centers.
     int popup_visible;
     int cursor_valid;
     int clip_valid;

@@ -53,8 +53,12 @@ static uintptr_t selector_test_vtable[8];
 static uint8_t selector_test_guest_entry[0x80];
 static int mock_gate_present[OBS_MAX];
 static void (*mock_gate_callbacks[OBS_MAX])(const uint64_t *regs);
+static void (*mock_gate_writable[OBS_MAX])(uint64_t *regs, int param);
 
 int gate_obs_present(int id) { return id > 0 && id < OBS_MAX && mock_gate_present[id]; }
+void gate_obs_set(int id, void (*fn)(uint64_t *regs, int param)) {
+    if (id > 0 && id < OBS_MAX) mock_gate_writable[id] = fn;
+}
 void gate_obs_read_set(int id, void (*fn)(const uint64_t *regs)) {
     if (id > 0 && id < OBS_MAX) mock_gate_callbacks[id] = fn;
 }
@@ -1976,6 +1980,215 @@ static void test_inventory_preview_rotation(void) {
     assert(snapshot_native_view_locked().inventory_arrow_valid[1]);
     guide[0x59] = 0;
     assert(!snapshot_native_view_locked().inventory_arrow_valid[1]);
+    dm_botw_touch_menu_reset();
+}
+
+static void test_dungeon_captured_prompts(void) {
+    dm_botw_touch_menu_reset(); init_selector_fixture();
+    uint8_t wrapper[0x40] = {0};
+    uint8_t *root = fake_pane(0, "RootPane", -1, 1280, 720, 0, 0);
+    const char *path[] = {"N_Born_00", "N_InOut_00", "N_MiniMap_01", "N_GuidePos_01",
+                          "N_Device_03", "N_GuidePos_00", "P_Text_01"};
+    for (int i = 0; i < 7; i++) {
+        float width = i == 6 ? 240 : 20, height = i == 6 ? 100 : 20;
+        fake_pane(i + 1, path[i], i, width, height, i == 6 ? 400 : 0, i == 6 ? -220 : 0);
+        link_child(native_panes[i].bytes, native_panes[i + 1].bytes);
+    }
+    uint8_t *capture = fake_pane(8, "N_CaptureText_01", 0, 240, 100, -1200, 0);
+    uint8_t *a = fake_pane(9, "T_A_00", 8, 24, 24, -1130, 18);
+    uint8_t *b = fake_pane(10, "T_B_00", 8, 24, 24, -1130, -18);
+    uint8_t *label_a = fake_pane(11, "T_GuideA_00", 8, 90, 20, -1200, 18);
+    uint8_t *label_b = fake_pane(12, "T_GuideB_00", 8, 90, 20, -1200, -18);
+    link_child(root, capture); link_child(capture, a); link_child(capture, b);
+    link_child(capture, label_a); link_child(capture, label_b);
+    put_ptr(selector.map_screen + 0x30, (uintptr_t)wrapper);
+    put_ptr(wrapper + 0x18, (uintptr_t)root);
+    dm_botw_touch_menu_view v = {0};
+    selector_dungeon_prompts((uintptr_t)selector.map_screen, &v);
+    assert(v.footer_action_count == 1 && v.footer_action_buttons[0] == DM_BTN_A && v.back_valid);
+    assert(v.footer_actions[0][0] > .5f && v.footer_actions[0][1] < v.back[1]);
+    label_a[0x59] = 0; memset(&v, 0, sizeof v);
+    selector_dungeon_prompts((uintptr_t)selector.map_screen, &v);
+    assert(!v.footer_action_count && v.back_valid); // hidden labels cannot be tapped
+    label_a[0x59] = 255; native_panes[7].bytes[0x59] = 0; memset(&v, 0, sizeof v);
+    selector_dungeon_prompts((uintptr_t)selector.map_screen, &v);
+    assert(!v.footer_action_count && !v.back_valid); // hidden destination
+    native_panes[7].bytes[0x59] = 255;
+    uint8_t *duplicate = fake_pane(13, "P_Text_01", 6, 240, 100, 400, -220);
+    link_child(native_panes[6].bytes, duplicate); memset(&v, 0, sizeof v);
+    selector_dungeon_prompts((uintptr_t)selector.map_screen, &v);
+    assert(!v.footer_action_count && !v.back_valid); // ambiguous destination
+    dm_botw_touch_menu_reset();
+}
+
+static void test_dungeon_focused_footer(void) {
+    dm_botw_touch_menu_reset(); init_selector_fixture();
+    current_guest_frame = 10000; dm_botw_touch_menu_test_set_render_frame(10000);
+    uint32_t count = 2; memcpy(selector.registry + 0x28, &count, sizeof count);
+    selector.screen_list[0] = (uintptr_t)selector.apphome_screen;
+    selector.screen_list[1] = (uintptr_t)selector.map_screen;
+    put_ptr(selector.apphome_screen, (uintptr_t)(g_mod[0].base + 0x1ce75f0));
+    selector.apphome_screen[0xfd] = 0; selector.apphome_screen[0xfe] = 2;
+    put_ptr(selector.apphome_screen + 0x38, (uintptr_t)selector.apphome_state);
+    selector.apphome_state[0x38] = 2;
+    uint8_t *apphome = fake_pane(20, "RootPane", -1, 1280, 720, 0, 0);
+    put_ptr(selector.apphome_screen + 0x30, (uintptr_t)selector.apphome_wrapper);
+    put_ptr(selector.apphome_wrapper + 0x18, (uintptr_t)apphome);
+    strcpy((char *)selector.map_screen + 0xa0, "AppMapDungeon_00");
+    selector.map_screen[0xfd] = 0; selector.map_screen[0xfe] = 2;
+    put_ptr(selector.map_screen + 0x38, (uintptr_t)selector.map_state);
+    selector.map_state[0x38] = 2;
+    uint8_t *root = fake_pane(21, "RootPane", -1, 1280, 720, 0, 0);
+    uint8_t *hit = fake_pane(22, "B_Hit_00", 21, 200, 40, 0, 0);
+    put_ptr(selector.owner + 0x60, (uintptr_t)hit);
+    put_ptr(selector.entry + 0x20, (uintptr_t)selector.map_screen);
+    put_ptr(selector.manager + 0x48, (uintptr_t)selector.entry);
+    g_native_view.frame = 10000;
+    g_native_view.footer_root = (uintptr_t)apphome;
+    g_native_view.guide_icon_valid[0] = g_native_view.guide_text_valid[0] = 1;
+    g_native_view.guide_icon_seen[0] = g_native_view.guide_text_seen[0] = 10000;
+    g_native_view.guide_icon_glyph[0] = 0xe041;
+    set_rect(g_native_view.guide_icons[0], .8f, .9f, .03f, .05f);
+    set_rect(g_native_view.guide_texts[0], .74f, .9f, .06f, .05f);
+    selector_publish_generic_view((uintptr_t)selector.manager, (uintptr_t)selector.map_screen,
+        2, 1, (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, 0);
+    dm_botw_touch_menu_view result = {0};
+    dm_botw_touch_menu_test_snapshot(&result);
+    assert(result.generic_root == (uintptr_t)root && result.back_valid && result.prompt_owner_valid);
+    assert(result.prompt_owner_screen == (uintptr_t)selector.apphome_screen);
+    selector.apphome_screen[0xfe] = 0;
+    selector_publish_generic_view((uintptr_t)selector.manager, (uintptr_t)selector.map_screen,
+        2, 1, (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, 0);
+    dm_botw_touch_menu_test_snapshot(&result);
+    assert(!result.back_valid && !result.prompt_owner_valid); // stale AppHome must not supply guides
+    dm_botw_touch_menu_reset();
+}
+
+static void test_dungeon_relative_rotation(void) {
+    dm_botw_touch_menu_reset(); init_inventory();
+    dm_botw_touch_menu_test_set_native_ready(1);
+    current_guest_frame = 10100;
+    dm_botw_touch_menu_test_set_render_frame(10100);
+    view.inventory_visible = view.cursor_valid = 0;
+    view.generic_mode = view.menu_dpad_visible = 1;
+    view.dungeon_screen = (uintptr_t)selector.map_screen;
+    mock_gate_present[OBS_BOTW_DUNGEON_ROTATE] = 1;
+    publish(10100);
+    assert(dm_botw_touch_menu_dpad_visible());
+
+    // Two small moves cross the threshold; the complete initial distance,
+    // subsequent movement and the final END location are all preserved.
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .4f, .4f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .401f, .401f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .404f, .404f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, .42f, .41f);
+    assert(fabsf(g_dungeon_delta[0] - (.02f * 1280 / 720)) < .00001f);
+    assert(fabsf(g_dungeon_delta[1] - .01f) < .00001f);
+    // Starting the next gesture before the game samples the first one must
+    // not erase its final displacement.
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .3f, .3f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, .3f, .3f);
+    assert(fabsf(g_dungeon_delta[0] - (.02f * 1280 / 720)) < .00001f);
+    assert(fabsf(g_dungeon_delta[1] - .01f) < .00001f);
+    struct { uint64_t x[32]; unsigned char q[512]; } regs = {0};
+    float native[2] = {0}, ratio = .5f;
+    regs.x[19] = view.dungeon_screen; regs.x[20] = (uintptr_t)native;
+    dungeon_rotate_input(regs.x, 0);
+    assert(regs.x[20] != (uintptr_t)native && !g_dungeon_delta[0] && !g_dungeon_delta[1]);
+    memcpy((uint8_t *)regs.x + 256, &ratio, sizeof ratio);
+    dungeon_rotate_input(regs.x, 1);
+    float *pair = (float *)(uintptr_t)regs.x[20];
+    assert(fabsf(pair[0] - (.02f * 1280 / 720 * 62.8318531f / ratio)) < .0001f);
+    assert(fabsf(pair[1] - (-.01f * 62.8318531f / ratio)) < .0001f);
+    assert(!g_dungeon_sample.active && native[0] == 0 && native[1] == 0);
+
+    // Cancel, a disappearing page, a different owner and physical stick
+    // input cannot leave a stale touch sample for the map.
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .4f, .4f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .45f, .4f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_CANCEL, .45f, .4f);
+    assert(!g_dungeon_delta[0] && !g_dungeon_delta[1]);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .4f, .4f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .45f, .4f);
+    regs.x[19] = view.dungeon_screen + 8; regs.x[20] = (uintptr_t)native;
+    dungeon_rotate_input(regs.x, 0);
+    assert(regs.x[20] == (uintptr_t)native && g_dungeon_delta[0]);
+    regs.x[19] = view.dungeon_screen; native[0] = .25f;
+    dungeon_rotate_input(regs.x, 0);
+    assert(regs.x[20] == (uintptr_t)native && !g_dungeon_delta[0]);
+    native[0] = 0;
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .5f, .4f);
+    view.menu_dpad_visible = 0; view.dungeon_screen = 0; publish(10100);
+    assert(!g_dungeon_delta[0] && !g_pointer_down && !dm_botw_touch_menu_dpad_visible());
+    mock_gate_present[OBS_BOTW_DUNGEON_ROTATE] = 0;
+    dm_botw_touch_menu_reset();
+}
+
+static unsigned mock_dungeon_marker_calls;
+static int mock_dungeon_marker_index;
+static void mock_dungeon_marker_setter(uintptr_t screen, int index) {
+    mock_dungeon_marker_calls++; mock_dungeon_marker_index = index;
+    memcpy((void *)(screen + 0x118c4), &index, sizeof index);
+}
+
+static void test_dungeon_marker_taps(void) {
+    static uint8_t screen[0x11900], items[3][0x18];
+    uintptr_t array[3];
+    int32_t selected = 0, count = 3, limit = 3;
+    float native[3][2] = {{150, 290}, {145, 150}, {130, 20}};
+    memset(screen, 0, sizeof screen); memset(items, 0, sizeof items);
+    for (int i = 0; i < 3; i++) {
+        array[i] = (uintptr_t)items[i];
+        memcpy(items[i] + 8, native[i], sizeof native[i]);
+    }
+    memcpy(screen + 0x118c4, &selected, sizeof selected);
+    memcpy(screen + 0x118c8, &count, sizeof count);
+    put_ptr(screen + 0x118d0, (uintptr_t)array);
+    put_ptr(screen + 0x118f0, (uintptr_t)&limit);
+    dm_botw_touch_menu_reset(); init_selector_fixture(); init_inventory();
+    dm_botw_touch_menu_test_set_native_ready(1);
+    mock_gate_present[OBS_BOTW_DUNGEON_ROTATE] = 1;
+    g_test_dungeon_marker_setter = (uintptr_t)mock_dungeon_marker_setter;
+    mock_dungeon_marker_calls = 0;
+    current_guest_frame = 10200; dm_botw_touch_menu_test_set_render_frame(10200);
+    view.inventory_visible = view.cursor_valid = 0;
+    view.generic_mode = view.menu_dpad_visible = 1;
+    view.dungeon_screen = (uintptr_t)screen;
+    selector_dungeon_markers((uintptr_t)screen, &view);
+    assert(view.dungeon_marker_count == 3 && view.dungeon_marker_selected == 0);
+    assert(fabsf(view.dungeon_markers[1][0] - 785.0f / 1280.0f) < .00001f);
+    assert(fabsf(view.dungeon_markers[1][1] - 210.0f / 720.0f) < .00001f);
+    publish(10200);
+    tap(view.dungeon_markers[2][0], view.dungeon_markers[2][1]);
+    assert(g_dungeon_marker.pending && g_dungeon_marker.index == 2);
+    uint64_t regs[32] = {0}; float raw[2] = {0};
+    regs[19] = (uintptr_t)screen; regs[20] = (uintptr_t)raw;
+    dungeon_rotate_input(regs, 0);
+    assert(mock_dungeon_marker_calls == 1 && mock_dungeon_marker_index == 2 && !g_dungeon_marker.pending);
+    memcpy(&selected, screen + 0x118c4, sizeof selected);
+    assert(selected == 2 && regs[20] == (uintptr_t)raw);
+
+    // A drag starting on a marker rotates without selecting it. A marker
+    // request also cannot follow the screen after its owner or state changes.
+    selector_dungeon_markers((uintptr_t)screen, &view); publish(10200);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, view.dungeon_markers[0][0], view.dungeon_markers[0][1]);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, view.dungeon_markers[0][0] + .05f, view.dungeon_markers[0][1]);
+    dungeon_rotate_input(regs, 0);
+    assert(mock_dungeon_marker_calls == 1 && !g_dungeon_marker.pending);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, view.dungeon_markers[0][0], view.dungeon_markers[0][1]);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, view.dungeon_markers[0][0], view.dungeon_markers[0][1]);
+    assert(g_dungeon_marker.pending);
+    view.menu_dpad_visible = 0; view.dungeon_screen = 0; publish(10200);
+    dungeon_rotate_input(regs, 0);
+    assert(mock_dungeon_marker_calls == 1 && !g_dungeon_marker.pending);
+
+    dm_botw_touch_menu_view invalid = {0};
+    limit = 4; selector_dungeon_markers((uintptr_t)screen, &invalid);
+    assert(!invalid.dungeon_marker_count);
+    limit = 3; float nan_value = NAN; memcpy(items[1] + 8, &nan_value, sizeof nan_value);
+    selector_dungeon_markers((uintptr_t)screen, &invalid);
+    assert(!invalid.dungeon_marker_count);
+    g_test_dungeon_marker_setter = 0; mock_gate_present[OBS_BOTW_DUNGEON_ROTATE] = 0;
     dm_botw_touch_menu_reset();
 }
 
@@ -4582,6 +4795,10 @@ int main(void) {
     test_shop_category_touch();
     test_cutscene_skip_prompt();
     test_inventory_preview_rotation();
+    test_dungeon_captured_prompts();
+    test_dungeon_focused_footer();
+    test_dungeon_relative_rotation();
+    test_dungeon_marker_taps();
     test_map_draw_order();
     test_map_displacement_drag();
     test_long_hud_path();
