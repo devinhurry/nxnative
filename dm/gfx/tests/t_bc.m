@@ -206,7 +206,11 @@ static void transcodes(void) {
     g_no_bc=0;t.d.format=0x41;
     CHECK("native BC bypasses transcoding",!bc_sampled_format(&t,&pf));g_no_bc=1;
 }
-int main(int argc,char **argv){@autoreleasepool{mtl_init();if(!g_dev.supportsBCTextureCompression){puts("native BC differential reference unavailable");return 77;}
+int main(int argc,char **argv){@autoreleasepool{
+    CHECK("BC fallback is enabled by default",bc_fallback_allowed(NULL));
+    CHECK("BC fallback accepts explicit enable",bc_fallback_allowed("1"));
+    CHECK("BC fallback accepts explicit disable",!bc_fallback_allowed("0"));
+    mtl_init();if(!g_dev.supportsBCTextureCompression){puts("native BC differential reference unavailable");return 77;}
     if(argc>1&&!strcmp(argv[1],"--transcode"))transcodes();
     else {g_bc_transcode_on=0;formats();copies();render_blocks(NVN_TEXTURE_TARGET_2D_ARRAY,2,9993);render_blocks(NVN_TEXTURE_TARGET_3D,3,9994);linear_blocks();}
     printf("t_bc (%s): %d checks, %d failed\n",g_no_bc?"fallback":"native",checks,failed);return failed!=0;

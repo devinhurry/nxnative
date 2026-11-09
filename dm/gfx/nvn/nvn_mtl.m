@@ -111,6 +111,7 @@ static id<MTL4CommandAllocator> g_present_alloc4[3];
 static id<MTL4CommandBuffer> g_present_cb[3];
 static id<MTL4ArgumentTable> g_vt, g_ft, g_ct, g_up_ct, g_ot;   // g_ot: the object stage of a task / mesh draw (mesh_tasks_draw)
 static int g_no_bc;
+static int bc_fallback_allowed(const char *value) { return !value || !strcmp(value, "1"); }
 static dispatch_queue_t g_bc_retire_q;
 static int bc_unpacked(uint32_t f, uint32_t *pf), bc_block(id<MTLTexture> t);
 static void bc_register(id<MTLTexture> t, uint32_t format);
@@ -546,7 +547,7 @@ void mtl_init(void) {
     g_dev = MTLCreateSystemDefaultDevice();
     if (!g_dev) MDIE("no Metal device");
     const char *test_bc = getenv("DM_TEST_NO_BC"), *fallback_bc = getenv("DM_NVN_BC_FALLBACK");
-    int allow_bc_fallback = fallback_bc && !strcmp(fallback_bc, "1");
+    int allow_bc_fallback = bc_fallback_allowed(fallback_bc);
     g_no_bc = (!g_dev.supportsBCTextureCompression && allow_bc_fallback && !g_classic_ok) || (test_bc && atoi(test_bc) > 0);
     if (g_no_bc) g_bc_retire_q = dispatch_queue_create("dm.nvn.bc-retire", DISPATCH_QUEUE_SERIAL);
     if (g_no_bc) MLOG("BC texture fallback: decode BC1-7 on the GPU (%s%s)", g_dev.name.UTF8String, test_bc && atoi(test_bc) > 0 ? "; DM_TEST_NO_BC" : "");
@@ -580,9 +581,9 @@ void mtl_init(void) {
         MLOG("[RED] Metal device %s has no Metal 4 (%s%s%s): the classic part only, nothing is presented (enough for a run-time shader capture)", g_dev.name.UTF8String, no4, *why ? ": " : "", why);
         return;
     }
-    // The optional decoder belongs to NVN only; GL and Vulkan retain the native-BC requirement.
+    // The decoder belongs to NVN only; GL and Vulkan retain the native-BC requirement.
     if (!g_dev.supportsBCTextureCompression && (g_classic_ok || !allow_bc_fallback))
-        MDIE("the Metal device %s has no BC texture formats; NVN can opt into experimental decoding with DM_NVN_BC_FALLBACK=1", g_dev.name.UTF8String);
+        MDIE("the Metal device %s has no BC texture formats; the NVN decoder is unavailable or disabled", g_dev.name.UTF8String);
     [g_q addResidencySet:g_res];
     [g_q4 addResidencySet:g_res];
     { void crash_set_wait_dump(void (*fn)(void)); void mtl_wait_state_dump(void); crash_set_wait_dump(mtl_wait_state_dump); }

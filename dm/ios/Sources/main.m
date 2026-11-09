@@ -102,7 +102,7 @@ static void aoc_locate(void) {
 // Why a slim build found no usable game files: the verdict on Documents/romfs.img (the first of romfs_document_images), in the log and for the screen (front_ios_boot_message). NULL when the build has no romfs.id
 static char g_boot_message[640];
 const char *front_ios_boot_message(void) { return g_boot_message[0] ? g_boot_message : NULL; }
-// By default, reject GPUs without BC texture formats before the first BC texture. The NVN decoder can be opted into for testing (dm/gfx/tex/README.md).
+// GPUs without native BC use the NVN decoder on Metal 4 unless it is disabled (dm/gfx/tex/README.md).
 // Called by startGame (front_ios.m) once the launcher has set
 // its switches: this makes the process's first Metal device, and Metal reads MTL_HUD_ENABLED then; checked at launch, it kept the launcher's Performance HUD off (GitHub issue #840)
 const char *front_ios_device_check(void) {
@@ -110,7 +110,7 @@ const char *front_ios_device_check(void) {
     if (done++) return msg[0] ? msg : NULL;
     id<MTLDevice> gpu = MTLCreateSystemDefaultDevice();   // the system default device, the one the graphics layers take (mtl_init repeats this check for the other routes)
     const char *bc_fallback = getenv("DM_NVN_BC_FALLBACK");
-    if (gpu && (gpu.supportsBCTextureCompression || (bc_fallback && !strcmp(bc_fallback, "1") && [gpu supportsFamily:MTLGPUFamilyMetal4]))) return NULL;
+    if (gpu && (gpu.supportsBCTextureCompression || ((!bc_fallback || !strcmp(bc_fallback, "1")) && [gpu supportsFamily:MTLGPUFamilyMetal4]))) return NULL;
     snprintf(msg, sizeof msg, "This device's GPU (%s) cannot read BC-compressed textures, which the games use. It needs an iPhone 15 Pro or newer (A17 Pro chip or later) or an iPad with an M1 chip or later.",
              gpu ? gpu.name.UTF8String : "no Metal device");
     fprintf(stderr, "[RED] boot: %s\n", msg);
