@@ -756,25 +756,100 @@
       "id": "applet.dungeon",
       "screen": "AppMapDungeon",
       "state": "dungeon map active",
-      "action": "Select/pan/zoom floor/markers and exit",
+      "action": "Tap Divine Beast controls and menu prompts; select a position with the D-pad or by tapping its marker; drag to rotate the map.",
       "implementation_status": "implemented",
       "implementation_evidence": [
         {
           "file": "dm/host/hle_botw_touch_menu.c",
-          "function": "selector_service_map_tap",
-          "why": "Maps touch to native map point."
+          "function": "selector_cursorless_prompt_view",
+          "why": "Checks the live AppHome and dungeon page before exposing the map controls and D-pad."
         },
         {
           "file": "dm/host/hle_botw_touch_menu.c",
-          "function": "selector_service_map_drag",
-          "why": "Updates map through native drag setter."
+          "function": "selector_dungeon_prompts",
+          "why": "Maps the offscreen A/B capture to the visible Divine Beast controls."
+        },
+        {
+          "file": "dm/host/hle_botw_touch_menu.c",
+          "function": "selector_publish_generic_view",
+          "why": "Retains AppHome prompts while the sensor selector owns focus."
+        },
+        {
+          "file": "dm/host/hle_botw_touch_menu.c",
+          "function": "dungeon_rotate_input",
+          "why": "Consumes accumulated movement through the dungeon camera while retaining its native limits."
+        },
+        {
+          "file": "dm/host/hle_botw_touch_menu.c",
+          "function": "selector_dungeon_markers",
+          "why": "Uses the projected centers in the game's live selector list, which move with the 3D map."
+        },
+        {
+          "file": "dm/host/hle_botw_touch_menu.c",
+          "function": "dungeon_service_marker",
+          "why": "Calls the validated native selector on the owning game thread after a stationary marker tap."
         }
       ],
-      "verification_status": "not_run",
-      "verification_reason": "Shared native hit/focus/action path is present; the remaining conditional screen states have no independent end-to-end run evidence.",
-      "implementation_status_reason": "A complete shared or screen-specific code path is present; verification status separately records whether this exact guest state has been exercised.",
-      "verification_evidence": [],
-      "verification_level": "none"
+      "verification_status": "passed",
+      "verification_reason": "On Mac with the supplied Vah Medoh save, D-pad selection, Tilt/Execute, sensor and Leave Area prompts, direct marker taps before and after rotation, and relative map dragging worked. Other beasts and physical iPhone gesture feel remain unverified.",
+      "implementation_status_reason": "Tilt and Back/Execute use the rendered capture geometry, the live map exposes the D-pad, and relative drag feeds the dungeon camera. Marker taps use live projected centers and the native selection function; the sensor selector inherits the live AppHome prompts.",
+      "verification_evidence": [
+        {
+          "file": "dm/host/tests/t_botw_touch_menu.c",
+          "function": "test_dungeon_captured_prompts",
+          "why": "Checks visible, hidden and ambiguous capture destinations."
+        },
+        {
+          "file": "dm/host/tests/t_botw_touch_menu.c",
+          "function": "test_dungeon_focused_footer",
+          "why": "Checks focused selector footer ownership and rejects a stale owner."
+        },
+        {
+          "file": "dm/host/tests/t_botw_touch_menu.c",
+          "function": "test_dungeon_relative_rotation",
+          "why": "Checks accumulated deltas, native interval, cancellation and controller precedence."
+        },
+        {
+          "file": "dm/host/tests/t_botw_touch_menu.c",
+          "function": "test_dungeon_marker_taps",
+          "why": "Checks projected marker coordinates, tap selection, drag separation and stale owner rejection."
+        }
+      ],
+      "verification_level": "game_state",
+      "verification_artifacts": [
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/divine-beast-20261109-144505/45-reopen7.png",
+          "why": "The map after choosing Tilt and Execute shows the changed beast pose."
+        },
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/divine-beast-20261109-144505/game8.log",
+          "why": "Mac game input trace for equal and opposite slow/fast drags, vertical movement and release."
+        },
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/divine-beast-20261109-144505/game9.log",
+          "why": "Mac run covering sensor selection, Back, Leave Area and cancellation."
+        },
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/divine-beast-20261109-144505/game11.log",
+          "why": "Mac scripted pointer trace for marker selection before and after rotating the map."
+        },
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/divine-beast-20261109-144505/76-marker-middle11.png",
+          "why": "The middle position is highlighted after a direct tap."
+        },
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/divine-beast-20261109-144505/79-marker-after-rotate11.png",
+          "why": "The top position is highlighted at its new location after a drag and direct tap."
+        },
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/divine-beast-20261109-144505/game12.log",
+          "why": "Final current-checkout Mac run: direct marker selection, map drag, Tilt and Execute."
+        },
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/divine-beast-20261109-144505/86-reopen12.png",
+          "why": "Reopening after Tilt and Execute shows the changed beast pose."
+        }
+      ]
     },
     {
       "id": "options.rows_values",

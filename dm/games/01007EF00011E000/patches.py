@@ -542,6 +542,36 @@ def validate_main(ctx):
     assert tuple(word(o) for o in range(0xd5801c, 0xd58030, 4)) == (
         0xfd400be8, 0xf94017f3, 0xa941fbfd, 0x9100c3ff, 0xd65f03c0,
     ), 'BOTW shared getter epilogue changed; recheck OBS32 scratch-register liveness'
+    # Dungeon map reads its own raw pair and applies 0.05 * the UI frame
+    # interval to its pitch/yaw before native clamping. Both sites use x19
+    # for the live screen and x20 for the input pair; x9-x17 are dead until
+    # the next native call. The second site has the frame interval in s0.
+    assert tuple(word(o) for o in range(0xdf2d20, 0xdf2d9c, 4)) == (
+        0x2d400680, 0x1e210822, 0xbd47e901, 0xf94002a0, 0x1f000800, 0x1e212000,
+        0x1a9fd7e1, 0x97fe0855, 0xf94002a0, 0x97fe0851, 0x37000100, 0x6d41a3e9,
+        0xf9401ff5, 0x6d40abeb, 0xa9444ff4, 0xa942fbfd, 0xfc4507ec, 0xd65f03c0,
+        0x90007ba8, 0xf9418d08, 0xf9400100, 0x97dea685, 0xf0004568, 0x1e204008,
+        0xbd400680, 0xbd425501, 0xaa1303e0, 0x1e210800, 0xbd767261, 0x1f080403,
+        0xbd367263,
+    ), 'BOTW dungeon camera input or interval sequence changed'
+    # Dungeon marker list and dispatch: the first function owns the selected
+    # index and projected point list, while the dispatcher chooses one of two
+    # native selection setters based on the current dungeon type.
+    assert tuple(word(o) for o in range(0xdf30c4, 0xdf3100, 4)) == (
+        0xd100c3ff, 0xa9017bfd, 0xa9024ff4, 0x910043fd, 0x91404408,
+        0x91231113, 0xb9400274, 0x3100069f, 0x540000c1, 0x12800000,
+        0xa9424ff4, 0xa9417bfd, 0x9100c3ff, 0xd65f03c0, 0x92407c21,
+    ), 'BOTW dungeon marker selection changed'
+    assert tuple(word(o) for o in range(0xdf2eb0, 0xdf2ed4, 4)) == (
+        0xb0007ba9, 0x52898708, 0x72a000c8, 0xf9448529, 0xaa0103f4,
+        0xf9400129, 0xaa0003f3, 0xb8686928, 0x71000d1f,
+    ), 'BOTW dungeon type lookup changed'
+    assert tuple(word(o) for o in range(0xdf31bc, 0xdf31d4, 4)) == (
+        0xa9bd7bfd, 0xf9000bf5, 0xa9024ff4, 0x910003fd, 0x91404408, 0x2a0103f3,
+    ), 'BOTW dungeon type-3 selector changed'
+    assert tuple(word(o) for o in range(0xdf3438, 0xdf3450, 4)) == (
+        0xa9bd7bfd, 0xa90157f6, 0xa9024ff4, 0x910003fd, 0x91404408, 0x2a0103f3,
+    ), 'BOTW dungeon marker selector changed'
     # Experimental composition preserves gyro selection. Pitch gates change only saved s0
     # and a persistent smoothing base; yaw gates change memory, never saved registers.
     # At each site x9-x17 remain unread through the next native call on every path.
@@ -738,6 +768,8 @@ OBS = {
     (0xe1a628, 31, 'f960de68', 'MainScreen3D update: correct its copied projection before rebuilding the world-label view'),
     (0xd58008, 33, 'f9409408', 'shared stick getter: snapshot the selected raw child pair before the native dead-zone/filter branches'),
     (0xd5801c, 32, 'fd400be8', 'shared normalized stick getter: inject one frame of relative input after native filtering and before return'),
+    (0xdf2d20, 44, '2d400680', 'Dungeon map: provide the queued touch displacement as its private native stick pair'),
+    (0xdf2d7c, 44 | 1 << 8, '1e204008', 'Dungeon map: normalize the queued touch displacement by the current UI interval'),
     (0xbf0c4c, 42, 'bd436261', 'CameraAiming common pitch target: add touch after gyro, before native clamp and smoothing'),
     (0xbf2ccc, 42 | 1 << 8, '394e2268', 'CameraAiming2 pitch target: add touch after gyro, before native smoothing'),
     (0xbf0e34, 43, '1e2f190a', 'CameraAiming final yaw: shift both native target and smoothed output by touch displacement'),
@@ -758,7 +790,7 @@ OBS = {
 # render info x1 are live; x9-x17 are unread until that call, as checked above.
 OBS_SAFE = {'cd57b23fa4bbad65803d9788c01821ee': {
     0xd5801c, 0x27ae4, 0xe1a628, 0x27d7c, 0xf714b8,
-    0xbf0c4c, 0xbf2ccc, 0xbf0e34, 0xbf2f90,
+    0xbf0c4c, 0xbf2ccc, 0xbf0e34, 0xbf2f90, 0xdf2d20, 0xdf2d7c,
 }}
 # How general each patch is and could be (dm/tools/docs_patches.py "Binding", listed in docs/agents/game-patches.md): what, its binding now, the loosest it could have (goal),
 # purpose, why; blocked or kept: why the gap stays open (cannot close yet, or left open on purpose); checked: what was checked on game files (else a judgement)

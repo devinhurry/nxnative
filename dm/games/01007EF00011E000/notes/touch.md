@@ -347,6 +347,49 @@ activation, exit, direction ownership and controller-mode suppression. The
 current test runtime has no mounted add-on content; X does not open Hero's Path
 there, so actual playback and physical iPhone acceptance remain pending.
 
+**Divine Beast controls (2026-11-09; Vah Medoh on Mac).** The fullscreen
+map is owned by `AppHome_00`; `AppMapDungeon_00` remains registered in gameplay
+and only supplies the active page. The D-pad is shown when both owners are live
+in the same input group. The Tilt and Back/Execute guides are rendered from an
+offscreen capture into `P_Text_01`; the touch rectangles must use the displayed
+capture transform. The sensor and Leave Area prompts use the AppHome footer,
+including when the sensor selector focuses AppMapDungeon.
+
+The supplied save verified D-pad position selection, Tilt and Execute: reopening
+the map showed the changed beast pose. Taps also opened the sensor selector and
+Leave Area confirmation, closed the selector with Back, chose sensor Off, and
+cancelled leaving. The dungeon camera reads a private input pair rather than the
+shared look getter. Its build-gated observer consumes accumulated touch movement
+once per frame and compensates for the game's camera gain and UI interval; a
+drag across the picture's short edge turns the view by half a revolution. Mac
+scripted input verified horizontal and vertical movement, equal and opposite
+slow/fast drags, and no continued motion after release. The direct-touch build
+uses the validated `cd57b23fa4bbad65803d9788c01821ee` main build.
+
+The pink position markers have offscreen and overlapping `B_Hit_00` pane
+matrices. Their projected centers instead come from the live marker list used
+by the game's direction-key selector. A stationary tap selects the nearest
+visible marker through the same build-gated native selection function; a drag
+starting on a marker rotates the view. On Mac, scripted pointer taps selected
+the middle and bottom markers, then selected the top marker at its new position
+after rotation. A subsequent gesture preserves movement the game has not yet
+consumed. Other Divine Beasts and the feel of the gesture on a physical iPhone
+remain unverified. Evidence: `divine-beast-20261109-144505/` in the game work
+folder; the original save was not modified.
+
+**Review findings (2026-11-09; open, synthetic reproductions).** A finite
+pointer move outside the centered UI canvas clears `g_pointer_down`; returning
+inside during the same Divine Beast drag cannot resume rotation. This also
+affects existing menu gestures that share the coordinate guard. An owned
+drag should keep its pointer until End or Cancel, with safe edge handling.
+Separately, Cancel clears the shared movement queue but does not invalidate
+a sample already taken by the first dungeon camera observer. If Cancel
+arrives before the interval observer, that observer still injects the saved
+movement. Both observers need to honor a shared cancellation generation.
+The existing menu suite, 25 inventory/patch checks and exact main-build
+validation passed; these two additional cases remain unfixed. No new game
+or physical iPhone run was performed for this review.
+
 The relocated collapsed map is drawn before other screens in its native
 ScreenMgr layer. OBS41 filters the draw receiver at the validated
 `main+0xf714b8` dispatch and shifts preceding draw receivers one slot while

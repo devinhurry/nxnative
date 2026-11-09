@@ -113,7 +113,19 @@ static pthread_mutex_t g_generic_hits_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_menu_mu = PTHREAD_MUTEX_INITIALIZER;
 static dm_botw_touch_menu_view g_view;
 static int g_view_valid, g_pointer_down, g_pointer_dragged;
-static int g_pointer_rotate;
+static int g_pointer_rotate, g_rotate_dungeon_owned;
+static float g_rotate_gesture_delta[2], g_dungeon_delta[2];
+static _Thread_local struct {
+    uintptr_t screen;
+    uint64_t frame;
+    float delta[2], pair[2];
+    int active;
+} g_dungeon_sample;
+static struct {
+    uintptr_t screen;
+    uint64_t frame, page;
+    int pending, index, selected;
+} g_dungeon_marker;
 static struct {
     uintptr_t pane, item;
     uint64_t started_ns;
@@ -121,7 +133,7 @@ static struct {
 static int g_target_equip;
 static uintptr_t g_target_equip_item;
 enum { INVENTORY_MENU_HOLD_NS = 150000000 };
-static float g_rotate_last_x;
+static float g_rotate_last_x, g_rotate_last_y;
 static int g_presented_menu;
 static int g_presented_gameplay;
 static int g_presented_loadout;
@@ -226,7 +238,7 @@ static struct {
 static uintptr_t g_selector_miss_pane, g_selector_bad_manager;
 static uint64_t g_selector_miss_page, g_selector_miss_popup;
 static uint64_t g_target_button_bits;
-static int g_target_axis;
+static int g_target_axis, g_target_axis_y;
 static int g_last_apply_valid, g_release_pending, g_axis_release_pending;
 static float g_pointer_start[2], g_target_center[2];
 static uint64_t g_last_apply_frame, g_last_action_frame, g_last_action_bits;
@@ -234,7 +246,7 @@ static uint64_t g_target_page_key, g_target_popup_key, g_apply_output_bits;
 static uint64_t g_generic_eligible_frame;
 static uintptr_t g_generic_eligible_entry, g_generic_eligible_screen, g_generic_eligible_root;
 static int g_generic_eligible_group = -1;
-static int g_apply_output_axis_valid, g_apply_output_rx;
+static int g_apply_output_axis_valid, g_apply_output_rx, g_apply_output_axis_ry;
 static int g_apply_output_map_left_valid, g_apply_output_map_right_valid;
 static int g_apply_output_lx, g_apply_output_ly;
 static int g_apply_output_ry;
@@ -304,6 +316,7 @@ static int selector_unfocused_view_for_manager(uintptr_t manager, uint64_t frame
 static int scope_owner_live_locked(uint64_t frame);
 static void selector_list_widget_observe(const uint64_t *regs);
 static void selector_service_quick_tap(module_t *main,uint64_t frame);
+static void dungeon_rotate_input(uint64_t *regs, int interval);
 static int selector_list_widget_vtable_matches(uintptr_t main_base, uintptr_t vtable,
                                                uintptr_t update);
 static int selector_list_widget_supported(uintptr_t main_base, uintptr_t widget,
@@ -345,6 +358,7 @@ static uintptr_t g_test_list_widget_setter;
 static uintptr_t g_test_list_category_setter;
 static uintptr_t g_test_list_category_jump;
 static uintptr_t g_test_quick_select_resolver;
+static uintptr_t g_test_dungeon_marker_setter;
 #endif
 static _Atomic int g_map_setter_signature_reported;
 
@@ -2412,6 +2426,8 @@ void dm_botw_touch_menu_install(void) {
     if (!gate_obs_present(OBS_BOTW_TOUCH_PANE) || !gate_obs_present(OBS_BOTW_TOUCH_MATRIX) ||
         !gate_obs_present(OBS_BOTW_MENU_SELECT)) return;
     gate_obs_read_set(OBS_BOTW_MENU_SELECT, dm_botw_touch_menu_selector);
+    if (gate_obs_present(OBS_BOTW_DUNGEON_ROTATE))
+        gate_obs_set(OBS_BOTW_DUNGEON_ROTATE, dungeon_rotate_input);
     if (gate_obs_present(OBS_BOTW_LIST_WIDGET_UPDATE))
         gate_obs_read_set(OBS_BOTW_LIST_WIDGET_UPDATE, selector_list_widget_observe);
     if (gate_obs_present(OBS_BOTW_SCREEN_DRAW)) gate_obs_result_set(OBS_BOTW_SCREEN_DRAW, selector_screen_draw);
@@ -4424,7 +4440,14 @@ static void selector_publish_generic_view(uintptr_t manager, uintptr_t screen, i
                 menu_add_action(&view, button, native.footer_actions[i]);
             }
         }
-        if (selector_apphome_page_screen_name(screen_name) && !selector_name_prefix(screen_name, "AppMap")) {
+        // The sensor selection inside the Divine Beast map focuses
+        // AppMapDungeon while its Back/Select guides still belong to AppHome.
+        int dungeon_page = !strcmp(screen_name, "AppMapDungeon_00") && input_active &&
+            native_screen_shown && native_group_getter &&
+            ((int (*)(uintptr_t))native_screen_shown)(screen) &&
+            ((int (*)(uintptr_t))native_group_getter)(screen) == group;
+        if ((selector_apphome_page_screen_name(screen_name) && !selector_name_prefix(screen_name, "AppMap")) ||
+            dungeon_page) {
             uintptr_t apphome_screen = 0, apphome_root = 0;
             if (selector_apphome_owner_active(manager, group, native_screen_shown,
                                               native_group_getter, &apphome_screen,
@@ -4627,6 +4650,90 @@ static void selector_paging_prompts(uintptr_t root, uint64_t frame,
     }
 }
 
+// Find an immediate child: dungeon layouts contain more than 512 panes, so
+// searching the complete tree cannot establish a unique capture destination.
+static uintptr_t selector_named_child(uintptr_t parent, const char *wanted) {
+    if (!selector_range(parent, 0x30)) return 0;
+    uintptr_t sentinel = parent + 0x20, node = selector_read_ptr(parent, 0x28), match = 0;
+    for (int i = 0; node && node != sentinel && i < 512; i++) {
+        if (node < 8) return 0;
+        uintptr_t child = node - 8;
+        if (!selector_range(child, PANE_NAME + 24) ||
+            selector_read_ptr(child, PANE_PARENT) != parent) return 0;
+        char name[25]; pane_name((uint8_t *)child, name);
+        if (!strcmp(name, wanted)) {
+            if (match) return 0;
+            match = child;
+        }
+        node = selector_read_ptr(child, 0x10);
+    }
+    return node == sentinel ? match : 0;
+}
+
+// AppMapDungeon keeps the projected marker centers in the same list its
+// direction-key selector uses. The +8 pair is in 1280x720, center-origin UI
+// coordinates; pane hit matrices are offscreen capture coordinates instead.
+static void selector_dungeon_markers(uintptr_t screen, dm_botw_touch_menu_view *view) {
+    if (!view || !gate_obs_present(OBS_BOTW_DUNGEON_ROTATE) ||
+        strcmp(dm_main_build(), BOTW_BUILD) || !selector_range(screen, 0x118f8)) return;
+    int32_t selected, count, limit;
+    memcpy(&selected, (const void *)(screen + 0x118c4), sizeof selected);
+    memcpy(&count, (const void *)(screen + 0x118c8), sizeof count);
+    uintptr_t items = selector_read_ptr(screen, 0x118d0);
+    uintptr_t limit_ptr = selector_read_ptr(screen, 0x118f0);
+    if (count <= 0 || count > DM_BOTW_MENU_MAX_DUNGEON_MARKERS ||
+        !selector_range(items, (size_t)count * sizeof(uintptr_t)) ||
+        !selector_range(limit_ptr, sizeof limit)) return;
+    memcpy(&limit, (const void *)limit_ptr, sizeof limit);
+    if (limit <= 0 || limit > count || selected < 0 || selected >= limit) return;
+    float points[DM_BOTW_MENU_MAX_DUNGEON_MARKERS][2];
+    for (int i = 0; i < limit; i++) {
+        uintptr_t item = selector_read_ptr(items, (size_t)i * sizeof(uintptr_t));
+        float native[2];
+        if (!selector_range(item, 0x10)) return;
+        memcpy(native, (const void *)(item + 8), sizeof native);
+        if (!isfinite(native[0]) || !isfinite(native[1])) return;
+        points[i][0] = (native[0] + 640.0f) / 1280.0f;
+        points[i][1] = (360.0f - native[1]) / 720.0f;
+    }
+    view->dungeon_marker_count = limit;
+    view->dungeon_marker_selected = selected;
+    memcpy(view->dungeon_markers, points, (size_t)limit * sizeof points[0]);
+}
+
+static void selector_dungeon_prompts(uintptr_t screen, dm_botw_touch_menu_view *view) {
+    uintptr_t root = selector_read_ptr(selector_read_ptr(screen, 0x30), 0x18);
+    const char *path[] = {"N_Born_00", "N_InOut_00", "N_MiniMap_01", "N_GuidePos_01",
+                          "N_Device_03", "N_GuidePos_00", "P_Text_01"};
+    uintptr_t dest = root;
+    for (size_t i = 0; dest && i < sizeof path / sizeof path[0]; i++)
+        dest = selector_named_child(dest, path[i]);
+    uintptr_t capture = selector_named_child(root, "N_CaptureText_01");
+    if (!root || !capture || !dest || !pane_chain_visible((uint8_t *)dest) ||
+        !pane_chain_alpha_visible((uint8_t *)dest)) return;
+    const char *icons[] = {"T_A_00", "T_B_00"};
+    const char *labels[] = {"T_GuideA_00", "T_GuideB_00"};
+    const uint64_t buttons[] = {DM_BTN_A, DM_BTN_B};
+    for (int i = 0; i < 2; i++) {
+        uintptr_t icon = selector_named_child(capture, icons[i]);
+        uintptr_t label = selector_named_child(capture, labels[i]);
+        float icon_rect[4], text_rect[4], rect[4];
+        if (!icon || !label || !pane_chain_visible((uint8_t *)icon) ||
+            !pane_chain_alpha_visible((uint8_t *)icon) ||
+            !pane_chain_visible((uint8_t *)label) ||
+            !pane_chain_alpha_visible((uint8_t *)label) ||
+            !capture_mapped_rect((uint8_t *)capture, (uint8_t *)icon, (uint8_t *)dest, icon_rect) ||
+            !capture_mapped_rect((uint8_t *)capture, (uint8_t *)label, (uint8_t *)dest, text_rect)) continue;
+        back_hit_rect(text_rect, icon_rect, -INFINITY, INFINITY, rect);
+        if (buttons[i] == DM_BTN_B) {
+            view->back_valid = 1;
+            memcpy(view->back, rect, sizeof rect);
+        } else {
+            menu_add_action(view, buttons[i], rect);
+        }
+    }
+}
+
 // A help page, empty album or other prompt-only menu need not have a
 // BoxCursor selection. Resolve its live native screen from the registry and
 // resolve the foremost input-enabled owner with matching live prompts.
@@ -4747,6 +4854,38 @@ static int selector_cursorless_prompt_view(uintptr_t manager, uint64_t frame,
         matches++;
     }
     if (!matches) return 0;
+    // AppMapDungeon stays registered during gameplay. AppHome owns the
+    // fullscreen menu, while the active dungeon page supplies its controls.
+    char selected_name[64];
+    if (input_active && selector_screen_name(selected.generic_screen, selected_name) &&
+        !strcmp(selected_name, "AppHome_00")) {
+        uintptr_t apphome = 0, apphome_root = 0;
+        if (selector_apphome_owner_active(manager, group, shown, group_getter,
+                                          &apphome, &apphome_root) &&
+            apphome == selected.generic_screen && apphome_root == selected.generic_root) {
+            for (uint32_t i = 0; i < count; i++) {
+                if (((const uint8_t *)active)[i] & 0x80) continue;
+                uintptr_t screen = selector_read_ptr(screens, i * sizeof(uintptr_t));
+                char name[64];
+                if (!selector_range(screen, 0x100) || !selector_screen_name(screen, name) ||
+                    strcmp(name, "AppMapDungeon_00") ||
+                    !((int (*)(uintptr_t))shown)(screen) ||
+                    ((int (*)(uintptr_t))group_getter)(screen) != group) continue;
+                uintptr_t state = selector_read_ptr(screen, 0x38);
+                int8_t visible = -1; uint8_t mode = 0;
+                memcpy(&visible, (const void *)(screen + 0xfd), sizeof visible);
+                memcpy(&mode, (const void *)(screen + 0xfe), sizeof mode);
+                if (visible >= 0 && mode == 2 && selector_range(state, 0x39) &&
+                    (((const uint8_t *)state)[0x38] & 2)) {
+                    selected.menu_dpad_visible = 1;
+                    selected.dungeon_screen = screen;
+                    selector_dungeon_prompts(screen, &selected);
+                    selector_dungeon_markers(screen, &selected);
+                    break;
+                }
+            }
+        }
+    }
     *view = selected;
     return 1;
 }
@@ -5822,6 +5961,10 @@ static void camera_clear_locked(void);
 static void menu_clear_queue_locked(void) {
     g_pointer_down = g_pointer_dragged = 0;
     g_pointer_rotate = 0;
+    g_rotate_dungeon_owned = 0;
+    g_rotate_gesture_delta[0] = g_rotate_gesture_delta[1] = 0;
+    g_dungeon_delta[0] = g_dungeon_delta[1] = 0;
+    memset(&g_dungeon_marker, 0, sizeof g_dungeon_marker);
     memset(&g_item_press, 0, sizeof g_item_press);
     camera_clear_locked();
     g_map_prompt_down = g_map_prompt_back = 0;
@@ -5840,7 +5983,7 @@ static void menu_clear_target_locked(void) {
     g_target_valid = g_target_popup = g_confirm_pending = 0;
     g_target_equip = 0; g_target_equip_item = 0;
     g_target_button_bits = 0;
-    g_target_axis = 0;
+    g_target_axis = g_target_axis_y = 0;
     g_target_category = g_target_generic = g_selector_ready = 0;
     g_target_pane = g_target_owner_pane = g_target_entry = g_target_screen = 0;
     g_target_root = 0;
@@ -6014,7 +6157,8 @@ void dm_botw_touch_menu_observe(const dm_botw_touch_menu_view *view) {
     pthread_mutex_lock(&g_menu_mu);
     int was_active = menu_active_locked(frame);
     int had_map_owner = g_view_valid && g_view.map_visible;
-    int had_menu_dpad = had_map_owner && g_view.hero_path;
+    int had_menu_dpad = (had_map_owner && g_view.hero_path) || g_view.menu_dpad_visible;
+    uintptr_t old_dungeon_screen = g_view.dungeon_screen;
     uintptr_t old_map_pane = g_view.map_pane, old_map_root = g_view.map_root;
     uintptr_t old_map_screen = g_view.generic_screen;
     uint64_t old_map_page = g_view.page_key;
@@ -6032,7 +6176,8 @@ void dm_botw_touch_menu_observe(const dm_botw_touch_menu_view *view) {
         view->category_count >= 0 && view->category_count <= DM_BOTW_MENU_MAX_CATEGORIES &&
         view->popup_count >= 0 && view->popup_count <= DM_BOTW_MENU_MAX_POPUP_ROWS &&
         view->footer_action_count >= 0 && view->footer_action_count <= DM_BOTW_MENU_MAX_FOOTER_ACTIONS &&
-        view->generic_count >= 0 && view->generic_count <= DM_BOTW_MENU_MAX_GENERIC_TARGETS) {
+        view->generic_count >= 0 && view->generic_count <= DM_BOTW_MENU_MAX_GENERIC_TARGETS &&
+        view->dungeon_marker_count >= 0 && view->dungeon_marker_count <= DM_BOTW_MENU_MAX_DUNGEON_MARKERS) {
         g_view = *view;
         g_view_valid = 1;
     } else {
@@ -6045,6 +6190,15 @@ void dm_botw_touch_menu_observe(const dm_botw_touch_menu_view *view) {
             g_map_published_root = g_view.map_root;
         } else {
             g_map_published_pane = g_map_published_root = 0;
+        }
+    }
+    if (!late_inventory_view && old_dungeon_screen &&
+        (!g_view.menu_dpad_visible || g_view.dungeon_screen != old_dungeon_screen)) {
+        g_dungeon_delta[0] = g_dungeon_delta[1] = 0;
+        memset(&g_dungeon_marker, 0, sizeof g_dungeon_marker);
+        if (g_rotate_dungeon_owned) {
+            g_rotate_dungeon_owned = g_pointer_rotate = g_pointer_down = g_pointer_dragged = 0;
+            g_rotate_gesture_delta[0] = g_rotate_gesture_delta[1] = 0;
         }
     }
     int lost_map_owner = !late_inventory_view && had_map_owner &&
@@ -6061,7 +6215,8 @@ void dm_botw_touch_menu_observe(const dm_botw_touch_menu_view *view) {
         g_last_apply_valid = 0;
     }
     int is_active = menu_active_locked(frame);
-    if (had_menu_dpad != (is_active && g_view.map_visible && g_view.hero_path)) notify = 1;
+    int menu_dpad = (g_view.map_visible && g_view.hero_path) || g_view.menu_dpad_visible;
+    if (had_menu_dpad != (is_active && menu_dpad)) notify = 1;
     int camera_active = camera_owner_live_locked(frame);
     if (g_camera_notified_active && !camera_active) {
         // A camera confirmation can retain the exact native screen identity.
@@ -6205,7 +6360,9 @@ void dm_botw_touch_menu_open_category(int category) {
 }
 int dm_botw_touch_menu_dpad_visible(void) {
     pthread_mutex_lock(&g_menu_mu);
-    int visible = menu_active_locked(menu_render_frame()) && g_view.map_visible && g_view.hero_path;
+    uint64_t frame = menu_render_frame();
+    int map_dpad = (g_view.map_visible && g_view.hero_path) || g_view.menu_dpad_visible;
+    int visible = menu_active_locked(frame) && map_dpad;
     pthread_mutex_unlock(&g_menu_mu);
     return visible;
 }
@@ -6371,17 +6528,163 @@ static void map_axes_trace_locked(uint64_t frame, uintptr_t pane, uintptr_t root
         g_apply_output_map_right_valid, g_apply_output_ry);
 }
 
-static void menu_rotate_move_locked(float x) {
-    float delta = (x - g_rotate_last_x) * 1280.0f;
-    if (fabsf(x - g_pointer_start[0]) * 1280.0f >= 8) g_pointer_dragged = 1;
-    g_rotate_last_x = x;
-    if (!g_pointer_dragged || delta == 0) return;
+// Return the same selection function the game's dungeon input dispatcher uses.
+// The build and entry signatures keep these game-owned calls out of other
+// revisions; the game thread calls them at its camera update observation.
+static uintptr_t selector_dungeon_marker_setter(int index) {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000") || strcmp(dm_main_build(), BOTW_BUILD)) return 0;
+#ifdef DM_TEST_HOOKS
+    if (g_test_dungeon_marker_setter) return g_test_dungeon_marker_setter;
+#endif
+    module_t *main = NULL;
+    for (int i = 0; i < g_nmod; i++)
+        if (!strcmp(g_mod[i].name, "main") && g_mod[i].loaded) { main = &g_mod[i]; break; }
+    if (!main || !main->base) return 0;
+    uintptr_t global = (uintptr_t)main->base + 0x1d67908;
+    if (!selector_loaded_module_range(global, sizeof(uintptr_t))) return 0;
+    uintptr_t indirect = selector_read_ptr(global, 0);
+    uintptr_t state = selector_read_ptr(indirect, 0);
+    if (!selector_range(state, 0x64c3c)) return 0;
+    uint32_t type;
+    memcpy(&type, (const void *)(state + 0x64c38), sizeof type);
+    if (type > 4 || (type == 3 && index >= 3)) return 0;
+    uintptr_t setter = (uintptr_t)main->base + (type == 3 ? 0xdf31bc : 0xdf3438);
+    static const uint8_t signature3[] = {
+        0xfd,0x7b,0xbd,0xa9,0xf5,0x0b,0x00,0xf9,0xf4,0x4f,0x02,0xa9,
+        0xfd,0x03,0x00,0x91,0x08,0x44,0x40,0x91,0xf3,0x03,0x01,0x2a
+    };
+    static const uint8_t signature_other[] = {
+        0xfd,0x7b,0xbd,0xa9,0xf6,0x57,0x01,0xa9,0xf4,0x4f,0x02,0xa9,
+        0xfd,0x03,0x00,0x91,0x08,0x44,0x40,0x91,0xf3,0x03,0x01,0x2a
+    };
+    const uint8_t *signature = type == 3 ? signature3 : signature_other;
+    if (!selector_loaded_module_range(setter, sizeof signature3) ||
+        memcmp((const void *)setter, signature, sizeof signature3)) return 0;
+    return setter;
+}
+
+static void dungeon_service_marker(uintptr_t screen, uint64_t frame) {
+    int index = -1, selected = -1;
+    pthread_mutex_lock(&g_menu_mu);
+    if (g_dungeon_marker.pending && g_dungeon_marker.screen == screen &&
+        g_view.menu_dpad_visible && g_view.dungeon_screen == screen &&
+        g_dungeon_marker.page == g_view.page_key && menu_view_fresh_locked(frame) &&
+        frame >= g_dungeon_marker.frame && frame - g_dungeon_marker.frame <= 4) {
+        index = g_dungeon_marker.index;
+        selected = g_dungeon_marker.selected;
+    }
+    if (g_dungeon_marker.pending && g_dungeon_marker.screen == screen)
+        memset(&g_dungeon_marker, 0, sizeof g_dungeon_marker);
+    pthread_mutex_unlock(&g_menu_mu);
+    if (index < 0 || !dm_botw_touch_hud_active()) return;
+    dm_botw_touch_menu_view current = {0};
+    selector_dungeon_markers(screen, &current);
+    if (index >= current.dungeon_marker_count || selected != current.dungeon_marker_selected ||
+        index == selected) return;
+    uintptr_t setter = selector_dungeon_marker_setter(index);
+    if (!setter) return;
+    ((void (*)(uintptr_t, int))setter)(screen, index);
+    if (atomic_load_explicit(&g_trace, memory_order_acquire))
+        LOG("BOTW dungeon marker frame=%llu selected=%d target=%d",
+            (unsigned long long)frame, selected, index);
+}
+
+// The Divine Beast camera bypasses the shared look getter. Its update first
+// tests a raw pair, then multiplies it by the UI frame interval before adding
+// pitch/yaw and applying the game's own limits. Use a private per-thread pair
+// so physical input, the cached native controller, and other menus stay intact.
+static void dungeon_rotate_input(uint64_t *regs, int interval) {
+    if (!regs) return;
+    uint64_t frame = dm_guest_frame();
+    if (interval) {
+        if (!g_dungeon_sample.active || g_dungeon_sample.screen != regs[19] ||
+            regs[20] != (uintptr_t)g_dungeon_sample.pair) return;
+        pthread_mutex_lock(&g_menu_mu);
+        int live = g_dungeon_sample.frame == frame && g_view.menu_dpad_visible &&
+                   g_view.dungeon_screen == regs[19] && menu_view_fresh_locked(frame);
+        pthread_mutex_unlock(&g_menu_mu);
+        float ratio;
+        // entry.S stores q0 at byte 256; s0 is the native UI frame interval.
+        memcpy(&ratio, (const uint8_t *)regs + 256, sizeof ratio);
+        if (live && isfinite(ratio) && ratio > 0) {
+            // A drag across the short edge rotates half a turn. Divide out
+            // the game's 0.05 stick gain and current UI interval.
+            const float gain = 62.8318531f;
+            g_dungeon_sample.pair[0] = g_dungeon_sample.delta[0] * gain / ratio;
+            g_dungeon_sample.pair[1] = -g_dungeon_sample.delta[1] * gain / ratio;
+        } else g_dungeon_sample.pair[0] = g_dungeon_sample.pair[1] = 0;
+        if (atomic_load_explicit(&g_trace, memory_order_acquire))
+            LOG("BOTW dungeon drag frame=%llu delta=(%.5f,%.5f) interval=%.5f",
+                (unsigned long long)frame, g_dungeon_sample.delta[0],
+                g_dungeon_sample.delta[1], ratio);
+        g_dungeon_sample.active = 0;
+        return;
+    }
+    g_dungeon_sample.active = 0;
+    dungeon_service_marker((uintptr_t)regs[19], frame);
+    pthread_mutex_lock(&g_menu_mu);
+    if (!g_view.menu_dpad_visible || !g_view.dungeon_screen ||
+        g_view.dungeon_screen != regs[19] || !menu_view_fresh_locked(frame) ||
+        (!g_dungeon_delta[0] && !g_dungeon_delta[1])) {
+        pthread_mutex_unlock(&g_menu_mu);
+        return;
+    }
+    uintptr_t input = (uintptr_t)regs[20];
+    float native[2];
+    if (!selector_range(input, sizeof native)) {
+        pthread_mutex_unlock(&g_menu_mu);
+        return;
+    }
+    memcpy(native, (const void *)input, sizeof native);
+    if (!isfinite(native[0]) || !isfinite(native[1]) ||
+        native[0] != 0 || native[1] != 0) {
+        // A real stick takes precedence over a simultaneous touch.
+        g_dungeon_delta[0] = g_dungeon_delta[1] = 0;
+        pthread_mutex_unlock(&g_menu_mu);
+        return;
+    }
+    g_dungeon_sample.screen = regs[19]; g_dungeon_sample.frame = frame;
+    g_dungeon_sample.delta[0] = g_dungeon_delta[0];
+    g_dungeon_sample.delta[1] = g_dungeon_delta[1];
+    g_dungeon_delta[0] = g_dungeon_delta[1] = 0;
+    // Wake the native update even for subpixel motion; replace this pair
+    // with the actual displacement after the game reads its frame interval.
+    g_dungeon_sample.pair[0] = 1; g_dungeon_sample.pair[1] = 0;
+    g_dungeon_sample.active = 1;
+    regs[20] = (uintptr_t)g_dungeon_sample.pair;
+    pthread_mutex_unlock(&g_menu_mu);
+}
+
+static void menu_rotate_move_locked(float x, float y) {
+    float dx = (x - g_rotate_last_x) * 1280.0f;
+    float dy = (y - g_rotate_last_y) * 720.0f;
+    float total_x = (x - g_pointer_start[0]) * 1280.0f;
+    float total_y = (y - g_pointer_start[1]) * 720.0f;
+    g_rotate_last_x = x; g_rotate_last_y = y;
+    if (g_rotate_dungeon_owned) {
+        // Preserve every pointer delta until the dungeon camera consumes it.
+        // The map uses its own raw stick pair, not the shared camera getter.
+        if (!g_pointer_dragged) {
+            g_rotate_gesture_delta[0] += dx; g_rotate_gesture_delta[1] += dy;
+            if (total_x * total_x + total_y * total_y < 16.0f) return;
+            g_pointer_dragged = 1;
+            dx = g_rotate_gesture_delta[0]; dy = g_rotate_gesture_delta[1];
+            g_rotate_gesture_delta[0] = g_rotate_gesture_delta[1] = 0;
+        }
+        g_dungeon_delta[0] += dx / 720.0f;
+        g_dungeon_delta[1] += dy / 720.0f;
+        return;
+    }
+    if (total_x * total_x + (g_view.menu_dpad_visible ? total_y * total_y : 0) >= 64.0f)
+        g_pointer_dragged = 1;
+    if (!g_pointer_dragged || (dx == 0 && (!g_view.menu_dpad_visible || dy == 0))) return;
     g_target_valid = 1; g_target_index = -5;
-    g_target_axis = (int32_t)fmaxf(-DM_STICK_MAX, fminf(DM_STICK_MAX, delta * 1024.0f));
+    g_target_axis = (int32_t)fmaxf(-DM_STICK_MAX, fminf(DM_STICK_MAX, dx * 1024.0f));
+    g_target_axis_y = g_view.menu_dpad_visible ?
+        (int32_t)fmaxf(-DM_STICK_MAX, fminf(DM_STICK_MAX, -dy * 1024.0f)) : 0;
     g_target_page_key = g_view.page_key; g_target_popup_key = g_view.popup_key;
     g_last_apply_valid = 0;
 }
-
 
 void dm_botw_touch_menu_pointer(int phase, float x, float y) {
     pthread_mutex_lock(&g_menu_mu);
@@ -6637,13 +6940,21 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
         }
     }
     if (phase == DM_BOTW_MENU_BEGIN) {
+        // A new gesture can start before the previous drag's final movement
+        // reaches the game's next update. Keep that displacement on the same
+        // live dungeon page instead of dropping it at finger-down.
+        int keep_delta = !g_pointer_down && g_view.menu_dpad_visible && g_view.dungeon_screen;
+        float pending_x = g_dungeon_delta[0], pending_y = g_dungeon_delta[1];
         menu_clear_queue_locked();
+        if (keep_delta) { g_dungeon_delta[0] = pending_x; g_dungeon_delta[1] = pending_y; }
         g_pointer_down = 1;
         g_pointer_start[0] = x; g_pointer_start[1] = y;
-        g_pointer_rotate = g_view.inventory_rotate_visible && !g_view.popup_visible &&
+        g_pointer_rotate = (g_view.inventory_rotate_visible || g_view.menu_dpad_visible) && !g_view.popup_visible &&
             !(g_view.back_valid && point_in_rect(x, y, g_view.back)) &&
             hit_rects(x, y, g_view.footer_actions, g_view.footer_action_count) < 0;
-        g_rotate_last_x = x;
+        g_rotate_last_x = x; g_rotate_last_y = y;
+        g_rotate_dungeon_owned = g_pointer_rotate && g_view.menu_dpad_visible &&
+                                 gate_obs_present(OBS_BOTW_DUNGEON_ROTATE);
         g_pointer_page_key = g_view.page_key;
         g_pointer_popup_key = g_view.popup_key;
         if (!g_view.generic_mode && !g_view.popup_visible && !g_pointer_rotate) {
@@ -6664,13 +6975,23 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
         return;
     }
     if (g_pointer_rotate) {
-        if (!g_view.inventory_rotate_visible || g_view.popup_visible) menu_clear_queue_locked();
-        else if (phase == DM_BOTW_MENU_MOVE || phase == DM_BOTW_MENU_END) {
-            menu_rotate_move_locked(x);
-            if (phase == DM_BOTW_MENU_END) g_pointer_down = g_pointer_rotate = 0;
+        if ((!g_view.inventory_rotate_visible && !g_view.menu_dpad_visible) || g_view.popup_visible) {
+            menu_clear_queue_locked();
+        } else if (phase == DM_BOTW_MENU_MOVE || phase == DM_BOTW_MENU_END) {
+            menu_rotate_move_locked(x, y);
+            if (phase == DM_BOTW_MENU_END) g_rotate_dungeon_owned = 0;
+            if (phase == DM_BOTW_MENU_END && !g_pointer_dragged && g_view.menu_dpad_visible) {
+                // A stationary tap can still hit an action on the map.
+                g_pointer_rotate = 0;
+            } else {
+                if (phase == DM_BOTW_MENU_END) g_pointer_down = g_pointer_rotate = 0;
+                pthread_mutex_unlock(&g_menu_mu);
+                return;
+            }
+        } else {
+            pthread_mutex_unlock(&g_menu_mu);
+            return;
         }
-        pthread_mutex_unlock(&g_menu_mu);
-        return;
     }
     if (phase == DM_BOTW_MENU_MOVE) {
         double dx = (double)(x - g_pointer_start[0]) * 1280.0;
@@ -6685,6 +7006,32 @@ void dm_botw_touch_menu_pointer(int phase, float x, float y) {
     double end_dx = (double)(x - g_pointer_start[0]) * 1280.0;
     double end_dy = (double)(y - g_pointer_start[1]) * 720.0;
     if (end_dx * end_dx + end_dy * end_dy >= 64.0) g_pointer_dragged = 1;
+    if (!g_pointer_dragged && g_view.menu_dpad_visible && g_view.dungeon_screen &&
+        !g_view.popup_visible && !(g_view.back_valid && point_in_rect(x, y, g_view.back)) &&
+        hit_rects(x, y, g_view.footer_actions, g_view.footer_action_count) < 0) {
+        int marker = -1;
+        float best = 32.0f * 32.0f;
+        for (int i = 0; i < g_view.dungeon_marker_count; i++) {
+            float dx = (x - g_view.dungeon_markers[i][0]) * 1280.0f;
+            float dy = (y - g_view.dungeon_markers[i][1]) * 720.0f;
+            float sx = (g_pointer_start[0] - g_view.dungeon_markers[i][0]) * 1280.0f;
+            float sy = (g_pointer_start[1] - g_view.dungeon_markers[i][1]) * 720.0f;
+            float distance = dx * dx + dy * dy;
+            if (distance < best && sx * sx + sy * sy < 32.0f * 32.0f) {
+                marker = i; best = distance;
+            }
+        }
+        if (marker >= 0) {
+            if (marker != g_view.dungeon_marker_selected) {
+                g_dungeon_marker.screen = g_view.dungeon_screen;
+                g_dungeon_marker.frame = frame; g_dungeon_marker.page = g_view.page_key;
+                g_dungeon_marker.index = marker; g_dungeon_marker.selected = g_view.dungeon_marker_selected;
+                g_dungeon_marker.pending = 1;
+            }
+            pthread_mutex_unlock(&g_menu_mu);
+            return;
+        }
+    }
     int carousel = !g_view.popup_visible && (g_view.carousel_valid ||
         (!g_view.generic_mode && g_view.inventory_visible));
     int page_direction = 0;
@@ -6926,7 +7273,7 @@ static int menu_release_axes_locked(int32_t axes[4]) {
     g_axis_release_pending = 0;
     if (mask & 1) {
         axes[2] = axes[3] = 0;
-        g_apply_output_axis_valid = 1; g_apply_output_rx = 0;
+        g_apply_output_axis_valid = 1; g_apply_output_rx = g_apply_output_axis_ry = 0;
     }
     if (mask & 2) {
         axes[0] = axes[1] = 0;
@@ -6971,7 +7318,7 @@ int dm_botw_touch_menu_apply(uint64_t *buttons, int32_t axes[4], uint64_t frame)
         }
         if (g_apply_output_map_right_valid) axes[3] = g_apply_output_ry;
         if (g_apply_output_axis_valid) {
-            axes[2] = g_apply_output_rx; axes[3] = 0;
+            axes[2] = g_apply_output_rx; axes[3] = g_apply_output_axis_ry;
         }
         if (g_apply_output_camera_axes_valid) {
             for (int i = 0; i < 4; i++)
@@ -7134,7 +7481,8 @@ int dm_botw_touch_menu_apply(uint64_t *buttons, int32_t axes[4], uint64_t frame)
     if (g_target_valid && (g_target_page_key != g_view.page_key ||
                            g_target_popup_key != g_view.popup_key))
         menu_clear_queue_locked();
-    if (g_target_valid && g_target_index == -5 && !g_view.inventory_rotate_visible)
+    if (g_target_valid && g_target_index == -5 &&
+        !g_view.inventory_rotate_visible && !g_view.menu_dpad_visible)
         menu_clear_queue_locked();
     if (g_target_valid && g_target_index == -2 && g_view.generic_mode && !g_view.carousel_valid)
         menu_clear_queue_locked();
@@ -7234,14 +7582,14 @@ int dm_botw_touch_menu_apply(uint64_t *buttons, int32_t axes[4], uint64_t frame)
             if (!(*buttons & g_target_button_bits)) emit = g_target_button_bits;
             menu_clear_queue_locked();
         } else if (g_target_index == -2 || g_target_index == -5) {
-            axes[2] = g_target_axis; axes[3] = 0;
-            g_apply_output_axis_valid = 1; g_apply_output_rx = g_target_axis;
+            axes[2] = g_target_axis; axes[3] = g_target_index == -5 ? g_target_axis_y : 0;
+            g_apply_output_axis_valid = 1; g_apply_output_rx = axes[2]; g_apply_output_axis_ry = axes[3];
             g_release_pending = g_axis_release_pending = 1;
             if (atomic_load_explicit(&g_trace, memory_order_acquire))
-                LOG("BOTW menu emit frame=%llu rightX=%d cursor=(%.4f,%.4f) target=%s",
-                    (unsigned long long)frame, g_target_axis, g_view.cursor[0], g_view.cursor[1],
+                LOG("BOTW menu emit frame=%llu right=(%d,%d) cursor=(%.4f,%.4f) target=%s",
+                    (unsigned long long)frame, axes[2], axes[3], g_view.cursor[0], g_view.cursor[1],
                     g_target_index == -5 ? "preview-rotate" : "category-swipe");
-            g_target_valid = 0; g_target_axis = 0;
+            g_target_valid = 0; g_target_axis = g_target_axis_y = 0;
             pthread_mutex_unlock(&g_menu_mu);
             return 1;
         } else if (g_target_index == -3) {
@@ -7286,7 +7634,7 @@ void dm_botw_touch_menu_reset(void) {
     menu_clear_queue_locked();
     g_last_apply_valid = 0; g_last_action_bits = 0;
     g_apply_output_bits = 0; g_release_pending = g_axis_release_pending = 0;
-    g_apply_output_axis_valid = 0; g_apply_output_rx = 0;
+    g_apply_output_axis_valid = 0; g_apply_output_rx = g_apply_output_axis_ry = 0;
     g_apply_output_map_left_valid = g_apply_output_map_right_valid = 0;
     g_map_left_owned = g_map_right_owned = 0;
     memset(&g_map_axis_trace, 0, sizeof g_map_axis_trace);
