@@ -40,8 +40,8 @@ static inline int dm_low_memory_wanted(const char *mode, int default_auto, uint6
 }
 
 // Called after launcher choices and preload, before guest memory or GPU pools.
-// The preset owns its component switches while enabled. Newer hosts already
-// use transient upload sources and enforce disk-space limits for guest files.
+// The preset owns its component switches while enabled. The host enforces
+// disk-space limits for guest files and uses temporary texture upload sources.
 static inline int dm_low_memory_apply(int default_auto) {
     if (!dm_low_memory_wanted(getenv("DM_LOW_MEMORY"), default_auto, dm_low_memory_available())) return 0;
     const char *temp = getenv("DM_TEMP"); char archive[PATH_MAX];

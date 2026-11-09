@@ -717,9 +717,41 @@ void mtl_pool_addressed(const void *mem, uint64_t size) {
 // On-demand residency of memory pools: putting a zero-copy buffer into the residency set makes iOS read the whole pool into memory and pin it as wired, even a pool the game never uses
 // (they measured on a 17 Pro Max a 512 MB render-target pool addressed 0 times in a run, with about 530 MB more device wired memory; a 4 GB A14 was ended by the system within seconds of launch because of it).
 // So a pool is not put into the residency set when created; it is put in, and the residency set committed on the spot, the first time the GPU gets its address through mtl_addr / mtl_gpu_addr -- these are the only two ways the GPU gets pool addresses,
-// and committing on the spot is earlier than any command buffer commit that uses it. CPU-side reads of pool contents through mtl_addr trigger it too (conservative, never misses). Caller holds g_mu
-static void pool_res(int i) {
+// and committing on the spot is earlier than any command buffer commit that uses it. Low-memory CPU-only lookups avoid making a pool resident.
+static id<MTLBuffer> pool_buf(uintptr_t a, uintptr_t b);
+static int lowmem_cpu_lookups(void) {
+    static _Atomic int cached = -1;
+    int value = atomic_load_explicit(&cached, memory_order_relaxed);
+    if (value < 0) { const char *e = getenv("DM_LOW_MEMORY_ACTIVE"); value = e && !strcmp(e, "1"); atomic_store_explicit(&cached, value, memory_order_relaxed); }
+    return value;
+}
+static id<MTLBuffer> pool_buf_retry(const void *mem, uint64_t size, uintptr_t a, uintptr_t b) {
+    id<MTLBuffer> buf = pool_buf(a, b);
+    // A zero-copy buffer can be refused under memory pressure. Retry as in ordinary pool creation.
+    for (int t = 0; !buf && t < 12; t++) {
+        usleep(10000u << (t < 4 ? t : 4));
+        buf = pool_buf(a, b);
+        if (buf) MLOG("[RED] memory pool %p+%#llx: the zero-copy buffer was refused, created at retry %d", mem, (unsigned long long)size, t + 1);
+    }
+    if (!buf) {
+        for (vm_address_t r = a; r < b; ) {
+            vm_size_t rs = 0; vm_region_basic_info_data_64_t vi; mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64; mach_port_t obj = MACH_PORT_NULL;
+            if (vm_region_64(mach_task_self(), &r, &rs, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&vi, &cnt, &obj) != KERN_SUCCESS) { MLOG("[RED]   no VM region at or after %#llx", (unsigned long long)r); break; }
+            MLOG("[RED]   VM region %#llx+%#llx protection %d (max %d)", (unsigned long long)r, (unsigned long long)rs, vi.protection, vi.max_protection);
+            r += rs;
+        }
+        MDIE("memory pool %p+%#llx: failed to create the zero-copy buffer over %#lx..%#lx", mem, (unsigned long long)size, (unsigned long)a, (unsigned long)b);
+    }
+    return buf;
+}
+static void pool_res(int i) {   // caller holds g_mu
     if (g_pools[i].res) return;
+    if (!g_pools[i].buf) {
+        uintptr_t page = (uintptr_t)getpagesize(), a = g_pools[i].base;
+        uintptr_t b = (g_pools[i].hi + page - 1) & ~(page - 1);
+        id<MTLBuffer> buf = pool_buf_retry((const void *)g_pools[i].lo, g_pools[i].hi - g_pools[i].lo, a, b);
+        g_pools[i].buf = buf; g_pools[i].gpu = buf.gpuAddress; [g_keep addObject:buf];
+    }
     res_add(g_pools[i].buf); res_commit(); g_pools[i].res = 1; g_pool_res_n++;
 }
 // A large pool in chunks. Metal wires a zero-copy buffer whole while it is in the residency set, so one buffer over a large pool pins all of it, whatever the GPU reads. Mario Kart World's 2,427 MB
@@ -745,29 +777,14 @@ void mtl_pool_add(const void *mem, uint64_t size) {
         pthread_mutex_unlock(&g_mu);
         if (k >= 0) { reg_bump(-1, REG_POOL); static int nl; if (nl++ < 8) MLOG("memory pool %p+%llu MB: in chunks, wired as far as lookups reach", mem, (unsigned long long)(size >> 20)); return; }
     }
-    id<MTLBuffer> buf = pool_buf(a, b);
-    // Pokémon Legends: Z-A: twice on the Mac a small pool's buffer was refused although its pages were one read-write VM region, both times while another heavy job (a shader compile,
-    // a second game instance) took the machine's memory; every run on an idle machine created all of them. Wiring the pages may fail under memory pressure: retry for up to about 2 s
-    for (int t = 0; !buf && t < 12; t++) {
-        usleep(10000u << (t < 4 ? t : 4));
-        buf = pool_buf(a, b);
-        if (buf) MLOG("[RED] memory pool %p+%#llx: the zero-copy buffer was refused, created at retry %d", mem, (unsigned long long)size, t + 1);
-    }
-    if (!buf) {   // say what the pages looked like: every VM region over the range, with its protection (an unmapped page in the range is the usual cause)
-        for (vm_address_t r = a; r < b; ) {
-            vm_size_t rs = 0; vm_region_basic_info_data_64_t vi; mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64; mach_port_t obj = MACH_PORT_NULL;
-            if (vm_region_64(mach_task_self(), &r, &rs, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&vi, &cnt, &obj) != KERN_SUCCESS) { MLOG("[RED]   no VM region at or after %#llx", (unsigned long long)r); break; }
-            MLOG("[RED]   VM region %#llx+%#llx protection %d (max %d)", (unsigned long long)r, (unsigned long long)rs, vi.protection, vi.max_protection);
-            r += rs;
-        }
-        MDIE("memory pool %p+%#llx: failed to create the zero-copy buffer over %#lx..%#lx", mem, (unsigned long long)size, (unsigned long)a, (unsigned long)b);
-    }
+    // Texture-only pools need no persistent Metal view. Make it when a GPU address is actually requested.
+    id<MTLBuffer> buf = lowmem_cpu_lookups() ? nil : pool_buf_retry(mem, size, a, b);
     pthread_mutex_lock(&g_mu);
     if (g_npool == g_cap) { g_cap = g_cap ? g_cap * 2 : 64; g_pools = realloc_or_die(g_pools, g_cap * sizeof *g_pools, "the memory pool table"); }
     g_pidx_ok = 0; g_plast = -1; atomic_fetch_add(&g_pool_gen, 1);   // the address index and the per-thread caches are invalid (pool_find, pc_get)
     g_pools[g_npool++] = (pool_ent){lo, hi, a, buf, buf.gpuAddress, mem, 0, clock_gettime_nsec_np(CLOCK_MONOTONIC), hi, 1};   // not in the residency set yet: put in the first time it is addressed (pool_res)
     g_pool_adds++;
-    [g_keep addObject:buf];
+    if (buf) [g_keep addObject:buf];
     pthread_mutex_unlock(&g_mu);
     reg_bump(-1, REG_POOL);
 }
@@ -788,9 +805,12 @@ void mtl_pool_del(const void *mem) {
     @autoreleasepool {
     int bg = -1; for (int k = 0; k < g_nbig; k++) if (g_big[k].mem == mem) bg = k;
     for (int i = 0; i < g_npool; i++)
-        if (g_pools[i].key == mem) { id<MTLBuffer> b = g_pools[i].buf; [g_keep removeObject:b]; defer_obj_release(b); if (g_pools[i].res) g_pool_res_n--;
-            if (!g_dead_pools) g_dead_pools = [NSHashTable weakObjectsHashTable];
-            [g_dead_pools addObject:b]; g_pools[i] = g_pools[--g_npool]; g_pidx_ok = 0; g_plast = -1; atomic_fetch_add(&g_pool_gen, 1);
+        if (g_pools[i].key == mem) { id<MTLBuffer> b = g_pools[i].buf;
+            if (b) { [g_keep removeObject:b]; defer_obj_release(b);
+                if (!g_dead_pools) g_dead_pools = [NSHashTable weakObjectsHashTable];
+                [g_dead_pools addObject:b]; }
+            if (g_pools[i].res) g_pool_res_n--;
+            g_pools[i] = g_pools[--g_npool]; g_pidx_ok = 0; g_plast = -1; atomic_fetch_add(&g_pool_gen, 1);
             if (i < g_npool) big_moved(i);   // the entry moved into this place
             if (bg < 0) break;   // a large pool has an entry per chunk
             i--; }
@@ -854,6 +874,17 @@ static int pool_find(uint64_t addr, uint64_t len) {
 int mtl_addr_known(uint64_t addr, uint64_t len) {
     pthread_mutex_lock(&g_mu); int b = big_of(addr), ok = b >= 0 ? addr + len <= g_big[b].hi : pool_find(addr, len) >= 0; pthread_mutex_unlock(&g_mu);
     return ok;
+}
+// For a CPU-only read, the guest address already is the no-copy buffer's contents.
+// Do not populate the GPU lookup cache: a later GPU use still has to call pool_res.
+static const uint8_t *mtl_cpu_ptr(uint64_t addr, uint64_t len) {
+    if (!addr || !len || addr > UINT64_MAX - len) return NULL;
+    if (lowmem_cpu_lookups()) {
+        if (pc_get(addr, len)) return (const uint8_t *)(uintptr_t)addr;
+        return mtl_addr_known(addr, len) ? (const uint8_t *)(uintptr_t)addr : NULL;
+    }
+    void *buffer; uint64_t off;
+    return mtl_addr(addr, len, &buffer, &off) ? (const uint8_t *)(uintptr_t)addr : NULL;
 }
 int mtl_addr(uint64_t addr, uint64_t len, void **buf, uint64_t *off) {
     const pc_ent *c = pc_get(addr, len);
@@ -6630,19 +6661,26 @@ static uint64_t vbuf_unaligned(uint64_t addr, uint64_t size, uint64_t need, int 
         if (!dirty) { c->epoch = g_wr_epoch; c->writes = g_vbuf_write_epoch; c->sbw = g_sbw_gen; c->npend = g_npend; return c->gpu; }
     }
     void *mb = NULL; uint64_t mo = 0;
-    if (len > VBUF_COPY_MAX || (size && !mtl_addr(addr, size, &mb, &mo))) {
+    int transient = lowmem_cpu_lookups();
+    const uint8_t *cpu_base = NULL;
+    if (len > VBUF_COPY_MAX || (size && (transient
+            ? !(cpu_base = mtl_cpu_ptr(addr, size)) : !mtl_addr(addr, size, &mb, &mo)))) {
         if (need) RED_ONCE(121, "a draw reads %llu bytes of the vertex stream at %#llx, bound with %llu: no copy padded with zeros, so Metal reads past the bound range", (unsigned long long)need, (unsigned long long)addr, (unsigned long long)size);
         else RED_ONCE(120, "vertex stream at an address not 4-byte aligned (%#llx, %llu bytes) could not be copied: bound as it is, which Metal reads from the aligned address below", (unsigned long long)addr, (unsigned long long)size);
         return 0;
     }
     id<MTLBuffer> src = (__bridge id<MTLBuffer>)mb;
     int cpu = !size || (!pend_hits(addr, size) && !g_sbw_over && !sbw_hits(addr, addr + size) && !gw_live(addr, addr + size)
-        && !nvn_sparse_gen() && nvn_host_readable(addr, size) && src.contents);   // a sparse mapping may alias this physical range
+        && !nvn_sparse_gen() && nvn_host_readable(addr, size) && (transient ? cpu_base : src.contents));   // a sparse mapping may alias this physical range
     if (!cpu && !prepare) MDIE("unaligned vertex stream was not prepared before its render encoder");
     id<MTLBuffer> ab; size_t off = arena_alloc((size_t)len, &ab);
     if (len > size) memset((uint8_t *)ab.contents + off + size, 0, (size_t)(len - size));   // the bytes past the bound range read as zeros
-    if (cpu) { if (size) memcpy((uint8_t *)ab.contents + off, (const uint8_t *)src.contents + mo, (size_t)size); }
+    if (cpu) { if (size) memcpy((uint8_t *)ab.contents + off, transient ? cpu_base : (const uint8_t *)src.contents + mo, (size_t)size); }
     else {
+        if (transient) {
+            if (!mtl_addr(addr, size, &mb, &mo)) MDIE("vertex copy source pool disappeared");
+            src = (__bridge id<MTLBuffer>)mb;
+        }
         g_blit_alias = 1;
         id<MTL4ComputeCommandEncoder> e = blit();   // lands deferred updates and orders all preceding GPU writes, including aliases
         g_blit_alias = 1;
@@ -9694,9 +9732,8 @@ static void ubo_read(int stage, int reg, int off, size_t n, void *out) {
     // A pool's buffer wraps guest memory without a copy (mtl_pool_add), so its contents at mo are the guest bytes at the address itself: read there, once a pool is found to hold
     // them. Asking the buffer for its contents cost a message, and, contents being an inner pointer, a retain and autorelease of the buffer at every handle read (Fire Emblem:
     // Fortune's Weave: about 4% of the submit thread's samples, and as much again draining the autorelease pool at commit)
-    void *mb; uint64_t mo;
-    if (!mtl_addr(u->addr + off, n, &mb, &mo)) return;
-    memcpy(out, (const void *)(uintptr_t)(u->addr + off), n);
+    const uint8_t *base = mtl_cpu_ptr(u->addr + off, n);
+    if (base) memcpy(out, base, n);
 }
 static uint32_t ubo_handle(int stage, int reg, int off) { uint32_t h; ubo_read(stage, reg, off, 4, &h); return h; }
 // The handle a TEXU / SAMPU binding reads: a word, or two the shader ORs (handle type 1), which hold the texture and the sampler in either order. Unreal Engine 5.4's lighting shaders on the Switch 2 put the
@@ -10392,17 +10429,17 @@ static int attr_read(int a, const p_draw *dw, const p_draw_idx *di, float P[64][
     if (!nc || !sm.stride || sm.divisor || !vb.address) return 8;
     const uint8_t *ib = NULL; int isz = di ? 1 << di->itype : 0;
     if (di && pend_hits(di->ibuf, (uint64_t)n * isz)) return 10;   // indices written by a copy / update earlier in this submission: the CPU still sees the old ones
-    if (di) { void *m; uint64_t o; if (!mtl_addr(di->ibuf, (uint64_t)n * isz, &m, &o) || !(ib = [(__bridge id<MTLBuffer>)m contents])) return 10; ib += o; }
+    if (di && !(ib = mtl_cpu_ptr(di->ibuf, (uint64_t)n * isz))) return 10;
     for (int k = 0; k < n; k++) {
         int64_t vid = dw ? (int64_t)dw->first + k : (isz == 1 ? (int64_t)ib[k] : isz == 2 ? (int64_t)((const uint16_t *)ib)[k] : (int64_t)((const uint32_t *)ib)[k]) + di->base_vertex;
         uint64_t off = (uint64_t)vid * sm.stride + at.offset;
         if (vid < 0 || off + bytes > vb.size) return 9;
         if (pend_hits(vb.address + off, bytes)) return 10;   // position written on the GPU earlier in this submission
-        void *mb; uint64_t mo; const uint8_t *base;
-        if (!mtl_addr(vb.address + off, bytes, &mb, &mo) || !(base = [(__bridge id<MTLBuffer>)mb contents])) return 10;
+        const uint8_t *base = mtl_cpu_ptr(vb.address + off, bytes);
+        if (!base) return 10;
         float v[4] = {0, 0, 0, 1};
-        if (hf) for (int c = 0; c < nc; c++) { _Float16 h; memcpy(&h, base + mo + 2 * c, 2); v[c] = (float)h; }
-        else memcpy(v, base + mo, bytes);
+        if (hf) for (int c = 0; c < nc; c++) { _Float16 h; memcpy(&h, base + 2 * c, 2); v[c] = (float)h; }
+        else memcpy(v, base, bytes);
         memcpy(P[k], v, sizeof v);
     }
     return 0;
@@ -11525,9 +11562,9 @@ static int ubo_float(int slot, uint32_t ref, float *out) {
     if (!u->addr || off + 4 > u->size) return 0;
     if (pend_read(u->addr + off, 4, out, &kind)) return 1;
     if (pend_hits(u->addr + off, 4)) return 0;
-    void *mb; uint64_t mo; const uint8_t *base;
-    if (!mtl_addr(u->addr + off, 4, &mb, &mo) || !(base = [(__bridge id<MTLBuffer>)mb contents])) return 0;
-    memcpy(out, base + mo, 4); return 1;
+    const uint8_t *base = mtl_cpu_ptr(u->addr + off, 4);
+    if (!base) return 0;
+    memcpy(out, base, 4); return 1;
 }
 static int zskip_fact_for(const char *key, zskip_fact *out) {
     if (!key) return 0;

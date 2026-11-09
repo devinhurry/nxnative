@@ -28,6 +28,33 @@ int main(void) { @autoreleasepool {
     mtl_pool_del(mem);
     CHECK("a removed pool holds nothing", !mtl_addr_known(base + 4096, 2048));
 
+    // CPU-only reads in low-memory mode must not make a Metal buffer or pin the pool.
+    // A later real GPU lookup must still create it and produce the correct address.
+    uint8_t *cpu_mem = mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0); if (cpu_mem == MAP_FAILED) abort();
+    uint64_t cpu_addr = (uint64_t)(uintptr_t)cpu_mem; uint32_t pattern[4] = {0x12345678, 0x9abcdef0, 0x76543210, 0x13579bdf};
+    memcpy(cpu_mem + 32, pattern, sizeof pattern);
+    mtl_pool_add(cpu_mem, n);
+    int low = lowmem_cpu_lookups(), ci = pool_find(cpu_addr, 1), before = g_pool_res_n;
+    CHECK("CPU pool registered", ci >= 0);
+    CHECK("low-memory pool buffer is lazy", !!g_pools[ci].buf == !low);
+    S.ubo[0][0].addr = cpu_addr + 32; S.ubo[0][0].size = sizeof pattern;
+    uint32_t out[4] = {0}; ubo_read(0, 0, 0, sizeof out, out);
+    CHECK("CPU uniform lookup reads the original bytes", !memcmp(out, pattern, sizeof out));
+    CHECK("CPU lookup respects the selected residency mode", g_pool_res_n == before + !low);
+    CHECK("out-of-range CPU address rejected", !mtl_cpu_ptr(cpu_addr + n - 8, 16));
+    CHECK("overflowing CPU address rejected", !mtl_cpu_ptr(UINT64_MAX - 3, 8));
+    uint64_t gpu = 0;
+    CHECK("later GPU lookup succeeds", mtl_gpu_addr(cpu_addr + 32, sizeof pattern, &mb, &mo, &gpu));
+    CHECK("later GPU lookup makes the pool resident", g_pool_res_n == before + 1);
+    CHECK("later GPU view points to the original bytes", (uint8_t *)[(__bridge id<MTLBuffer>)mb contents] + mo == cpu_mem + 32);
+    CHECK("later GPU address matches its view", gpu == [(__bridge id<MTLBuffer>)mb gpuAddress] + mo);
+    mtl_pool_del(cpu_mem);
+    memset(out, 0xff, sizeof out); ubo_read(0, 0, 0, sizeof out, out);
+    uint32_t zero[4] = {0}; CHECK("removed pool cannot be read", !memcmp(out, zero, sizeof out));
+    uint8_t *never_used = mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0); if (never_used == MAP_FAILED) abort();
+    mtl_pool_add(never_used, n); mtl_pool_del(never_used);
+    CHECK("an unused pool can be removed", !mtl_addr_known((uint64_t)(uintptr_t)never_used, 1));
+
     // A large pool: anonymous pages, untouched, so its size costs nothing
     const size_t nb = (size_t)BIG_MIN + (32u << 20);
     uint8_t *big = mmap(NULL, nb, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0); if (big == MAP_FAILED) abort();
