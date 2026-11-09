@@ -400,7 +400,7 @@ static void ensure_fi(NSUInteger iw, NSUInteger ih) {
     }
     g.in_w = iw; g.in_h = ih; g.prev_ok = g.hist_ok = 0;
     if (profile) dm_fg_profile_event(@"configuration",@{@"prepare":@(g.frames),@"old_w":@(old_w),@"old_h":@(old_h),@"input_w":@(iw),@"input_h":@(ih),@"cache_hit":@(cache_hit),@"lookup_ms":@((lookup-begin)*1000),@"compiler_ms":@((compiler_end-lookup)*1000),@"interpolator_ms":@((create_end-compiler_end)*1000),@"motion_depth_allocation_ms":@((allocation_end-allocation_begin)*1000),@"total_cpu_ms":@((CACurrentMediaTime()-begin)*1000),@"motion_depth_bytes":@(g.mv.allocatedSize+g.ndepth.allocatedSize+g.pdepth.allocatedSize+g.flow.allocatedSize+g.flow_fill.allocatedSize),@"process_gpu_allocated_bytes":@(g.dev.currentAllocatedSize),@"history_invalidated":@YES});
-    MLOG("frame interpolator: depth / motion %lux%lu -> %lux%lu (scene format %lu, output RGBA8 sRGB, UI composited, format %lu)", (unsigned long)iw, (unsigned long)ih, (unsigned long)g.out_w, (unsigned long)g.out_h, (unsigned long)g.scene_fmt, (unsigned long)g.scene_fmt);
+    MLOG("frame interpolator: depth / motion %lux%lu -> %lux%lu (scene format %lu, output RGBA8 sRGB, UI %s, format %lu)", (unsigned long)iw, (unsigned long)ih, (unsigned long)g.out_w, (unsigned long)g.out_h, (unsigned long)g.scene_fmt, g.ui == g.ui_layer ? "separate" : "composited", (unsigned long)g.ui.pixelFormat);
 }
 
 // 4x4 inverse (Gauss-Jordan, partial pivoting) and product, row-major, in double: the view-projection matrices hold

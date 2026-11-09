@@ -135,13 +135,17 @@ require more. The native ARM64 regression executes the emitted patch over the
 floor, original-path and longer-frame cases. In a separate Unicorn run using
 this branch's rewrite of the actual 1.9.0 executable, the game's own solver
 setup stored 3, 3, 5, 6 and 9 steps at 120, 60, 40, 30 and 20 real fps;
-with fractional timing inactive, a 0.25 ratio followed the original two-step path. To
-repeat that last check, supply a rewritten game executable and its sibling
-fixups/cuts tables to `python3 dm/tools/tests/research_botw_physics.py
-<work-dir>/main.patched.bin` with Unicorn installed. Game files stay outside
-Git. The PR notes that two substeps made ragdolls unstable; neither gameplay
-stability nor a CPU/FPS improvement has been measured for this change on this
-branch. The PR's independent
+with fractional timing inactive, a 0.25 ratio followed the original two-step
+path. To repeat that last check with Unicorn, set `REWRITE_DIR` to the folder
+containing a rewritten game executable and its sibling fixups/cuts tables:
+
+```sh
+python3 dm/tools/tests/research_botw_physics.py "$REWRITE_DIR/main.patched.bin"
+```
+
+Game files stay outside Git. The PR notes that two substeps made ragdolls
+unstable; neither gameplay stability nor a CPU/FPS improvement has been
+measured for this change on this branch. The PR's independent
 render-scale-above-1 feature expands the game's buffer pools and is not a frame
 rate optimization; it was not imported as part of this comparison.
 
@@ -178,8 +182,23 @@ Metal 4 renderer, alpha-tested HUD, blending modes, or an iPhone/game.
 An earlier color-attachment-map experiment had an invalid control and is
 inconclusive; it is not evidence for or against another solution. Metal also
 supports a [composited UI input](https://developer.apple.com/documentation/metalfx/mtlfxframeinterpolatorbase/uitexture),
-but its visual equivalence to a separate HUD has not been established here.
-Apple's [function-stitching API](https://developer.apple.com/videos/play/wwdc2021/10229/)
+and [describes its limitation](https://developer.apple.com/videos/play/wwdc2025/211/):
+the interpolator cannot perfectly recover a translucent UI from a picture
+already blended with the scene. A controlled comparison now executes this
+branch's MetalFX encoder on an Apple M2, with a moving patterned background
+and a stationary synthetic HUD. Against the known midpoint, mean RGB error
+(on a 0–255 scale) for composited versus separate UI was 0.00 / 0.00 for
+opaque, 5.15 / 0.10 for 50% opacity, 7.95 / 0.00 for 25% opacity and 2.63 /
+0.08 for 75% opacity. It checks the actual input modes and reads back the GPU
+output, but is not a BOTW gameplay test. With the existing framegen test headers
+prepared, reproduce it without game files or shader-cache changes using:
+
+```sh
+python3 dm/gfx/tests/research_framegen_ui_compare.py
+```
+
+The fixture prepares equivalent synthetic inputs for both modes; it does not
+exercise HUD draw capture. Apple's [function-stitching API](https://developer.apple.com/videos/play/wwdc2021/10229/)
 requires functions prepared with the `stitchable` attribute; the existing shader
 generator does not emit such functions, so this is not an established way to
 add a second output to already-built arbitrary fragment shaders.
