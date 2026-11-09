@@ -827,9 +827,10 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
     return botwTouchHudSupported() && _full && !_tap && !_padOff && !_manualMenuPad &&
         (!_botwMenuMode || _botwCameraPadVisible || botwSeated()) && !atomic_load(&g_any_controller_connected);
 }
-- (BOOL)botwMenuDpadActive { return _touchLayout.dpad_visible && !botwSeated() && botwTouchHudSupported() && _full && !_tap && !_padOff && _botwMenuMode && !_manualMenuPad && !atomic_load(&g_any_controller_connected) && dm_botw_touch_menu_dpad_visible(); }
+- (BOOL)botwMenuDpadActive { return !botwSeated() && botwTouchHudSupported() && _full && !_tap && !_padOff && _botwMenuMode && !_manualMenuPad && !atomic_load(&g_any_controller_connected) && dm_botw_touch_menu_dpad_visible(); }
 - (uint64_t)botwDpadMask {
-    if (![self botwTouchControlsActive]) return DM_BTN_LEFT | DM_BTN_UP | DM_BTN_RIGHT | DM_BTN_DOWN;
+    if (![self botwTouchControlsActive] || (_botwMenuMode && dm_botw_touch_menu_dpad_visible()))
+        return DM_BTN_LEFT | DM_BTN_UP | DM_BTN_RIGHT | DM_BTN_DOWN;
     if (dm_botw_touch_quick_select_active() || dm_botw_touch_switch_active()) return 0;
     return dm_botw_layout_dpad_mask(&_touchLayout, dm_botw_touch_vertical_dpad_active());
 }
@@ -851,7 +852,7 @@ static CGFloat dist(CGPoint a, CGPoint b) { return hypot(a.x - b.x, a.y - b.y); 
         }
         if (released) [self recompute];
     }
-    if (_tap || !_full || _padOff || (botw &&
+    if (_tap || !_full || _padOff || (botw && !dm_botw_touch_menu_dpad_visible() &&
         !dm_botw_layout_dpad_artwork_visible(&_touchLayout,dm_botw_touch_loadout_visible()))) mask = 0;
     for (int b = B_LEFT; b <= B_DOWN; b++) _key[b].hidden = !(mask & (1ull << b));
 }

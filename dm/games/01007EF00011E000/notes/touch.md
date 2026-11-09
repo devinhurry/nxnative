@@ -355,6 +355,27 @@ offscreen capture into `P_Text_01`; the touch rectangles must use the displayed
 capture transform. The sensor and Leave Area prompts use the AppHome footer,
 including when the sensor selector focuses AppMapDungeon.
 
+**Required D-pad visibility (2026-11-09).** Both touch frontends now give
+the live menu's required directions priority over the user's saved hidden-D-pad
+setting. Divine Beast controls expose all four directions in ordinary, compact
+and Seated layouts; Hero's Path uses the same required-menu predicate. Leaving
+the required menu restores the saved visibility and releases temporary keys.
+Magnesis retains its separate temporary Up/Down requirement. Neither layout's
+saved preference is rewritten.
+
+The UIKit handler matrix passes 72 checks across both saved visibility settings
+and all three layouts, including actual four-direction input, release and
+controller handoff. Sixteen of those checks failed with the old production
+input code. The complete fixture still has 15 unrelated failures that are
+unchanged before/after this fix (badge artwork/hits, scope R3 double tap and
+HUD-publication scaling); a full-suite pass is not claimed. The fixture also
+needed its missing `dm_aspect_touch_hud_target` stub before it could link.
+Mac frontend syntax compilation passes. The BOTW quick comparison after
+rewriting stale modules found no new regressions, but both revisions miss the
+route's frame milestone; this is not a full gameplay acceptance result. Physical
+iPhone acceptance is pending. Evidence and limits:
+`divine-beast-dpad-20261109/validation.md` in the game work folder.
+
 The supplied save verified D-pad position selection, Tilt and Execute: reopening
 the map showed the changed beast pose. Taps also opened the sensor selector and
 Leave Area confirmation, closed the selector with Back, chose sensor Off, and

@@ -13,6 +13,7 @@
 #include "../../host/botw_rune_icon.h"
 #include "../../host/botw_touch_menu.h"
 #include "../../host/botw_touch_style.h"
+#include "../../host/botw_touch_layout.h"
 UIView *dm_gamepad_view(CGRect frame);
 void dm_gamepad_open_settings(void);
 void dm_test_motion_reset(void);
@@ -98,6 +99,7 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y, float
 - (CGPoint)clickCenter:(int)button;
 - (CGPoint)stickHome;
 - (CGPoint)dpadCenter;
+- (CGFloat)dpadR;
 - (CGRect)pillRect:(int)button;
 @end
 
@@ -159,7 +161,7 @@ static BOOL g_botw_loadout_visible = YES;
 static BOOL g_botw_vertical_dpad;
 static BOOL g_botw_quick_select;
 static BOOL g_botw_switch_opening;
-static BOOL g_botw_hero_path;
+static BOOL g_botw_hero_path, g_botw_dungeon_map;
 static BOOL g_force_controls_hidden;
 static BOOL g_botw_touch_map_active;
 static BOOL g_botw_touch_camera_active;
@@ -191,7 +193,7 @@ void dm_botw_touch_button_end(int control,int cancelled) { (void)control; (void)
 void dm_botw_touch_switch_cancel(void) {}
 int dm_botw_touch_switch_active(void) { return g_botw_switch_opening; }
 int dm_botw_touch_switch_cancel_visible(void) { return 0; }
-int dm_botw_touch_menu_dpad_visible(void) { return g_botw_hero_path; }
+int dm_botw_touch_menu_dpad_visible(void) { return g_botw_hero_path || g_botw_dungeon_map; }
 int dm_botw_touch_vertical_dpad_active(void) { return g_botw_vertical_dpad; }
 int dm_botw_touch_controls_visible(void) {
     if (g_force_controls_hidden || (g_botw_touchhud_available && !g_published_touchhud_active)) return 0;
@@ -292,6 +294,19 @@ int dm_aspect_region(int controls,float rect[4]) {
     rect[0]=rect[1]=0; rect[2]=rect[3]=1;
     if (g_seated) { rect[1]=controls ? .51f : 0; rect[3]=.49f; }
     return g_seated;
+}
+int dm_aspect_touch_hud_target(float w,float h,float x,float y,float point_scale,float target[3]) {
+    if (w<=0 || h<=0) return 0;
+    float rect[4]; dm_aspect_touch_rect(w,h,rect);
+    if (g_seated) {
+        dm_touchpad_rect canvas=dm_botw_layout_canvas(w,h*.49f);
+        rect[0]=canvas.x; rect[1]=h*.51f+canvas.y;
+        rect[2]=canvas.width; rect[3]=canvas.height;
+    }
+    target[0]=(x-rect[0])/rect[2];
+    target[1]=(y+DM_BOTW_LOADOUT_Y_OFFSET_PT-rect[1])/rect[3];
+    target[2]=point_scale;
+    return 1;
 }
 float dm_aspect_hud_y_scale(void) { return 1; }
 float dm_aspect_hud_gain(void) { return 1; }
@@ -1191,6 +1206,63 @@ static void test_botw_stick_feedback(DmGamepad *view) {
     FakeTouch *ordinary=touch(camera.x,camera.y); beganAt(view,ordinary,7.0); endedAt(view,ordinary,camera.x,camera.y,7.08);
     CHECK(feedback.count==1,"other games keep their original right-stick grip haptic");
     [view dm_testSetTouchFeedback:nil]; [view reset];
+}
+
+static void test_botw_dungeon_dpad_override(DmGamepad *view) {
+    CGRect original=view.frame;
+    const CGSize sizes[]={{844,390},{390,844},{805,1100}};
+    const uint64_t directions[]={DM_BTN_LEFT,DM_BTN_UP,DM_BTN_RIGHT,DM_BTN_DOWN};
+    const CGPoint offsets[]={{-1,0},{0,-1},{1,0},{0,1}};
+    g_botw_touchhud_available=g_botw_gameplay_ready=g_botw_loadout_visible=YES;
+    for (int visible=0;visible<2;visible++) {
+        setenv("DM_BOTW_PAD_DPAD_VISIBLE",visible ? "1" : "0",1);
+        setenv("DM_BOTW_PORTRAIT_PAD_DPAD_VISIBLE",visible ? "1" : "0",1);
+        for (int mode=0;mode<3;mode++) {
+            g_seated=mode==2; dm_gamepad_surface_changed();
+            view.frame=(CGRect){CGPointZero,sizes[mode]};
+            [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO];
+            [view refreshTouchSettings];
+            g_botw_dungeon_map=g_botw_touch_menu_active=g_botw_touch_menu_presented=YES;
+            [view refreshBotwTouchMenuMode]; [view setNeedsLayout]; [view layoutIfNeeded];
+            BOOL shown=![view dm_testMenuDpadHidden] && [view dm_testControlsHidden];
+            if (g_seated) {
+                shown=![view dm_testControlsHidden];
+                for (int b=12;b<=15;b++) shown &= ![view dm_testButtonLayer:b].hidden;
+            }
+            CHECK(shown,"Divine Beast D-pad overrides both visibility preferences in ordinary, compact and Seated layouts");
+            CGPoint d=[view dpadCenter]; CGFloat step=[view dpadR]*.7;
+            int pointers=g_menu_pointer_count;
+            for (int i=0;i<4;i++) {
+                CGPoint p=CGPointMake(d.x+offsets[i].x*step,d.y+offsets[i].y*step);
+                FakeTouch *t=touch(p.x,p.y); began(view,t);
+                CHECK(g_buttons==directions[i] && g_menu_pointer_count==pointers,
+                      "Divine Beast temporary directions deliver native buttons instead of map pointer input");
+                ended(view,t,p.x,p.y);
+                CHECK(!g_buttons,"Divine Beast direction releases when its finger lifts");
+            }
+            [view dm_testSetTouchHudModeFull:YES tap:NO connected:YES]; [view layoutIfNeeded];
+            CHECK([view dm_testMenuDpadHidden] && [view dm_testControlsHidden],
+                  "Divine Beast temporary D-pad yields to a connected physical controller");
+            [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view layoutIfNeeded];
+            d=[view dpadCenter]; FakeTouch *held=touch(d.x+step,d.y); began(view,held);
+            g_botw_dungeon_map=g_botw_touch_menu_active=g_botw_touch_menu_presented=NO;
+            [view refreshBotwTouchMenuMode]; [view layoutIfNeeded];
+            CHECK(!g_buttons && [view dm_testMenuDpadHidden],"leaving the Divine Beast menu releases its held temporary direction");
+            ended(view,held,held.point.x,held.point.y);
+            if (!visible) {
+                CHECK([view dm_testDpadArtworkHidden],"leaving the Divine Beast menu restores the user's hidden D-pad");
+                g_botw_vertical_dpad=YES; [view setNeedsLayout]; [view layoutIfNeeded];
+                CHECK([view dm_testButtonLayer:12].hidden && [view dm_testButtonLayer:14].hidden &&
+                      ![view dm_testButtonLayer:13].hidden && ![view dm_testButtonLayer:15].hidden,
+                      "Magnesis still exposes only Up/Down after the Divine Beast override ends");
+                g_botw_vertical_dpad=NO;
+            }
+        }
+    }
+    unsetenv("DM_BOTW_PAD_DPAD_VISIBLE"); unsetenv("DM_BOTW_PORTRAIT_PAD_DPAD_VISIBLE");
+    g_seated=0; dm_gamepad_surface_changed(); view.frame=original;
+    [view refreshTouchSettings]; [view refreshBotwTouchMenuMode]; [view setNeedsLayout]; [view layoutIfNeeded];
+    g_botw_touchhud_available=NO;
 }
 
 static void test_botw_inventory_pointer(DmGamepad *view) {
@@ -2329,6 +2401,7 @@ static void run_tests(DmGamepad *view) {
     test_botw_l3_timing(view);
     test_botw_stick_response(view);
     test_botw_stick_feedback(view);
+    test_botw_dungeon_dpad_override(view);
     test_botw_inventory_pointer(view);
     test_botw_scope_pointer(view);
     test_motion_orientation();
