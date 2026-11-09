@@ -127,10 +127,21 @@ without those flags, including a missing VFR object at startup. Link pacing and
 frame-generation unit tests also pass. This does not prove a real cutscene's
 speed or presentation without gameplay testing.
 
-The PR allows a minimum of three physics solver substeps at high rates; this
-branch keeps six during fractional stepping. The PR notes that two substeps
-made ragdolls unstable; its three-substep option is a possible CPU saving but
-needs game measurements and stability checks before adoption. Its independent
+The branch now adopts the PR's physics floor during fractional stepping: the
+game's own ratio, with a minimum of 0.5, yields at least three solver substeps.
+At 120 real game frames per second this is three substeps instead of the six
+previously forced by this branch; at 30 fps it remains six. Longer frames can
+require more. The native ARM64 regression executes the emitted patch over the
+floor, original-path and longer-frame cases. In a separate Unicorn run using
+this branch's rewrite of the actual 1.9.0 executable, the game's own solver
+setup stored 3, 3, 5, 6 and 9 steps at 120, 60, 40, 30 and 20 real fps;
+with fractional timing inactive, a 0.25 ratio followed the original two-step path. To
+repeat that last check, supply a rewritten game executable and its sibling
+fixups/cuts tables to `python3 dm/tools/tests/research_botw_physics.py
+<work-dir>/main.patched.bin` with Unicorn installed. Game files stay outside
+Git. The PR notes that two substeps made ragdolls unstable; neither gameplay
+stability nor a CPU/FPS improvement has been measured for this change on this
+branch. The PR's independent
 render-scale-above-1 feature expands the game's buffer pools and is not a frame
 rate optimization; it was not imported as part of this comparison.
 

@@ -59,7 +59,7 @@ class FrameStep(unittest.TestCase):
                     u.reg_write(arm.UC_ARM64_REG_SP, self.stack)
                     u.emu_start(self.base+offset, self.base+offset+4, count=30)
                     result = struct.unpack('<f', struct.pack('<I', u.reg_read(output)))[0]
-                    self.assertAlmostEqual(result, (1 if offset==0x128106c else ratio) if ratio else original, places=6)
+                    self.assertAlmostEqual(result, (2 if offset==0x128106c else ratio) if ratio else original, places=6)
                     self.assertEqual(u.reg_read(arm.UC_ARM64_REG_X9), 0x123456789abcdef)
                     self.assertEqual(u.reg_read(arm.UC_ARM64_REG_X10), 0xfedcba987654321)
                     self.assertEqual(u.reg_read(arm.UC_ARM64_REG_SP), self.stack)

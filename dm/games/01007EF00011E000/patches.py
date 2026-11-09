@@ -87,7 +87,7 @@ def frame_step(ctx):
         (0x151d484, 0x1e202020, 0x1e270121),  # fcmp s1,s0: replace s1 with the latched ratio first
         (0x125f128, 0x1e210800, 0x1e270120),  # fade: fmul s0,s0,s1 -> measured ratio
         (0x1280ee4, 0x1e210800, 0x1e270120),  # UI animation: same ratio
-        (0x128106c, 0x1e204009, 0x1e2e1009),  # physics: keep six substeps, frame seconds still vary
+        (0x128106c, 0x1e204009, 0x1e2c1009),  # physics: at least three solver substeps
     ):
         fs_site(off, struct.pack('<I', original).hex())
         start=here(); emit(STP_PRE(9,10,31,-16)); emit(ADRP(9,here(),FS_STATE_OFF))
@@ -95,6 +95,13 @@ def frame_step(ctx):
         if off==0x151d484:
             emit(0x34000049); emit(replacement)   # cbz w9,+8 / fmov s1,w9
             emit(LDP_POST(9,10,31,16)); emit(original)
+        elif off==0x128106c:
+            # The game rounds 6 * s9 to its solver substeps. Use its real
+            # ratio from s0 but floor it at 0.5: 3 substeps at 60/120 fps,
+            # more when a longer frame needs them (upstream PR #76).
+            emit(0x34000089); emit(replacement)   # cbz w9,+16 / fmov s9,#0.5
+            emit(0x1e294809)                     # fmax s9,s0,s9
+            emit(B(here(),here()+8)); emit(original); emit(LDP_POST(9,10,31,16))
         else:
             emit(0x34000069); emit(replacement)   # cbz w9,+12 / replacement
             emit(B(here(),here()+8)); emit(original); emit(LDP_POST(9,10,31,16))

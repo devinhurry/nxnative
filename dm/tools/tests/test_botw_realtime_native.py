@@ -77,7 +77,7 @@ class NativeFrameStep(unittest.TestCase):
                 self.assertAlmostEqual(latched, expected, places=6)
                 for i, fn in enumerate(funcs):
                     actual = fn(2.0, .8 if i == 0 else .5)
-                    wanted = (1.0 if i == 3 else expected) if expected else (.8 if i == 0 else 2.0 if i == 3 else 1.0)
+                    wanted = (2.0 if i == 3 else expected) if expected else (.8 if i == 0 else 2.0 if i == 3 else 1.0)
                     self.assertAlmostEqual(actual, wanted, places=6)
         ctypes.c_float.from_address(state).value = 0
         for ratio in (0.0, 1.0, .75, .6, .5, .25):
@@ -87,8 +87,18 @@ class NativeFrameStep(unittest.TestCase):
             self.assertAlmostEqual(ctypes.c_float.from_address(state + 0xa4).value, ratio, places=6)
             for i, fn in enumerate(funcs):
                 actual = fn(2.0, .8 if i == 0 else .5)
-                wanted = (1.0 if i == 3 else ratio) if ratio else (.8 if i == 0 else 2.0 if i == 3 else 1.0)
+                wanted = (2.0 if i == 3 else ratio) if ratio else (.8 if i == 0 else 2.0 if i == 3 else 1.0)
                 with self.subTest(ratio=ratio, site=i): self.assertAlmostEqual(actual, wanted, places=6)
+
+        # The game's physics ratio is s0, not the host's latch. Test the actual
+        # emitted instructions at 120/60/40/30/20 fps, a shorter frame, and
+        # while the fractional override is off. 0.5 corresponds to 3 substeps.
+        for gate, game_ratio, wanted in ((0, .25, .25), (.25, .25, .5), (.5, .5, .5),
+                                         (.75, .75, .75), (1, 1, 1), (1.5, 1.5, 1.5),
+                                         (.25, .125, .5), (.25, 2, 2)):
+            ctypes.c_float.from_address(state + 0xa4).value = gate
+            with self.subTest(gate=gate, game_ratio=game_ratio):
+                self.assertAlmostEqual(funcs[3](game_ratio, .5), wanted, places=6)
 
 
 if __name__ == '__main__':

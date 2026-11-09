@@ -27,7 +27,7 @@ On the verified 1.9.0 build, a supported MetalFX GPU can insert a generated pict
 
 ## Frame rate
 
-The verified 1.9.0 timing patch also offers experimental rates from 20 to 120 fps in steps of five. The game advances by the measured time between real frames at those rates; 30 and 60 retain the existing frame-step behavior. Higher rates depend on the device and screen. These custom rates have not been measured in gameplay on this branch.
+The verified 1.9.0 timing patch also offers experimental rates from 20 to 120 fps in steps of five. The game advances by the measured time between real frames at those rates; 30 and 60 retain the existing frame-step behavior when frame generation is off. During fractional stepping, physics takes the game's frame ratio with a minimum of 0.5: three solver substeps at 60 or 120 real frames per second, more when longer frames need them (upstream PR #76). When the game or a movie owns the clock, the fractional physics override is inactive. Higher rates depend on the device and screen. These custom rates and physics changes have not been measured in gameplay on this branch.
 
 ### The frame step (current)
 
