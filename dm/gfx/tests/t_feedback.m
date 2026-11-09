@@ -402,6 +402,41 @@ static void fpos_case(const char *dir) {
 }
 // A frame that snapshots more keys than the cache has entries, in several sizes (Tears of the Kingdom: 4-5 a frame), makes no texture once each size has one: a new key takes an entry
 // whose texture has its format and size. Taking the entries in turn made one for nearly every snapshot (GitHub #931). Entries a later draw can still reuse are taken last
+static void view_case(NvProg *pr, id<MTLRenderPipelineState> pipeline) {
+    tex_t source, output; target(&source, 99880); id<MTLTexture> destination = target(&output, 99881);
+    int tid = 710; mtl_reg_tex(tid, &source, NULL);
+    NvShader *fs = pr->sh[1]; fs->rf.b[0].reg = 0;
+    id<MTLBuffer> result = [g_dev newBufferWithLength:3072 options:MTLResourceStorageModeShared]; res_add(result);
+    state_reset(); memset(&R, 0, sizeof R); mtl_sub_begin();
+    R.has_rt = 1; R.rt.n = 1; R.rt.color[0] = &source; S.tex[1][0] = tid;
+    clear(MTLClearColorMake(1, 0, 0, 1)); fb_prepare(pr);
+    CHECK(g_fb_n == 1, "view fixture has a production snapshot");
+    CHECK(!!(g_fb_use[0].usage & MTLTextureUsagePixelFormatView) == 0, "ordinary snapshot only requests shader-read usage");
+    id<MTLTexture> srgb = [g_fb_use[0] newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
+    CHECK(srgb != nil, "linear/sRGB view works without general format-view usage");
+    clear(MTLClearColorMake(0, 1, 0, 1)); rp_end();
+    view_t swizzle = {.set_swizzle=1, .swz={NVN_SWZ_B, NVN_SWZ_G, NVN_SWZ_R, NVN_SWZ_A}};
+    mtl_reg_tex(tid + 1, &source, &swizzle); S.tex[1][0] = tid + 1;
+    fb_prepare(pr);
+    CHECK(!!(g_fb_use[0].usage & MTLTextureUsagePixelFormatView) == 0, "swizzled snapshot keeps minimal usage");
+    R.rt.color[0] = &output; sample(fs, pipeline); readback(destination, result, 0);
+    uint64_t copies = g_fb_count;
+    view_t reinterpret = {.set_format=1, .format=NVN_FORMAT_RGBA8UI};
+    mtl_reg_tex(tid + 2, &source, &reinterpret); R.rt.color[0] = &source; S.tex[1][0] = tid + 2;
+    fb_prepare(pr);
+    id<MTLTexture> integer = g_fb_n == 1 ? g_fb_use[0] : nil;
+    CHECK(integer && (integer.usage & MTLTextureUsagePixelFormatView), "required reinterpretation upgrades the cached snapshot");
+    CHECK(g_fb_count == copies + 1, "format-view usage upgrade is one copy, not a source refresh");
+    CHECK(integer.pixelFormat == MTLPixelFormatRGBA8Uint, "integer format view is supported after upgrade"); readback(integer, result, 1024);
+    g_fb_bar++; R.rt.color[0] = &source; S.tex[1][0] = tid;
+    fb_prepare(pr); readback(g_fb_use[0], result, 2048);
+    CHECK(mtl_wait(mtl_sub_commit(), 5000000000ull), "format-view GPU submission completes");
+    CHECK(!mtl_last_commit_error(), "format-view fixture has no GPU error");
+    pixels(result, 0, (const uint8_t[]){0, 0, 255, 255}, "swizzled shader reads the old red snapshot as blue");
+    pixels(result, 1024, (const uint8_t[]){255, 0, 0, 255}, "usage upgrade preserves red rather than recopying the green attachment");
+    pixels(result, 2048, (const uint8_t[]){0, 255, 0, 255}, "a real barrier refreshes to the green source");
+    mtl_tex_release(&source); mtl_tex_release(&output);
+}
 static void shape_case(void) {
     for (int i = 0; i < 8; i++) { g_fbc[i] = (fb_cache_t){0}; } g_fbc_use = 0;
     static const NSUInteger size[5][2] = {{64, 32}, {32, 16}, {16, 8}, {64, 32}, {8, 4}};
@@ -409,16 +444,16 @@ static void shape_case(void) {
     for (int frame = 0; frame < 6; frame++) {
         g_fb_bar++;   // the game's barrier before each snapshot draw, as in Tears of the Kingdom's shrines
         for (int k = 0; k < 5; k++, g_fb_bar++) {
-            fb_cache_t *e = fb_snap(1000 + frame * 5 + k, 0, 0, MTLPixelFormatRGBA8Unorm, size[k][0], size[k][1], 0, &fresh);
+            fb_cache_t *e = fb_snap(1000 + frame * 5 + k, 0, 0, MTLPixelFormatRGBA8Unorm, size[k][0], size[k][1], 0, 0, &fresh);
             bad += !e || !fresh || e->snap.width != size[k][0] || e->snap.height != size[k][1];
             if (e) [made addObject:[NSValue valueWithPointer:(__bridge void *)e->snap]];
         }
     }
     CHECK(!bad, "every new key gets a texture of its size");
     CHECK(made.count == 4, "30 snapshots of 4 sizes over 6 frames make one texture per size, not one each");
-    fb_cache_t *a = fb_snap(1, 0, 0, MTLPixelFormatRGBA8Unorm, 64, 32, 0, &fresh), *b = fb_snap(2, 0, 0, MTLPixelFormatRGBA8Unorm, 64, 32, 0, &fresh);
+    fb_cache_t *a = fb_snap(1, 0, 0, MTLPixelFormatRGBA8Unorm, 64, 32, 0, 0, &fresh), *b = fb_snap(2, 0, 0, MTLPixelFormatRGBA8Unorm, 64, 32, 0, 0, &fresh);
     CHECK(a != b, "a live snapshot is not taken for another key while a stale entry is free");
-    fb_cache_t *a2 = fb_snap(1, 0, 0, MTLPixelFormatRGBA8Unorm, 64, 32, 0, &fresh);
+    fb_cache_t *a2 = fb_snap(1, 0, 0, MTLPixelFormatRGBA8Unorm, 64, 32, 0, 0, &fresh);
     CHECK(a2 == a && !fresh, "the live snapshot is reused until the next barrier");
     for (int i = 0; i < 8; i++) { g_fbc[i] = (fb_cache_t){0}; } g_fbc_use = 0;
 }
@@ -585,6 +620,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     const int slots[] = {0, 128, 255};
     for (int i = 0; i < 3; i++) slot_case(pr, pipeline, slots[i], i);
     reuse_case(pr);
+    view_case(pr, pipeline);
     shape_case();
     mip_chain_case(pr);
     fs->fn = [lib newFunctionWithName:@"mask"];

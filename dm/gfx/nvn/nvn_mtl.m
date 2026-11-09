@@ -11663,20 +11663,38 @@ static inline int fb_live(const fb_cache_t *e) { return e->ser && e->bar == g_fb
 // A new key takes an entry whose texture already has its format and size, one no later draw can reuse first, else the least recently used. Taking the entries in turn made a texture for
 // nearly every snapshot when a frame snapshots several sizes: Tears of the Kingdom's 4-5 a frame (1600x896 down to 400x224) each made one, 4-6 GB of textures every 300 frames on the Mac
 // and a residency commit for each texture added and each removed (GitHub #931)
-static fb_cache_t *fb_snap(uint64_t ser, int lv, int sl, MTLPixelFormat pf, NSUInteger w, NSUInteger h, int force, int *fresh) {
+static id<MTLTexture> fb_texture(MTLPixelFormat pf, NSUInteger w, NSUInteger h, int need_pfv) {
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:w height:h mipmapped:NO];
+    // PixelFormatView disables lossless compression. Same-format reads,
+    // swizzles and linear/sRGB view pairs do not need it.
+    d.usage = MTLTextureUsageShaderRead | (need_pfv ? MTLTextureUsagePixelFormatView : 0);
+    d.storageMode = MTLStorageModePrivate;
+    id<MTLTexture> t = [g_dev newTextureWithDescriptor:d]; if (t) res_add(t); return t;
+}
+static fb_cache_t *fb_snap(uint64_t ser, int lv, int sl, MTLPixelFormat pf, NSUInteger w, NSUInteger h, int need_pfv, int force, int *fresh) {
     fb_cache_t *e = NULL;
     for (int i = 0; i < 8 && !e; i++) if (g_fbc[i].snap && g_fbc[i].ser == ser && g_fbc[i].lv == lv && g_fbc[i].sl == sl) e = &g_fbc[i];
     if (e && !fb_shape(e, pf, w, h)) { e->ser = 0; e = NULL; }   // the attachment was made again in another format or size: its snapshot is no longer this key's
-    if (e && !force && fb_live(e)) { e->use = ++g_fbc_use; *fresh = 0; return e; }
+    if (e && !force && fb_live(e)) {
+        if (need_pfv && !(e->snap.usage & MTLTextureUsagePixelFormatView)) {
+            id<MTLTexture> old = e->snap, t = fb_texture(pf, w, h, 1);
+            if (!t) MDIE("feedback snapshot format-view upgrade allocation failed");
+            // Preserve the cached content: the attachment may have changed
+            // since the game's last barrier.
+            if (g_enc) rp_end();
+            enc_b_copy_texture(blit(), old, 0, 0, MTLOriginMake(0, 0, 0), MTLSizeMake(w, h, 1), t, 0, 0, MTLOriginMake(0, 0, 0));
+            e->snap = t; defer_obj_release(old); g_fb_count++;
+        }
+        e->use = ++g_fbc_use; *fresh = 0; return e;
+    }
     if (!e) {   // by rank: same shape and not live, not live, same shape (every entry live), least recently used within a rank
         int best = 1 << 30;
         for (int i = 0; i < 8; i++) { fb_cache_t *c = &g_fbc[i]; int r = fb_live(c) ? (fb_shape(c, pf, w, h) ? 2 : 3) : fb_shape(c, pf, w, h) ? 0 : 1;
             if (r < best || (r == best && c->use < e->use)) { best = r; e = c; } }
         if (e->snap && !fb_shape(e, pf, w, h)) { defer_obj_release(e->snap); e->snap = nil; }
     }
-    if (!e->snap) { MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:w height:h mipmapped:NO];
-        d.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView; d.storageMode = MTLStorageModePrivate;
-        e->snap = [g_dev newTextureWithDescriptor:d]; if (!e->snap) { e->ser = 0; return NULL; } res_add(e->snap); }   // full queue barriers separate a copy from the draws that read the earlier content
+    if (e->snap && need_pfv && !(e->snap.usage & MTLTextureUsagePixelFormatView)) { defer_obj_release(e->snap); e->snap = nil; }
+    if (!e->snap) { e->snap = fb_texture(pf, w, h, need_pfv); if (!e->snap) { e->ser = 0; return NULL; } }   // full queue barriers separate a copy from the draws that read the earlier content
     e->ser = ser; e->lv = lv; e->sl = sl; e->bar = g_fb_bar; e->sub = g_sub_serial; e->use = ++g_fbc_use; *fresh = 1; return e;
 }
 // ---- Same-pass feedback read from the tile ----
@@ -11846,7 +11864,8 @@ static void fb_prepare(NvProg *pr) {
                 RED_ONCE(80, "same-pass feedback sampling: the sampled view is not a single-level 2D view of the attachment's level and layer (type %lu levels %lu+%lu layer %lu, attachment level %d layer %d, shader %s); left as is", (unsigned long)t.textureType, (unsigned long)tl, (unsigned long)t.mipmapLevelCount, (unsigned long)ts, lv, sl, fs->key);
                 continue; }
             NSUInteger w = MAX(base.width >> lv, 1ul), h = MAX(base.height >> lv, 1ul); int fresh;
-            fb_cache_t *e = fb_snap(ser, lv, sl, base.pixelFormat, w, h, g_fb_mode == 2, &fresh); if (!e) continue;
+            int need_pfv = tex_need_pfv(base.pixelFormat, t.pixelFormat);
+            fb_cache_t *e = fb_snap(ser, lv, sl, base.pixelFormat, w, h, need_pfv, g_fb_mode == 2, &fresh); if (!e) continue;
             id<MTLTexture> snap = e->snap;
             if (fresh) {
                 if (g_enc) rp_end();
