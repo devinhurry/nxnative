@@ -44,7 +44,9 @@ class LauncherSettingsTests(unittest.TestCase):
             with self.subTest(api=api):
                 s = build(gid, api)['DM_PRESENT_UPSCALE']
                 self.assertEqual((s['kind'], s['section'], s['default']), ('choice', 'Game', 'off'))
-                self.assertEqual(s['options'], [['off', 'Standard'], ['metalfx', 'MetalFX']])
+                want = [['off', 'Standard']] + ([['scene', 'Scene MetalFX']] if gid == BOTW else []) + [['metalfx', 'Full-screen MetalFX']]
+                self.assertEqual(s['options'], want)
+                if gid == BOTW: self.assertIn('experimental', s['note'])
 
     def test_frame_buffering_by_graphics_api(self):
         for api, gid in [('nvn', BOTW), ('vulkan', '0100535012974000'), ('gl', '010014E00DB56000'), ('', BOTW)]:

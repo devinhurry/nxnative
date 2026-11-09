@@ -116,6 +116,8 @@ def build(gid, patched, control):
         if var == 'DM_DYNAMIC_RESOLUTION' and 'DYNAMIC_RESOLUTION_BUDGET' in keys:
             s['label'] = 'Dynamic resolution target'
             s['note'] = 'Adjusts the game’s native resolution controller to the selected frame rate. A fixed render scale takes precedence.'
+        if var == 'DM_PRESENT_UPSCALE' and macro('DM_GAME_SCENE_UPSCALE_PS', n):
+            s['note'] = 'Scene MetalFX (experimental) scales the 3D scene before the HUD. Full-screen MetalFX scales the final picture. Both use more GPU time and can increase heat.'
         if var == 'DM_RENDER_SCALE' and base: s['base'] = base   # the render scale in pixels, for the console mode chosen
         if kind == 'choice':
             opts = [list(l) for l in langs] if values == 'languages' else [v.split('?', 1)[0].split('=', 1) for v in values.split(',') if offered(v, n)]

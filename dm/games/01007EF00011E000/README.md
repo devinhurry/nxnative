@@ -91,6 +91,8 @@ Used at `DM_FPS_TARGET=0` and for the interval the framework keeps while the VFR
 
 Handheld, the game draws 1280x720 into its 1920x1080 window textures and crops the window to it. Docked it scales its 900p scene to 1080p with one draw and draws the HUD on the 1080p target. The optional [MetalFX present](../../../docs/reference/rendering.md#the-present-upscales-through-metalfx) scales that presented picture in either mode; it cannot recover detail lost in the game's own upscale.
 
+The experimental `DM_PRESENT_UPSCALE=scene` applies MetalFX to the verified scene composite before the native FXAA and HUD, while `metalfx` scales the final picture. It keeps the game's own draw when the input or output cannot be verified. This option has passed GPU checks on this branch, but has not been measured in gameplay here.
+
 Measurements reported in [PR #215](https://github.com/seedds/nxnative/pull/215), the present command buffer's GPU time:
 
 | Device and content → output | MetalFX | Standard |

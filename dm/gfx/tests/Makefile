@@ -543,3 +543,7 @@ t_render_counter_overlap: t_render_counter_overlap.m $(MTL_T_DEP)
 check_t_render_counter_overlap: t_render_counter_overlap
 	MTL_DEBUG_LAYER=1 DM_NVN_ENC_THREAD=0 ./$<
 	MTL_DEBUG_LAYER=1 DM_NVN_ENC_THREAD=1 ./$<
+
+t_scene_upscale: t_scene_upscale.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_scene_upscale.m $(MTL_T_SRC) $(FW)
+check_t_scene_upscale: RUN_ENV = MTL_DEBUG_LAYER=1

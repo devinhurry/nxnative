@@ -9712,6 +9712,8 @@ static void cbs_feedback(cbs_list *l, NSError *err, const char *where) {   // fr
         } }
     free(l);
 }
+static struct { __strong id<MTLTexture> source, output; } g_scene_up;
+static void scene_upscale_prepare(NvProg *pr, const p_draw *dw, const p_draw_idx *di);
 static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex);
 static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex) { cbs_note(sh); AP_B; int r = encode_args_(en, sh, nvn_stage, metal_vertex); AP_E(3); return r; }
 static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex) {
@@ -9799,6 +9801,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             void *tv = NULL; uint64_t trid = tid ? tex_fast_rid(tid, &tv) : 0; __unsafe_unretained id<MTLTexture> t = (__bridge id<MTLTexture>)tv;
             int snap = fb_snapshot_slot(nvn_stage, t);
             if (snap >= 0) { t = g_fb_use[snap]; trid = g_fb_rid[snap]; }
+            if (nvn_stage == 1 && reg == 0 && g_scene_up.output && t == g_scene_up.source) { t = g_scene_up.output; trid = t.gpuResourceID._impl; }
             if (t && passdump() && tid < g_ntreg) PD("R %llu st%d ser=%llu", g_stat_pass, nvn_stage, g_treg[tid].t.serial);
             if (bl) PD("B %llu st%d tex reg%d tid=%d %s ser=%llu fmt=%lu %lux%lux%lu view_lv=%lu+%lu view_sl=%lu array=%lu target=%lu swz=%d%d%d%d mtl=%p", g_stat_pass, nvn_stage, reg, tid, t ? "real" : "dummy", t && tid < g_ntreg ? g_treg[tid].t.serial : 0ull,
                        (unsigned long)t.pixelFormat, (unsigned long)t.width, (unsigned long)t.height, (unsigned long)t.depth,
@@ -12469,6 +12472,7 @@ static void draw_multi(const p_multi_draw *m) {
 static void draw_(const p_draw *dw, const p_draw_idx *di);
 static void draw(const p_draw *dw, const p_draw_idx *di) { cp_stamp start = cp_begin(); if (dw && dw->prim == DM_PRIM_MESH_TASKS) mesh_tasks_draw(dw); else draw_(dw, di); cp_end(5, start); }
 static void draw_(const p_draw *dw, const p_draw_idx *di) {
+    if (g_scene_up.output) { g_scene_up.source = g_scene_up.output = nil; g_args_dirty[1] = 1; }
     g_draw_binst = (uint32_t)(dw ? dw->base_instance : di ? di->base_instance : 0);   // c0 + 0x644 of the stages that read the driver segment (encode_args)
     if (passdump()) { NvProg *p = g_geo_program ? g_geo_program : S.prog ? prog_get(S.prog) : nil;
         PD("j %llu draw-entry vs=%s fs=%s gs=%s prim=%d count=%d instances=%d indexed=%d indirect=%#llx discard=%d feedback=%d", g_stat_pass + !g_enc,
@@ -12560,6 +12564,7 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
     if (g_enc && g_vis_counting && g_vis_n >= VIS_SLOTS) rp_end();   // this draw's query needs a slot and the buffer is bound for the whole pass: the next pass begins with a new one (rp_begin_ex)
     if (g_enc && g_rp_aw && (!R.has_sc || (long)R.sc.x + R.sc.w > (long)g_rp_aw || (long)R.sc.y + R.sc.h > (long)g_rp_ah)) rp_end();   // leaves the pass's render area
     fb_prepare(pr);   // same-pass feedback sampling: copy the snapshot first (see fb_prepare)
+    scene_upscale_prepare(pr, dw, di);
     if (R.has_sc && !g_enc && !S.rast_discard) {
         NSUInteger tw0 = 0, th0 = 0; rt_dims(&tw0, &th0);
         long x0 = R.sc.x < 0 ? 0 : R.sc.x, y0 = R.sc.y < 0 ? 0 : R.sc.y, x1 = (long)R.sc.x + R.sc.w, y1 = (long)R.sc.y + R.sc.h;
@@ -14501,19 +14506,23 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTex
 // bytes), then draw 1:1 with the usual origin and output format. Queue barriers serialize both the frame's rendering and reuse of the scaler's textures across presents.
 // Replacing those textures waits for earlier presents; throttle replacement during resizing, and keep standard scaling for refused sizes. Offscreen captures own separate state.
 #define FX_REMAKE_PRESENTS 30
-typedef struct { id<MTL4FXSpatialScaler> sc; id<MTLTexture> in, out; uint64_t made_at; int made; NSUInteger refused[6]; } fx_state;
+typedef struct { id<MTL4FXSpatialScaler> sc; id<MTLTexture> in, out; id<MTL4Compiler> compiler; uint64_t made_at; int made; NSUInteger refused[6]; } fx_state;
 static fx_state g_fx_present;   // only the present thread encodes or replaces the scaler
 static id<MTL4Compiler> g_fx_comp;
-static int g_fx_mode = -1;   // 1 = metalfx, 0 = off
+static _Atomic int g_fx_mode = -1;   // shared by scene replay and presentation; 0 = standard, 1 = full-screen MetalFX, 2 = scene MetalFX
 static int fx_mode(void) {
-    if (g_fx_mode >= 0) return g_fx_mode;
-    const char *e = getenv("DM_PRESENT_UPSCALE"); int v = 0;
+    int v = atomic_load_explicit(&g_fx_mode, memory_order_relaxed);
+    if (v >= 0) return v;
+    const char *e = getenv("DM_PRESENT_UPSCALE"); v = 0;
     if (e && (!strcmp(e, "metalfx") || !strcmp(e, "1"))) v = 1;
+    else if (e && !strcmp(e, "scene")) v = 2;
     else if (e && (!strcmp(e, "off") || !strcmp(e, "0"))) v = 0;
-    else if (e && *e) MLOG("[RED] DM_PRESENT_UPSCALE=%s: metalfx or off; keeping %s", e, v ? "metalfx" : "off");
+    else if (e && *e) MLOG("[RED] DM_PRESENT_UPSCALE=%s: scene, metalfx or off; keeping off", e);
+    if (v == 2 && !*DM_GAME_SCENE_UPSCALE_PS) { MLOG("scene upscaling: unavailable for this profile; keeping standard scaling"); v = 0; }
     if (v && !(g_q4 && [MTLFXSpatialScalerDescriptor supportsMetal4FX:g_dev])) { MLOG("present upscaling: this GPU has no Metal 4 MetalFX spatial scaler; the present scales bilinearly"); v = 0; }
-    MLOG("present upscaling (DM_PRESENT_UPSCALE): %s", v ? "metalfx, MetalFX's spatial scaler where the picture is shown larger than the game renders it" : "off, bilinear");
-    return g_fx_mode = v;
+    MLOG("upscaling (DM_PRESENT_UPSCALE): %s", v == 2 ? "scene, MetalFX before the HUD" : v == 1 ? "metalfx, MetalFX on the final picture" : "off, bilinear");
+    atomic_store_explicit(&g_fx_mode, v, memory_order_relaxed);
+    return v;
 }
 // MetalFX scales the content (cw x ch) to its rectangle on the canvas (vp) when the rectangle is at least as large in both directions and larger in one
 static int fx_wanted(MTLViewport vp, NSUInteger cw, NSUInteger ch) {
@@ -14521,26 +14530,29 @@ static int fx_wanted(MTLViewport vp, NSUInteger cw, NSUInteger ch) {
     return cw && ch && w >= cw && h >= ch && (w > cw || h > ch);
 }
 // Encodes the upscale of the rectangle r of raw into cb (see above); returns the scaled picture, which the present pass draws 1:1 into vp, or nil (the bilinear pass).
-// remake_wait: fx is the present thread's, whose textures presents still on the GPU may read: a new scaler waits for them and for FX_REMAKE_PRESENTS presents since the last
-static id<MTLTexture> fx_encode(fx_state *fx, id<MTL4CommandBuffer> cb, id<MTLTexture> raw, const NSUInteger r[4], MTLViewport vp, MTLPixelFormat out_pf, int remake_wait) {
+// A present scaler waits for outstanding presents and limits resize churn; a scene scaler retires replaced resources behind the rendering fence.
+enum { FX_CAPTURE, FX_PRESENT, FX_SCENE };
+static id<MTLTexture> fx_encode(fx_state *fx, id<MTL4CommandBuffer> cb, id<MTLTexture> raw, const NSUInteger r[4], MTLViewport vp, MTLPixelFormat out_pf, int scope) {
     NSUInteger cw = r[2], ch = r[3], ow = (NSUInteger)vp.width, oh = (NSUInteger)vp.height;
-    if (fx_mode() != 1 || !fx_wanted(vp, cw, ch)) return nil;
+    if (!fx_wanted(vp, cw, ch)) return nil;
     if (!fx->sc || fx->in.width != cw || fx->in.height != ch || fx->in.pixelFormat != raw.pixelFormat || fx->out.width != ow || fx->out.height != oh || fx->out.pixelFormat != out_pf) {
         NSUInteger key[6] = {cw, ch, raw.pixelFormat, ow, oh, out_pf};
         if (!memcmp(key, fx->refused, sizeof key)) return nil;
-        if (remake_wait && fx->made && g_present_n < fx->made_at + FX_REMAKE_PRESENTS) return nil;
-        if (remake_wait) { pthread_mutex_lock(&g_pq_mu); while (g_pq_inflight) pthread_cond_wait(&g_pq_cv, &g_pq_mu); pthread_mutex_unlock(&g_pq_mu); }
-        res_remove(fx->in); res_remove(fx->out); fx->sc = nil; fx->in = fx->out = nil;
+        if (scope == FX_PRESENT && fx->made && g_present_n < fx->made_at + FX_REMAKE_PRESENTS) return nil;
+        if (scope == FX_PRESENT) { pthread_mutex_lock(&g_pq_mu); while (g_pq_inflight) pthread_cond_wait(&g_pq_cv, &g_pq_mu); pthread_mutex_unlock(&g_pq_mu); }
+        if (scope == FX_SCENE) { defer_obj_release(fx->in); defer_obj_release(fx->out); defer_obj_unref(fx->sc); }
+        else { res_remove(fx->in); res_remove(fx->out); }
+        fx->sc = nil; fx->in = fx->out = nil;
         uint64_t t0 = now_ns(); NSError *e = nil;
-        if (!g_fx_comp) g_fx_comp = [g_dev newCompilerWithDescriptor:[MTL4CompilerDescriptor new] error:&e];
+        if (!fx->compiler) fx->compiler = [g_dev newCompilerWithDescriptor:[MTL4CompilerDescriptor new] error:&e];
         MTLFXSpatialScalerDescriptor *d = [MTLFXSpatialScalerDescriptor new];
         d.colorTextureFormat = raw.pixelFormat; d.outputTextureFormat = out_pf; d.inputWidth = cw; d.inputHeight = ch; d.outputWidth = ow; d.outputHeight = oh;
         d.colorProcessingMode = MTLFXSpatialScalerColorProcessingModePerceptual;
-        id<MTL4FXSpatialScaler> sc = g_fx_comp ? [d newSpatialScalerWithDevice:g_dev compiler:g_fx_comp] : nil;
-        fx->made_at = g_present_n; fx->made++;
+        id<MTL4FXSpatialScaler> sc = fx->compiler ? [d newSpatialScalerWithDevice:g_dev compiler:fx->compiler] : nil;
+        fx->made_at = scope == FX_PRESENT ? g_present_n : 0; fx->made++;
         if (!sc) { memcpy(fx->refused, key, sizeof key);
             MLOG("present upscaling: MetalFX makes no spatial scaler for %lux%lu format %lu → %lux%lu format %lu%s; this size is scaled bilinearly", (unsigned long)cw, (unsigned long)ch, (unsigned long)raw.pixelFormat,
-                 (unsigned long)ow, (unsigned long)oh, (unsigned long)out_pf, g_fx_comp ? "" : " (no Metal 4 compiler)"); return nil; }
+                 (unsigned long)ow, (unsigned long)oh, (unsigned long)out_pf, fx->compiler ? "" : " (no Metal 4 compiler)"); return nil; }
         MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:raw.pixelFormat width:cw height:ch mipmapped:NO];
         td.storageMode = MTLStorageModePrivate; td.usage = sc.colorTextureUsage | MTLTextureUsageShaderRead;
         id<MTLTexture> in = [g_dev newTextureWithDescriptor:td];
@@ -14559,9 +14571,12 @@ static id<MTLTexture> fx_encode(fx_state *fx, id<MTL4CommandBuffer> cb, id<MTLTe
     [ce copyFromTexture:raw sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(r[0], r[1], 0) sourceSize:MTLSizeMake(cw, ch, 1) toTexture:fx->in destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
     [ce barrierAfterStages:MTLStageBlit beforeQueueStages:MTLStageAll visibilityOptions:resource_vis()];   // the scaler's encoders come after the copy
     [ce endEncoding];
-    fx->sc.colorTexture = fx->in; fx->sc.inputContentWidth = cw; fx->sc.inputContentHeight = ch; fx->sc.outputTexture = fx->out;
-    [fx->sc encodeToCommandBuffer:cb];
-    return fx->out;
+    id<MTL4FXSpatialScaler> scaler = fx->sc; id<MTLTexture> in = fx->in, out = fx->out;
+    rec_cb_block(cb, ^(id<MTL4CommandBuffer> actual) {
+        scaler.colorTexture = in; scaler.outputTexture = out; scaler.inputContentWidth = cw; scaler.inputContentHeight = ch;
+        [scaler encodeToCommandBuffer:actual];
+    });
+    return out;
 }
 // ---------- A game's own upscaler drawn by MetalFX (DM_UPSCALER) ----------
 // Donkey Kong Bananza upscales its frame with agl's NDSR network: one compute dispatch (agl_ndsr.pck, 24 variants; Splatoon Raiders ships 20) reading the scene colour (texture slot 0, R11G11B10F; see up_mfx_color)
@@ -14715,6 +14730,45 @@ static int up_mfx_encode(NvShader *cs) {
                             (unsigned long)out.pixelFormat, direct ? ", straight" : srgb ? ", through RGBA16F, decoded from sRGB" : ", through RGBA16F");
     return 1;
 }
+// An opt-in at a profile's verified scene-composite pair, before its HUD.
+// Keep the native FXAA draw (including its channel mask / output alpha); only
+// replace its scene input. Its existing vertex constants already describe the
+// output texel grid, which becomes the scaled input's grid as well.
+static void scene_upscale_prepare(NvProg *pr, const p_draw *dw, const p_draw_idx *di) {
+    static fx_state fx;
+    if (fx_mode() != 2 || !g_cb || !pr || !pr->sh[0] || !pr->sh[1] || g_fz.active || g_defer.active || g_defer_replaying || g_geo_program || !R.has_rt ||
+        strncmp(pr->sh[0]->key, DM_GAME_SCENE_UPSCALE_VS, 16) || strncmp(pr->sh[1]->key, DM_GAME_SCENE_UPSCALE_PS, 16)) return;
+    int count = dw ? dw->count : di ? di->count : 0;
+    if (count != 3 || (dw ? dw->ind || dw->instances > 1 : di->ind || di->instances > 1) || R.rt.n != 1 || !R.rt.color[0] || R.rt.depth ||
+        S.ds.dt || S.ds.st || S.rast_discard || S.tf_on || !S.has_vp || S.vp[0][0] || S.vp[0][1]) return;
+    NSUInteger ow = (NSUInteger)S.vp[0][2], oh = (NSUInteger)S.vp[0][3];
+    if (!ow || !oh || ow > R.rt.color[0]->d.width || oh > R.rt.color[0]->d.height ||
+        (R.has_sc && (R.sc.x > 0 || R.sc.y > 0 || R.sc.x + R.sc.w < (int)ow || R.sc.y + R.sc.h < (int)oh))) return;
+    int tid = (int)(tex_slot_h(S.tex[1], S.img[1], 0) & 0xfffff);
+    os_unfair_lock_lock(&g_rmu);
+    void *raw = NULL; if (tid > 0) tex_fast_rid(tid, &raw);
+    id<MTLTexture> source = (__bridge id<MTLTexture>)raw;
+    int distinct = tid > 0 && tid < g_ntreg && g_treg[tid].ok && g_treg[tid].t.serial != R.rt.color[0]->serial;
+    os_unfair_lock_unlock(&g_rmu);
+    if (!distinct || !source || source.textureType != MTLTextureType2D || source.sampleCount != 1 || source.mipmapLevelCount != 1 ||
+        source.swizzle.red != MTLTextureSwizzleRed || source.swizzle.green != MTLTextureSwizzleGreen ||
+        source.swizzle.blue != MTLTextureSwizzleBlue || source.swizzle.alpha != MTLTextureSwizzleAlpha) return;
+    MTLViewport vp = {0, 0, ow, oh, 0, 1};
+    if (!fx_wanted(vp, source.width, source.height) || fabs((double)source.width * oh - (double)source.height * ow) > ow) return;
+    float cb[4]; ubo_read(0, 0, 0, sizeof cb, cb);
+    PD("scene FXAA texel constants %g,%g,%g,%g source %lux%lu output %lux%lu", cb[0], cb[1], cb[2], cb[3], (unsigned long)source.width, (unsigned long)source.height, (unsigned long)ow, (unsigned long)oh);
+    if (fabsf(cb[0] * ow - 1) > 1e-4f || fabsf(cb[1] * oh - 1) > 1e-4f) return;
+    rp_flush(); ubd_land_compute();
+    if (g_blit) { enc_b_end(g_blit); g_blit = nil; }
+    up_flush();
+    NSUInteger crop[] = {0, 0, source.width, source.height};
+    id<MTLTexture> output = fx_encode(&fx, g_cb, source, crop, vp, source.pixelFormat, FX_SCENE);
+    if (!output) return;
+    g_last_end_relaxed = 0;
+    g_scene_up.source = source; g_scene_up.output = output;
+    g_args_dirty[1] = 1;
+    static int first; if (!first++) MLOG("scene upscaling: first native FXAA draw uses MetalFX %lux%lu → %lux%lu; HUD draws retain their inputs", (unsigned long)source.width, (unsigned long)source.height, (unsigned long)ow, (unsigned long)oh);
+}
 // The present pass: src's valid rectangle drawn into dst (the drawable, or a screenshot's texture) as present_encode draws it, through MetalFX first where fx_encode takes it
 // (fx: the scaler state to use, nil = bilinear). uvb: the pass's crop constants (one buffer per present allocator, written by the CPU)
 static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4], id<MTLBuffer> uvb, fx_state *fx) {
@@ -14723,7 +14777,7 @@ static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MT
     double dw = dst.width, dh = dst.height;
     MTLViewport vp = present_fit(src, dw, dh);
     int full = vp.originX == 0 && vp.originY == 0 && vp.width == dw && vp.height == dh;
-    id<MTLTexture> tex = present_raw_src(src), up = fx ? fx_encode(fx, cb, tex, r, vp, dst.pixelFormat, fx == &g_fx_present) : nil;
+    id<MTLTexture> tex = present_raw_src(src), up = fx && fx_mode() == 1 ? fx_encode(fx, cb, tex, r, vp, dst.pixelFormat, fx == &g_fx_present ? FX_PRESENT : FX_CAPTURE) : nil;
     if (up) { tex = up; r[0] = r[1] = 0; r[2] = up.width; r[3] = up.height; }   // the scaled picture, the viewport's size: drawn 1:1
     MTL4RenderPassDescriptor *rp = [MTL4RenderPassDescriptor new];
     rp.colorAttachments[0].texture = dst;
