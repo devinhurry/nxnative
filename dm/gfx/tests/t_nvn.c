@@ -90,6 +90,14 @@ int main(void) {
       EXPECT("back to 2 from 3 waits a second again",60,nvn_game_fps());
       _Alignas(8) uint8_t state[64]={0};float cap=60;memcpy(state,&cap,4);dm_fps_state=state;
       EXPECT("stub state takes precedence over env",60,fps_present_cap());
+      dm_fps_resolution_budget=1; resolution_budget(60);
+      EXPECT("disabled resolution budget stays disabled",0,*(uint32_t *)(state+0x38));
+      float normalization=100;memcpy(state+0x38,&normalization,4);
+      resolution_budget(60);memcpy(&normalization,state+0x38,4);
+      EXPECT("60 fps retargets native GPU normalization",200,(int)normalization);
+      resolution_budget(30);memcpy(&normalization,state+0x38,4);
+      EXPECT("movie or thermal 30 cap restores native budget",100,(int)normalization);
+      dm_fps_resolution_budget=0;
       *(uint32_t *)(state+4)=1;
       EXPECT("the state page's movie flag is the host's copy, not read for the cap",60,fps_present_cap());
       dm_fps_state=NULL;unsetenv("DM_FPS_TARGET");g_present_cap=-1;nvn_present_config(0,0);

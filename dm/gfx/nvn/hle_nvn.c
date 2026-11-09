@@ -1824,6 +1824,7 @@ static _Atomic uint64_t g_itv2_since;   // start of the game's current run of ev
 //   a single interval-2 frame is instead kept on screen for its own period by the display-link callback, and the next acquire waits as many ticks (mtl_link_wait_tick, nvn_mtl.m), without changing the mode
 // Frame step (patch_nso.py FRAME_STEP: Tears of the Kingdom 1.4.3, Breath of the Wild 1.9.0): the game no longer picks an interval. The host hands it each frame's step in whole vsyncs
 // (fstep_tick, nvn_fstep.h) and presents follow the hold k it decides with it
+__attribute__((weak)) int dm_fps_resolution_budget;
 __attribute__((weak)) uint8_t *dm_fps_state;   // loader.c; graphics unit tests have no loader
 __attribute__((weak)) void dm_fps_lock_tick(void) {}   // hle_fpslock.c: engine frame limits in game memory (Monster Hunter Rise); graphics unit tests have no host
 static int g_engine_stub = 1;   // the weak dm_fps_lock_engine's answer, for graphics unit tests (t_nvn sets it)
@@ -1890,6 +1891,14 @@ static int fps_step_cap(void) {
     // calm interval, and cooling during those caps counts towards recovery.
     int thermal = thermal_capped();
     return dm_movie_playing() || t <= 30 || thermal ? 30 : 60;   // a movie: its player takes a picture per game frame, paced for the Switch's 30 (hle_movie.c)
+}
+// Keep the game's native dynamic-resolution budget aligned with the effective
+// frame cap, including movie and thermal caps. A zero word leaves it unchanged.
+static void resolution_budget(int cap) {
+    if (!dm_fps_state || !dm_fps_resolution_budget || !__atomic_load_n((uint32_t *)(dm_fps_state + 0x38), __ATOMIC_RELAXED)) return;
+    float percent = cap > 0 ? 100.0f * cap / 30.0f : 100.0f;
+    uint32_t bits; memcpy(&bits, &percent, sizeof bits);
+    __atomic_store_n((uint32_t *)(dm_fps_state + 0x38), bits, __ATOMIC_RELAXED);
 }
 static int fstep_on(void) { return fps_step_cap() != 0; }   // the host decides the steps in whole vsyncs
 // Engine-native frame limiters have no frame-step state page. Their requested
@@ -2089,6 +2098,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     if (fps_high()) high_cap_tick();
     if (dm_fps_state) __atomic_store_n((uint32_t *)(dm_fps_state + 4), (uint32_t)dm_movie_playing(), __ATOMIC_RELAXED);   // the stubs' copy of the movie state (hle.h)
     int c = fps_step_cap();
+    resolution_budget(c);
     if (dm_fps_state) { static int was; if (c != was) { LOG("[nvn] frame step cap %d → %d fps at present %llu%s", was, c, (unsigned long long)o->presents, c == 30 && was == 60 ? (dm_movie_playing() ? " (movie playing)" : thermal_capped() ? " (thermal state serious)" : "") : ""); was = c; } }
     if (c) fstep_tick(o, c);
     dm_fps_lock_tick();   // after the frame step: at 120 fps the target follows the hold just decided

@@ -113,6 +113,9 @@ def build(gid, patched, control):
         if not shown(cond, n): continue
         if var == 'DM_THERMAL_CAP' and platform != 'ios': continue
         s = {'env': var, 'kind': kind, 'section': section, 'label': label, 'note': note, 'default': value(default, n), **m}
+        if var == 'DM_DYNAMIC_RESOLUTION' and 'DYNAMIC_RESOLUTION_BUDGET' in keys:
+            s['label'] = 'Dynamic resolution target'
+            s['note'] = 'Adjusts the game’s native resolution controller to the selected frame rate. A fixed render scale takes precedence.'
         if var == 'DM_RENDER_SCALE' and base: s['base'] = base   # the render scale in pixels, for the console mode chosen
         if kind == 'choice':
             opts = [list(l) for l in langs] if values == 'languages' else [v.split('?', 1)[0].split('=', 1) for v in values.split(',') if offered(v, n)]

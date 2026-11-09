@@ -20,6 +20,20 @@ class ResolutionSetting(unittest.TestCase):
                 self.assertEqual(fps['default'],'60')
                 self.assertEqual(fps['options'],[['30','30 fps'],['60','60 fps']])
 
+
+    def test_botw_budget_retargets_native_resolution_only_on_verified_builds(self):
+        with tempfile.TemporaryDirectory() as tmp,patch.object(settings.nacp,'languages',return_value=['en-US']):
+            p=Path(tmp)/'main.fixups.tsv'
+            p.write_text('')
+            rows=settings.build('01007EF00011E000',tmp,'unused')['settings']
+            self.assertFalse(any(s['env']=='DM_DYNAMIC_RESOLUTION' for s in rows))
+            p.write_text('# DYNAMIC_RESOLUTION\t1\n# DYNAMIC_RESOLUTION_BUDGET\t1\n')
+            rows=settings.build('01007EF00011E000',tmp,'unused')['settings']
+            dr=next(s for s in rows if s['env']=='DM_DYNAMIC_RESOLUTION')
+            self.assertEqual((dr['kind'],dr['default'],dr['label']),('toggle','0','Dynamic resolution target'))
+            self.assertIn('native resolution controller',dr['note'])
+            self.assertIn('fixed render scale takes precedence',dr['note'])
+
 class FrameRateOption(unittest.TestCase):
     def test_120_only_on_the_mac_for_a_game_checked_at_that_speed(self):
         with tempfile.TemporaryDirectory() as tmp,patch.object(settings.nacp,'languages',return_value=['en-US']):

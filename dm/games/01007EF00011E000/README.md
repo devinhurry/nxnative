@@ -17,6 +17,10 @@ Update 1.9.0 (v1114112) over the base game, SDK 20.5.22. Nintendo EPD's engine (
 
 No `tex_flush_upload` (a minute's boot saw it flush 32 CPU-filled textures with data, and it needs none).
 
+## Dynamic-resolution target
+
+On the verified 1.9.0 build, `DM_DYNAMIC_RESOLUTION=1` adjusts the game's native dynamic-resolution controller to the effective 30 or 60 fps cap, including movie and thermal limits. It keeps the game's existing smoothing and resolution range. The default `0` leaves the controller at its original target; a fixed `DM_RENDER_SCALE` takes precedence. This option has not been measured in gameplay on this branch.
+
 ## Frame rate
 
 ### The frame step (current)
