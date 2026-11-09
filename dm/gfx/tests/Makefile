@@ -166,7 +166,10 @@ check_t_cbs_fault: t_cbs_fault
 	./t_cbs_fault
 t_bc_alias: t_bc_alias.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_bc_alias.m $(MTL_T_SRC) $(FW)
-check_t_bc_alias: RUN_ENV = MTL_DEBUG_LAYER=1
+check_t_bc_alias: t_bc_alias
+	MTL_DEBUG_LAYER=1 ./t_bc_alias
+	DM_TEST_NO_BC=1 MTL_DEBUG_LAYER=1 ./t_bc_alias
+	DM_TEST_NO_BC=1 DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_bc_alias
 t_tex_fit_root: t_tex_fit_root.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_tex_fit_root.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_tex_fit_root
@@ -284,6 +287,17 @@ check_t_cpu_storage: RUN_ENV = MTL_DEBUG_LAYER=1
 t_initial_uncached: t_initial_uncached.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_initial_uncached.m $(MTL_T_SRC) $(FW)
 check_t_initial_uncached: RUN_ENV = MTL_DEBUG_LAYER=1
+t_bc: t_bc.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_bc.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_bc
+check_t_bc: t_bc
+	python3 ../tex/bcdec_msl.py --check
+	python3 ../tex/gen_bctc_msl.py --check
+	DM_TEST_NO_BC=0 MTL_DEBUG_LAYER=1 ./t_bc
+	DM_TEST_NO_BC=1 MTL_DEBUG_LAYER=1 ./t_bc
+	DM_TEST_NO_BC=1 DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_bc
+	DM_TEST_NO_BC=1 MTL_DEBUG_LAYER=1 ./t_bc --transcode
+	DM_TEST_NO_BC=1 DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_bc --transcode
 t_upload_slots: t_upload_slots.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_upload_slots.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_upload_slots

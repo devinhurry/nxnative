@@ -179,6 +179,7 @@ int main(int argc, char **argv) {
     } else host_preload(argc, argv);
     int low_memory = dm_low_memory_apply(DM_GAME_LOW_MEMORY_AUTO);
     if (low_memory < 0) die("[RED] low-memory mode setup failed: %s", strerror(errno));
+    if (setenv("DM_LOW_MEMORY_ACTIVE", low_memory ? "1" : "0", 1)) die("[RED] low-memory mode state failed: %s", strerror(errno));
     if (low_memory) LOG("[mem] low-memory mode on: file-backed guest memory, no prebuild or bundled archive; pipeline archive %s", getenv("DM_PSO_ARCHIVE"));
     { void dm_fps_state_apply(void); dm_fps_state_apply(); }   // frame rate and render scale into the frame step state page (loader.c): the iOS launcher sets them after the loading began
     front_run(guest_main);

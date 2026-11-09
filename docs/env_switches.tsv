@@ -99,6 +99,7 @@ DM_LINK_VTICK	switch	`0` keeps the system's display-link rate on 144 or 165 Hz M
 DM_LOADHASH	diagnostic	`=1` logs an address-independent SHA-256 per module after loading
 DM_LONGFRAME	diagnostic	`0` turns off the long-frame log (on by default), a line for a frame over 20 ms or with GPU time over 16.7 ms that is clearly above recent frames
 DM_LOW_MEMORY	player	`auto` selects the low-memory preset below 4.5 GiB available, `1` forces it on, `0` disables the preset. It forces file-backed guest memory, disables pipeline prebuild and the bundled archive, and keeps its runtime archive separate. Automatic by default for Breath of the Wild; the guest-file disk-space protections still apply.
+DM_LOW_MEMORY_ACTIVE	test	Internal resolved low-memory preset state; overwritten at game startup.
 DM_MEASURE_LOCK	path	`=<file>`: `scripts/regress.py`'s default `--lock`, the measuring lock `scripts/bench.py --lock` shares: held only while a game runs, and the harness's shader builds pause while another process holds it
 DM_MEMSTAT	diagnostic	`=<tsv>` writes one line per second of memory accounting: footprint, Metal allocation and resident and charged memory by region class (guest, code, malloc, gpu, …)
 DM_MEMSTAT_DUMP	diagnostic	`=<seconds>`: with `DM_MEMSTAT`, at that second writes every VM region of 1 MiB or more to `<tsv>.regions`
@@ -121,6 +122,8 @@ DM_NVN_ALLOCPROF	diagnostic	`=1` charges Metal allocation growth to each replaye
 DM_NVN_API	switch	`=<major>.<minor>` overrides the NVN API version `nvnDeviceGetInteger` reports (by default decided by the SDK version or the profile's `device_api`: 55.15 for SDK 11 and later, 53.313 before)
 DM_NVN_BARRIER	switch	How draw passes are ordered: `full` (default) waits for all earlier GPU work, `game` only for the previous pass's fragment stage unless the game set a barrier, `ab` alternates with the `DM_AB` phases
 DM_NVN_BC_ALIAS	diagnostic	`0` directs copies into textures aliasing compressed ones to the alias, for comparison.
+DM_NVN_BC_FALLBACK	switch	`1` opts NVN into experimental BC texture decoding on a Metal 4 GPU without native BC support; other graphics backends still require native BC.
+DM_NVN_BC_TRANSCODE	switch	`0` disables lossy ASTC/EAC transcoding for eligible sampled textures in the low-memory BC fallback; native BC, signed BC, BC6H, 3D and writable textures retain their existing paths.
 DM_NVN_BF_WANT	path	`=<file>`: appends the key of each fragment shader whose passes could not be merged for lack of a readable-tile version to that file, once per key
 DM_NVN_BLIT_ORDER	diagnostic	`0` drops the barriers between dependent operations in the copy encoder, which reproduces the fountain's vertical stripes in Mario Wonder
 DM_NVN_CAPTURE	diagnostic	`=<frame>:1:<path>` writes that frame (from its first submit to its present) to one file: pool bytes, registries, program keys, the textures whose content lives only in Metal, each submission's records with pointers relocatable, and the presented frame's SHA-256 and pixels; `dm/gfx/tests/nvn_replay` replays it ([development.md](development.md#frame-capture-and-replay))
@@ -356,6 +359,7 @@ DM_TEST_KEYRACE	diagnostic	`=<n>` creates up to n (at most 512) pthread keys on 
 DM_TEST_KILL_AT	diagnostic	`=write:<n>` exits the process (`_exit(9)`) at the nth save write, imitating a kill mid-write
 DM_TEST_LEAK_GPU	diagnostic	`=1` allocates and keeps a 1 MB shared Metal buffer every 100 ticks: a GPU memory leak on demand
 DM_TEST_LINK_STALL	diagnostic	`=<start s>,<duration s>`: counting from the first present, pauses the display link at that point for that long, to check the present fallback
+DM_TEST_NO_BC	test	`1` forces the NVN BC fallback on a GPU with native BC, for image and copy comparisons.
 DM_TEST_NO_METAL4	diagnostic	`=1` treats the GPU as one without Metal 4, as on a virtual Mac: the NVN layer starts only its classic part and drops every present
 DM_TEST_PRESENT_LAG	diagnostic	`=<every n>,<ms>[,<in a row>][;…]` sleeps that long before every nth present (and the ones after it in the run): a slow frame on demand
 DM_TEST_SWKBD_HOLD_MS	diagnostic	`=<ms>` (with `DM_KBD`) keeps the system keyboard up that long before `DM_KBD`'s text is returned, as a player typing would

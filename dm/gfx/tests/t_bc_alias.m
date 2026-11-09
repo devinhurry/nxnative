@@ -33,12 +33,14 @@ static void fill(id<MTLTexture> t, uint8_t seed) {   // every byte of the 8x8 RG
     run(^(id<MTLBlitCommandEncoder> b) { [b copyFromBuffer:src sourceOffset:0 sourceBytesPerRow:BLOCKS * BLOCK sourceBytesPerImage:BLOCKS * BLOCKS * BLOCK
                                                sourceSize:MTLSizeMake(BLOCKS, BLOCKS, 1) toTexture:t destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)]; });
 }
-static id<MTLBuffer> blocks_of(id<MTLTexture> bc) {   // the compressed texture's blocks, row by row
-    id<MTLBuffer> out = buffer(BLOCKS * BLOCKS * BLOCK);
-    run(^(id<MTLBlitCommandEncoder> b) { [b copyFromTexture:bc sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(W, W, 1)
-                                                  toBuffer:out destinationOffset:0 destinationBytesPerRow:BLOCKS * BLOCK destinationBytesPerImage:BLOCKS * BLOCKS * BLOCK]; });
-    return out;
+static id<MTLBuffer> blocks_of(id<MTLTexture> bc) {   // the original BC blocks, including in fallback storage
+    id<MTLBuffer> out = buffer(BLOCKS * BLOCKS * BLOCK); res_add(out);
+    mtl_sub_begin();
+    enc_b_copy_texture_buffer(blit(), bc, 0, 0, MTLOriginMake(0, 0, 0), MTLSizeMake(W, W, 1), out, 0, BLOCKS * BLOCK, BLOCKS * BLOCKS * BLOCK);
+    CHECK(mtl_wait(mtl_sub_commit(), 5000000000ull), "block read completes");
+    res_remove(out); return out;
 }
+
 static void copy(const tex_t *src, const tex_t *dst) {
     p_copy_t2t c = {.src = src, .dst = dst, .sr = {0, 0, 0, BLOCKS, BLOCKS, 1}, .dr = {0, 0, 0, BLOCKS, BLOCKS, 1}};
     mtl_sub_begin(); copy_t2t(&c);
@@ -54,7 +56,7 @@ int main(void) { @autoreleasepool {
     mtl_reg_tex(1, &bc, NULL); mtl_reg_tex(2, &alias, NULL);
     id<MTLTexture> mbc = tex_mtl(&bc), msrc = tex_mtl(&src);
     while (mbc.parentTexture) mbc = mbc.parentTexture;
-    CHECK(mbc && bc_block_bytes(mbc.pixelFormat) == BLOCK, "the compressed texture is BC3 in Metal");
+    CHECK(mbc && (bc_block_bytes(mbc.pixelFormat) == BLOCK || bc_block(mbc) == BLOCK), "the compressed texture retains its BC3 blocks");
     CHECK(msrc && msrc.pixelFormat == MTLPixelFormatRGBA32Uint, "the source is RGBA32UI");
 
     fill(msrc, 3);

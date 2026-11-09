@@ -21,7 +21,7 @@ The offsets of each level and layer within the storage, and the block height and
 
 ## BC textures
 
-Only GPUs with BC compressed textures are supported (`supportsBCTextureCompression` of `MTLDevice`: Apple silicon Macs and the latest iPhones), so BC textures are created and uploaded as BC; there is no decompression path. A device without them is refused at start ([GPUs without BC textures](../../../docs/reference/rendering.md#gpus-without-bc-textures-are-refused-at-start)). A BC texture is never a render target and its raw blocks are not sampled through an uncompressed view (Metal has no such views; Breath of the Wild encodes one 32×32 BC4 texture on the GPU, GitHub issue #4).
+GPUs with native BC keep BC textures unchanged. On Metal 4 devices without native BC, NVN can opt into experimental GPU decoding with `DM_NVN_BC_FALLBACK=1`. In low-memory mode eligible sampled textures can instead be transcoded to ASTC/EAC, which may lose detail; `DM_NVN_BC_TRANSCODE=0` disables that tradeoff. The original blocks remain available for copies and readback. GL and Vulkan still require native BC. Physical older-device gameplay and memory use have not been verified. A BC texture is never a render target and its raw blocks are not sampled through an uncompressed view (Metal has no such views; Breath of the Wild encodes one 32×32 BC4 texture on the GPU, GitHub issue #4).
 
 ## Tests
 
