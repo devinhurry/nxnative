@@ -756,7 +756,7 @@
       "id": "applet.dungeon",
       "screen": "AppMapDungeon",
       "state": "dungeon map active",
-      "action": "Tap Divine Beast controls and menu prompts; select a position with the D-pad or by tapping its marker; drag to rotate the map.",
+      "action": "Tap Divine Beast controls and menu prompts; always show the required D-pad regardless of its saved visibility; select a position with directions or a marker tap; drag to rotate the map.",
       "implementation_status": "implemented",
       "implementation_evidence": [
         {
@@ -788,11 +788,26 @@
           "file": "dm/host/hle_botw_touch_menu.c",
           "function": "dungeon_service_marker",
           "why": "Calls the validated native selector on the owning game thread after a stationary marker tap."
+        },
+        {
+          "file": "dm/ios/Sources/DmGamepad.m",
+          "function": "botwMenuDpadActive",
+          "why": "Shows required menu directions independently of the saved gameplay D-pad visibility."
+        },
+        {
+          "file": "dm/ios/Sources/DmGamepad.m",
+          "function": "botwDpadMask",
+          "why": "Keeps all four required directions usable, including in Seated controls."
+        },
+        {
+          "file": "dm/host/front_mac.m",
+          "function": "botwDpadMask",
+          "why": "Applies the same required-direction override to Mac drawing and input."
         }
       ],
       "verification_status": "passed",
-      "verification_reason": "On Mac with the supplied Vah Medoh save, D-pad selection, Tilt/Execute, sensor and Leave Area prompts, direct marker taps before and after rotation, and relative map dragging worked. Other beasts and physical iPhone gesture feel remain unverified.",
-      "implementation_status_reason": "Tilt and Back/Execute use the rendered capture geometry, the live map exposes the D-pad, and relative drag feeds the dungeon camera. Marker taps use live projected centers and the native selection function; the sensor selector inherits the live AppHome prompts.",
+      "verification_reason": "On Mac with the supplied Vah Medoh save, D-pad selection, Tilt/Execute, sensor and Leave Area prompts, direct marker taps before and after rotation, and relative map dragging worked. Other beasts and physical iPhone gesture feel remain unverified. A UIKit handler matrix passes 72 checks of both visibility preferences, ordinary/compact/Seated layouts, all four directions, release and controller handoff; the full fixture retains 15 unchanged unrelated failures.",
+      "implementation_status_reason": "Tilt and Back/Execute use the rendered capture geometry, the live map exposes the D-pad, and relative drag feeds the dungeon camera. Marker taps use live projected centers and the native selection function; the sensor selector inherits the live AppHome prompts. Both frontends give required menu directions priority over the saved D-pad visibility and restore the preference after leaving.",
       "verification_evidence": [
         {
           "file": "dm/host/tests/t_botw_touch_menu.c",
@@ -813,6 +828,11 @@
           "file": "dm/host/tests/t_botw_touch_menu.c",
           "function": "test_dungeon_marker_taps",
           "why": "Checks projected marker coordinates, tap selection, drag separation and stale owner rejection."
+        },
+        {
+          "file": "dm/ios/tests/ios_look_harness.m",
+          "function": "test_botw_dungeon_dpad_override",
+          "why": "Checks that required directions override both saved visibility settings and restore the hidden setting and Magnesis behavior on exit."
         }
       ],
       "verification_level": "game_state",
@@ -848,6 +868,10 @@
         {
           "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/divine-beast-20261109-144505/86-reopen12.png",
           "why": "Reopening after Tilt and Execute shows the changed beast pose."
+        },
+        {
+          "file": "/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/divine-beast-dpad-20261109/validation.md",
+          "why": "Records the required-direction matrix, before/after results and the full fixture limitations."
         }
       ]
     },

@@ -47,7 +47,7 @@ Implementation and verification are independent. `blocked` means a save, story/D
 | `applet.picture_book` — AppPictureBook; grid/detail state | Select categories immediately; select entries and navigate pages/details/back | implemented | not_run / none |
 | `applet.tool` — AppTool; rune tool active | Operate available native controls and close to gameplay | implemented | not_run / none |
 | `applet.camera` — AppCamera_00; Camera Rune shown in native viewfinder | See enumerated camera action requirements: shutter, back, self-portrait, album, framing/focus, zoom, and selfie poses. | implemented | passed / game state |
-| `applet.dungeon` — AppMapDungeon; dungeon map active | Tap Divine Beast controls and menu prompts; select a position with the D-pad or by tapping its marker; drag to rotate the map. | implemented | passed / game state |
+| `applet.dungeon` — AppMapDungeon; dungeon map active | Tap Divine Beast controls and menu prompts; always show the required D-pad regardless of its saved visibility; select a position with directions or a marker tap; drag to rotate the map. | implemented | passed / game state |
 | `options.rows_values` — OptionWindow; options list active | Select, scroll, change arrows/labels and ON/OFF values | implemented | passed / game state |
 | `title.load` — Title; title choices visible | Choose Continue/New Game and accept/cancel load flow | implemented | passed / game state |
 | `system.ack` — SystemWindow variants; dialog shown | Choose a visible dialog option through its native hit/focus target; tap an authored confirm/back guide when present. | implemented | not_run / none |
@@ -294,7 +294,7 @@ All enumerated AppCamera actions plus the newly required touch-gamepad/menu coex
 
 ### applet.dungeon
 
-Tilt and Back/Execute use the rendered capture geometry, the live map exposes the D-pad, and relative drag feeds the dungeon camera. Marker taps use live projected centers and the native selection function; the sensor selector inherits the live AppHome prompts.
+Tilt and Back/Execute use the rendered capture geometry, the live map exposes the D-pad, and relative drag feeds the dungeon camera. Marker taps use live projected centers and the native selection function; the sensor selector inherits the live AppHome prompts. Both frontends give required menu directions priority over the saved D-pad visibility and restore the preference after leaving.
 
 - [dm/host/hle_botw_touch_menu.c](../../dm/host/hle_botw_touch_menu.c) `selector_cursorless_prompt_view`: Checks the live AppHome and dungeon page before exposing the map controls and D-pad.
 - [dm/host/hle_botw_touch_menu.c](../../dm/host/hle_botw_touch_menu.c) `selector_dungeon_prompts`: Maps the offscreen A/B capture to the visible Divine Beast controls.
@@ -302,13 +302,17 @@ Tilt and Back/Execute use the rendered capture geometry, the live map exposes th
 - [dm/host/hle_botw_touch_menu.c](../../dm/host/hle_botw_touch_menu.c) `dungeon_rotate_input`: Consumes accumulated movement through the dungeon camera while retaining its native limits.
 - [dm/host/hle_botw_touch_menu.c](../../dm/host/hle_botw_touch_menu.c) `selector_dungeon_markers`: Uses the projected centers in the game's live selector list, which move with the 3D map.
 - [dm/host/hle_botw_touch_menu.c](../../dm/host/hle_botw_touch_menu.c) `dungeon_service_marker`: Calls the validated native selector on the owning game thread after a stationary marker tap.
+- [dm/ios/Sources/DmGamepad.m](../../dm/ios/Sources/DmGamepad.m) `botwMenuDpadActive`: Shows required menu directions independently of the saved gameplay D-pad visibility.
+- [dm/ios/Sources/DmGamepad.m](../../dm/ios/Sources/DmGamepad.m) `botwDpadMask`: Keeps all four required directions usable, including in Seated controls.
+- [dm/host/front_mac.m](../../dm/host/front_mac.m) `botwDpadMask`: Applies the same required-direction override to Mac drawing and input.
 
-**Verification (passed; game state):** On Mac with the supplied Vah Medoh save, D-pad selection, Tilt/Execute, sensor and Leave Area prompts, direct marker taps before and after rotation, and relative map dragging worked. Other beasts and physical iPhone gesture feel remain unverified.
+**Verification (passed; game state):** On Mac with the supplied Vah Medoh save, D-pad selection, Tilt/Execute, sensor and Leave Area prompts, direct marker taps before and after rotation, and relative map dragging worked. Other beasts and physical iPhone gesture feel remain unverified. A UIKit handler matrix passes 72 checks of both visibility preferences, ordinary/compact/Seated layouts, all four directions, release and controller handoff; the full fixture retains 15 unchanged unrelated failures.
 
 - [dm/host/tests/t_botw_touch_menu.c](../../dm/host/tests/t_botw_touch_menu.c) `test_dungeon_captured_prompts`: Checks visible, hidden and ambiguous capture destinations.
 - [dm/host/tests/t_botw_touch_menu.c](../../dm/host/tests/t_botw_touch_menu.c) `test_dungeon_focused_footer`: Checks focused selector footer ownership and rejects a stale owner.
 - [dm/host/tests/t_botw_touch_menu.c](../../dm/host/tests/t_botw_touch_menu.c) `test_dungeon_relative_rotation`: Checks accumulated deltas, native interval, cancellation and controller precedence.
 - [dm/host/tests/t_botw_touch_menu.c](../../dm/host/tests/t_botw_touch_menu.c) `test_dungeon_marker_taps`: Checks projected marker coordinates, tap selection, drag separation and stale owner rejection.
+- [dm/ios/tests/ios_look_harness.m](../../dm/ios/tests/ios_look_harness.m) `test_botw_dungeon_dpad_override`: Checks that required directions override both saved visibility settings and restore the hidden setting and Magnesis behavior on exit.
 
 - Recorded artifact: `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/divine-beast-20261109-144505/45-reopen7.png` — The map after choosing Tilt and Execute shows the changed beast pose.
 - Recorded artifact: `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/divine-beast-20261109-144505/game8.log` — Mac game input trace for equal and opposite slow/fast drags, vertical movement and release.
@@ -318,6 +322,7 @@ Tilt and Back/Execute use the rendered capture geometry, the live map exposes th
 - Recorded artifact: `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/divine-beast-20261109-144505/79-marker-after-rotate11.png` — The top position is highlighted at its new location after a drag and direct tap.
 - Recorded artifact: `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/divine-beast-20261109-144505/game12.log` — Final current-checkout Mac run: direct marker selection, map drag, Tilt and Execute.
 - Recorded artifact: `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/divine-beast-20261109-144505/86-reopen12.png` — Reopening after Tilt and Execute shows the changed beast pose.
+- Recorded artifact: `/Volumes/ExternalSSD/Games/ZeldaWild/01007EF00011E000-work/divine-beast-dpad-20261109/validation.md` — Records the required-direction matrix, before/after results and the full fixture limitations.
 
 ### options.rows_values
 

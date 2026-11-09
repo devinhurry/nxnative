@@ -672,7 +672,9 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
             dm_input_cancel_virtual_latch(_held); [self cancelInput];
         }
         if (_menuPose.active && !dm_botw_touch_camera_active()) [self cancelInput];
-        if (active && !preview_seated() && _owner == PREVIEW_DPAD && !dm_botw_touch_menu_dpad_visible()) [self cancelInput];
+        if (active && _owner == PREVIEW_DPAD &&
+            ((!preview_seated() && !dm_botw_touch_menu_dpad_visible()) || (_held & ~self.botwDpadMask)))
+            [self cancelInput];
         [self setNeedsDisplay:YES]; return;
     }
     _cameraPadVisible = cameraPadVisible;
@@ -889,7 +891,8 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
 }
 - (BOOL)keepNativeLoadout { return !_touchLayout.dpad_visible; }
 - (uint64_t)botwDpadMask {
-    if (!_active) return DM_BTN_LEFT | DM_BTN_UP | DM_BTN_RIGHT | DM_BTN_DOWN;
+    if (!_active || (_menuMode && dm_botw_touch_menu_dpad_visible()))
+        return DM_BTN_LEFT | DM_BTN_UP | DM_BTN_RIGHT | DM_BTN_DOWN;
     if (dm_botw_touch_quick_select_active() || dm_botw_touch_switch_active()) return 0;
     return dm_botw_layout_dpad_mask(&_touchLayout, dm_botw_touch_vertical_dpad_active());
 }
@@ -982,7 +985,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     _down = _last = NSMakePoint(p.x, p.y); _hasTouch = YES; _held = _cancelPending; _owner = PREVIEW_NONE;
     [self setBotwMenuActive:_active && !dm_botw_touch_controls_visible()];
     if (_menuMode && !_settingsShortcutVisible && ((!_cameraPadVisible && !preview_seated()) || (preview_seated() && p.y<[self controlArea].y))) {
-        if (_touchLayout.dpad_visible && dm_botw_touch_menu_dpad_visible() && !preview_seated()) {
+        if (dm_botw_touch_menu_dpad_visible() && !preview_seated()) {
             dm_touchpad_point center=self.dpadCenter;
             uint64_t direction = hypotf(p.x-center.x,p.y-center.y)<=self.dpadRadius*DM_TP_DPAD_GRAB ? [self dpadAtTop:p] : 0;
             if (direction) { _owner=PREVIEW_DPAD; _held=direction; [self publishButtons]; return; }
@@ -1365,7 +1368,7 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     (void)dirtyRect; if (!_active) return;
     float h = self.bounds.size.height, w = self.bounds.size.width, u = self.u;
     if (_menuMode && !_cameraPadVisible && !preview_seated() && !_settingsShortcutVisible) {
-        if (_touchLayout.dpad_visible && dm_botw_touch_menu_dpad_visible()) {
+        if (dm_botw_touch_menu_dpad_visible()) {
             dm_touchpad_point d=self.dpadCenter;
             NSColor *color=[NSColor colorWithRed:226/255.0 green:222/255.0 blue:211/255.0 alpha:_touchLayout.icon_alpha];
             for (int b=12;b<16;b++) preview_draw_botw_glyph(dm_botw_dpad_key_path(CGPointMake(d.x,d.y),self.dpadRadius,b),h,color);
@@ -1406,7 +1409,8 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
         else [self drawButtonIcon:dm_botw_touch_bow_active() && control<18 ? control+5 : control center:at radius:r.width*.5f];
     }
     dm_touchpad_point fc = [self faceCenter];
-    if (dm_botw_layout_dpad_artwork_visible(&_touchLayout,dm_botw_touch_loadout_visible())) {
+    if (dm_botw_touch_menu_dpad_visible() ||
+        dm_botw_layout_dpad_artwork_visible(&_touchLayout,dm_botw_touch_loadout_visible())) {
         dm_touchpad_point d = self.dpadCenter;
         for (int b=12;b<16;b++)
             if (self.botwDpadMask & (1ull<<b))
