@@ -8,11 +8,13 @@
 #import <Metal/Metal.h>
 #import <AVFAudio/AVFAudio.h>
 #include <errno.h>
+#include <stdatomic.h>
 #include "front.h"
 #include "hle.h"
 #include "dm.h"
 #include "haptics_apple.h"
 #include "save_sync.h"
+#include "../../gfx/nvn/framegen_policy.h"
 #import "CloudSaves.h"
 
 void dm_gamepad_active(void);
@@ -82,6 +84,7 @@ static void tv_attach(void);
 @property (nonatomic, strong) DmGameView *game;
 @property (nonatomic, strong) UIView *pad;
 @property (nonatomic, strong) UILabel *fps;
+@property (nonatomic, strong) NSTimer *fpsTimer;
 @property (nonatomic) BOOL launched;
 @property (nonatomic, strong) id tv;   // the TV scene accessory's registration (iOS 27)
 @property (nonatomic) BOOL fill;   // DM_PICTURE_FIT=fill: in landscape the picture covers the screen, its edges cropped (DmLayout.h dm_layout_picture)
@@ -95,6 +98,8 @@ static void tv_attach(void);
 - (void)showFPS:(BOOL)on;
 @end
 static DmRootVC *g_root;
+static _Atomic int g_screen_hz = 60;
+int front_screen_max_fps(void) { return atomic_load(&g_screen_hz); }
 static CGFloat g_picture_aspect = DM_PICTURE_16_9;   // the presented picture's width / height (front_picture_shape); main thread
 static void launcher_done(void) { [g_root startGame]; }
 @implementation DmRootVC
@@ -182,6 +187,8 @@ static void launcher_done(void) { [g_root startGame]; }
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds; if (!self.game) return;
+    NSInteger hz = self.game.window.windowScene.screen.maximumFramesPerSecond;
+    if (hz > 0) atomic_store(&g_screen_hz, (int)hz);
     CGRect division = CGRectNull;   // an iPhone Duo's fold, as UIKit reports it (iOS 27.1)
     NSMutableArray<NSString *> *regionLog = [NSMutableArray array];
 #if __has_include(<UIKit/UIHingeInteraction.h>)
@@ -207,12 +214,12 @@ static void launcher_done(void) { [g_root startGame]; }
     if (self.fps) {   // the top row's free stretch: right of DmGamepad.m's L3 key (102 + 17 of its units from the safe edge), level with − / + (22 units down); u is its unit
         CGRect s = CGRectIntersection(layout.controls, UIEdgeInsetsInsetRect(b, gameInsets));
         CGFloat u = layout.separated ? MIN(MIN(s.size.height / 430.0, s.size.width / 700.0), 1.3) : MIN(b.size.height / 430.0, 1.3);
-        self.fps.frame = CGRectMake(floor(CGRectGetMinX(s) + 130 * u), floor(CGRectGetMinY(s) + 22 * u - 11), 64, 22);
+        self.fps.frame = CGRectMake(floor(CGRectGetMinX(s) + 130 * u), floor(CGRectGetMinY(s) + 22 * u - 11), MAX(64, ceil(self.fps.intrinsicContentSize.width) + 12), 22);
     }
 }
 - (void)showFPS:(BOOL)on {   // the frame-rate counter: DM_SHOW_FPS at Play, then the in-game menu
-    if (on && !self.fps) { self.fps = front_ios_fps_label(); [self.view addSubview:self.fps]; [self.view setNeedsLayout]; }   // above the pad, which hides while a controller is connected
-    self.fps.hidden = !on;
+    if (on && !self.fps) { self.fps = front_ios_fps_label(); [self.view addSubview:self.fps]; [self.view setNeedsLayout]; }
+    else if (!on && self.fps) { self.fps.hidden = YES; [self.fpsTimer invalidate]; self.fpsTimer = nil; [self.fps removeFromSuperview]; self.fps = nil; }
 }
 - (void)viewDidAppear:(BOOL)a {
     [super viewDidAppear:a];
@@ -285,6 +292,10 @@ bool dm_setting_live(const char *env, const char *value) {
         dm_set_opmode(m); dm_gamepad_opmode_changed(); LOG("front end: console mode %s (in-game menu)", m ? "docked" : "handheld");
         return true;
     }
+    if (!strcmp(env, "DM_FRAMEGEN") && *DM_GAME_FRAMEGEN_SCENE) {
+        if (value) return dm_fg_set_mode(dm_framegen_parse(value));
+        return true;
+    }
     if (!strcmp(env, "DM_SHOW_FPS")) { if (value) [g_root showFPS:atoi(value) != 0]; return true; }
     if (!strcmp(env, "DM_TOUCH_HAPTICS")) { if (value) dm_gamepad_touch_feedback(atoi(value) != 0); return true; }
     if (!strcmp(env, "DM_RUMBLE")) { if (value) { dm_haptics_set_enabled(atoi(value) != 0); LOG("front end: game rumble %s (in-game menu)", atoi(value) ? "on" : "off"); } return true; }
@@ -323,16 +334,21 @@ static void front_ios_power_watch(void) {
 // On when the IPA was built with it (the NSP script's SHOW_FPS / --show-fps → DMShowFPS in Info.plist); DM_SHOW_FPS=0 / 1 (the launcher, Documents/env.txt) overrides that without a rebuild,
 // and the in-game menu turns it on and off ([DmRootVC showFPS:])
 uint64_t mtl_present_count(void);
+uint64_t mtl_generated_present_count(void);
 static UILabel *front_ios_fps_label(void) {
     UILabel *l = [UILabel new];
     l.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightSemibold]; l.textColor = UIColor.whiteColor; l.textAlignment = NSTextAlignmentCenter;
     l.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45]; l.layer.cornerRadius = 6; l.layer.masksToBounds = YES; l.userInteractionEnabled = NO;
     l.text = @"-- fps";
-    __block uint64_t n0 = mtl_present_count(); __block double t0 = CACurrentMediaTime();
-    [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
-        (void)t; uint64_t n = mtl_present_count(); double now = CACurrentMediaTime();
-        if (now - t0 < 1.5) l.text = [NSString stringWithFormat:@"%.0f fps", (n - n0) / (now - t0)];   // a longer span is the time in the background: no reading
-        n0 = n; t0 = now;
+    __block uint64_t n0 = mtl_present_count(), generated0 = mtl_generated_present_count(); __block double t0 = CACurrentMediaTime();
+    g_root.fpsTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
+        (void)t; uint64_t n = mtl_present_count(), generated = mtl_generated_present_count(); double now = CACurrentMediaTime(), elapsed = now - t0;
+        if (elapsed > 0 && elapsed < 1.5) {
+            double fps = (n - n0) / elapsed;
+            l.text = dm_fg_enabled() ? [NSString stringWithFormat:@"%.0f+%.0f fps", fps, (generated - generated0) / elapsed] : [NSString stringWithFormat:@"%.0f fps", fps];
+            CGRect frame = l.frame; frame.size.width = MAX(64, ceil(l.intrinsicContentSize.width) + 12); l.frame = frame;
+        }
+        n0 = n; generated0 = generated; t0 = now;
     }];
     LOG("front end: frame-rate counter on");
     return l;

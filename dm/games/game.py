@@ -205,6 +205,13 @@ def header_one(g):
     if mml not in ('on', 'off'): sys.exit(f'{g.id}: mem_map_limit must be on or off: {mml}')
     lma = g.get('low_memory_auto', 'off')
     if lma not in ('on', 'off'): sys.exit(f'{g.id}: low_memory_auto must be on or off: {lma}')
+    fg_scene = g.get('framegen_scene', '')
+    fg_camera = g.get('framegen_camera', '')
+    fg_canvas = g.get('framegen_canvas', '')
+    if fg_scene and any(not re.fullmatch(r'[0-9a-f]{16}', k) for k in fg_scene.split()): sys.exit(f'{g.id}: framegen_scene must list shader keys')
+    if fg_camera and not re.fullmatch(r'(?:[0-9]|1[0-5]):[0-9]+', fg_camera): sys.exit(f'{g.id}: framegen_camera must name a vertex uniform and byte size')
+    if fg_canvas and not re.fullmatch(r'[0-9a-f]{16}', fg_canvas): sys.exit(f'{g.id}: framegen_canvas must be one shader key')
+    if bool(fg_scene) != bool(fg_camera) or bool(fg_scene) != bool(fg_canvas): sys.exit(f'{g.id}: framegen_scene, framegen_camera and framegen_canvas must be supplied together')
     scene = g.get('scene_upscale', '').split()
     if scene and (len(scene) != 2 or any(not re.fullmatch(r'[0-9a-f]{16}', k) for k in scene)):
         sys.exit(f'{g.id}: scene_upscale needs the verified vertex and pixel shader keys')
@@ -271,6 +278,7 @@ def header_one(g):
          f'#define DM_GAME_DRAW_BARRIERS_GAME {int(dbr == "game")}',
          f'#define DM_GAME_UPSCALER_KEYS {q(",".join(ups))}', f'#define DM_GAME_UPSCALER_N {len(ups)}',
          f'#define DM_GAME_SCENE_UPSCALE_VS {q(scene[0] if scene else "")}', f'#define DM_GAME_SCENE_UPSCALE_PS {q(scene[1] if scene else "")}',
+         f'#define DM_GAME_FRAMEGEN_SCENE {q(fg_scene)}', f'#define DM_GAME_FRAMEGEN_CAMERA {q(fg_camera)}', f'#define DM_GAME_FRAMEGEN_CANVAS {q(fg_canvas)}',
          f'#define DM_GAME_VCONV_RANGE {int(vcr == "on")}',
          *([f'#define DM_GAME_NVN_API_MAJOR {api.split(".")[0]}', f'#define DM_GAME_NVN_API_MINOR {api.split(".")[1]}'] if g.get('device_api', '') else []),   # without the key: by the SDK version (hle_nvn.c nvn_api)
          '']

@@ -16,6 +16,7 @@
 #include "dm.h"
 #include "dm_input.h"
 #include "front.h"
+#include "../gfx/nvn/framegen_policy.h"
 #include "hle.h"
 #include "pad_slots.h"
 #include "haptics_apple.h"
@@ -543,6 +544,13 @@ static _Atomic double g_picture_aspect = 16.0 / 9.0;
 void front_picture_shape(int w, int h) { if (w > 0 && h > 0) g_picture_aspect = (double)w / h; }
 @interface DmGameView : NSView @end
 @implementation DmGameView
+- (void)changeFrameGeneration:(NSMenuItem *)item {
+    if (dm_fg_set_mode((int)item.tag)) [[NSUserDefaults standardUserDefaults] setObject:item.representedObject forKey:@"launcher.DM_FRAMEGEN"];
+}
+- (BOOL)validateMenuItem:(NSMenuItem *)item {
+    if (item.action==@selector(changeFrameGeneration:)) item.state=dm_fg_requested_mode()==item.tag?NSControlStateValueOn:NSControlStateValueOff;
+    return YES;
+}
 - (void)mouseDown:(NSEvent *)e { [self mouseDragged:e]; }
 - (void)mouseDragged:(NSEvent *)e {
     if (!g_input_on) return;
@@ -1484,6 +1492,17 @@ void front_run(void (*guest)(void)) {
             dispatch_async(dispatch_get_main_queue(), ^{ [g_cheats_menu showPanel:nil]; });
         [[bar addItemWithTitle:@"Window" action:nil keyEquivalent:@""] setSubmenu:wm];
         [wm addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"].keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagCommand;
+        if (*DM_GAME_FRAMEGEN_SCENE) {
+            NSMenu *fg=[[NSMenu alloc] initWithTitle:@"Frame generation"];
+            [[bar addItemWithTitle:@"Frame generation" action:nil keyEquivalent:@""] setSubmenu:fg];
+            for (int mode=0;mode<=65;mode+=5) {
+                if (mode>0 && mode<20) continue;
+                int rate=mode==65?-1:mode;
+                NSString *title=rate<0?@"Uncapped":rate?[NSString stringWithFormat:@"%d + %d",rate,rate]:@"Off";
+                NSMenuItem *item=[fg addItemWithTitle:title action:@selector(changeFrameGeneration:) keyEquivalent:@""];
+                item.target=v; item.tag=rate; item.representedObject=rate<0?@"max":@(rate).stringValue;
+            }
+        }
         NSApp.mainMenu = bar;
         const char *fs = getenv("DM_FULLSCREEN");   // 1 (or any value but 0): start in fullscreen; 0, the settings window's Window, or unset: a window
         if (fs && strcmp(fs, "0")) {

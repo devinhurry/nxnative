@@ -16,6 +16,9 @@
 #include <time.h>
 #include <math.h>
 #include "motion_fusion.h"
+#include "../gfx/nvn/framegen_policy.h"
+// CPU-only HID tools and other graphics APIs have no interpolation backend.
+__attribute__((weak)) int dm_fg_set_mode(int mode) { (void)mode; return 0; }
 
 enum { NPAD_NO1 = 0, NPAD_HANDHELD = 0x20 };
 enum { STYLE_FULLKEY = 1u << 0, STYLE_HANDHELD = 1u << 1, STYLE_JOYDUAL = 1u << 2, STYLE_JOYLEFT = 1u << 3, STYLE_JOYRIGHT = 1u << 4 };
@@ -247,6 +250,11 @@ static void *ctl_main(void *arg) {
                                                      while (*e3 == ' ') e3++; dm_ctl_memdump(a, n, e3); continue; }
                 if (!strncmp(line, "cvari ", 6)) { void dm_ctl_cvar_i32(uint64_t off, int32_t v); char *e2; uint64_t off = strtoull(line + 6, &e2, 16); dm_ctl_cvar_i32(off, (int32_t)strtol(e2, NULL, 0)); continue; }
                 if (!strncmp(line, "cvarf ", 6)) { void dm_ctl_cvar_f32(uint64_t off, float v); char *e2; uint64_t off = strtoull(line + 6, &e2, 16); dm_ctl_cvar_f32(off, strtof(e2, NULL)); continue; }
+                if (!strncmp(line,"framegen ",9)) {
+                    const char *value=line+9; int mode=dm_framegen_parse(value);
+                    if ((!mode && strcmp(value,"0")) || !dm_fg_set_mode(mode)) LOG("[RED] DM_CTL framegen: use 0, 30, 40, 50, 60 or max on a supported game/GPU");
+                    continue;
+                }
                 if (!strncmp(line, "env ", 4)) { char *eq = strchr(line + 4, '='); if (eq) { *eq = 0; setenv(line + 4, eq + 1, 1); LOG("DM_CTL: env %s=%s", line + 4, eq + 1); } continue; }
                 if (!strncmp(line, "texdump ", 8)) { void dm_gfx_texdump_next(const char *path); dm_gfx_texdump_next(line + 8); LOG("DM_CTL: colour targets of the next frame → %s (as DM_NVN_TEXDUMP)", line + 8); continue; }
                 if (!strncmp(line, "passdump ", 9)) { void dm_gfx_passdump_next(long n); dm_gfx_passdump_next(atol(line + 9)); LOG("DM_CTL: passes of the next %ld frames (as DM_NVN_PASSDUMP)", atol(line + 9)); continue; }

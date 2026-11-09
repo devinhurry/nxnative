@@ -20,6 +20,11 @@ pad_layout	full
 # ---- Graphics ----
 # The frame-interval controller (60 fps cuts in patches.py) and dynamic resolution read the GPU time between the frame's two timestamp reports: each report takes its segment's GPU start / end
 gpu_timestamps	segment
+# Verified frame generation scene, camera layout and final canvas.
+framegen_scene	bd7ffdd435c6c3bc f7ee6fe10b925543
+framegen_camera	0:2336
+framegen_canvas	ecb4242efaf4042b
+shader_ui_capture	1
 # Verified native scene composite before the HUD.
 scene_upscale	5e9f57168d89a543 bd7ffdd435c6c3bc
 # 60 fps (30 on the Switch): the host decides each frame's step in whole vsyncs and holds the frame that long (rewriter stubs at setWaitVsyncInterval and VFR::updateInterval,

@@ -111,6 +111,7 @@ def build(gid, patched, control):
             can = table[need]
             if can is not None and want not in can: sys.exit(f'settings.tsv:{n}: needs a value {need} never takes: {want} (it takes {", ".join(sorted(can))})')
         if not shown(cond, n): continue
+        if var == 'DM_FRAMEGEN' and not macro('DM_GAME_FRAMEGEN_SCENE', n): continue
         if var == 'DM_THERMAL_CAP' and platform != 'ios': continue
         s = {'env': var, 'kind': kind, 'section': section, 'label': label, 'note': note, 'default': value(default, n), **m}
         if var == 'DM_DYNAMIC_RESOLUTION' and 'DYNAMIC_RESOLUTION_BUDGET' in keys:
@@ -124,6 +125,8 @@ def build(gid, patched, control):
             if any(len(o) != 2 for o in opts): sys.exit(f'settings.tsv:{n}: choice values are value=label,...')
             if var == 'DM_FPS_TARGET' and 'REALTIME_FRAME_STEP' in keys:
                 opts = [[str(rate), f'{rate} fps'] for rate in range(20, 121, 5)]
+            if var == 'DM_FRAMEGEN' and 'REALTIME_FRAME_STEP' in keys:
+                opts = [['0', 'Off']] + [[str(rate), f'{rate} + {rate}'] for rate in range(20, 61, 5)] + [['max', 'Uncapped']]
             if s['default'] not in [o[0] for o in opts]: s['default'] = opts[0][0]   # a default the game does not offer (a language it lacks): its first
             s['options'] = opts
             if values == 'languages' and not have: s['note'] = UNKNOWN_LANGUAGES

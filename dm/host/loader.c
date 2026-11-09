@@ -2,9 +2,11 @@
 // The code area (original text and patch area) is set to read-only+execute as soon as it is copied in, and from then on the loader only writes data: on iOS these two blocks must be embedded as is as signed code segments.
 #include "dm.h"
 #include "../gfx/nvn/nvn_realtime_step.h"
+#include "../gfx/nvn/framegen_policy.h"
 #include <TargetConditionals.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <stdatomic.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -15,6 +17,12 @@
 #if TARGET_OS_IPHONE
 #include <mach/mach.h>
 #endif
+
+// CPU-only tools have no interpolation backend. The graphics implementation
+// supplies the strong definition and checks device support before the cap.
+__attribute__((weak)) int dm_fg_enabled(void) { return 0; }
+__attribute__((weak)) int dm_fg_mode(void) { return *DM_GAME_FRAMEGEN_SCENE && dm_fg_enabled()?dm_framegen_parse(getenv("DM_FRAMEGEN")):0; }
+__attribute__((weak)) int dm_fg_requested_mode(void) { return dm_fg_mode(); }
 
 module_t *g_mod;
 int g_nmod;
@@ -309,6 +317,22 @@ static void read_layout(module_t *m, const char *dir) {
 uint8_t *dm_fps_state;
 int dm_fps_resolution_budget, dm_fps_realtime;
 static const char *g_fps_mod;   // the module holding the state page (for the log)
+static _Atomic int g_normal_fps_target;
+int dm_framegen_is_verified(void) { return dm_fps_state && dm_fps_realtime; }
+void dm_framegen_mode_changed(int mode) {
+    if (!dm_fps_state) return;
+    uint32_t was=__atomic_load_n((uint32_t *)(dm_fps_state+0xa0),__ATOMIC_RELAXED);
+    float target=mode ? (mode>0?mode:60) : atomic_load(&g_normal_fps_target);
+    int realtime=mode || (dm_fps_realtime && target>0 && target!=30 && target!=60);
+    float ratio=realtime ? 30.0f/target : 0;
+    uint32_t bits; memcpy(&bits,&target,4); __atomic_store_n((uint32_t *)dm_fps_state,bits,__ATOMIC_RELAXED);
+    memcpy(&bits,&ratio,4); __atomic_store_n((uint32_t *)(dm_fps_state+0xa0),bits,__ATOMIC_RELAXED);
+    if (realtime || was) {
+        uint32_t rate=(uint32_t)target,step=rate?(60+rate-1)/rate:0;
+        __atomic_store_n((uint32_t *)(dm_fps_state+0x20),step,__ATOMIC_RELAXED);
+    }
+    if (!realtime) __atomic_store_n((uint32_t *)(dm_fps_state+0xa4),0,__ATOMIC_RELAXED);
+}
 static void install_fps_state(module_t *m) {
     if (m->fps_state_off + 0xa8 > m->size || m->fps_state_off < m->key_page_off + m->key_page_size) die("%s: frame step state page out of range", m->name);
     dm_fps_state = m->base + m->fps_state_off; g_fps_mod = m->name;
@@ -320,9 +344,12 @@ void dm_fps_state_apply(void) {
     if (!dm_fps_state) return;
     const char *e = getenv("DM_FPS_TARGET"); int t = e ? atoi(e) : DM_GAME_FPS_TARGET;
     if (!nvn_realtime_rate_valid(t, dm_fps_realtime)) { LOG("[RED] DM_FPS_TARGET=%s: unsupported for this build; using the game's own frame step", e); t = 0; }
-    float f = (float)t; memcpy(dm_fps_state, &f, sizeof f);
-    float ratio = dm_fps_realtime && t && t != 30 && t != 60 ? 30.0f / t : 0;
-    memcpy(dm_fps_state + 0xa0, &ratio, sizeof ratio); memcpy(dm_fps_state + 0xa4, &ratio, sizeof ratio);
+    atomic_store(&g_normal_fps_target,t);
+    int framegen=dm_fps_realtime ? dm_fg_mode() : 0;
+    dm_framegen_mode_changed(framegen);
+    if (framegen) t=framegen>0?framegen:60;
+    float ratio = framegen || (dm_fps_realtime && t && t != 30 && t != 60) ? 30.0f / t : 0;
+    memcpy(dm_fps_state + 0xa4, &ratio, sizeof ratio);
     // Render scale of the 3D views (the stubs at Tears of the Kingdom's main+0xd5cc0, Breath of the Wild's main+0x1266880): 1.0 keeps the game's own size and dynamic resolution;
     // another factor fixes the size at that fraction (DM_RENDER_SCALE, 0.5 to 1.0). Independent of the frame step: written at target 0 too
     const char *rs = getenv("DM_RENDER_SCALE"); float sc = 1.0f;
@@ -376,7 +403,7 @@ void dm_fps_state_apply(void) {
         }
     }
     char cap[32]; snprintf(cap, sizeof cap, ", capped at %d fps", t);
-    LOG("%s: frame step %s%s (%s)", g_fps_mod, !t ? "as the game sets it" : ratio ? "following measured real time" : "in whole vsyncs decided by the host", t ? cap : "", e ? "DM_FPS_TARGET" : "game profile fps_target");
+    LOG("%s: frame step %s%s (%s)", g_fps_mod, !t ? "as the game sets it" : ratio ? "following measured real time" : "in whole vsyncs decided by the host", t ? cap : "", framegen ? "DM_FRAMEGEN" : e ? "DM_FPS_TARGET" : "game profile fps_target");
 }
 static void install_key_page(module_t *m) {
     if (m->key_page_off + m->key_page_size > m->size) die("%s: key page out of range", m->name);

@@ -13,6 +13,7 @@
 # Final summary: success / failure counts and the distribution of reasons; distribution of driver segment read offsets (those outside the range the replay layer can fill are listed separately);
 # a [RED] line per shader that built but lost something (shader_regressions.report_losses), which does not change the exit status
 import atexit, bisect, inspect, os, re, sys, json, mmap, struct, hashlib, shutil, subprocess, tempfile, time, collections, threading, concurrent.futures as cf
+import dmsh_ui
 import dmsh_geometry, dmsh_atomic, dmsh_wide, dmsh_meshstage, dmsh_abi as abi   # abi: the driver segment layout and the binding kinds the host shares (dm/gfx/nvn/dmsh_abi.h)
 DM_ROOT = os.environ.get('DM_ROOT') or os.path.expanduser('~/dm-work')   # Workspace root (game files, build outputs and run artifacts are all under it)
 HOME = os.path.expanduser('~')
@@ -558,7 +559,7 @@ def publish_cache(key, digest, rule_fp, code_fp):
             for name in names:
                 src = os.path.join(out if label == 'mac' else IOSOUT, name)
                 if name.endswith('.json'):
-                    value = json.load(open(src)); value.pop('fetch', None); value.pop('vin', None); value.pop('pull', None); value.pop('alpha', None); value.pop('logic', None)   # the side libraries are made again from the restored MSL (ps_libraries, vin_finish, pull_finish)
+                    value = json.load(open(src)); value.pop('fetch', None); value.pop('vin', None); value.pop('pull', None); value.pop('alpha', None); value.pop('logic', None); value.pop('ui_capture', None)   # the side libraries are made again from the restored MSL (ps_libraries, vin_finish, pull_finish)
                     STORE.put(f'{root}/{label}/{name}', json.dumps(value, ensure_ascii=False, indent=1).encode())
                 else: STORE.put_file(f'{root}/{label}/{name}', src)
         STORE.put(cache_meta_path(key), json.dumps({'digest': digest, 'rule_fp': rule_fp, 'code_fp': code_fp}).encode())
@@ -631,7 +632,7 @@ def vin_finish(key, full, refl):
     VIN_STATS['inputs'] += len(shadows); VIN_STATS['float only'] += sum(1 for s in shadows if 'sint' not in s and 'uint' not in s)
     return refl
 
-def ps_libraries(key, msl, full, bindings):
+def base_ps_libraries(key, msl, full, bindings):
     """A pixel shader's libraries, cut from one compile through the MSL-keyed Metal cache (dmsh_side.cut): <key>_b with its own entry points, <key>_bx with its alpha test and logic
     operation ones (dmsh_side.unit), <key>_bf with its readable-tile version main0_f (dmsh_fetch.fold; a shader without a rewritable sample only when bf_want.tsv lists it). The readable-tile
     version was a source and a Metal compile of its own (13,666 of Mario Kart 8 Deluxe's 29,651 shaders). msl: the file of its plain source, full; bindings: its reflection's.
@@ -667,6 +668,35 @@ def ps_libraries(key, msl, full, bindings):
     drop('_bx', '_bf')
     for t, d in targets: MTL.compile(t, msl, os.path.join(d, key + '_b.metallib'))
     return {}
+
+def ps_libraries(key, msl, full, bindings):
+    # The HUD capture library is a frame-generation dependency, separate from
+    # the ordinary draw; failure drops interpolation, never the game's draw.
+    result = base_ps_libraries(key, msl, full, bindings)
+    targets = [(t, d) for t, d in (("mac", out), ("ios", IOSOUT)) if d and t in TARGETS]
+    def drop():
+        for _, directory in targets:
+            try: os.unlink(os.path.join(directory, key + "_bui.metallib"))
+            except FileNotFoundError: pass
+    if GAME.get("shader_ui_capture", "0") != "1":
+        drop(); return result
+    source, entries = dmsh_ui.variant(full)
+    if source is None:
+        drop(); return result
+    ui_msl = os.path.join(w, key + "_bui.metal")
+    open(ui_msl, "w").write(source)
+    try:
+        for target, directory in targets:
+            MTL.compile(target, ui_msl, os.path.join(directory, key + "_bui.metallib"))
+    except subprocess.CalledProcessError as error:
+        drop()
+        print(f"[RED] {key}: separate HUD shader failed ({str(error)[:120]}): interpolation skips affected frames", flush=True)
+        return result
+    finally:
+        try: os.unlink(ui_msl)
+        except FileNotFoundError: pass
+    result["ui_capture"] = {"entries": entries}
+    return result
 
 pc_of, loc = {}, {}
 MAP_ROWS, MAP_CONFLICT_ROWS = {}, {}

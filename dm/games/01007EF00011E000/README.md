@@ -21,6 +21,10 @@ No `tex_flush_upload` (a minute's boot saw it flush 32 CPU-filled textures with 
 
 On the verified 1.9.0 build, `DM_DYNAMIC_RESOLUTION=1` adjusts the game's native dynamic-resolution controller to the effective frame-rate cap, including movie and thermal limits. It keeps the game's existing smoothing and resolution range. The default `0` leaves the controller at its original target; a fixed `DM_RENDER_SCALE` takes precedence. This option has not been measured in gameplay on this branch.
 
+## Experimental frame generation
+
+On the verified 1.9.0 build, a supported MetalFX GPU can insert a generated picture between real frames. `DM_FRAMEGEN` is off by default; choose a source rate from 20 to 60 in steps of five, or `max` for uncapped. It stays off when `DM_FPS_TARGET` is above 60. The separate HUD remains at the real-frame rate, and unsupported capture operations keep the real frame. The iPhone FPS counter reports real and confirmed generated frames separately. Motion artifacts, latency, and device performance still need gameplay testing on this branch.
+
 ## Frame rate
 
 The verified 1.9.0 timing patch also offers experimental rates from 20 to 120 fps in steps of five. The game advances by the measured time between real frames at those rates; 30 and 60 retain the existing frame-step behavior. Higher rates depend on the device and screen. These custom rates have not been measured in gameplay on this branch.

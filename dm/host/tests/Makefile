@@ -12,6 +12,12 @@ QUIET = $(if $(findstring -fsanitize,$(SAN)),,2>/dev/null)
 GINC = $(if $(strip $(GAME)),-I../gen/$(GAME) -I../../games/$(GAME),$(error GAME is not set: make GAME=<base game title ID>: $(shell python3 ../../games/game.py list | awk -F'\t' '{printf "%s (%s)  ", $$1, $$3}')))
 $(B)/t_fs $(B)/t_fs_case $(B)/t_fs_commit_list $(B)/t_fs_commit_list_tsan: ../romfs_image.h
 GAME_H = ../gen/$(GAME)/game_profile.h
+$(B)/t_framegen_fps: t_framegen_fps.c ../loader.c ../dm.h ../../gfx/nvn/framegen_policy.h $(GAME_H) | $(B)
+	$(CLANG) -O1 -g -Wall -Werror -Wno-unused-function -Wno-deprecated-declarations -I.. $(GINC) -o $@ t_framegen_fps.c ../loader.c
+.PHONY: framegen-fps
+framegen-fps: $(B)/t_framegen_fps
+	$(B)/t_framegen_fps
+run: framegen-fps
 $(B)/t_memory_mode: t_memory_mode.c ../memory_mode.h | $(B)
 	$(CLANG) -O1 -g -Wall -Werror -o $@ t_memory_mode.c
 run: check-memory-mode

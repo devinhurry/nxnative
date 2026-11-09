@@ -14,6 +14,7 @@
 #include "nvn_tex.h"
 #include "../tex/nvn_deswizzle.h"
 #include "nvn_mtl.h"
+#include "framegen_policy.h"
 #include "nvn_pace.h"
 #include "nvn_fstep.h"
 #include "nvn_realtime_step.h"
@@ -1541,7 +1542,7 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
             // frames are dropped as fast as they come and nothing frees a ring slot later, so the texture's slot time paces the game: unpaced, Breath of the Wild ran 3 to 4.5 times real time there.
             // Otherwise snapshots take the display link's wait below like any present. The wait for a free ring slot (mtl_snap_acquire_wait) alone did not pace: the link takes frames in
             // order and drops all but the newest two, and a dropped frame frees its slot, so Donkey Kong Bananza at the 30 fps cap ran 43-65 fps of game time and dropped about 110 of every 300 frames
-        else if (nvn_game_realtime() && period && mtl_link_rate() % (int)(1000000000ull / period)) { if (wait) sleep_until_ns(at); }
+        else if (nvn_game_realtime() && (!period || mtl_link_rate() % (int)(1000000000ull / period))) { if (wait) sleep_until_ns(at); }
         else if (mtl_link_active()) { if (!link_wait(o, period ? 2 * period : 33333333ull) && wait) sleep_until_ns(at); }   // DM_PRESENT_LINK: pacing fully follows the display link (wait for the present interval's display-link ticks when running fast, go immediately when behind); our own 60 Hz clock is only the fallback when no display-link tick arrives
         else if (wait) sleep_until_ns(at);
         pace_ns = now_ns() - p0;
@@ -1830,6 +1831,7 @@ static _Atomic uint64_t g_itv2_since;   // start of the game's current run of ev
 __attribute__((weak)) int dm_fps_resolution_budget, dm_fps_realtime;
 int nvn_game_realtime(void) {
     if (!dm_fps_state || !dm_fps_realtime) return 0;
+    if (dm_fg_enabled()) return 1;
     uint32_t bits = __atomic_load_n((uint32_t *)dm_fps_state, __ATOMIC_RELAXED);
     float target; memcpy(&target, &bits, sizeof target);
     return target > 0 && target != 30 && target != 60;
@@ -1932,6 +1934,14 @@ static int fps_present_cap(void) {
 static nvn_fstep g_fs;   // present thread only
 static nvn_fgpu g_fg;   // the GPU time at kmin and at the current hold (nvn_fstep_gpu_slowed)
 static _Atomic int g_fs_k;   // the hold presentation follows (0 = not decided yet)
+static int g_fs_restart;
+static void fstep_framegen_mode(nvn_realtime_step *clock,int mode) {
+    if (!nvn_realtime_set_mode(clock,mode)) return;
+    // These policies own different clocks. A return to whole-vsync stepping
+    // must not repay time already advanced by the fractional game clock.
+    memset(&g_fs,0,sizeof g_fs); memset(&g_fg,0,sizeof g_fg);
+    g_fs_start=g_fs_wait=0; atomic_store(&g_fs_k,0); g_fs_restart=1;
+}
 // The display link runs at 30 Hz at a 30 cap, except while the game fixes its own step at 1 (BotW's VFR override)
 int nvn_fps_high_now(void) { return atomic_load(&g_fs_k) == 1 ? 120 : 60; }   // hle_fpslock.c: the target of the next game frame, from the hold in force
 // The rate of vi::GetDisplayVsyncEvent (hle_sdk16.c, nvn_mtl.m mtl_link_wait_vsync): the Switch's 60 Hz, or 120 while 120 fps is on and its hold is one tick of 1/120 s. A game that
@@ -1978,6 +1988,11 @@ static int link_wait(const win_t *o, uint64_t timeout_ns) {
 }
 static uint64_t present_period(const win_t *o) {
     present_cfg(o);
+    if (dm_fg_enabled()) {
+        int cap=fps_step_cap();
+        if (dm_fg_mode()<0 && cap!=30) return 0;
+        return cap>0 ? 1000000000ull/(uint64_t)cap : 0;
+    }
     int was = atomic_load(&g_game_itv), want = o->interval > 0 ? o->interval : 1;
     if (want != was) {
         atomic_store(&g_game_itv, want);
@@ -2030,7 +2045,12 @@ static int fstep_hold(void) {
 // Once per present, before this frame's period is taken: the time since the previous frame's start (shown) and the frame's cost decide this frame's hold and the next frame's step.
 // Cost = max(CPU: the time between the frames' starts without the pacing wait, GPU: the latest finished frame's GPU time), in vsyncs
 static void fstep_tick(const win_t *o, int c) {
-    static uint64_t prev, t0, v0, fixed_sum, held[FSTEP_MAX + 1]; static int nlog;
+    static uint64_t prev, t0, v0, fixed_sum, held[FSTEP_MAX + 1], first_present;
+    static int nlog, fixed_was, nfix, slow_k; static uint16_t slow_bits;
+    if (g_fs_restart) {
+        g_fs_restart=0; prev=t0=v0=fixed_sum=0; memset(held,0,sizeof held);
+        nlog=fixed_was=nfix=slow_k=slow_bits=0; first_present=o->presents-1;
+    }
     const double v = 1e9 / fstep_hz();
     uint64_t st = g_fs_start ? g_fs_start : now_ns(), pw = g_fs_wait; g_fs_start = g_fs_wait = 0;
     double shown = prev ? (st - prev) / v : 0, gpu = 0; prev = st;
@@ -2049,10 +2069,10 @@ static void fstep_tick(const win_t *o, int c) {
     // Lateness is then what the screen shows: the on-screen interval of the frame 8 presents back against its hold (pres_expect_ms), late by a quarter or dropped
     // A game that is slower than its hold frame after frame (not a few long frames: 12 of the last 16 started late) is late too, though the screen misses only every few frames:
     // 18.9 ms frames at hold 1 missed one refresh in 7, never three in a row, and ran at a jittering 53 fps with a payback every few frames instead of a steady 30
-    if (mtl_snap_on() && mtl_link_active() && !mtl_link_stalled() && o->presents > 9) {   // (frames the stall fallback drops say nothing about the game: judged by cost then)
+    if (mtl_snap_on() && mtl_link_active() && !mtl_link_stalled() && o->presents-first_present > 9) {   // only pictures from this policy; stall fallback drops say nothing about the game
         uint64_t pn = o->presents - 8; double a = mtl_presented_time(pn), b = mtl_presented_time(pn - 1);
         if (a < 0) g_fs.screen = 2; else if (a > 0 && b > 0) g_fs.screen = (a - b) * 1e3 > 1.25 * pres_expect_ms(pn) ? 2 : 1;
-        static uint16_t slow_bits; static int slow_k; int k = g_fs.k ? g_fs.k : kmin;
+        int k = g_fs.k ? g_fs.k : kmin;
         if (k != slow_k) { slow_k = k; slow_bits = 0; }   // judged against the hold in force, not the frames before a step
         slow_bits = (uint16_t)(slow_bits << 1 | (shown > k + FSTEP_LATE));
         if (__builtin_popcount(slow_bits) >= 12) g_fs.screen = 2;
@@ -2065,7 +2085,6 @@ static void fstep_tick(const win_t *o, int c) {
     if (dm_fps_state) __atomic_store_n((uint32_t *)(dm_fps_state + 0x20), (uint32_t)n, __ATOMIC_RELAXED);
     atomic_store(&g_fs_k, g_fs.k);
     held[g_fs.k]++; if (fixed) fixed_sum += (uint64_t)n;   // the stubs count only the host's steps
-    static int fixed_was, nfix;
     if (fixed != fixed_was && nfix < 40) { nfix++; if (fixed) LOG("[nvn] frame step: the game fixes its own step at %d vsyncs at present %llu", fixed, (unsigned long long)o->presents); else LOG("[nvn] frame step: the game hands the step back to the host at present %llu", (unsigned long long)o->presents); }
     fixed_was = fixed;
     if (k0 && g_fs.k != k0 && nlog < 40) {
@@ -2110,14 +2129,16 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     dm_ue_cvar_tick();
     if (fps_high()) high_cap_tick();
     if (dm_fps_state) __atomic_store_n((uint32_t *)(dm_fps_state + 4), (uint32_t)dm_movie_playing(), __ATOMIC_RELAXED);   // the stubs' copy of the movie state (hle.h)
+    int framegen=dm_fg_mode();
     int c = fps_step_cap();
     resolution_budget(c);
     if (dm_fps_state) { static int was; if (c != was) { LOG("[nvn] frame step cap %d → %d fps at present %llu%s", was, c, (unsigned long long)o->presents, c == 30 && was == 60 ? (dm_movie_playing() ? " (movie playing)" : thermal_capped() ? " (thermal state serious)" : "") : ""); was = c; } }
     static nvn_realtime_step step;
     int realtime = nvn_game_realtime();
-    nvn_realtime_set_mode(&step, realtime ? -c : 0);
+    int mode = framegen ? framegen : realtime ? -c : 0;
+    fstep_framegen_mode(&step, mode);
     if (realtime && c) {
-        float ratio = (float)(30 * nvn_realtime_seconds(&step, now_ns(), -c, c));
+        float ratio = (float)(30 * nvn_realtime_seconds(&step, now_ns(), mode, c));
         uint32_t bits; memcpy(&bits, &ratio, 4);
         __atomic_store_n((uint32_t *)(dm_fps_state + 0xa0), bits, __ATOMIC_RELAXED);
         __atomic_store_n((uint32_t *)(dm_fps_state + 0x20), (uint32_t)((60 + c - 1) / c), __ATOMIC_RELAXED);

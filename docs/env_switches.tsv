@@ -43,6 +43,12 @@ DM_FORCE_STRICT	diagnostic	`=1` makes the loader fail on forced-hook entries no 
 DM_FPS	switch	`30` or `60` pins the frame rate the display link and frame pacing aim for; otherwise it follows the game's present interval (60, or 30 when the game asks for 30)
 DM_FPS_HOLD	player	`on` / `off` overrides the profile's `fps_hold`: whether late frames may raise the hold above the frame cap's vsyncs (on by default)
 DM_FPS_TARGET	player	Frame-rate cap: `30` or `60`, `120` for a game whose profile has `fps_max 120` (60 otherwise), or `0` for the game's own limit. Builds with a verified `REALTIME_FRAME_STEP` also accept `20`–`120` in steps of five; overrides the profile's `fps_target`.
+DM_FRAMEGEN	player	Experimental frame generation: `0` (off), a source rate from `20` through `60` in steps of five, or `max` for uncapped. Verified BOTW 1.9.0 and a supported MetalFX GPU only; inactive if `DM_FPS_TARGET` exceeds 60.
+DM_FRAMEGEN_FI_CACHE	diagnostic	`0` disables reuse of frame interpolators between matching sizes (on by default).
+DM_FRAMEGEN_PROFILE	diagnostic	A file path for frame-generation profiling events in JSONL format.
+DM_FRAMEGEN_SHOT	diagnostic	A path prefix for one diagnostic generated/real frame pair.
+DM_FRAMEGEN_TIMING	diagnostic	A file path for generated and real drawable presentation timestamps.
+DM_FRAMEGEN_YFLIP	diagnostic	`-1` tries the opposite clip-space Y direction for interpolation motion vectors.
 DM_FS	diagnostic	When set, logs file opens, paths not found or not mounted, and a read summary every 64 MiB or 1000 reads
 DM_FSLOG	diagnostic	`=<file>` writes one TSV line per ReadFile: seconds since boot, guest path, offset, length and guest buffer address
 DM_FSLOG_HASH	diagnostic	With `DM_FSLOG`, adds a column with the FNV-1a 64 hash of the bytes read
@@ -114,6 +120,7 @@ DM_NRO_DIR	path	folder of NROs the shader split reads like `main`, and in which 
 DM_NVN_ALLOCPROF	diagnostic	`=1` charges Metal allocation growth to each replayed op type and function, and logs command allocator sizes and each new texture (serial, size, format, storage); `=2` also gives each main submission a fresh command allocator and reports command memory by operation, by encoder, by submission size and the indirect-count multi-draws encoded
 DM_NVN_API	switch	`=<major>.<minor>` overrides the NVN API version `nvnDeviceGetInteger` reports (by default decided by the SDK version or the profile's `device_api`: 55.15 for SDK 11 and later, 53.313 before)
 DM_NVN_BARRIER	switch	How draw passes are ordered: `full` (default) waits for all earlier GPU work, `game` only for the previous pass's fragment stage unless the game set a barrier, `ab` alternates with the `DM_AB` phases
+DM_NVN_BC_ALIAS	diagnostic	`0` directs copies into textures aliasing compressed ones to the alias, for comparison.
 DM_NVN_BF_WANT	path	`=<file>`: appends the key of each fragment shader whose passes could not be merged for lack of a readable-tile version to that file, once per key
 DM_NVN_BLIT_ORDER	diagnostic	`0` drops the barriers between dependent operations in the copy encoder, which reproduces the fountain's vertical stripes in Mario Wonder
 DM_NVN_CAPTURE	diagnostic	`=<frame>:1:<path>` writes that frame (from its first submit to its present) to one file: pool bytes, registries, program keys, the textures whose content lives only in Metal, each submission's records with pointers relocatable, and the presented frame's SHA-256 and pixels; `dm/gfx/tests/nvn_replay` replays it ([development.md](development.md#frame-capture-and-replay))
@@ -354,6 +361,7 @@ DM_TEST_PRESENT_LAG	diagnostic	`=<every n>,<ms>[,<in a row>][;…]` sleeps that 
 DM_TEST_SWKBD_HOLD_MS	diagnostic	`=<ms>` (with `DM_KBD`) keeps the system keyboard up that long before `DM_KBD`'s text is returned, as a player typing would
 DM_TEST_SWKBD_LAG_MS	diagnostic	`=<ms>` sleeps that long between the keyboard handing back its text and the game's thread getting the result, to check that auto-accept does not act early
 DM_TEST_TRANSFORM_FEEDBACK	test	Path to the native t_transform_feedback executable used by the Python feedback tests
+DM_TEST_UI_LIBRARY	test	Path to the offline HUD shader fixture used by frame-generation tests.
 DM_TEST_UP_LEAK	diagnostic	`=1` keeps the old upload staging block instead of retiring it, as before the fix, to measure the leak
 DM_TEST_UP_LOST	diagnostic	`=<batch index>` treats that batch of uploads as dropped, to exercise the re-upload path
 DM_THERMAL_CAP	switch	`1` enables the optional thermal cap, which holds the frame step at 30 fps while iOS reports a serious or critical thermal state (off by default)

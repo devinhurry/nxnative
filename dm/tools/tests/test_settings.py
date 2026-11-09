@@ -43,6 +43,19 @@ class FrameRateOption(unittest.TestCase):
                 row = next(s for s in settings.build('01007EF00011E000', tmp, 'unused')['settings'] if s['env'] == 'DM_FPS_TARGET')
                 self.assertEqual([option[0] for option in row['options']], expected)
 
+    def test_frame_generation_requires_verified_inputs_and_step(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(settings.nacp, 'languages', return_value=['en-US']):
+            p = Path(tmp) / 'main.fixups.tsv'
+            for gid, fixups, offered in [('01007EF00011E000', '', False),
+                                         ('01007EF00011E000', '# REALTIME_FRAME_STEP\t1\n', True),
+                                         ('010056B015FE8000', '# REALTIME_FRAME_STEP\t1\n', False)]:
+                p.write_text(fixups)
+                rows = settings.build(gid, tmp, 'unused')['settings']
+                fg = [s for s in rows if s['env'] == 'DM_FRAMEGEN']
+                self.assertEqual(bool(fg), offered)
+                if offered:
+                    self.assertEqual([o[0] for o in fg[0]['options']], ['0'] + [str(n) for n in range(20, 61, 5)] + ['max'])
+
     def test_120_only_on_the_mac_for_a_game_checked_at_that_speed(self):
         with tempfile.TemporaryDirectory() as tmp,patch.object(settings.nacp,'languages',return_value=['en-US']):
             (Path(tmp)/'main.fixups.tsv').write_text('')
