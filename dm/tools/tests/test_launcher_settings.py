@@ -15,7 +15,7 @@ settings = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(settings)
 
 BOTW, WONDER = '01007EF00011E000', '010015100B514000'
-PERFORMANCE_NVN = ['DM_NVN_FB_SNAP', 'DM_PRESENT_SNAP', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_NVN_ENC_THREAD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
+PERFORMANCE_NVN = ['DM_LOW_MEMORY', 'DM_NVN_FB_SNAP', 'DM_PRESENT_SNAP', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_NVN_ENC_THREAD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
 
 
 def build(gid, api, platform=None):
@@ -31,6 +31,13 @@ def rows_with_languages(listed):   # the settings rows, by variable, of a game w
 
 
 class LauncherSettingsTests(unittest.TestCase):
+    def test_low_memory_preset_is_automatic_only_for_botw(self):
+        for platform in ('ios', 'mac'):
+            row = build(BOTW, 'nvn', platform)['DM_LOW_MEMORY']
+            self.assertEqual((row['kind'], row['default']), ('choice', 'auto'))
+            self.assertEqual([v[0] for v in row['options']], ['auto', '1', '0'])
+            self.assertNotIn('DM_LOW_MEMORY', build(WONDER, 'nvn', platform))
+
     def test_game_language_row_offers_the_games_own_or_every_language_when_unknown(self):
         self.assertNotIn('DM_LANG', rows_with_languages(['ja']))   # one language: nothing to pick
         s = rows_with_languages(['en-US', 'ja'])['DM_LANG']

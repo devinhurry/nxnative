@@ -52,6 +52,8 @@ mem_reserve	0x100000000
 mem_alias	0x10000000
 mem_stack	0x10000000
 app_pool	0xCD500000
+# The low-memory preset follows available memory unless explicitly overridden.
+low_memory_auto	on
 
 # ---- Shader split (shader_split.py) ----
 shader_groups	/Shader/=shader /Effect/=effect /Layout/=layout /System/=gsys /Terrain/=terrain

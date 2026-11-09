@@ -93,6 +93,8 @@ Handheld, the game draws 1280x720 into its 1920x1080 window textures and crops t
 
 The experimental `DM_PRESENT_UPSCALE=scene` applies MetalFX to the verified scene composite before the native FXAA and HUD, while `metalfx` scales the final picture. It keeps the game's own draw when the input or output cannot be verified. This option has passed GPU checks on this branch, but has not been measured in gameplay here.
 
+The experimental low-memory preset can be set to Automatic, On or Off. Automatic enables it when less than 4.5 GiB is available at startup. It uses file-backed guest memory, disables pipeline prebuild and the bundled archive, and keeps its runtime archive separate. It can cause stutter and needs free disk space. The host's existing disk-space checks still apply.
+
 Measurements reported in [PR #215](https://github.com/seedds/nxnative/pull/215), the present command buffer's GPU time:
 
 | Device and content → output | MetalFX | Standard |

@@ -203,6 +203,8 @@ def header_one(g):
     if vcr not in ('on', 'off'): sys.exit(f'{g.id}: vconv_range must be on or off: {vcr}')
     mml = g.get('mem_map_limit', 'off')   # MapPhysicalMemory refused beyond the application pool, as on Horizon (hle_svc.c): on / off
     if mml not in ('on', 'off'): sys.exit(f'{g.id}: mem_map_limit must be on or off: {mml}')
+    lma = g.get('low_memory_auto', 'off')
+    if lma not in ('on', 'off'): sys.exit(f'{g.id}: low_memory_auto must be on or off: {lma}')
     scene = g.get('scene_upscale', '').split()
     if scene and (len(scene) != 2 or any(not re.fullmatch(r'[0-9a-f]{16}', k) for k in scene)):
         sys.exit(f'{g.id}: scene_upscale needs the verified vertex and pixel shader keys')
@@ -235,6 +237,7 @@ def header_one(g):
          f'#define DM_GAME_MEM_ALIAS {g.int("mem_alias"):#x}ull',
          f'#define DM_GAME_MEM_STACK {g.int("mem_stack"):#x}ull',
          f'#define DM_GAME_APP_POOL {g.int("app_pool"):#x}ull',
+         f'#define DM_GAME_LOW_MEMORY_AUTO {int(lma == "on")}',
          f'#define DM_GAME_MEM_USED {int(g.get("mem_used", "0x4000000"), 0):#x}ull',   # used memory reported beside the heap (hle_svc.c GetInfo UsedMemorySize)
          f'#define DM_GAME_SYS_RESOURCE {int(g.get("sys_resource", "0x2000000"), 0):#x}ull',   # the NPDM's system resource size (hle_svc.c GetInfo TotalSystemResourceSize; 0 = no virtual address memory)
          f'#define DM_GAME_ARGS {q(g.get("game_args", ""))}',   # game arguments when the command line gives none (main.c; Octopath Traveler 0: Unreal's -SwitchVirtualAddressSpaceSize=)
