@@ -107,10 +107,20 @@ int main(int argc, char **argv) { @autoreleasepool {
     acquire_ticks(120, 1, 1, 2, "native 60 fps cap waits two 120 Hz ticks");
     CHECK(nvn_game_fps() == 60, "native 60 fps cap configures the display link");
     setenv("DM_FPS_TARGET", "0", 1); g_present_cap = -1;
-    _Alignas(8) float state[10] = {60}; dm_fps_state = (uint8_t *)state;   // include the fixed-step flag at +0x24 read by rt_period_ns
+    _Alignas(8) float state[42] = {60}; dm_fps_state = (uint8_t *)state;   // include the real-time fields at +0xa0 and +0xa4
     acquire_ticks(120, 1, 1, 2, "the 60 fps frame step keeps 60 Hz vsyncs");
     state[0] = 30;
     acquire_ticks(120, 1, 1, 4, "the 30 fps frame step keeps two 60 Hz vsyncs");
+    dm_fps_realtime = 1; state[0] = 40;
+    CHECK(nvn_game_realtime() && fps_step_cap() == 40, "a verified custom rate follows real time");
+    win_t real = {.interval = 2};
+    CHECK(present_period(&real) == 25000000ull, "40 fps uses a 25 ms present period");
+    acquire_ticks(120, 1, 2, 3, "40 fps waits three ticks of a 120 Hz link");
+    state[0] = 45;
+    CHECK(present_period(&real) == 1000000000ull / 45, "45 fps retains its fractional period");
+    CHECK(link_vsync_count(144, 144) == 60 && link_vsync_count(120, 120) == 60, "a native-rate link retains a 60 Hz guest vsync");
+    dm_fps_realtime = 0;
+    CHECK(!nvn_game_realtime() && fps_step_cap() == 60, "an unverified build retains its ordinary frame step");
     dm_fps_state = NULL;
     // 120 fps: the frame step's hold is in ticks of 1/120 s, whatever interval the game asks for, and the target the host writes follows it
     setenv("DM_FPS_TARGET", "120", 1); g_present_cap = -1; g_fps_high = -1;

@@ -8,7 +8,8 @@
 #include <string.h>
 
 int nvn_game_fps(void);
-static _Alignas(8) uint8_t fps_state[0x40];
+extern int dm_fps_realtime;
+static _Alignas(8) uint8_t fps_state[0xa8];
 uint8_t *dm_fps_state = fps_state;
 static _Atomic uint64_t test_now;
 static _Atomic int test_thermal = -1, thermal_reads;
@@ -52,6 +53,8 @@ int main(void) {
         target(30); CHECK("disabled: the configured 30 fps cap still applies", nvn_game_fps() == 30);
         target(60);
         movie(1); CHECK("disabled: the movie cap still applies", nvn_game_fps() == 30);
+        movie(0); dm_fps_realtime = 1; target(45);
+        CHECK("disabled: a verified custom rate keeps its cap", nvn_game_fps() == 45);
         CHECK("disabled: thermal state is never read", atomic_load(&thermal_reads) == 0);
     } else {
         dm_fps_state = NULL; at(1, 2);
@@ -90,7 +93,14 @@ int main(void) {
         at(200, 0); CHECK("the restarted recovery lasts all 30 seconds", nvn_game_fps() == 30);
         at(201, 0); CHECK("recovery also completes at nominal", nvn_game_fps() == 60);
 
-        at(202, 2);
+        dm_fps_realtime = 1; target(45);
+        at(202, 0); CHECK("a custom rate is retained while cool", nvn_game_fps() == 45);
+        at(203, 2); CHECK("a hot custom rate drops to 30", nvn_game_fps() == 30);
+        at(204, 0); (void)nvn_game_fps();
+        at(234, 0); CHECK("a custom rate returns after cooling", nvn_game_fps() == 45);
+        dm_fps_realtime = 0; target(60);
+
+        at(235, 2);
         pthread_t threads[4];
         for (unsigned i = 0; i < 4; i++) if (pthread_create(&threads[i], NULL, reader, NULL)) return 2;
         while (atomic_load(&ready) != 4) sched_yield();

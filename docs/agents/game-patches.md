@@ -87,7 +87,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 | [Super Mario 3D All-Stars: Super Mario Sunshine](#super-mario-3d-all-stars-super-mario-sunshine) | 2 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [Super Smash Bros. Ultimate](#super-smash-bros-ultimate) | 11 | 0 | 0 | 1 | 0 | `game` |
 | [Taiko Risshiden V DX](#taiko-risshiden-v-dx) | 1 | 0 | 0 | 2 | 0 | `game` |
-| [The Legend of Zelda: Breath of the Wild](#the-legend-of-zelda-breath-of-the-wild) | 7 | 0 | 44 | 0 | 0 | `build` → `game` ×2 |
+| [The Legend of Zelda: Breath of the Wild](#the-legend-of-zelda-breath-of-the-wild) | 7 | 0 | 48 | 0 | 0 | `build` → `game` ×2 |
 | [The Legend of Zelda: Link's Awakening](#the-legend-of-zelda-links-awakening) | 1 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [The Legend of Zelda: Ocarina of Time](#the-legend-of-zelda-ocarina-of-time) | 0 | 0 | 2 | 0 | 0 | `game` ×2 |
 | [The Legend of Zelda: Tears of the Kingdom](#the-legend-of-zelda-tears-of-the-kingdom) | 0 | 0 | 9 | 0 | 0 | `build` → `game` |
@@ -542,7 +542,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - cut `+0x1126794`: stepping down stops at < 3 → at < 2: cmp w9,#3 → cmp w9,#2
   - cut `+0x112691c`: interval controller always takes the GPU time path (CPU span timing): cbz x0,#0x1126934 → b #0x1126928
   - cut `+0x1126974`: interval controller always takes the GPU time path (takes max(CPU span, GPU time)): cbz x0,#0x112698c → b #0x1126980
-  <details><summary>44 frame-step sites</summary>
+  <details><summary>48 frame-step sites</summary>
 
   - frame step `+0x27ae0`: Pane::Calculate: a HUD widget at the edge moved to the taller screen's edge with its children, full-screen backgrounds stretched (duo_anchor.c)
   - frame step `+0x2df28`: projected texture fitted to the layout: a pane as tall as the taller screen maps its whole height
@@ -574,6 +574,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - frame step `+0x10ee094`: main camera fovy getter: widened like the projection (culling tests)
   - frame step `+0x10ee0cc`: main camera fovy getter in degrees: widened like the projection
   - frame step `+0x11269b8`: setWaitVsyncInterval: the host's step unless the VFR override is set (state page target fps; 0 = the game's interval)
+  - frame step `+0x125f128`: optional real-time rate: latched real-time VFR / fade / UI / physics step; zero preserves original
   - frame step `+0x12618c4`: output size static, its getter
   - frame step `+0x1261920`: layout size static, its getter
   - frame step `+0x12660d4`: docked display size 1920x1080
@@ -585,14 +586,17 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - frame step `+0x1266880`: 3D view scale = the host render scale (1.0 = the game's dynamic resolution)
   - frame step `+0x12670ac`: native dynamic-resolution GPU budget follows the host frame-rate cap
   - frame step `+0x127a2f8`: map footprint trail: its viewport and projection at the 720 pane's half-height, not the taller frame's
+  - frame step `+0x1280ee4`: optional real-time rate: latched real-time VFR / fade / UI / physics step; zero preserves original
+  - frame step `+0x128106c`: optional real-time rate: latched real-time VFR / fade / UI / physics step; zero preserves original
   - frame step `+0x13f9704`: 1280x720 passed as a size
   - frame step `+0x151d3d0`: VFR::updateInterval: its own override published for the host (state page target fps; 0 = original)
+  - frame step `+0x151d484`: optional real-time rate: latched real-time VFR / fade / UI / physics step; zero preserves original
   - frame step `+0x1544644`: 720.0 with 1280.0
 
   </details>
 
   - render scale stub (the launcher offers DM_RENDER_SCALE)
-  - launcher capabilities: DYNAMIC_RESOLUTION, DYNAMIC_RESOLUTION_BUDGET
+  - launcher capabilities: DYNAMIC_RESOLUTION, DYNAMIC_RESOLUTION_BUDGET, REALTIME_FRAME_STEP
 
 ### The Legend of Zelda: Link's Awakening
 

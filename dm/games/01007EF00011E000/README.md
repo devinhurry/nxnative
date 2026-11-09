@@ -19,9 +19,11 @@ No `tex_flush_upload` (a minute's boot saw it flush 32 CPU-filled textures with 
 
 ## Dynamic-resolution target
 
-On the verified 1.9.0 build, `DM_DYNAMIC_RESOLUTION=1` adjusts the game's native dynamic-resolution controller to the effective 30 or 60 fps cap, including movie and thermal limits. It keeps the game's existing smoothing and resolution range. The default `0` leaves the controller at its original target; a fixed `DM_RENDER_SCALE` takes precedence. This option has not been measured in gameplay on this branch.
+On the verified 1.9.0 build, `DM_DYNAMIC_RESOLUTION=1` adjusts the game's native dynamic-resolution controller to the effective frame-rate cap, including movie and thermal limits. It keeps the game's existing smoothing and resolution range. The default `0` leaves the controller at its original target; a fixed `DM_RENDER_SCALE` takes precedence. This option has not been measured in gameplay on this branch.
 
 ## Frame rate
+
+The verified 1.9.0 timing patch also offers experimental rates from 20 to 120 fps in steps of five. The game advances by the measured time between real frames at those rates; 30 and 60 retain the existing frame-step behavior. Higher rates depend on the device and screen. These custom rates have not been measured in gameplay on this branch.
 
 ### The frame step (current)
 

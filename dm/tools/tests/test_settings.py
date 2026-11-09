@@ -35,6 +35,14 @@ class ResolutionSetting(unittest.TestCase):
             self.assertIn('fixed render scale takes precedence',dr['note'])
 
 class FrameRateOption(unittest.TestCase):
+    def test_custom_rates_require_a_verified_real_time_step(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(settings.nacp, 'languages', return_value=['en-US']):
+            p = Path(tmp) / 'main.fixups.tsv'
+            for fixups, expected in [('', ['30', '60']), ('# REALTIME_FRAME_STEP\t1\n', [str(n) for n in range(20, 121, 5)])]:
+                p.write_text(fixups)
+                row = next(s for s in settings.build('01007EF00011E000', tmp, 'unused')['settings'] if s['env'] == 'DM_FPS_TARGET')
+                self.assertEqual([option[0] for option in row['options']], expected)
+
     def test_120_only_on_the_mac_for_a_game_checked_at_that_speed(self):
         with tempfile.TemporaryDirectory() as tmp,patch.object(settings.nacp,'languages',return_value=['en-US']):
             (Path(tmp)/'main.fixups.tsv').write_text('')
