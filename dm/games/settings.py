@@ -111,6 +111,7 @@ def build(gid, patched, control):
             can = table[need]
             if can is not None and want not in can: sys.exit(f'settings.tsv:{n}: needs a value {need} never takes: {want} (it takes {", ".join(sorted(can))})')
         if not shown(cond, n): continue
+        if var == 'DM_THERMAL_CAP' and platform != 'ios': continue
         s = {'env': var, 'kind': kind, 'section': section, 'label': label, 'note': note, 'default': value(default, n), **m}
         if var == 'DM_RENDER_SCALE' and base: s['base'] = base   # the render scale in pixels, for the console mode chosen
         if kind == 'choice':
