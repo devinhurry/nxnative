@@ -30,10 +30,10 @@ behavior on a real device. It records what was checked and what remains open.
   establish equality of every file in those histories. The backup was not
   scanned commit-by-commit with the same method.
 - Two independent upstream PR refs are outside the 209-commit snapshot:
-  `upstream/pr-76` (`0f2a772c`) proposes another variable-frame-step and
-  greater-than-1080p implementation; `upstream/pr-303` (`127a2aa3`) adds a
-  GPU-pool diagnostic. They were not imported or compared feature-by-feature.
-  The 209-commit scan is therefore not a complete audit of every local ref.
+  `upstream/pr-76` (`0f2a772c`) and `upstream/pr-303` (`127a2aa3`). Their
+  purposes, clock algorithms, and diagnostic semantics were compared in the
+  follow-up below; they were not imported wholesale. The 209-commit scan is
+  therefore not a complete audit of every local ref.
 
 Regenerate the candidate list from a checkout of this branch:
 
@@ -59,7 +59,7 @@ or proof of coverage. The table below records the manual classifications.
 | Low-memory preset and upload sources: `2c09c9d7`, `404d6fe2`, `fcb78eea` | `cbed8da0`, `a5af1300`, together with mechanisms already in `main`; see the differences below |
 | BC transcoding and driver metadata cache: `50381fae` | `f42efb9d`, `47f0cf17` |
 | Decode BC on compatible GPUs without native support: `9cbe8984` | `f42efb9d`, `faed654e`; enabled by default unless explicitly disabled |
-| Custom frame-rate controls: `00b87e3b`; live settings portions of `f4959f62`, `993fb842`, `679a33af`, `8870dddf` | `4aee6c62`, `18099f22` |
+| Custom frame-rate controls: `00b87e3b`; live settings portions of `f4959f62`, `993fb842`, `679a33af`, `8870dddf` | `4aee6c62`, `18099f22`; game-controlled clock correction in `fe8af968` |
 | Frame generation, HUD separation, FPS display: `73f75af7`, `828cc1cd`, `10efd8c3`; frame-generation portion of `95d873f0` | `e1cacd8b`, `18099f22`, `b1453adf` |
 | BOTW device-specific defaults: `61c1eae2` | `2ed57968`; device detection differs, as described below |
 | Render-pass and attachment-transfer optimization: `1983d2d3`, `dc59ea0d` | `5ae13700`; eligibility is more conservative, as described below |
@@ -99,10 +99,58 @@ or proof of coverage. The table below records the manual classifications.
    `f90208a6`, `c024065f`, `e7de778f`, `f6c3b82b`, `839d3d45`, `0c2463ed` and
    the shader-build portion of `3c26c79d`, were excluded.
 
+## Follow-up: upstream experiments
+
+### PR #76: frame timing
+
+Both implementations advance BOTW's game clock by elapsed time, but they are
+not the same implementation. The PR permits target rates up to 240 fps; this
+branch accepts verified custom rates from 20 to 120 in steps of 5, as well as
+0, 30 and 60. The PR uses the last frame duration, caps one step at 50 ms,
+and carries the remainder below its 1/240 s minimum. This branch averages five
+samples, caps that average at 1/15 s, and resets the filter after a pause over
+250 ms. Their behavior during a hitch is intentionally different.
+
+For an identical synthetic 120-fps/144-Hz periodic sequence of 500 intervals,
+actual time was 4.166667 s; this branch advanced 4.161111 s, including filter
+warmup, and the PR advanced 4.166666 s. After a 200 ms stall and ten 60-Hz
+intervals, actual time was 0.366667 s, this branch advanced 0.366667 s, and
+PR #76 advanced 0.216667 s. These are calculations using the two algorithms,
+not measurements from gameplay, and do not establish which looks better.
+
+The comparison found a correctness hole: a game-controlled frame interval or
+movie could leave the fractional clock active. `fe8af968` clears the guest's
+latched fractional ratio while the game's override or movie flag is set, and
+makes the host leave fractional timing until control returns. A native ARM64
+test executes the actual emitted setter and four game-step stubs with and
+without those flags, including a missing VFR object at startup. Link pacing and
+frame-generation unit tests also pass. This does not prove a real cutscene's
+speed or presentation without gameplay testing.
+
+The PR allows a minimum of three physics solver substeps at high rates; this
+branch keeps six during fractional stepping. The PR notes that two substeps
+made ragdolls unstable; its three-substep option is a possible CPU saving but
+needs game measurements and stability checks before adoption. Its independent
+render-scale-above-1 feature expands the game's buffer pools and is not a frame
+rate optimization; it was not imported as part of this comparison.
+
+### PR #303: pool observation
+
+`DM_NVN_POOLPEAK` records 64-KiB pool pages on which a texture has ever been
+placed and reports the largest range never touched. The existing `DM_MEMSTAT`
+reports process footprint and Metal allocation sizes; these are complementary,
+not equivalent. PR #303 is an opt-in diagnostic, not itself an optimization.
+Its 13 extracted tests pass. In an extra controlled example, two disjoint
+four-page allocations at different times produce eight historical pages and
+zero never-used pages although only four pages are live at once. The diagnostic
+does not measure peak simultaneous live use. It was not imported; a future
+pool diagnostic should name the historical-union metric clearly and handle
+pool lifetimes and concurrency deliberately.
+
 ## Evidence and limits
 
-- Mac host build passed. The compiler emitted 57 warnings; this is a compile
-  result, not a gameplay result.
+- Mac host builds passed; the most recent after the clock correction emitted
+  59 warnings. This is a compile result, not a gameplay result.
 - Frame-generation GPU tests passed, including 1,295 checks and twelve isolated
   controlled-motion processes; frame-rate and live scale state tests passed.
 - BC GPU tests passed with native BC and forced fallback modes. The fallback was
