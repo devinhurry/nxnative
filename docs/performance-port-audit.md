@@ -99,7 +99,7 @@ or proof of coverage. The table below records the manual classifications.
    `f90208a6`, `c024065f`, `e7de778f`, `f6c3b82b`, `839d3d45`, `0c2463ed` and
    the shader-build portion of `3c26c79d`, were excluded.
 
-## Follow-up: upstream experiments
+## Follow-up: upstream experiments and HUD capture
 
 ### PR #76: frame timing
 
@@ -146,6 +146,46 @@ zero never-used pages although only four pages are live at once. The diagnostic
 does not measure peak simultaneous live use. It was not imported; a future
 pool diagnostic should name the historical-union metric clearly and handle
 pool lifetimes and concurrency deliberately.
+
+### HUD without a new shader-generation path
+
+The readable-tile `_bf` shader variant already exists on `main`. A controlled
+Metal probe specializes that existing variant to write one fragment result to
+both a HUD attachment and a scene attachment, and uses Metal's
+[`alphaToOneEnabled`](https://developer.apple.com/documentation/metal/mtlrenderpipelinedescriptor/isalphatooneenabled?language=objc)
+to force only attachment 0's alpha to one. On this Apple M2 the probe read back
+HUD alpha 255, scene alpha 64, and exactly 65,536 fragment invocations for a
+256-by-256 draw. With the option off both alphas were 64. Reproduce it with:
+
+```sh
+MTL_DEBUG_LAYER=1 python3 dm/gfx/tests/research_framegen_hud.py
+```
+
+This tests a synthetic fragment through the existing `dmsh_fetch.fold` code
+and the classic Metal API. It is not an integration test of the production
+Metal 4 renderer, alpha-tested HUD, blending modes, or an iPhone/game.
+An earlier color-attachment-map experiment had an invalid control and is
+inconclusive; it is not evidence for or against another solution. Metal also
+supports a [composited UI input](https://developer.apple.com/documentation/metalfx/mtlfxframeinterpolatorbase/uitexture),
+but its visual equivalence to a separate HUD has not been established here.
+Apple's [function-stitching API](https://developer.apple.com/videos/play/wwdc2021/10229/)
+requires functions prepared with the `stitchable` attribute; the existing shader
+generator does not emit such functions, so this is not an established way to
+add a second output to already-built arbitrary fragment shaders.
+
+Coverage is the main obstacle. A read-only survey of one *older* BOTW Mac
+cache (`b-c2cc5a7544c5`, not the chain built by this branch) found 10,560 pixel
+shaders: 6,414 with `_bf`, 10,318 with `_bui`, 6,268 with both, and 4,050
+with `_bui` but no `_bf`. These are cache-wide counts, not a count of shaders
+used by the HUD in any particular frame. Packaged apps do not generally carry
+shader sources. Thus replacing `_bui` with existing `_bf` variants cannot yet
+be shown to cover actual UI draws, alpha testing, blend state or all supported
+configurations. Missing variants would require a safe fallback, and falling
+back to the fully composited UI or skipping interpolation changes behavior.
+The build-scope conflict in difference 1 above remains unresolved; **this
+branch still contains the shader-generation changes**. Establish actual HUD
+shader coverage on representative scenes and prove any fallback on the target
+Metal 4 devices before replacing the current implementation.
 
 ## Evidence and limits
 
