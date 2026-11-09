@@ -11,7 +11,7 @@ behavior on a real device. It records what was checked and what remains open.
   (the `touch-the-wild` tip when this audit started). During the audit the
   branch ref was moved externally to its parent `81880286`; the fixed snapshot
   is also retained by `preserve/touch-the-wild-ahead-88e2a605` locally.
-- Feature code reviewed through `b1453adf744cc28cf5372d468243949656415a6d`.
+- Feature code reviewed through `13ba8944cbe8fddcee832c43aac0e426447f827c`.
   The audit document and its scanner are later commits.
 - Git reports 209 source commits, including 35 merges, in `main..88e2a605`.
   Commit subjects and changed paths were surveyed. A repeatable keyword scan
@@ -54,15 +54,16 @@ or proof of coverage. The table below records the manual classifications.
 
 | Source change | Where to review it on `performance` |
 | --- | --- |
-| Thermal frame limit and feedback snapshots: `c197cc6c`, `5b6a11e6`, `2004eb43` | `100d4b5f` |
-| BOTW dynamic resolution and scene upscaling: `b34ac5e4`, `daba30db` | `c6ca6e50`, `e41ec43c`; live frame-rate budget update in `18099f22` |
-| Low-memory preset and upload sources: `2c09c9d7`, `404d6fe2`, `fcb78eea` | `cbed8da0`, `a5af1300`, together with mechanisms already in `main`; see the differences below |
-| BC transcoding and driver metadata cache: `50381fae` | `f42efb9d`, `47f0cf17` |
-| Decode BC on compatible GPUs without native support: `9cbe8984` | `f42efb9d`, `faed654e`; enabled by default unless explicitly disabled |
-| Custom frame-rate controls: `00b87e3b`; live settings portions of `f4959f62`, `993fb842`, `679a33af`, `8870dddf` | `4aee6c62`, `18099f22`; game-controlled clock correction in `fe8af968` |
-| Frame generation, HUD separation, FPS display: `73f75af7`, `828cc1cd`, `10efd8c3`; frame-generation portion of `95d873f0` | `e1cacd8b`, `18099f22`, `b1453adf` |
-| BOTW device-specific defaults: `61c1eae2` | `2ed57968`; device detection differs, as described below |
-| Render-pass and attachment-transfer optimization: `1983d2d3`, `dc59ea0d` | `5ae13700`; eligibility is more conservative, as described below |
+| Thermal frame limit: `c197cc6c` | `d240a487` |
+| Feedback snapshots: `5b6a11e6`, `2004eb43` | `a18c19de` |
+| BOTW dynamic resolution and scene upscaling: `b34ac5e4`, `daba30db` | `9716d86c`, `7217dc94`; live frame-rate budget update in `d75f2be7` |
+| Low-memory preset and upload sources: `2c09c9d7`, `404d6fe2`, `fcb78eea` | `043c421b`, `76ff5268`, together with mechanisms already in `main`; see the differences below |
+| BC transcoding and driver metadata cache: `50381fae` | `7b1d99e1`, `77d7d21f` |
+| Decode BC on compatible GPUs without native support: `9cbe8984` | `7b1d99e1`, `7af82108`; enabled by default unless explicitly disabled |
+| Custom frame-rate controls: `00b87e3b`; live settings portions of `f4959f62`, `993fb842`, `679a33af`, `8870dddf` | `f8b8d302`, `d75f2be7`; game-controlled clock correction in `2100de5c` |
+| Frame generation, HUD separation, FPS display: `73f75af7`, `828cc1cd`, `10efd8c3`; frame-generation portion of `95d873f0` | `06bbf118`, `d75f2be7`, `13ba8944` |
+| BOTW device-specific defaults: `61c1eae2` | `dfd08b10`; device detection differs, as described below |
+| Render-pass and attachment-transfer optimization: `1983d2d3`, `dc59ea0d` | `7da9decd`; eligibility is more conservative, as described below |
 | Immediate FPS counter visibility in `21b6b549` | Already present on `main` |
 | Direct tile feedback and frame probe visible in merge `65bde2c5`; compute hoisting visible in `413c875c`; initial Metal performance HUD setup in `6558b1c5` | Already present on `main` for the named behavior |
 
@@ -79,7 +80,7 @@ or proof of coverage. The table below records the manual classifications.
    Its `scripts/run_mac.py --save-copy` workflow is absent from `main`; this
    exact behavior was **not ported**. The normal renderer does have pipeline
    caches, which does not establish equivalence for that workflow.
-3. The source uses GPU generation names for device defaults. `2ed57968` uses a
+3. The source uses GPU generation names for device defaults. `dfd08b10` uses a
    fixed set of iPhone model identifiers to avoid creating a Metal device before
    the performance HUD setting is applied. Unknown future models may receive
    different defaults.
@@ -88,7 +89,7 @@ or proof of coverage. The table below records the manual classifications.
    large or unaddressed transient-upload path and adds lazy GPU residency for
    low-memory CPU reads. It does not reproduce every source upload eligibility
    rule or prove the same memory footprint.
-5. The render-pass optimization in `5ae13700` deliberately refuses some cases
+5. The render-pass optimization in `7da9decd` deliberately refuses some cases
    accepted by the source, including certain MetalFX, PSO, override and
    frame-generation UI cases. Its performance effect may therefore differ.
 6. The source's settings-menu pause (`9b7d910b`) and FPS-counter layout changes
@@ -119,7 +120,7 @@ PR #76 advanced 0.216667 s. These are calculations using the two algorithms,
 not measurements from gameplay, and do not establish which looks better.
 
 The comparison found a correctness hole: a game-controlled frame interval or
-movie could leave the fractional clock active. `fe8af968` clears the guest's
+movie could leave the fractional clock active. `2100de5c` clears the guest's
 latched fractional ratio while the game's override or movie flag is set, and
 makes the host leave fractional timing until control returns. A native ARM64
 test executes the actual emitted setter and four game-step stubs with and
