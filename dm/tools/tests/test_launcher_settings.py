@@ -31,6 +31,15 @@ def rows_with_languages(listed):   # the settings rows, by variable, of a game w
 
 
 class LauncherSettingsTests(unittest.TestCase):
+    def test_botw_phone_defaults_follow_recognized_models(self):
+        ios, mac = build(BOTW, 'nvn', 'ios'), build(BOTW, 'nvn', 'mac')
+        models = ['iPhone19,2', 'iPhone19,3', 'iPhone19,4', 'iPhone19,7']
+        for key, base, phone in [('DM_FPS_TARGET', '30', '60'), ('DM_OPMODE', '0', '1')]:
+            self.assertEqual(ios[key]['default'], base)
+            self.assertEqual(mac[key]['default'], base)
+            self.assertEqual(ios[key]['phone_default'], {'models': models, 'value': phone})
+            self.assertNotIn('phone_default', mac[key])
+
     def test_low_memory_preset_is_automatic_only_for_botw(self):
         for platform in ('ios', 'mac'):
             row = build(BOTW, 'nvn', platform)['DM_LOW_MEMORY']

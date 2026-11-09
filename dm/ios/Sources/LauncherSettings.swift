@@ -3,7 +3,10 @@ import Foundation
 import Combine
 
 struct Setting: Decodable, Identifiable {
-    let env, kind, label, note, def: String
+    let env, kind, label, note: String
+    var def: String
+    let phoneDefault: PhoneDefault?
+    struct PhoneDefault: Decodable { let models: [String]; let value: String }
     let section: String?   // heading on the settings screen; absent in older bundles
     let needs: String?     // "<VAR>=<value>": a sub-setting, drawn only while that setting has that value
     let level: String?     // "basic": shown first (the Mac window's Basic settings); any other or none: Advanced settings. The iPhone keeps one list
@@ -30,7 +33,7 @@ struct Setting: Decodable, Identifiable {
         default: return true
         }
     }
-    enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", section, needs, level, base, options, min, max, step, on, off }
+    enum CodingKeys: String, CodingKey { case env, kind, label, note, def = "default", phoneDefault = "phone_default", section, needs, level, base, options, min, max, step, on, off }
 }
 struct SettingsFile: Decodable { let settings: [Setting] }
 
@@ -43,8 +46,24 @@ final class LauncherModel: ObservableObject {
 
     private let defaults: UserDefaults
 
-    init(_ settings: [Setting], defaults: UserDefaults = .standard) {
+    // Reading hw.machine does not create a Metal device before the launcher applies the HUD setting.
+    static var phoneModel: String? {
+        #if os(iOS)
+        var buffer = [CChar](repeating: 0, count: 128)
+        var length = buffer.count
+        guard sysctlbyname("hw.machine", &buffer, &length, nil, 0) == 0 else { return nil }
+        return String(cString: buffer)
+        #else
+        return nil
+        #endif
+    }
+    init(_ settings: [Setting], defaults: UserDefaults = .standard, phoneModel: String? = LauncherModel.phoneModel) {
         self.defaults = defaults
+        let settings = settings.map { row -> Setting in
+            var row = row
+            if let preset = row.phoneDefault, let model = phoneModel, preset.models.contains(model), row.accepts(preset.value) { row.def = preset.value }
+            return row
+        }
         self.settings = settings
         let env = ProcessInfo.processInfo.environment
         fromLaunch = Set((env["DM_ENV_LAUNCH_KEYS"] ?? "").split(separator: " ").map(String.init))
@@ -119,7 +138,9 @@ final class LauncherModel: ObservableObject {
     func applySaved() {
         for s in settings where !fixed.contains(s.env) {
             let v = values[s.env] ?? s.def
-            if !s.isDefault(v) { setenv(s.env, v, 1); fputs("launcher: \(s.env)=\(v) (saved choice)\n", stderr) }
+            if s.phoneDefault != nil || !s.isDefault(v) {
+                setenv(s.env, v, 1); fputs("launcher: \(s.env)=\(v) (\(s.isDefault(v) ? "default" : "saved choice"))\n", stderr)
+            }
         }
     }
 }

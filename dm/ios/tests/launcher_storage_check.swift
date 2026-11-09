@@ -6,11 +6,34 @@ import Foundation
         var failed = 0
         func expect(_ c: Bool, _ what: String) { print((c ? "PASS " : "FAIL ") + what); if !c { failed += 1 } }
         let file = try! JSONDecoder().decode(SettingsFile.self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])))
+        let phoneSuite = "nxnative.phone-default-test." + UUID().uuidString
+        let phoneDefaults = UserDefaults(suiteName: phoneSuite)!
+        defer { phoneDefaults.removePersistentDomain(forName: phoneSuite) }
+        for (model, fast) in [(nil, false), ("iPhone18,1", false), ("iPhone19,1", false),
+                              ("iPhone19,2", true), ("iPhone19,3", true), ("iPhone19,4", true),
+                              ("iPhone19,7", true), ("iPad19,2", false)] as [(String?, Bool)] {
+            let phone = LauncherModel(file.settings, defaults: phoneDefaults, phoneModel: model)
+            expect(phone.values["DM_FPS_TARGET"] == (fast ? "60" : "30") && phone.values["DM_OPMODE"] == (fast ? "1" : "0"),
+                   "phone defaults follow the recognized model: \(model ?? "none")")
+            expect(!phone.changed, "phone defaults are not saved choices")
+        }
+        let phone = LauncherModel(file.settings, defaults: phoneDefaults, phoneModel: "iPhone19,2")
+        phone.applySaved()
+        expect(getenv("DM_FPS_TARGET").map { String(cString: $0) } == "60" && getenv("DM_OPMODE").map { String(cString: $0) } == "1" &&
+               phoneDefaults.string(forKey: "launcher.DM_FPS_TARGET") == nil, "skipping the screen applies device defaults without saving them")
+        phone.values["DM_FPS_TARGET"] = "30"; phone.values["DM_OPMODE"] = "0"; phone.apply()
+        let savedPhone = LauncherModel(file.settings, defaults: phoneDefaults, phoneModel: "iPhone19,2")
+        expect(savedPhone.values["DM_FPS_TARGET"] == "30" && savedPhone.values["DM_OPMODE"] == "0", "saved choices override phone defaults")
+        savedPhone.reset(); savedPhone.apply()
+        expect(savedPhone.values["DM_FPS_TARGET"] == "60" && savedPhone.values["DM_OPMODE"] == "1" &&
+               phoneDefaults.string(forKey: "launcher.DM_FPS_TARGET") == nil, "reset restores phone defaults")
+        unsetenv("DM_FPS_TARGET"); unsetenv("DM_OPMODE")
+        let customFPS = file.settings.first { $0.env == "DM_FPS_TARGET" }!.def == "30" ? "60" : "30"
         let suite = "nxnative.launcher-test." + UUID().uuidString
         let d = UserDefaults(suiteName: suite)!
         defer { d.removePersistentDomain(forName: suite) }
         d.set("1", forKey: "launcher.DM_PRESENT_SNAP")   // stored by the old launcher, equal to the default
-        d.set("30", forKey: "launcher.DM_FPS_TARGET")    // a changed game setting
+        d.set(customFPS, forKey: "launcher.DM_FPS_TARGET")    // a changed game setting
         d.set("0", forKey: "launcher.DM_PSO_MTL4")       // a changed performance setting
         d.set("1", forKey: "launcher.DM_FPS_HOLD")       // a value the toggle does not take (on / off): the default
         setenv("DM_ENV_FILE_KEYS", "DM_METAL_HUD", 1); setenv("DM_METAL_HUD", "1", 1)   // set by Documents/env.txt
@@ -19,18 +42,18 @@ import Foundation
         expect(["nan", "inf", "-inf", "0.49", "1.01", "invalid", "0x1p-1", "0X1", " 0.75"].allSatisfy { !scale.accepts($0) } && scale.accepts("0.5") && scale.accepts("1.00"), "saved ranges reject nonfinite, out-of-range, hex and padded values, as launcher.c does")
         d.set("nan", forKey: "launcher.DM_RENDER_SCALE")
         expect(LauncherModel(file.settings, defaults: d).values["DM_RENDER_SCALE"] == scale.def, "an invalid saved range loads the default")
-        expect(m.values["DM_FPS_TARGET"] == "30" && m.values["DM_PSO_MTL4"] == "0" && m.values["DM_FPS_HOLD"] == "on" && m.values["DM_METAL_HUD"] == "1", "stored choices and the env file are read")
+        expect(m.values["DM_FPS_TARGET"] == customFPS && m.values["DM_PSO_MTL4"] == "0" && m.values["DM_FPS_HOLD"] == "on" && m.values["DM_METAL_HUD"] == "1", "stored choices and the env file are read")
         expect(m.changed, "Reset is offered with changed settings")
         m.values["DM_RENDER_SCALE"] = "1.00"   // the slider's format of the default
         m.apply()
         expect(d.string(forKey: "launcher.DM_PRESENT_SNAP") == nil, "a value equal to the default is not stored (and an old one is dropped)")
         expect(d.string(forKey: "launcher.DM_RENDER_SCALE") == nil && d.string(forKey: "launcher.DM_OPMODE") == nil && d.string(forKey: "launcher.DM_FPS_HOLD") == nil, "defaults are not stored")
-        expect(d.string(forKey: "launcher.DM_FPS_TARGET") == "30" && d.string(forKey: "launcher.DM_PSO_MTL4") == "0", "changed choices are stored")
+        expect(d.string(forKey: "launcher.DM_FPS_TARGET") == customFPS && d.string(forKey: "launcher.DM_PSO_MTL4") == "0", "changed choices are stored")
         expect(d.string(forKey: "launcher.DM_METAL_HUD") == nil && String(cString: getenv("DM_METAL_HUD")) == "1", "the env file's value is kept and not stored")
         expect(String(cString: getenv("DM_PSO_MTL4")) == "0" && String(cString: getenv("DM_PRESENT_SNAP")) == "1" && String(cString: getenv("DM_FPS_HOLD")) == "on", "the environment gets every value")
         m.reset()
         expect(m.values["DM_PSO_MTL4"] == "1" && m.values["DM_FPS_TARGET"] == file.settings.first { $0.env == "DM_FPS_TARGET" }!.def, "Reset shows the defaults")
-        expect(d.string(forKey: "launcher.DM_PSO_MTL4") == "0" && d.string(forKey: "launcher.DM_FPS_TARGET") == "30", "Reset alone forgets nothing: Quit after it keeps the choices")
+        expect(d.string(forKey: "launcher.DM_PSO_MTL4") == "0" && d.string(forKey: "launcher.DM_FPS_TARGET") == customFPS, "Reset alone forgets nothing: Quit after it keeps the choices")
         expect(m.values["DM_METAL_HUD"] == "1" && !m.changed, "Reset leaves the env file's value; nothing left to reset")
         m.apply()
         expect(d.string(forKey: "launcher.DM_PSO_MTL4") == nil && d.string(forKey: "launcher.DM_FPS_TARGET") == nil, "Play after Reset forgets the choices")
@@ -47,18 +70,18 @@ import Foundation
         m.values["DM_RUMBLE"] = "1"
         // DM_LAUNCHER=0 skips the screen, not the saved choices; DM_SAVED_CHOICES=0 ignores them and leaves them stored
         let fps = file.settings.first { $0.env == "DM_FPS_TARGET" }!
-        d.set("30", forKey: "launcher.DM_FPS_TARGET"); unsetenv("DM_FPS_TARGET")
+        d.set(customFPS, forKey: "launcher.DM_FPS_TARGET"); unsetenv("DM_FPS_TARGET")
         LauncherModel(file.settings, defaults: d).applySaved()
-        expect(String(cString: getenv("DM_FPS_TARGET")) == "30" && d.string(forKey: "launcher.DM_FPS_TARGET") == "30", "without the screen, a saved choice goes into the environment and stays saved")
+        expect(String(cString: getenv("DM_FPS_TARGET")) == customFPS && d.string(forKey: "launcher.DM_FPS_TARGET") == customFPS, "without the screen, a saved choice goes into the environment and stays saved")
         setenv("DM_SAVED_CHOICES", "0", 1); unsetenv("DM_FPS_TARGET")
         let plain = LauncherModel(file.settings, defaults: d)
         expect(plain.values["DM_FPS_TARGET"] == fps.def, "DM_SAVED_CHOICES=0 starts from the defaults")
         plain.applySaved()
-        expect(getenv("DM_FPS_TARGET") == nil, "DM_SAVED_CHOICES=0: nothing saved goes into the environment")
+        expect(getenv("DM_FPS_TARGET").map { String(cString: $0) } == fps.def, "DM_SAVED_CHOICES=0: skipping the screen applies the device default")
         plain.apply()
-        expect(String(cString: getenv("DM_FPS_TARGET")) == fps.def && d.string(forKey: "launcher.DM_FPS_TARGET") == "30", "DM_SAVED_CHOICES=0: Play uses the screen's values and leaves the saved choices")
+        expect(String(cString: getenv("DM_FPS_TARGET")) == fps.def && d.string(forKey: "launcher.DM_FPS_TARGET") == customFPS, "DM_SAVED_CHOICES=0: Play uses the screen's values and leaves the saved choices")
         plain.reset()
-        expect(d.string(forKey: "launcher.DM_FPS_TARGET") == "30", "DM_SAVED_CHOICES=0: Reset leaves the saved choices too")
+        expect(d.string(forKey: "launcher.DM_FPS_TARGET") == customFPS, "DM_SAVED_CHOICES=0: Reset leaves the saved choices too")
         unsetenv("DM_SAVED_CHOICES")
         // The Mac window's list (second argument): Basic first, then Advanced in the list's sections; Display mode; the render scale in pixels; values set at launch are fixed
         let mac = try! JSONDecoder().decode(SettingsFile.self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[2])))

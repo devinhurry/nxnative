@@ -6,7 +6,7 @@ Update 1.9.0 (v1114112) over the base game, SDK 20.5.22. Nintendo EPD's engine (
 
 | Setting | Where | Why |
 |---|---|---|
-| Frame step, `fps_target 60` | [`patches.py`](patches.py) `FRAME_STEP` (`main` `cd57b23f…`), [`game.tsv`](game.tsv) | 60 fps at normal speed; see [Frame rate](#frame-rate) |
+| Frame step, `fps_target 30` | [`patches.py`](patches.py) `FRAME_STEP` (`main` `cd57b23f…`), [`game.tsv`](game.tsv) | 30 fps handheld by default; recognized A20 Pro phones use docked 60 fps; see [Frame rate](#frame-rate) |
 | Interval controller floor 2 → 1 (five cuts) and GPU-time path (two cuts) | `patches.py` `CUTS` | the game's own controller at `DM_FPS_TARGET=0` and while its VFR override holds; see [The game's own interval controller](#the-games-own-interval-controller) |
 | Render scale stubs | `patches.py` `frame_step` (`main+0x1266880`, `main+0x126686c`) | `DM_RENDER_SCALE`; see [Render scale](#render-scale) |
 | `gpu_timestamps segment` | `game.tsv` | the interval controller and the dynamic resolution read the GPU time between the frame's two timestamp reports |
@@ -31,7 +31,8 @@ The verified 1.9.0 timing patch also offers experimental rates from 20 to 120 fp
 
 ### The frame step (current)
 
-- **60 fps at normal speed (30 on the Switch).** The game steps its time by the frame interval its framework picks (`ksys::VFR`: interval / 2 of a 30 fps tick). With the profile's `fps_target` (60) the host picks it instead, in whole vsyncs (`FRAME_STEP` in `patches.py`, `hle_nvn.c` `fstep_tick`, `nvn_fstep.h`, the same frame step as Tears of the Kingdom's): a stub at the framework's `setWaitVsyncInterval` hands the game the host's step once a frame, and the host keeps each frame on screen that many vsyncs.
+- **Startup defaults:** 30 fps and handheld. The recognized iPhone 18 Pro, 18 Pro Max and Duo models use 60 fps and docked mode. Saved choices and environment overrides take priority; Reset restores the device default.
+- **60 fps at normal speed (30 on the Switch).** The game steps its time by the frame interval its framework picks (`ksys::VFR`: interval / 2 of a 30 fps tick). With a 60 fps target the host picks it instead, in whole vsyncs (`FRAME_STEP` in `patches.py`, `hle_nvn.c` `fstep_tick`, `nvn_fstep.h`, the same frame step as Tears of the Kingdom's): a stub at the framework's `setWaitVsyncInterval` hands the game the host's step once a frame, and the host keeps each frame on screen that many vsyncs.
 - It holds 1 (60 fps). Three late frames in a row (the frame or its GPU work more than 1.7 ms over) step up to the cost, 2 (30 fps) as a rule: no 40 fps on 120 Hz screens. 30 frames that would fit the shorter hold try it again, and each failed try doubles the wait before the next (1 → 8 s). After a hitch, a cost at 30 like the one that held 60 tries it too (probes, below).
 - Real time lost to a late frame or a hitch is paid back one vsync per frame (at most 15; the rest of a long load is dropped), so game time = real time. The log line `frame step: game time 30.00 s in 30.00 s (1.000 of real time)` checks it every 1,800 presents, with the frames held 1 / 2 / 3 vsyncs, late frames, paid-back vsyncs and hold changes.
 - **Resolved: movies at twice their speed at 60 fps (issue #636).** The game's movie player takes one picture per frame (34 s of its 30 fps movie in about 1,250 presents). While the host's movie decoder hands out pictures, the frame step holds 30: [Movies hold 30 fps under the frame step](../../../docs/reference/frame-rate.md#movies-hold-30-fps-under-the-frame-step).
