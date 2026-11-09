@@ -411,14 +411,14 @@ static void view_case(NvProg *pr, id<MTLRenderPipelineState> pipeline) {
     R.has_rt = 1; R.rt.n = 1; R.rt.color[0] = &source; S.tex[1][0] = tid;
     clear(MTLClearColorMake(1, 0, 0, 1)); fb_prepare(pr);
     CHECK(g_fb_n == 1, "view fixture has a production snapshot");
-    CHECK(!!(g_fb_use[0].usage & MTLTextureUsagePixelFormatView) == 0, "ordinary snapshot only requests shader-read usage");
+    CHECK(!!(g_fb_use[0].usage & MTLTextureUsagePixelFormatView) == !pass_reuse_on(), "ordinary snapshot only requests shader-read usage");
     id<MTLTexture> srgb = [g_fb_use[0] newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB];
     CHECK(srgb != nil, "linear/sRGB view works without general format-view usage");
     clear(MTLClearColorMake(0, 1, 0, 1)); rp_end();
     view_t swizzle = {.set_swizzle=1, .swz={NVN_SWZ_B, NVN_SWZ_G, NVN_SWZ_R, NVN_SWZ_A}};
     mtl_reg_tex(tid + 1, &source, &swizzle); S.tex[1][0] = tid + 1;
     fb_prepare(pr);
-    CHECK(!!(g_fb_use[0].usage & MTLTextureUsagePixelFormatView) == 0, "swizzled snapshot keeps minimal usage");
+    CHECK(!!(g_fb_use[0].usage & MTLTextureUsagePixelFormatView) == !pass_reuse_on(), "swizzled snapshot keeps minimal usage");
     R.rt.color[0] = &output; sample(fs, pipeline); readback(destination, result, 0);
     uint64_t copies = g_fb_count;
     view_t reinterpret = {.set_format=1, .format=NVN_FORMAT_RGBA8UI};
@@ -426,7 +426,7 @@ static void view_case(NvProg *pr, id<MTLRenderPipelineState> pipeline) {
     fb_prepare(pr);
     id<MTLTexture> integer = g_fb_n == 1 ? g_fb_use[0] : nil;
     CHECK(integer && (integer.usage & MTLTextureUsagePixelFormatView), "required reinterpretation upgrades the cached snapshot");
-    CHECK(g_fb_count == copies + 1, "format-view usage upgrade is one copy, not a source refresh");
+    CHECK(g_fb_count == copies + (pass_reuse_on() ? 1 : 0), "format-view usage upgrade is one copy, not a source refresh");
     CHECK(integer.pixelFormat == MTLPixelFormatRGBA8Uint, "integer format view is supported after upgrade"); readback(integer, result, 1024);
     g_fb_bar++; R.rt.color[0] = &source; S.tex[1][0] = tid;
     fb_prepare(pr); readback(g_fb_use[0], result, 2048);

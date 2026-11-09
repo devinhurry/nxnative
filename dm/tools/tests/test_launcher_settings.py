@@ -15,7 +15,7 @@ settings = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(settings)
 
 BOTW, WONDER = '01007EF00011E000', '010015100B514000'
-PERFORMANCE_NVN = ['DM_LOW_MEMORY', 'DM_NVN_FB_SNAP', 'DM_PRESENT_SNAP', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_NVN_ENC_THREAD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
+PERFORMANCE_NVN = ['DM_LOW_MEMORY', 'DM_NVN_PASS_REUSE', 'DM_NVN_FB_SNAP', 'DM_PRESENT_SNAP', 'DM_PSO_MTL4', 'DM_PSO_PREBUILD', 'DM_NVN_ENC_THREAD', 'DM_FPS_HOLD', 'DM_METAL_HUD']
 
 
 def build(gid, api, platform=None):
@@ -83,6 +83,12 @@ class LauncherSettingsTests(unittest.TestCase):
         self.assertEqual(list(dict.fromkeys(s['section'] for s in botw.values())), ['Game', 'Controls', 'Performance'])
         self.assertNotIn('DM_FPS_HOLD', wonder)   # no frame step, as the Frame rate row
         self.assertIn('first start', botw['DM_PSO_PREBUILD']['note'])   # it runs once in the prepare step, before the first frame
+
+    def test_memory_transfer_optimization_is_enabled_for_nvn(self):
+        for platform in ('ios', 'mac'):
+            row = build(BOTW, 'nvn', platform)['DM_NVN_PASS_REUSE']
+            self.assertEqual((row['kind'], row['on'], row['off'], row['default']), ('toggle', '1', '0', '1'))
+            self.assertNotIn('DM_NVN_PASS_REUSE', build(BOTW, 'gl', platform))
 
     def test_skip_snapshots_is_opt_in(self):
         s = build(BOTW, 'nvn')['DM_NVN_FB_SNAP']

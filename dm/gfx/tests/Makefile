@@ -340,7 +340,9 @@ check_t_geometry_mesh: t_geometry_mesh
 	@set -e; work=$$(mktemp -d); trap 'rm -rf "$$work"' EXIT; python3 test_dmsh_geometry.py --fixture "$$work"; MTL_DEBUG_LAYER=1 ./t_geometry_mesh "$$work"; DM_NVN_GEO_MESH_RUN=0 MTL_DEBUG_LAYER=1 ./t_geometry_mesh "$$work"; DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_geometry_mesh "$$work"
 .PHONY: check_t_feedback
 check_t_feedback: t_feedback
-	@set -e; work=$$(mktemp -d); trap 'rm -rf "$$work"' EXIT; python3 test_dmsh_fetch.py --fixture "$$work"; MTL_DEBUG_LAYER=1 ./t_feedback "$$work"
+	@set -e; work=$$(mktemp -d); trap 'rm -rf "$$work"' EXIT; python3 test_dmsh_fetch.py --fixture "$$work"; \
+	MTL_DEBUG_LAYER=1 ./t_feedback "$$work"; \
+	DM_NVN_PASS_REUSE=0 MTL_DEBUG_LAYER=1 ./t_feedback "$$work"
 t_mip_extent: t_mip_extent.m ../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_mip_extent.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
 .PHONY: check_t_mip_extent
@@ -355,6 +357,10 @@ t_rt_range: t_rt_range.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_rt_range.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_rt_range
 check_t_rt_range: t_rt_range
+	MTL_DEBUG_LAYER=1 ./t_rt_range --same-target
+	MTL_DEBUG_LAYER=1 ./t_rt_range --same-target --sample-attachment
+	MTL_DEBUG_LAYER=1 ./t_rt_range --same-target --registry-change
+	DM_NVN_PASS_REUSE=0 MTL_DEBUG_LAYER=1 ./t_rt_range --same-target
 	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_rt_range
 	MTL_DEBUG_LAYER=1 ./t_rt_range   # DontCare on by default: attachment bytes use the closed-form expectation of "one depth-stencil store saved per pass"
 	DM_NVN_UNWRITTEN_DC=0 MTL_DEBUG_LAYER=1 ./t_rt_range --disabled
@@ -478,7 +484,11 @@ t_image_primitive_id: t_image_primitive_id.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_image_primitive_id.m $(MTL_T_SRC) $(FW)
 t_unwritten_store: t_unwritten_store.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_unwritten_store.m $(MTL_T_SRC) $(FW)
-check_t_unwritten_store: RUN_ENV = MTL_DEBUG_LAYER=1
+.PHONY: check_t_unwritten_store
+check_t_unwritten_store: t_unwritten_store
+	MTL_DEBUG_LAYER=1 ./t_unwritten_store
+	DM_NVN_PASS_REUSE=0 MTL_DEBUG_LAYER=1 ./t_unwritten_store
+	DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_unwritten_store
 t_upgrade_alias: t_upgrade_alias.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_upgrade_alias.m $(MTL_T_SRC) $(FW)
 check_t_upgrade_alias: RUN_ENV = MTL_DEBUG_LAYER=1

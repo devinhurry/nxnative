@@ -644,7 +644,7 @@ static int geo_mesh_draw(NvProg *pr, const p_draw *dw, const p_draw_idx *di) {
     g_geo_program = nil; g_geo_mesh.on = 0; args_dirty_all();
     if (g_geo_mesh.miss) { g_geo_mesh_wait++; return 0; }
     // the kernel's storage writes, noted as its arguments were encoded (always: geo_mesh_encode), so a drain's list of later writes holds them (g_wr_geo, drw_valid)
-    swrite_note(pr); udc_note_draw(pr, 0); g_wr_epoch++; g_wr_geo++; g_mdx_epoch++;
+    swrite_note(pr); udc_note_draw(pr, 0, 0); g_wr_epoch++; g_wr_geo++; g_mdx_epoch++;
     if (!g_geo_mesh_n++) MLOG("geometry mesh: first mesh draw, vertex %s kernel %s, %u triangles", pr->sh[0]->key, g_geo_mesh.lean->key, g_geo_mesh.a.count / 3);
     return 1;
 }
@@ -924,7 +924,7 @@ static void geo_gs_one(id<MTL4ComputeCommandEncoder> ce, const geo_job *j) {
         enc_c_dispatch(ce, MTLSizeMake((j->groups + 63) / 64, 1, 1), MTLSizeMake(64, 1, 1));
     }
     // its guest storage writes are noted (geo_prep, encode_args), so a drain's list of later writes holds them (g_wr_geo, drw_valid)
-    swrite_note(j->pr); udc_note_draw(j->pr, 0); g_wr_epoch++; g_wr_geo++; g_mdx_epoch++;
+    swrite_note(j->pr); udc_note_draw(j->pr, 0, 0); g_wr_epoch++; g_wr_geo++; g_mdx_epoch++;
 }
 static void geo_raster(const geo_job *j, int last_in_run) {
     g_geo_bind[1] = j->output;

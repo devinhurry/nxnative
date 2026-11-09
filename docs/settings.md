@@ -280,6 +280,7 @@ A line like `DM_PRESENT_SNAP=0` in `Documents/env.txt` (in the Files app, under 
 | Upscaling | `DM_PRESENT_UPSCALE` | `off`, `metalfx`, `scene` |
 | Game's upscaler | `DM_UPSCALER` | `game`, `metalfx` |
 | Low-memory mode | `DM_LOW_MEMORY` | `auto`, `1`, `0` (Breath of the Wild) |
+| Memory transfer optimization | `DM_NVN_PASS_REUSE` | `1`, `0` |
 | Frame buffering | `DM_PRESENT_SNAP` | `1`, `0` |
 | Metal 4 pipelines | `DM_PSO_MTL4` | `1`, `0` |
 | Pipeline prebuild | `DM_PSO_PREBUILD` | `1`, `0` |
