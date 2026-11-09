@@ -207,11 +207,33 @@ Coverage is the main obstacle. A read-only survey of one *older* BOTW Mac
 cache (`b-c2cc5a7544c5`, not the chain built by this branch) found 10,560 pixel
 shaders: 6,414 with `_bf`, 10,318 with `_bui`, 6,268 with both, and 4,050
 with `_bui` but no `_bf`. These are cache-wide counts, not a count of shaders
-used by the HUD in any particular frame. Packaged apps do not generally carry
-shader sources. Thus replacing `_bui` with existing `_bf` variants cannot yet
-be shown to cover actual UI draws, alpha testing, blend state or all supported
-configurations. Missing variants would require a safe fallback, and falling
-back to the fully composited UI or skipping interpolation changes behavior.
+used by the HUD in any particular frame.
+
+The BOTW profile's `ps_layout.bin` list names 20 layout pixel shaders. All 20
+had an existing `_bf` library in that older cache. On the Apple M2, those
+libraries accepted specialization for output 0 to both attachments 0 and 7;
+all 20 also passed compilation and the same specialization when this branch's
+current `dmsh_fetch.fold` was run in memory on the cached source. The older
+libraries use entry `main0`, whereas the current folded variant uses
+`main0_f`. The probe checks the output-mapping constants and does not write game
+shader sources into its temporary directory. With such a cache available:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 dm/gfx/tests/research_framegen_hud_cache.py /path/to/b-cache
+```
+
+This static profile subset is not a trace of every shader actually used for
+HUD draws, and the old cached source is not a full build of the current chain.
+The check only compiles and specializes functions: it does not build their
+render pipelines or draw the game. Alpha-tested UI remains a concrete gap:
+`_bf` has no alpha-test entry, while the existing HUD variant has one. The
+synthetic `alphaToOneEnabled` probe used attachment 0 for HUD and attachment 7
+for scene; the production path uses the reverse order, so the mapping and any
+other attachments also require a correct integration. Packaged apps do not
+generally carry shader sources. Missing variants or alpha-tested draws would
+require a safe fallback, and falling back to the fully composited UI or
+skipping interpolation changes behavior.
+
 The build-scope conflict in difference 1 above remains unresolved; **this
 branch still contains the shader-generation changes**. Establish actual HUD
 shader coverage on representative scenes and prove any fallback on the target
