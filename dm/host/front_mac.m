@@ -542,13 +542,54 @@ static void pads_start(void) {
 // The picture's width / height (front.h front_picture_shape; 16:9 until the first present), which the present fits into the view
 static _Atomic double g_picture_aspect = 16.0 / 9.0;
 void front_picture_shape(int w, int h) { if (w > 0 && h > 0) g_picture_aspect = (double)w / h; }
+static BOOL live_setting_fixed(NSString *name) {
+    const char *keys[] = {"DM_ENV_FILE_KEYS", "DM_ENV_LAUNCH_KEYS", NULL};
+    for (int i = 0; keys[i]; i++) {
+        const char *v = getenv(keys[i]);
+        if (v && [[[NSString stringWithUTF8String:v] componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceCharacterSet] containsObject:name]) return YES;
+    }
+    return NO;
+}
 @interface DmGameView : NSView @end
 @implementation DmGameView
 - (void)changeFrameGeneration:(NSMenuItem *)item {
-    if (dm_fg_set_mode((int)item.tag)) [[NSUserDefaults standardUserDefaults] setObject:item.representedObject forKey:@"launcher.DM_FRAMEGEN"];
+    if (!dm_fps_live_framegen((int)item.tag)) return;
+    if (!getenv("DM_SAVED_CHOICES") || strcmp(getenv("DM_SAVED_CHOICES"), "0")) {
+        NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+        [defaults setObject:item.representedObject forKey:@"launcher.DM_FRAMEGEN"];
+        const char *rate = getenv("DM_FPS_TARGET"); if (rate) [defaults setObject:@(rate) forKey:@"launcher.DM_FPS_TARGET"];
+    }
+}
+- (void)changeFrameRate:(NSMenuItem *)item {
+    if (!dm_fps_live_rate((int)item.tag)) return;
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    if (!getenv("DM_SAVED_CHOICES") || strcmp(getenv("DM_SAVED_CHOICES"), "0")) {
+        [defaults setObject:item.representedObject forKey:@"launcher.DM_FPS_TARGET"];
+        const char *fg = getenv("DM_FRAMEGEN"); if (fg) [defaults setObject:@(fg) forKey:@"launcher.DM_FRAMEGEN"];
+    }
+}
+- (void)changeRenderScale:(NSMenuItem *)item {
+    if (!dm_fps_live_scale((float)item.tag / 100.f)) return;
+    if (!getenv("DM_SAVED_CHOICES") || strcmp(getenv("DM_SAVED_CHOICES"), "0"))
+        [NSUserDefaults.standardUserDefaults setObject:item.representedObject forKey:@"launcher.DM_RENDER_SCALE"];
 }
 - (BOOL)validateMenuItem:(NSMenuItem *)item {
-    if (item.action==@selector(changeFrameGeneration:)) item.state=dm_fg_requested_mode()==item.tag?NSControlStateValueOn:NSControlStateValueOff;
+    if (item.action==@selector(changeFrameGeneration:)) {
+        item.state=dm_fg_requested_mode()==item.tag?NSControlStateValueOn:NSControlStateValueOff;
+        const char *e=getenv("DM_FPS_TARGET"); int rate=e?atoi(e):DM_GAME_FPS_TARGET;
+        return !live_setting_fixed(@"DM_FRAMEGEN") && (!item.tag || dm_framegen_allowed()) &&
+               (!item.tag || !live_setting_fixed(@"DM_FPS_TARGET") || item.tag==rate);
+    }
+    if (item.action==@selector(changeFrameRate:)) {
+        const char *e=getenv("DM_FPS_TARGET"); int rate=e?atoi(e):DM_GAME_FPS_TARGET;
+        item.state=rate==item.tag?NSControlStateValueOn:NSControlStateValueOff;
+        return !live_setting_fixed(@"DM_FPS_TARGET") && !(live_setting_fixed(@"DM_FRAMEGEN") && dm_fg_requested_mode());
+    }
+    if (item.action==@selector(changeRenderScale:)) {
+        const char *e=getenv("DM_RENDER_SCALE"); float scale=e?strtof(e,NULL):1.f;
+        item.state=fabsf(scale-(float)item.tag/100.f)<.001f?NSControlStateValueOn:NSControlStateValueOff;
+        return !live_setting_fixed(@"DM_RENDER_SCALE");
+    }
     return YES;
 }
 - (void)mouseDown:(NSEvent *)e { [self mouseDragged:e]; }
@@ -1492,6 +1533,21 @@ void front_run(void (*guest)(void)) {
             dispatch_async(dispatch_get_main_queue(), ^{ [g_cheats_menu showPanel:nil]; });
         [[bar addItemWithTitle:@"Window" action:nil keyEquivalent:@""] setSubmenu:wm];
         [wm addItemWithTitle:@"Enter Full Screen" action:@selector(toggleFullScreen:) keyEquivalent:@"f"].keyEquivalentModifierMask = NSEventModifierFlagControl | NSEventModifierFlagCommand;
+        if (dm_fps_live_available()) {
+            NSMenu *rates=[[NSMenu alloc] initWithTitle:@"Frame rate"];
+            [[bar addItemWithTitle:@"Frame rate" action:nil keyEquivalent:@""] setSubmenu:rates];
+            for (int rate=20; rate<=120; rate+=5) {
+                if (!dm_fps_realtime && rate != 30 && rate != 60) continue;
+                NSMenuItem *item=[rates addItemWithTitle:[NSString stringWithFormat:@"%d fps",rate] action:@selector(changeFrameRate:) keyEquivalent:@""];
+                item.target=v; item.tag=rate; item.representedObject=@(rate).stringValue;
+            }
+            NSMenu *scales=[[NSMenu alloc] initWithTitle:@"Render scale"];
+            [[bar addItemWithTitle:@"Render scale" action:nil keyEquivalent:@""] setSubmenu:scales];
+            for (int percent=50; percent<=100; percent+=5) {
+                NSMenuItem *item=[scales addItemWithTitle:[NSString stringWithFormat:@"%d %%",percent] action:@selector(changeRenderScale:) keyEquivalent:@""];
+                item.target=v; item.tag=percent; item.representedObject=[NSString stringWithFormat:@"%.2f",percent/100.0];
+            }
+        }
         if (*DM_GAME_FRAMEGEN_SCENE) {
             NSMenu *fg=[[NSMenu alloc] initWithTitle:@"Frame generation"];
             [[bar addItemWithTitle:@"Frame generation" action:nil keyEquivalent:@""] setSubmenu:fg];

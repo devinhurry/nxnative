@@ -23,6 +23,8 @@
 __attribute__((weak)) int dm_fg_enabled(void) { return 0; }
 __attribute__((weak)) int dm_fg_mode(void) { return *DM_GAME_FRAMEGEN_SCENE && dm_fg_enabled()?dm_framegen_parse(getenv("DM_FRAMEGEN")):0; }
 __attribute__((weak)) int dm_fg_requested_mode(void) { return dm_fg_mode(); }
+__attribute__((weak)) int dm_fg_set_mode(int mode) { return mode == 0; }
+__attribute__((weak)) void dm_fps_lock_setting_changed(int target) { (void)target; }
 
 module_t *g_mod;
 int g_nmod;
@@ -319,6 +321,15 @@ int dm_fps_resolution_budget, dm_fps_realtime;
 static const char *g_fps_mod;   // the module holding the state page (for the log)
 static _Atomic int g_normal_fps_target;
 int dm_framegen_is_verified(void) { return dm_fps_state && dm_fps_realtime; }
+static void dm_fps_budget_update(float target) {
+    if (!dm_fps_state || !dm_fps_resolution_budget) return;
+    uint32_t dyn = __atomic_load_n((uint32_t *)(dm_fps_state + 0x40), __ATOMIC_RELAXED);
+    uint32_t word = __atomic_load_n((uint32_t *)(dm_fps_state + 0x10), __ATOMIC_RELAXED);
+    float scale; memcpy(&scale, &word, sizeof scale);
+    float budget = dyn && scale == 1.f ? (target > 0 ? 100.f * target / 30.f : 100.f) : 0;
+    memcpy(&word, &budget, sizeof word);
+    __atomic_store_n((uint32_t *)(dm_fps_state + 0x38), word, __ATOMIC_RELAXED);
+}
 void dm_framegen_mode_changed(int mode) {
     if (!dm_fps_state) return;
     uint32_t was=__atomic_load_n((uint32_t *)(dm_fps_state+0xa0),__ATOMIC_RELAXED);
@@ -327,11 +338,73 @@ void dm_framegen_mode_changed(int mode) {
     float ratio=realtime ? 30.0f/target : 0;
     uint32_t bits; memcpy(&bits,&target,4); __atomic_store_n((uint32_t *)dm_fps_state,bits,__ATOMIC_RELAXED);
     memcpy(&bits,&ratio,4); __atomic_store_n((uint32_t *)(dm_fps_state+0xa0),bits,__ATOMIC_RELAXED);
+    dm_fps_budget_update(target);
     if (realtime || was) {
         uint32_t rate=(uint32_t)target,step=rate?(60+rate-1)/rate:0;
         __atomic_store_n((uint32_t *)(dm_fps_state+0x20),step,__ATOMIC_RELAXED);
     }
     if (!realtime) __atomic_store_n((uint32_t *)(dm_fps_state+0xa4),0,__ATOMIC_RELAXED);
+}
+// UI requests are latched by the present thread; they never rewrite an in-flight
+// frame's state page. Extended rates require a verified real-time step.
+static _Atomic int g_live_rate = -1;
+static _Atomic uint32_t g_live_scale;
+int dm_fps_live_available(void) { return dm_fps_state != NULL; }
+int dm_fps_live_rate(int target) {
+    if (!dm_fps_live_available() || !nvn_realtime_rate_valid(target, dm_fps_realtime) || target == 0) return 0;
+    int fg = dm_fg_requested_mode(), next = fg && target <= 60 ? target : 0;
+    char value[16], old[32]; snprintf(value, sizeof value, "%d", target);
+    const char *previous = getenv("DM_FPS_TARGET"); int had_previous = previous != NULL;
+    if (had_previous) snprintf(old, sizeof old, "%s", previous);
+    if (fg && !next && !dm_fg_set_mode(0)) return 0;
+    if (setenv("DM_FPS_TARGET", value, 1)) { if (fg && !next) dm_fg_set_mode(fg); return 0; }
+    if (fg && next && !dm_fg_set_mode(next)) goto restore;
+    if (fg) {
+        char mode[16]; snprintf(mode, sizeof mode, "%d", next);
+        if (setenv("DM_FRAMEGEN", mode, 1)) goto restore;
+    }
+    atomic_store(&g_live_rate, target);
+    return 1;
+restore:
+    if (had_previous) setenv("DM_FPS_TARGET", old, 1); else unsetenv("DM_FPS_TARGET");
+    if (fg) dm_fg_set_mode(fg);
+    return 0;
+}
+// Changing a generated-frame source rate also changes the ordinary rate to
+// which the game will return when interpolation is switched off.
+int dm_fps_live_framegen(int mode) {
+    if (!dm_fps_live_available() || (mode && !dm_fps_realtime)) return 0;
+    int old = dm_fg_requested_mode();
+    if (!dm_fg_set_mode(mode)) return 0;
+    if (mode > 0) {
+        if (dm_fps_live_rate(mode)) return 1;
+    } else if (!setenv("DM_FRAMEGEN", mode < 0 ? "max" : "0", 1)) return 1;
+    dm_fg_set_mode(old);
+    return 0;
+}
+int dm_fps_live_scale(float scale) {
+    if (!dm_fps_state || !(scale >= .5f && scale <= 1.f)) return 0;
+    char value[16]; snprintf(value, sizeof value, "%.3f", scale);
+    if (setenv("DM_RENDER_SCALE", value, 1)) return 0;
+    uint32_t bits; memcpy(&bits, &scale, sizeof bits); atomic_store(&g_live_scale, bits);
+    return 1;
+}
+void dm_fps_live_update(void) {
+    int target = atomic_exchange(&g_live_rate, -1);
+    if (target >= 0) {
+        atomic_store(&g_normal_fps_target, target);
+        if (target == 30 || target == 60) dm_fps_lock_setting_changed(target);
+        // An interpolation change has its own frame-boundary latch and callback.
+        if (!dm_fg_mode()) dm_framegen_mode_changed(0);
+    }
+    uint32_t bits = atomic_exchange(&g_live_scale, 0);
+    if (bits) {
+        float rate;
+        __atomic_store_n((uint32_t *)(dm_fps_state + 0x10), bits, __ATOMIC_RELAXED);
+        uint32_t ratebits = __atomic_load_n((uint32_t *)dm_fps_state, __ATOMIC_RELAXED);
+        memcpy(&rate, &ratebits, sizeof rate);
+        dm_fps_budget_update(rate);
+    }
 }
 static void install_fps_state(module_t *m) {
     if (m->fps_state_off + 0xa8 > m->size || m->fps_state_off < m->key_page_off + m->key_page_size) die("%s: frame step state page out of range", m->name);

@@ -6,6 +6,37 @@ import Foundation
         var failed = 0
         func expect(_ c: Bool, _ what: String) { print((c ? "PASS " : "FAIL ") + what); if !c { failed += 1 } }
         let file = try! JSONDecoder().decode(SettingsFile.self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])))
+        // Exercise linked frame-rate and frame-generation choices independently
+        // of the fixture's game-build capability list.
+        let frameJSON = """
+        {"settings":[
+          {"env":"DM_FPS_TARGET","kind":"choice","label":"Rate","note":"","default":"30","options":[["30","30"],["40","40"],["60","60"],["120","120"]]},
+          {"env":"DM_FRAMEGEN","kind":"choice","label":"Frame generation","note":"","default":"0","options":[["0","Off"],["30","30"],["40","40"],["60","60"],["max","Uncapped"]]}
+        ]}
+        """.data(using: .utf8)!
+        let frameSettings = try! JSONDecoder().decode(SettingsFile.self, from: frameJSON).settings
+        let frameSuite = "nxnative.frame-rate-test." + UUID().uuidString
+        let frameDefaults = UserDefaults(suiteName: frameSuite)!
+        defer { frameDefaults.removePersistentDomain(forName: frameSuite) }
+        let fpsRow = frameSettings[0], fgRow = frameSettings[1]
+        let fm = LauncherModel(frameSettings, defaults: frameDefaults)
+        fm.setValue("40", for: fgRow)
+        expect(fm.values["DM_FPS_TARGET"] == "40" && fm.values["DM_FRAMEGEN"] == "40", "frame generation selects its source rate")
+        fm.setValue("60", for: fpsRow)
+        expect(fm.values["DM_FRAMEGEN"] == "60", "changing the rate updates frame generation")
+        fm.setValue("120", for: fpsRow)
+        expect(fm.values["DM_FRAMEGEN"] == "0", "rates above 60 switch frame generation off")
+        fm.choose(fgRow, "40")
+        expect(frameDefaults.string(forKey: "launcher.DM_FPS_TARGET") == "40" && frameDefaults.string(forKey: "launcher.DM_FRAMEGEN") == "40", "live frame generation persists both rates")
+        setenv("DM_ENV_FILE_KEYS", "DM_FRAMEGEN", 1); setenv("DM_FRAMEGEN", "40", 1)
+        let fixedFG = LauncherModel(frameSettings, defaults: frameDefaults)
+        fixedFG.setValue("60", for: fpsRow)
+        expect(fixedFG.values["DM_FPS_TARGET"] == "40" && fixedFG.lockingKey(fpsRow) == "DM_FRAMEGEN", "fixed frame generation also fixes its source rate")
+        setenv("DM_ENV_FILE_KEYS", "DM_FPS_TARGET", 1); setenv("DM_FPS_TARGET", "120", 1)
+        let fixedRate = LauncherModel(frameSettings, defaults: frameDefaults)
+        fixedRate.setValue("40", for: fgRow)
+        expect(fixedRate.values["DM_FPS_TARGET"] == "120" && fixedRate.values["DM_FRAMEGEN"] == "0", "fixed rate above 60 keeps frame generation off")
+        unsetenv("DM_ENV_FILE_KEYS"); unsetenv("DM_FRAMEGEN"); unsetenv("DM_FPS_TARGET")
         let phoneSuite = "nxnative.phone-default-test." + UUID().uuidString
         let phoneDefaults = UserDefaults(suiteName: phoneSuite)!
         defer { phoneDefaults.removePersistentDomain(forName: phoneSuite) }

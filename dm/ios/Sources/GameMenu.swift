@@ -1,7 +1,7 @@
 // The in-game menu, opened by the gamepad's menu button at the top centre (DmGamepad.m): the controller layout, then the settings-screen settings the running game takes at once
 // (front_ios.m dm_setting_live), grouped as on the settings screen but without its headings, one row each, so the menu stays short over the game (its text size is fixed: front_ios.m
 // startGame). A pick is saved as Play saves it (LauncherModel.choose), so the settings screen shows it at the next start; a setting an env file fixes is shown, not changed. Settings
-// that need the next start (language, pipelines, the frame rate and so on), and the sliders, stay on the settings screen, which the menu's title points to.
+// that need the next start (language, pipelines and so on) stay on the settings screen, which the menu's title points to.
 import UIKit
 
 var gameMenuModel: LauncherModel?   // the settings screen's model (Launcher.swift); nil in an app without one: the menu has the layout only
@@ -25,7 +25,7 @@ private func gameMenuItems() -> [UIMenuElement] {
         for section in m.sections {
             var rows: [UIMenuElement] = section == "Controls" ? [layout] : []
             if section == "Controls" { placed = true }
-            for s in m.rows(in: section) where (s.kind == "choice" || s.kind == "toggle") && dm_setting_live(s.env, nil) { rows.append(gameMenuRow(m, s)) }
+            for s in m.rows(in: section) where (s.kind == "choice" || s.kind == "toggle" || s.env == "DM_RENDER_SCALE") && dm_setting_live(s.env, nil) { rows.append(gameMenuRow(m, s)) }
             if !rows.isEmpty { items.append(UIMenu(options: .displayInline, children: rows)) }
         }
     }
@@ -34,9 +34,26 @@ private func gameMenuItems() -> [UIMenuElement] {
 }
 
 private func gameMenuRow(_ m: LauncherModel, _ s: Setting) -> UIMenuElement {
-    let now = m.values[s.env] ?? s.def, fixed = m.fixed.contains(s.env)
+    let now = m.values[s.env] ?? s.def
+    let fgPinned = s.env == "DM_FPS_TARGET" && m.fixed.contains("DM_FRAMEGEN") && (m.values["DM_FRAMEGEN"] ?? "0") != "0"
+    let fixed = m.fixed.contains(s.env) || fgPinned
     let attributes: UIMenuElement.Attributes = fixed ? .disabled : []
-    func pick(_ v: String) { m.choose(s, v); _ = dm_setting_live(s.env, v) }
+    func pick(_ v: String) {
+        if s.env == "DM_FPS_TARGET" || s.env == "DM_FRAMEGEN" || s.env == "DM_RENDER_SCALE" {
+            guard dm_setting_live(s.env, v) else { return }
+            m.choose(s, v)
+            if s.env == "DM_FPS_TARGET", let row = m.settings.first(where: { $0.env == "DM_FRAMEGEN" }),
+               let p = getenv("DM_FRAMEGEN") { m.choose(row, String(cString: p)) }
+        } else { m.choose(s, v); _ = dm_setting_live(s.env, v) }
+    }
+    if s.env == "DM_RENDER_SCALE", let lo = s.min, let hi = s.max, let step = s.step, step > 0 {
+        let actions = (0...Int(((hi - lo) / step).rounded())).map { index in
+            let value = lo + Double(index) * step, text = String(format: "%.2f", value)
+            return UIAction(title: "\(Int((value * 100).rounded())) %", attributes: attributes,
+                            state: abs((Double(now) ?? -1) - value) < 0.001 ? .on : .off) { _ in pick(text) }
+        }
+        return UIMenu(title: s.label, options: .singleSelection, children: actions)
+    }
     if s.kind == "toggle" {
         let a = UIAction(title: s.label, attributes: attributes, state: now == s.onValue ? .on : .off) { _ in pick(now == s.onValue ? s.offValue : s.onValue) }
         if fixed { a.subtitle = "Set in env.txt" }
@@ -44,6 +61,9 @@ private func gameMenuRow(_ m: LauncherModel, _ s: Setting) -> UIMenuElement {
     }
     let options = s.options ?? []
     let current = options.first { $0[0] == now }?[1] ?? now
-    let actions = options.map { o in UIAction(title: o[1], attributes: attributes, state: o[0] == now ? .on : .off) { _ in pick(o[0]) } }
+    let actions = options.map { o in
+        let pinnedRate = s.env == "DM_FRAMEGEN" && m.fixed.contains("DM_FPS_TARGET") && o[0] != "0" && o[0] != m.values["DM_FPS_TARGET"]
+        return UIAction(title: o[1], attributes: pinnedRate ? .disabled : attributes, state: o[0] == now ? .on : .off) { _ in pick(o[0]) }
+    }
     return UIMenu(title: s.label, subtitle: fixed ? "\(current), set in env.txt" : nil, options: .singleSelection, children: actions)
 }

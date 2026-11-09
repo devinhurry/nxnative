@@ -75,6 +75,40 @@ final class LauncherModel: ObservableObject {
             let saved = ignoreSaved ? nil : defaults.object(forKey: "launcher." + s.env) as? String   // a string, as launcher.c reads it: not string(forKey:), which turns a number into one
             values[s.env] = saved.flatMap { s.accepts($0) ? $0 : nil } ?? s.def   // a saved choice the game no longer offers: its default
         }
+        alignFrameGeneration()
+    }
+
+    // A fixed interpolation rate fixes the effective game rate too. If only the
+    // game rate is fixed, use it for interpolation, or disable it above 60.
+    func lockingKey(_ s: Setting) -> String? {
+        if fixed.contains(s.env) { return s.env }
+        if s.env == "DM_FPS_TARGET", fixed.contains("DM_FRAMEGEN"), (values["DM_FRAMEGEN"] ?? "0") != "0" { return "DM_FRAMEGEN" }
+        return nil
+    }
+    private func alignFrameGeneration() {
+        guard let fg = values["DM_FRAMEGEN"], fg != "0", let rate = values["DM_FPS_TARGET"] else { return }
+        if fixed.contains("DM_FRAMEGEN") {
+            if !fixed.contains("DM_FPS_TARGET"), Int(fg) != nil { values["DM_FPS_TARGET"] = fg }
+        } else if fixed.contains("DM_FPS_TARGET") {
+            values["DM_FRAMEGEN"] = (Int(rate) ?? 120) <= 60 ? rate : "0"
+        } else if (Int(rate) ?? 120) > 60 {
+            values["DM_FRAMEGEN"] = "0"
+        } else if Int(fg) != nil {
+            values["DM_FPS_TARGET"] = fg
+        }
+    }
+    func setValue(_ v: String, for s: Setting) {
+        guard lockingKey(s) == nil, s.accepts(v) else { return }
+        if s.env == "DM_FRAMEGEN", v != "0", fixed.contains("DM_FPS_TARGET") {
+            guard v == values["DM_FPS_TARGET"], (Int(v) ?? 120) <= 60 else { return }
+        }
+        if s.env == "DM_FRAMEGEN", v == "max", (Int(values["DM_FPS_TARGET"] ?? "60") ?? 120) > 60 { return }
+        values[s.env] = v
+        if s.env == "DM_FPS_TARGET", (values["DM_FRAMEGEN"] ?? "0") != "0" {
+            values["DM_FRAMEGEN"] = (Int(v) ?? 120) <= 60 ? v : "0"
+        } else if s.env == "DM_FRAMEGEN", v != "0", Int(v) != nil, !fixed.contains("DM_FPS_TARGET") {
+            values["DM_FPS_TARGET"] = v
+        }
     }
 
     var sections: [String] {
@@ -129,9 +163,15 @@ final class LauncherModel: ObservableObject {
     // A choice made while the game runs (the iOS in-game menu, GameMenu.swift): saved as Play saves it, so the settings screen shows it at the next start, and put in the environment.
     // A value an env file or the launch fixed stays
     func choose(_ s: Setting, _ v: String) {
-        guard !fixed.contains(s.env), s.accepts(v) else { return }
-        values[s.env] = v; store(s, v); setenv(s.env, v, 1)
-        fputs("launcher: \(s.env)=\(v) (in-game menu)\n", stderr)
+        guard lockingKey(s) == nil, s.accepts(v) else { return }
+        let before = values
+        setValue(v, for: s)
+        guard values[s.env] == v else { return }
+        for row in settings where !fixed.contains(row.env) {
+            guard let value = values[row.env], row.env == s.env || value != before[row.env] else { continue }
+            store(row, value); setenv(row.env, value, 1)
+            fputs("launcher: \(row.env)=\(value) (in-game menu)\n", stderr)
+        }
     }
 
     // DM_LAUNCHER=0: no screen, but the saved choices still apply (only DM_SAVED_CHOICES=0 ignores them); nothing is written

@@ -12,6 +12,7 @@
 // the time that passed is left as it is
 #include "hle.h"
 #include <mach/mach.h>
+#include <stdatomic.h>
 
 // What a field holds: the frame rate as a float, double or int32, vsyncs per frame (60 / frame rate) as an int32, or the frame time in milliseconds as a float. Copies: consecutive copies of the
 // value (Unreal keeps one for the game thread, one for the render thread). A row with no pointer (ptr_off 0) has its field at main + field: a constant in main's read-only data, which the loader
@@ -253,22 +254,34 @@ static void lock_find(void) {
 // presenting at a cap the game does not step by runs a fixed-step game fast or slow (Tears of the Kingdom 1.4.2 at 2x with DM_FPS_TARGET=60)
 int dm_fps_lock_engine(void) { pthread_once(&g_found, lock_find); return nrow || nier || fb.n || uq.base; }
 int nvn_fps_high_now(void);   // hle_nvn.c
+static _Atomic int g_launcher_fps_target = -1;
+void dm_fps_lock_setting_changed(int target) {
+    if (target == 0 || target == 30 || target == 60) atomic_store(&g_launcher_fps_target, target);
+}
 void dm_fps_lock_tick(void) {
     dynamic_resolution_tick();   // separate from the FPS cap
     static int state = -2, nlog[NLOCKS + 5], target, high; static const char *src;
-    if (state == -1) return;
+    int requested = atomic_load(&g_launcher_fps_target);
+    if (state == -1 && requested > 0) state = -2;   // a live choice can enable a previously unset limit
+    if (state == -1 || state == -3) return;
     if (state == -2) {
         state = -1; pthread_once(&g_found, lock_find);
-        if (!nrow && !nier && !fb.n && !uq.base && !ue_missing) return;
-        const char *e = getenv("DM_FPS_TARGET"); int t = e ? atoi(e) : DM_GAME_FPS_TARGET; src = e ? "DM_FPS_TARGET" : "game profile fps_target";
+        if (!nrow && !nier && !fb.n && !uq.base && !ue_missing) { state = -3; return; }
+        const char *e = getenv("DM_FPS_TARGET"); int t = requested >= 0 ? requested : e ? atoi(e) : DM_GAME_FPS_TARGET;
+        src = requested >= 0 ? "live setting" : e ? "DM_FPS_TARGET" : "game profile fps_target";
         if (t != 0 && t != 30 && t != 60 && t != 120) { LOG("[RED] DM_FPS_TARGET=%s: must be 0, 30, 60 or 120; leaving the game's frame limit", e); t = 0; }
         if (t == 120 && DM_GAME_FPS_MAX < 120) { LOG("[RED] DM_FPS_TARGET=120: this game's speed at 120 fps is not checked (profile fps_max); running at 60"); t = 60; }
         high = t == 120;
         if (t && ue_missing) LOG("[RED] main: Unreal %s not found by the rewriter (ue_cvar.py NAMES; game profile ue_fps_cvar): the game's own frame limit stays", DM_GAME_UE_FPS_CVAR);
-        if (!nrow && !nier && !fb.n && !uq.base) return;
+        if (!nrow && !nier && !fb.n && !uq.base) { state = -3; return; }
         if (!t) { for (int r = 0; r < nrow; r++) LOG("main: %s left as the game sets it (%s)", rows[r]->what, src); if (nier) LOG("main: NieR frame interval left as the game sets it (%s)", src);
                   if (fb.n) LOG("main: Frostbite simulation rate left as the game sets it (%s)", src); if (uq.base) LOG("main: Unity vSyncCount left as the game sets it (%s)", src); return; }
         target = t; state = 0;
+    }
+    requested = atomic_load(&g_launcher_fps_target);
+    if (requested >= 0 && requested != target) {
+        if (!requested) { state = -1; return; }
+        target = requested; high = 0; src = "live setting";
     }
     if (high) target = nvn_fps_high_now();   // 120 while frames fit, else 60: the game's step stays what the screen shows (hle_nvn.c fps_high)
     if (nier) {

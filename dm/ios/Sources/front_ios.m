@@ -292,8 +292,18 @@ bool dm_setting_live(const char *env, const char *value) {
         dm_set_opmode(m); dm_gamepad_opmode_changed(); LOG("front end: console mode %s (in-game menu)", m ? "docked" : "handheld");
         return true;
     }
+    if (!strcmp(env, "DM_FPS_TARGET") && dm_fps_live_available()) {
+        if (!value) return true;
+        char *end; long rate = strtol(value, &end, 10);
+        return *value && !*end && rate >= 20 && rate <= 120 && dm_fps_live_rate((int)rate);
+    }
+    if (!strcmp(env, "DM_RENDER_SCALE") && dm_fps_state) {
+        if (!value) return true;
+        char *end; float scale = strtof(value, &end);
+        return *value && !*end && dm_fps_live_scale(scale);
+    }
     if (!strcmp(env, "DM_FRAMEGEN") && *DM_GAME_FRAMEGEN_SCENE) {
-        if (value) return dm_fg_set_mode(dm_framegen_parse(value));
+        if (value) return dm_fps_live_framegen(dm_framegen_parse(value));
         return true;
     }
     if (!strcmp(env, "DM_SHOW_FPS")) { if (value) [g_root showFPS:atoi(value) != 0]; return true; }

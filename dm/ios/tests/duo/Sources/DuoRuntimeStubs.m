@@ -111,6 +111,15 @@ bool dm_show_launcher(void *viewController, void (*done)(void)) { (void)viewCont
 uint64_t g_t0_ns;
 uint64_t now_ns(void) { return 1; }
 uint64_t mtl_present_count(void) { return 0; }
+uint64_t mtl_generated_present_count(void) { return 0; }
+uint8_t *dm_fps_state;
+int dm_fps_realtime;
+int dm_fps_live_available(void) { return 0; }
+int dm_fps_live_rate(int target) { (void)target; return 0; }
+int dm_fps_live_framegen(int mode) { (void)mode; return 0; }
+int dm_fps_live_scale(float scale) { (void)scale; return 0; }
+int dm_fg_set_mode(int mode) { (void)mode; return 0; }
+int dm_fg_enabled(void) { return 0; }
 __thread _Atomic int dm_host_work;
 void dm_gfx_suspend(int on) { (void)on; }
 void dm_audio_suspend(int on) { (void)on; }
