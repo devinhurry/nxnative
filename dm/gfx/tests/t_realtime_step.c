@@ -22,6 +22,10 @@ int main(void) {
     assert(nvn_realtime_set_mode(&step,0));
     assert(nvn_realtime_set_mode(&step,30));
     assert(nvn_realtime_seconds(&step,3100000000ull,30,30)==1./30); // no sample crosses Off
+    assert(nvn_realtime_wanted(1,0,45,0,0) && nvn_realtime_wanted(1,1,60,0,0));
+    assert(!nvn_realtime_wanted(0,1,45,0,0) && !nvn_realtime_wanted(1,0,60,0,0));
+    assert(!nvn_realtime_wanted(1,0,45,1,0) && !nvn_realtime_wanted(1,1,60,1,0));
+    assert(!nvn_realtime_wanted(1,0,45,0,2) && !nvn_realtime_wanted(1,1,60,0,1));
     assert(nvn_realtime_rate_valid(20,1) && nvn_realtime_rate_valid(120,1));
     assert(!nvn_realtime_rate_valid(45,0) && !nvn_realtime_rate_valid(22,1) && !nvn_realtime_rate_valid(125,1));
     puts("real-time source clocks: 30..120, interruption and mode changes: OK");

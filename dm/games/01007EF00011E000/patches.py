@@ -38,8 +38,18 @@ def frame_step(ctx):
     here, emit, fs_site, fs_put, FS_STATE_OFF = ctx.here, ctx.emit, ctx.site, ctx.put, ctx.state
     fs_site(0x11269b8, 'fd7bbea9'); fs_site(0x151d3d0, 'fd7bbea9')
     start = here(); emit(ADRP(16, here(), FS_STATE_OFF))
-    emit(0xb940a211)   # ldr w17,[x16,#0xa0]    next real-frame ratio
-    emit(0xb900a611)   # str w17,[x16,#0xa4]    latch once for the whole game frame
+    # A movie or a VFR override owns the clock. Latch zero immediately in
+    # that frame so all four fractional stubs keep their original operations.
+    emit(0xb9400611)   # ldr w17,[x16,#4]       movie playing
+    emit(0x35000131)   # cbnz w17,clear (+9)
+    emit(ADRP(17, here(), 0x1e93890)); emit(LDRX(17, 17, 0x890 // 8))
+    emit(0xb4000071)   # cbz x17,load (+3)      no VFR yet
+    emit(0x3940a631)   # ldrb w17,[x17,#0x29]  the VFR's override
+    emit(0x35000091)   # cbnz w17,clear (+4)
+    emit(0xb940a211)   # load: ldr w17,[x16,#0xa0]  next real-frame ratio
+    emit(0xb900a611)   # str w17,[x16,#0xa4]         latch for the game frame
+    emit(B(here(), here()+8))   # skip clear
+    emit(0xb900a61f)   # clear: str wzr,[x16,#0xa4]  game controls its step
     for w in (0xb9400211,   # ldr w17,[x16]          target fps (0 = off)
               0x34000191):  # cbz w17,orig (+12)
         emit(w)

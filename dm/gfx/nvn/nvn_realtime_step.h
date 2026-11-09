@@ -20,6 +20,10 @@ static inline double nvn_realtime_seconds(nvn_realtime_step *s,uint64_t now,int 
     return seconds>1./15 ? 1./15 : seconds;
 }
 
+// The game's own fixed step and prerecorded movies retain their original clock.
+static inline int nvn_realtime_wanted(int verified,int framegen,int target,int movie,int fixed) {
+    return verified && !movie && !fixed && (framegen || (target > 0 && target != 30 && target != 60));
+}
 static inline int nvn_realtime_rate_valid(int rate, int verified) {
     return rate == 0 || rate == 30 || rate == 60 || (verified && rate >= 20 && rate <= 120 && rate % 5 == 0);
 }

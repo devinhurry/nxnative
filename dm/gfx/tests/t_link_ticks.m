@@ -200,6 +200,12 @@ int main(int argc, char **argv) { @autoreleasepool {
     acquire_ticks(120, 1, 1, 4, "the 30 fps frame step keeps two 60 Hz vsyncs");
     dm_fps_realtime = 1; state[0] = 40;
     CHECK(nvn_game_realtime() && fps_step_cap() == 40, "a verified custom rate follows real time");
+    *(uint32_t *)((uint8_t *)state + 0x24) = 2;
+    CHECK(!nvn_game_realtime() && fps_step_cap() == 60, "a game-controlled interval uses the whole-vsync clock");
+    test_framegen = 1;
+    CHECK(!nvn_game_realtime(), "frame generation cannot override the game's fixed clock");
+    test_framegen = 0; *(uint32_t *)((uint8_t *)state + 0x24) = 0;
+    CHECK(nvn_game_realtime(), "the fractional clock resumes after the game override");
     win_t real = {.interval = 2};
     CHECK(present_period(&real) == 25000000ull, "40 fps uses a 25 ms present period");
     acquire_ticks(120, 1, 2, 3, "40 fps waits three ticks of a 120 Hz link");

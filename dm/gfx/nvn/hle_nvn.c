@@ -1829,12 +1829,13 @@ static _Atomic uint64_t g_itv2_since;   // start of the game's current run of ev
 // Frame step (patch_nso.py FRAME_STEP: Tears of the Kingdom 1.4.3, Breath of the Wild 1.9.0): the game no longer picks an interval. The host hands it each frame's step in whole vsyncs
 // (fstep_tick, nvn_fstep.h) and presents follow the hold k it decides with it
 __attribute__((weak)) int dm_fps_resolution_budget, dm_fps_realtime;
+int dm_movie_playing(void);
 int nvn_game_realtime(void) {
     if (!dm_fps_state || !dm_fps_realtime) return 0;
-    if (dm_fg_enabled()) return 1;
     uint32_t bits = __atomic_load_n((uint32_t *)dm_fps_state, __ATOMIC_RELAXED);
     float target; memcpy(&target, &bits, sizeof target);
-    return target > 0 && target != 30 && target != 60;
+    int fixed = __atomic_load_n((uint32_t *)(dm_fps_state + 0x24), __ATOMIC_RELAXED);
+    return nvn_realtime_wanted(dm_fps_realtime, dm_fg_enabled(), (int)target, dm_movie_playing(), fixed);
 }
 __attribute__((weak)) uint8_t *dm_fps_state;   // loader.c; graphics unit tests have no loader
 __attribute__((weak)) void dm_fps_lock_tick(void) {}   // hle_fpslock.c: engine frame limits in game memory (Monster Hunter Rise); graphics unit tests have no host
@@ -2138,8 +2139,9 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     if (dm_fps_state) { static int was; if (c != was) { LOG("[nvn] frame step cap %d → %d fps at present %llu%s", was, c, (unsigned long long)o->presents, c == 30 && was == 60 ? (dm_movie_playing() ? " (movie playing)" : thermal_capped() ? " (thermal state serious)" : "") : ""); was = c; } }
     static nvn_realtime_step step;
     int realtime = nvn_game_realtime();
-    int mode = framegen ? framegen : realtime ? -c : 0;
+    int mode = realtime ? (framegen ? framegen : -c) : 0;
     fstep_framegen_mode(&step, mode);
+    if (!realtime && dm_fps_state) __atomic_store_n((uint32_t *)(dm_fps_state + 0xa0), 0, __ATOMIC_RELAXED);
     if (realtime && c) {
         float ratio = (float)(30 * nvn_realtime_seconds(&step, now_ns(), mode, c));
         uint32_t bits; memcpy(&bits, &ratio, 4);

@@ -57,6 +57,29 @@ class NativeFrameStep(unittest.TestCase):
 
         latch = ctypes.CFUNCTYPE(None)(base + setter)
         funcs = [ctypes.CFUNCTYPE(ctypes.c_float, ctypes.c_float, ctypes.c_float)(base + 0x1d00000 + i * 0x100) for i in range(4)]
+        # No VFR object exists early in startup: it must still latch safely.
+        ctypes.c_float.from_address(state + 0xa0).value = .6
+        latch()
+        self.assertAlmostEqual(ctypes.c_float.from_address(state + 0xa4).value, .6, places=6)
+        # Exercise the real emitted setter with a mock VFR object. The game
+        # and movies must retain their own step even if a host ratio is ready.
+        protect(0)
+        ctypes.c_uint64.from_address(base + 0x1e93890).value = state + 0x1000
+        protect(1)
+        ctypes.c_float.from_address(state).value = 60
+        ctypes.c_float.from_address(state + 0xa0).value = .6
+        for movie, override, expected in ((0,0,.6), (0,1,0), (1,0,0), (1,1,0), (0,0,.6)):
+            ctypes.c_uint32.from_address(state + 4).value = movie
+            ctypes.c_uint8.from_address(state + 0x1000 + 0x29).value = override
+            latch()
+            latched = ctypes.c_float.from_address(state + 0xa4).value
+            with self.subTest(movie=movie, override=override):
+                self.assertAlmostEqual(latched, expected, places=6)
+                for i, fn in enumerate(funcs):
+                    actual = fn(2.0, .8 if i == 0 else .5)
+                    wanted = (1.0 if i == 3 else expected) if expected else (.8 if i == 0 else 2.0 if i == 3 else 1.0)
+                    self.assertAlmostEqual(actual, wanted, places=6)
+        ctypes.c_float.from_address(state).value = 0
         for ratio in (0.0, 1.0, .75, .6, .5, .25):
             ctypes.c_float.from_address(state + 0xa0).value = ratio
             ctypes.c_float.from_address(state + 0xa4).value = -1
