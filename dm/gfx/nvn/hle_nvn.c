@@ -2186,7 +2186,7 @@ __attribute__((weak)) void dm_ue_cvar_tick(void) {}   // hle_uecvar.c: Unreal's 
 __attribute__((weak)) int dm_movie_playing(void) { return 0; }   // hle_movie.c: a movie's pictures are being handed out; graphics unit tests have no movie decoder
 // Thermal cap (iOS): while the device is thermally serious or worse (NSProcessInfo thermalState >= 2) the frame step holds 30 fps, and it goes back to the cap after the device
 // has been fair or better for THERMAL_CALM_NS, so it does not flap. At "serious" iOS caps the GPU clock to about a third: Breath of the Wild's vistas (about 3,000 G-buffer draws)
-// then took 17-26 ms a frame and dropped a frame in most windows; a steady 30 instead also lets the device cool. DM_THERMAL_CAP=0 turns it off; the Mac reports no thermal state
+// then took 17-26 ms a frame and dropped a frame in most windows. Disabled by default: DM_THERMAL_CAP=1 opts into this application cap; the OS still controls its own clocks.
 #define THERMAL_CALM_NS 30000000000ull
 static int thermal_capped(void) {
     // Acquire, present and the display-link configuration can ask on different
@@ -2195,7 +2195,7 @@ static int thermal_capped(void) {
     static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
     static int on = -1, capped; static uint64_t last, calm_since;
     pthread_mutex_lock(&mu);
-    if (on < 0) { const char *e = getenv("DM_THERMAL_CAP"); on = !(e && !strcmp(e, "0")); }
+    if (on < 0) { const char *e = getenv("DM_THERMAL_CAP"); on = e && strcmp(e, "0") != 0; }
     if (on) {
         uint64_t now = now_ns();
         if (now - last >= 1000000000ull) {   // the thermal state is read once a second
@@ -2347,8 +2347,9 @@ static uint64_t rt_period_ns(const win_t *o, uint64_t period) {
     int kmin = fstep_hz() / c;
     return present_itv(o) > kmin ? (uint64_t)kmin * 1000000000ull / (uint64_t)g_hz : period;
 }
-// Whether the CPU runs below its speed for reasons other than heat (nvn_fstep_next's slow, which allows probes): under 30% of the process's CPU time on performance cores in
-// each of the last two windows of 30 presents, on a system with two core types, at thermal state nominal or fair, Low Power Mode off. A game that waits out a long hold is parked
+// Whether the CPU appears slowed (nvn_fstep_next's slow, which allows probes): under 30% of the process's CPU time on performance cores in
+// each of the last two windows of 30 presents, on a system with two core types, Low Power Mode off. Heat only limits recovery when the application thermal cap is explicitly enabled.
+// A game that waits out a long hold is parked
 // on the efficiency cores (TOTK on an iPhone: 6% on performance cores at 1.6 GHz, thermal 0), where the cost the frame step measures never fits k − 1 again; one window alone
 // dips that low on a Mac at 30 fps now and then (26% once in 70 s, 97% around it)
 static int g_fs_pshare = -1;   // the last window's share in percent (−1 = not measured yet)
@@ -2362,7 +2363,7 @@ static int fstep_cpu_slowed(uint64_t presents) {
     if (pc && c > pc) g_fs_pshare = (int)(100 * (p - pp) / (c - pc));
     pc = c; pp = p;
     int low = g_fs_pshare >= 0 && g_fs_pshare < 30;
-    slowed = low && low_was && dm_thermal_now() <= 1 && !dm_low_power_now(); low_was = low;
+    slowed = low && low_was && !dm_low_power_now(); low_was = low;
     return slowed;
 }
 // Whether late frames may raise the hold above the cap's vsyncs (profile fps_hold, DM_FPS_HOLD=on / off). Off for a game whose updates do not wait for the presents and step
@@ -2386,13 +2387,13 @@ static void fstep_tick(const win_t *o, int c) {
     for (uint64_t f = g_frame; f-- > 0 && g_frame - f <= 8;) { double g = mtl_gpu_ms(f); if (g >= 0) { gpu = g * 1e6 / v; break; } }
     double cpu = shown - pw / v, cost = cpu > gpu ? cpu : gpu;
     int kmin = fstep_hz() / c, kmax = fps_high() ? 2 : !fstep_hold() ? kmin : kmin >= 2 ? 2 : FSTEP_MAX, k0 = g_fs.k,   // at 120 fps a late frame must step down whatever fps_hold says: the game steps by the target
-         kmin0 = g_fs.kmin, probe0 = g_fs.probe;
+         kmin0 = g_fs.kmin, probe0 = g_fs.probe, target0 = g_fs.target, fallback0 = g_fs.fallback;
     int fixed = dm_fps_state ? (int)__atomic_load_n((uint32_t *)(dm_fps_state + 0x24), __ATOMIC_RELAXED) : 0;
     uint64_t probes0 = g_fs.probes, failed0 = g_fs.failed;
     // A screen whose rate is not a multiple of 60 (144, 165 Hz) shows the link's 1/60 s ticks on their nearest refreshes (nvn_mtl.m link_range), so a frame on time can show for one
     // refresh more than its hold: a cheap 50 ms frame shows 54.5 ms at 165 Hz, which counted as late kept the hold at 20 fps for good
     int hz = front_screen_max_fps(); g_fs.shown_slack = hz > fstep_hz() && hz % fstep_hz() && mtl_link_active() ? (double)fstep_hz() / hz : 0;
-    int cslow = fstep_cpu_slowed(o->presents), gslow = nvn_fstep_gpu_slowed(&g_fg, gpu, k0 ? k0 : kmin, kmin, probe0) && dm_thermal_now() <= 1 && !dm_low_power_now();   // same gates as the CPU's
+    int cslow = fstep_cpu_slowed(o->presents), gslow = nvn_fstep_gpu_slowed(&g_fg, gpu, k0 ? k0 : kmin, kmin, probe0) && !dm_low_power_now();   // an optional thermal cap already bounds kmin/kmax
     // Present snapshots (nvn_mtl.m snap_take): the game runs up to a frame ahead of the screen, so a frame whose work runs long is absorbed instead of shown late, and its cost is
     // no evidence against the hold (Breath of the Wild in Zora's Domain stepped to 30 at a GPU time of 0.75 vsyncs: the frame's CPU time held its waits on its own GPU work).
     // Lateness is then what the screen shows: the on-screen interval of the frame 8 presents back against its hold (pres_expect_ms), late by a quarter or dropped
@@ -2420,18 +2421,18 @@ static void fstep_tick(const win_t *o, int c) {
     if (fixed != fixed_was && nfix < 40) { nfix++; if (fixed) LOG("[nvn] frame step: the game fixes its own step at %d vsyncs at present %llu", fixed, (unsigned long long)o->presents); else LOG("[nvn] frame step: the game hands the step back to the host at present %llu", (unsigned long long)o->presents); }
     fixed_was = fixed;
     if (k0 && g_fs.k != k0 && nlog < 40) {
-        char why[160], held[48] = ""; int w = snprintf(why, sizeof why, "probe");
+        char why[160], held[48] = ""; int w = snprintf(why, sizeof why, "probe toward hold %d, return hold %d", g_fs.target, g_fs.fallback);
         if (cslow) w += snprintf(why + w, sizeof why - w, ", CPU %d%% on performance cores", g_fs_pshare);
         if (gslow) w += snprintf(why + w, sizeof why - w, ", GPU %.2f× its time at hold %d", g_fg.cur / g_fg.ref, kmin);
         if (nvn_fstep_same(&g_fs)) snprintf(why + w, sizeof why - w, ", cost %.2f× the cost that held hold %d", g_fs.ccur / g_fs.cref, kmin);
         if (g_fs.k > k0 && g_fs.cref > 0) snprintf(held, sizeof held, "; hold %d held at %.2f", kmin, g_fs.cref);   // what a probe compares the longer hold's cost with
         LOG("[nvn] frame step: hold %d → %d %s at present %llu (%s; cost %.2f, GPU %.2f%s)%s", k0, g_fs.k, fps_high() ? "ticks of 1/120 s" : "vsyncs", (unsigned long long)o->presents,
-            fixed ? "the game's own step" : kmin0 > FSTEP_MAX ? "the game's own step ended" : kmin != kmin0 ? "the cap changed" : g_fs.k > k0 ? "3 late frames" : g_fs.probes != probes0 ? why : "trial", cost, gpu, held, ++nlog == 40 ? "; further changes only counted below" : "");
+            fixed ? "the game's own step" : kmin0 > FSTEP_MAX ? "the game's own step ended" : kmin != kmin0 ? "the cap changed" : g_fs.failed != failed0 ? "trial failed, return to previous hold" : g_fs.k > k0 ? "3 late frames" : g_fs.probes != probes0 ? why : "trial", cost, gpu, held, ++nlog == 40 ? "; further changes only counted below" : "");
     }
-    if (probe0 == 1 && g_fs.probe != 1 && !fixed && nlog < 40)   // whether the controller raised the clock for the shorter deadline
-        LOG("[nvn] frame step: the probe %s at present %llu (CPU %d%% on performance cores)%s", g_fs.probe == 2 ? "held" : "failed", (unsigned long long)o->presents, g_fs_pshare, ++nlog == 40 ? "; further changes only counted below" : "");
+    if (probe0 == 1 && g_fs.probe != 1 && !fixed && (g_fs.probe == 2 || g_fs.failed != failed0) && nlog < 40)   // a cap / fixed-step override cancels a probe without failing it
+        LOG("[nvn] frame step: the probe toward hold %d %s at present %llu (return hold %d, CPU %d%% on performance cores)%s", target0, g_fs.probe == 2 ? "held" : "failed", (unsigned long long)o->presents, fallback0, g_fs_pshare, ++nlog == 40 ? "; further changes only counted below" : "");
     else if (probe0 == 2 && !g_fs.probe && g_fs.failed != failed0 && nlog < 40)
-        LOG("[nvn] frame step: the run at hold %d after the probe lasted under %.0f s, counted as a failed probe (CPU %d%% on performance cores)%s", kmin, FSTEP_HOLD_MAX / 60, g_fs_pshare, ++nlog == 40 ? "; further changes only counted below" : "");
+        LOG("[nvn] frame step: the run at hold %d after the probe lasted under %.0f s, counted as a failed probe (return hold %d, CPU %d%% on performance cores)%s", target0, FSTEP_HOLD_MAX / 60, g_fs.k, g_fs_pshare, ++nlog == 40 ? "; further changes only counted below" : "");
     if (!dm_fps_state) {   // 120 fps: no game clock to read; the frames at each hold say how much of the time it held 120
         if (o->presents % 1800 == 0) { LOG("[nvn] 120 fps: held 1 / 2 ticks %llu / %llu frames, %llu late, %llu up / %llu down (%llu probes, %llu failed trials)", (unsigned long long)held[1], (unsigned long long)held[2], (unsigned long long)g_fs.late, (unsigned long long)g_fs.ups, (unsigned long long)g_fs.downs, (unsigned long long)g_fs.probes, (unsigned long long)g_fs.failed); memset(held, 0, sizeof held); }
     } else if (o->presents % 1800 == 0) {   // game time against real time (1.000 = normal speed; lower when a device cannot hold 20 fps or after long stalls)
