@@ -20,6 +20,15 @@ static int g_checks, g_failed;
 @interface TestPipelineState : NSObject { @public int call; } @end
 @implementation TestPipelineState @end
 
+static _Atomic int g_probe_deallocs;
+@interface PoolProbe : NSObject
++ (instancetype)transient;
+@end
+@implementation PoolProbe
++ (instancetype)transient { return [self new]; }
+- (void)dealloc { atomic_fetch_add(&g_probe_deallocs, 1); }
+@end
+
 // The fake compiler blocks selected invocation numbers, so the test can hold
 // real pso_pend_kick workers in the compiler without relying on driver timing.
 @interface GateDevice : NSObject {
@@ -27,6 +36,7 @@ static int g_checks, g_failed;
     pthread_cond_t _cv;
     int _entered, _released, _block_through, _nil_call;
     int _sync_calls, _async_calls;
+    BOOL _emit_probe;
     pthread_t _submitter;
     NSMutableArray *_results;
     BOOL _submitter_call[1024];
@@ -35,6 +45,7 @@ static int g_checks, g_failed;
     BOOL _absent_key_observed[1024];
 }
 - (instancetype)initBlockingThrough:(int)call nilCall:(int)nilCall;
+- (void)emitProbe;
 - (id<MTLRenderPipelineState>)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)descriptor error:(NSError **)error;
 - (BOOL)waitForEntered:(int)count timeoutMs:(int)timeoutMs;
 - (void)releaseThrough:(int)count;
@@ -58,8 +69,13 @@ static int g_checks, g_failed;
     return self;
 }
 - (void)dealloc { pthread_cond_destroy(&_cv); pthread_mutex_destroy(&_mu); }
+- (void)emitProbe { _emit_probe = YES; }
 - (id<MTLRenderPipelineState>)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)descriptor error:(NSError **)error {
     (void)descriptor;
+    if (_emit_probe) { // Ignore the +0 return so the probe stays in the worker's autorelease pool.
+        void (*send)(id, SEL) = (void (*)(id, SEL))objc_msgSend;
+        send([PoolProbe class], @selector(transient));
+    }
     pthread_mutex_lock(&_mu);
     int n = ++_entered;
     TestPipelineState *result = [TestPipelineState new]; result->call = n;
@@ -194,6 +210,28 @@ static int wait_kick_job(kick_job *j, int timeout_ms) {
     pthread_mutex_lock(&j->mu); int rc = 0;
     while (!j->done && rc != ETIMEDOUT) rc = pthread_cond_timedwait(&j->cv, &j->mu, &end);
     int done = j->done; pthread_mutex_unlock(&j->mu); return done;
+}
+
+static void test_worker_drains_autoreleases(void) {
+    reset_queue(); atomic_store(&g_probe_deallocs, 0);
+    GateDevice *dev = [[GateDevice alloc] initBlockingThrough:0 nilCall:0]; [dev emitProbe]; g_dev = (id<MTLDevice>)(id)dev;
+    pso_key k = make_key(550); uint32_t gen = 0;
+    pthread_mutex_lock(&g_pp_mu); int slot = pso_pend_slot(&k, 0, &gen); pthread_mutex_unlock(&g_pp_mu);
+    EXPECT_TRUE("probe job admitted", slot >= 0);
+    if (slot < 0) return;
+    dispatch_queue_t q = dispatch_queue_create("dm.test.pso-pool", DISPATCH_QUEUE_SERIAL);
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    __block int deallocated = -1;
+    dispatch_suspend(q); // Queue the observation before the worker can finish.
+    pso_pend_start(slot, gen, pso_desc(&k, test_vs, test_fs, nil, 0), !k.border, q);
+    dispatch_async(q, ^{ deallocated = atomic_load(&g_probe_deallocs); dispatch_semaphore_signal(done); });
+    dispatch_resume(q);
+    long wait = dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
+    EXPECT_EQ("worker observation completed", 0, wait);
+    if (wait) exit(1);   // a stuck worker cannot be safely drained by the remaining tests
+    EXPECT_EQ("worker releases its temporary autoreleases before the next job", 1, deallocated);
+    EXPECT_TRUE("worker result remains usable", pso_pend_take(&k) != nil);
+    reset_queue();
 }
 
 static void test_two_active_exact_take_and_release(void) {
@@ -370,6 +408,7 @@ int main(void) {
         setvbuf(stdout, NULL, _IONBF, 0);
         test_vs = [NvShader new]; test_fs = [NvShader new];
         snprintf(test_vs->key, sizeof test_vs->key, "pending-base-vs"); snprintf(test_fs->key, sizeof test_fs->key, "pending-base-fs");
+        test_worker_drains_autoreleases();
         test_two_active_exact_take_and_release();
         test_full_table_reclaims_done_not_running();
         test_nil_prediction_falls_back_then_predicts();

@@ -500,8 +500,17 @@ Games read this count as a position in their own command memory and size their h
 
 - **Symptom:** `FATAL submit re-entered` in the first frames.
 - **Cause:** the game initializes two NVN queues and submits on both from two threads, while the Metal replay keeps one command buffer for the submission in progress.
-- **Fix:** ready queue continuations replay under one lock (`g_sub_mu` in `hle_nvn.c`); submission copies its command stream and descriptors under the same lock. Queue dependencies determine which continuation can run ([GPU event waits](#gpu-event-waits-order-work-across-queues)). Replay takes the lock before the graphics gate ([Going to the background during the prepare step](#going-to-the-background-during-the-prepare-step)).
+- **Fix:** ready queue continuations replay under one lock (`g_sub_mu` in `hle_nvn.c`); submitted descriptor snapshots share that lock, while pure command-byte assembly can [overlap the preceding replay](#command-assembly-serialized-with-the-preceding-replay). Queue dependencies determine which continuation can run ([GPU event waits](#gpu-event-waits-order-work-across-queues)). Replay takes the lock before the graphics gate ([Going to the background during the prepare step](#going-to-the-background-during-the-prepare-step)).
 - **Found on:** [Fire Emblem: Three Houses](../../dm/games/010055D009F78000/README.md).
+
+### Command assembly serialized with the preceding replay
+
+- **Symptom:** an NVN submit cannot copy its command bytes while the preceding submission translates to Metal, even though that copy uses no renderer state. Demonstrated with the renderer lock held in a CPU test; game frame-time impact has not been measured.
+- **Cause:** `nvn_queue_submit` held the renderer lock (`g_sub_mu`) across flattening, compact-record expansion and descriptor snapshots. Compact records also expanded into a scratch buffer, then were copied again into the owned command stream one canonical record at a time.
+- **Fix:** copy and expand the command bytes before taking the renderer lock; then walk the owned canonical stream under the lock to snapshot and retain its programs and textures, before enqueueing. The caller's command memory and referenced descriptors remain valid until submit returns. Compact records expand directly into the owned stream. Queue cuts, event signal bookkeeping, descriptor lifetime and the canonical replay/capture format are preserved.
+- **Measured:** `t_queue_snapshot --bench`, Apple M2, 4,096 synthetic meshes with bindings (885,144 canonical bytes), 300 snapshots per process and five alternating baseline/candidate pairs: median 0.427 ms before and 0.271 ms after; the candidate's descriptor pass under the renderer lock took 0.105 ms. This is a CPU microbenchmark, not an iPhone or game FPS result.
+- **Check:** `t_queue_snapshot` verifies byte equality with canonical recordings and the linear diagnostic/capture stream, event-wait boundaries, and that assembly progresses while the renderer lock is held but descriptor preparation still waits for it. The overlap check fails before the change. `t_queue_lifetime` checks real submitted program/texture reuse, direct and with the encoding worker; `t_gfx_suspend` checks the lifecycle gate.
+- **Found on:** a synthetic queue-copy benchmark and lock-contention test; no game slowdown is attributed to this path yet.
 
 ### Going to the background during the prepare step
 

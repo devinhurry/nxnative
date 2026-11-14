@@ -92,6 +92,7 @@ static void success(size_t size) {
     assert(size == old_size ? calls == 0 && map_calls == 0 : correct_call());
     assert(dm_guest_heap_readable((uint64_t)g_heap, size));
     assert(!dm_guest_heap_readable((uint64_t)g_heap, size + 1));
+    for (size_t i = old_size; i < size; i++) assert(!g_heap[i]);   // newly opened heap bytes must be zero
     if (size) { g_heap[0] = 0x5a; g_heap[size - 1] = 0xa5; }
 }
 static void failure(size_t size, int error) {
@@ -132,11 +133,20 @@ int main(void) {
     success(0);                              // unchanged empty heap
     success(page); success(0);               // regrowth after release
     success(3 * page);
+    memset(g_heap, 0x4e, 3 * page);
     injected_map_error = ENOMEM;             // failed replacement, successful protection fallback
     success(page); used_memory(page);
+    injected_map_error = 0;
+    success(2 * page);
+    for (size_t i = 1; i + 1 < page; i++) assert(g_heap[i] == 0x4e);   // the live prefix is preserved
+    memset(g_heap + page, 0x63, page);
+    injected_map_error = ENOMEM;
     success(0); used_memory(0);
     injected_map_error = 0;
-    success(page); success(0);               // regrowth after the fallback release
+    success(3 * page);                       // also clear the older tail beyond the second shrink's old size
+    memset(g_heap, 0x2a, 3 * page);
+    success(0); success(3 * page);           // a later successful replacement still reads zero
+    success(0);
     free(g_alias_bits); free(g_alias_exposed);
     assert(munmap(g_as, RESERVE) == 0);
     puts("SetHeapSize production dispatcher: growth, shrink, unchanged, zero, failure state and fail-fast passed");

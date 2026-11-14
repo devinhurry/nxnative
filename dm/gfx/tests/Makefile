@@ -365,6 +365,12 @@ t_rt_depth_ro: t_rt_depth_ro.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_rt_depth_ro.m $(MTL_T_SRC) $(FW)
 t_pso_pending: t_pso_pending.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_pending.m $(MTL_T_SRC) $(FW)
+t_pso_future: t_pso_future.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_future.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_pso_future
+check_t_pso_future: t_pso_future
+	./t_pso_future --sync
+	./t_pso_future
 t_shmap_warm: t_shmap_warm.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_shmap_warm.m $(MTL_T_SRC) $(FW)
 t_pso_depth_stencil: t_pso_depth_stencil.m $(MTL_T_DEP)
@@ -635,6 +641,8 @@ t_wait_event: t_wait_event.m $(MTL_T_DEP)
 
 t_queue_lifetime: t_queue_lifetime.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_queue_lifetime.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
+t_queue_snapshot: t_queue_snapshot.c $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_queue_snapshot.c $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) ../nvn/nvn_mtl.m $(FW)
 
 .PHONY: check_t_wait_event check_t_queue_lifetime
 check_t_wait_event: t_wait_event

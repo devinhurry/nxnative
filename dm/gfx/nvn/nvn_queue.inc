@@ -186,13 +186,14 @@ static void *nq_worker(void *unused) {
 }
 static void nq_start(void) { pthread_t t; if(pthread_create(&t,NULL,nq_worker,NULL)) die("NVN queue worker failed"); pthread_detach(t); }
 static nq_node *nq_append(nq_job *j,unsigned kind) { nq_node *n=calloc(1,sizeof *n); if(!n) die("queue continuation allocation failed"); n->kind=kind; if(j->last) j->last->next=n; else j->first=n; j->last=n; return n; }
-static void nq_bytes(nq_node *n,const void *bytes,size_t length) { if(n->length+length>n->capacity) { n->capacity=(n->length+length+4095)&~(size_t)4095; n->bytes=realloc(n->bytes,n->capacity); if(!n->bytes) die("queue commands allocation failed"); } memcpy(n->bytes+n->length,bytes,length); n->length+=length; } // NOLINT(bugprone-suspicious-realloc-usage): allocation failure aborts, so the old buffer cannot leak into a continuing process
+static uint8_t *nq_room(nq_node *n,size_t length) { if(n->length+length>n->capacity) { n->capacity=(n->length+length+4095)&~(size_t)4095; n->bytes=realloc(n->bytes,n->capacity); if(!n->bytes) die("queue commands allocation failed"); } return n->bytes+n->length; } // NOLINT(bugprone-suspicious-realloc-usage): allocation failure aborts, so the old buffer cannot leak into a continuing process
+static void nq_bytes(nq_node *n,const void *bytes,size_t length) { memcpy(nq_room(n,length),bytes,length); n->length+=length; }
 static void nq_signal_add(nq_node *n,nq_signal s) {
     if(!(n->signal_count&(n->signal_count-1))) { n->signals=realloc(n->signals,(n->signal_count?2*n->signal_count:1)*sizeof *n->signals); if(!n->signals) die("queue signals allocation failed"); } // NOLINT(bugprone-suspicious-realloc-usage): allocation failure aborts
     n->signals[n->signal_count++]=s;
 }
 static void nq_end(nq_job *j) { if(j->last && j->last->kind==NQ_COMMANDS && !j->last->closed) { op_hdr end={OP_END,8}; nq_bytes(j->last,&end,8); j->last->closed=1; } }
-// One record of a recording, copied into the job (its object pointers snapshotted); waits and fences cut the job. A signal does not: its value is published when the commands
+// One record of a recording, copied into the job; its object pointers are snapshotted under the renderer lock afterwards. Waits and fences cut the job. A signal does not: its value is published when the commands
 // it is among complete (mtl_sub_event), and a wait on it is ordered by that value or, while it is in flight, by the fence of those commands (nq_event_write), so the node keeps
 // every signal it records. Each node is a Metal command buffer of its own, so a cut ends the open render pass: BioShock Infinite signals an event per occlusion query, and a cut
 // at each took its title screen from 88 to 189 passes a frame and from 734 MB to 2.58 GB of attachment loads (issue #2112)
@@ -205,18 +206,25 @@ static void nq_record_one(nq_job *j,const uint8_t *p,op_hdr h) {
         else { memcpy(&n->sync_source,a,8); if(h.op==OP_FENCE_SYNC) n->receipt=nq_new(); }
     } else {
         nq_node *n=j->last; if(!n || n->kind!=NQ_COMMANDS || n->closed) n=nq_append(j,NQ_COMMANDS);
-        size_t offset=n->length; nq_bytes(n,p,h.size); if(!n->bytes) die("queue commands: a record of %u bytes",h.size);
-        if(!cap_rec_fields(h.op,n->bytes+offset+8,h.size,&nq_snapshot_ops,j)) die("queue snapshot: unknown command %u",h.op);
+        nq_bytes(n,p,h.size);
         if(h.op==OP_SIGNAL_EVENT) {
             nq_signal sig; memcpy(&sig.event,a,8); memcpy(&sig.mode,a+8,4); memcpy(&sig.value,a+12,4); nq_signal_add(n,sig);
         }
     }
 }
-// A compact record (nvn_obj.h OPC_*) goes into the job as the canonical records it stands for
+// Compact records contain no descriptor pointers, signals or queue cuts: expand directly into the owned stream, without a scratch copy or a per-expanded-record append.
+_Static_assert(OPC_END_==OPC_BASE+19,"new compact ops need their descriptor ownership and queue-cut behavior reviewed here");
 static void nq_record(nq_job *j,const uint8_t *p,op_hdr h) {
     if(!rec_compact(h.op)) { nq_record_one(j,p,h); return; }
-    uint8_t x[REC_EXPAND_MAX] __attribute__((aligned(8))); size_t n=rec_expand(p,x);
-    for(size_t o=0;o<n;) { op_hdr c; memcpy(&c,x+o,8); nq_record_one(j,x+o,c); o+=c.size; }
+    nq_node *n=j->last; if(!n || n->kind!=NQ_COMMANDS || n->closed) n=nq_append(j,NQ_COMMANDS);
+    n->length+=rec_expand(p,nq_room(n,REC_EXPAND_MAX));
+}
+static void nq_snapshot(nq_job *j) {   // renderer lock held: retain every program and texture descriptor before enqueue
+    for(nq_node *n=j->first;n;n=n->next) if(n->kind==NQ_COMMANDS) for(size_t o=0;o<n->length;) {
+        op_hdr h; memcpy(&h,n->bytes+o,8);
+        if(!cap_rec_fields(h.op,n->bytes+o+8,h.size,&nq_snapshot_ops,j)) die("queue snapshot: unknown command %u",h.op);
+        o+=h.size;
+    }
 }
 // A handle is the recording's control list (nvn_obj.h ctl_e): its pieces of records, its links to more control memory. Calls were copied in when they were recorded.
 // A piece runs what its command memory holds at submit, as the GPU runs a command set's bytes: the records that fit in it (nvn_piece_record). A game may record over a called
@@ -235,10 +243,13 @@ static void nq_enqueue(nq_queue *q,nq_job *j) { if(q->last) q->last->next=j; els
 void nvn_queue_submit(queue_t *q,int count,const uint64_t *handles) {
     pthread_once(&nq_once,nq_start); nq_job *j=calloc(1,sizeof *j); if(!j) die("queue job allocation failed"); j->receipt=nq_new();
     j->objects.klen=16; j->frame=dm_nvn_frame_count();
-    // No scheduler lock while copying descriptors or resolving shader libraries.
-    dm_host_mutex_lock(&g_sub_mu); void *pool=objc_autoreleasePoolPush(); dm_host_work++; mtl_prepare(); dm_host_work--; nq_cost cost=nq_cost_begin();
+    // Copy only command bytes here: the caller keeps its recording and referenced descriptors alive until this API returns. Expansion uses no renderer state, so it can
+    // overlap the previous submission's Metal translation. Descriptor lookup / pinning still share the renderer lock with replay and finalization; no scheduler lock is held.
+    nq_cost cost=nq_cost_begin();
     for(int i=0;i<count;i++) nq_flatten(j,(const uint8_t *)(uintptr_t)handles[i]); nq_end(j);
-    nq_cost_end(cost); objc_autoreleasePoolPop(pool); pthread_mutex_unlock(&g_sub_mu);
+    nq_cost_end(cost);
+    dm_host_mutex_lock(&g_sub_mu); void *pool=objc_autoreleasePoolPush(); dm_host_work++; mtl_prepare(); dm_host_work--; cost=nq_cost_begin();
+    nq_snapshot(j); nq_cost_end(cost); objc_autoreleasePoolPop(pool); pthread_mutex_unlock(&g_sub_mu);
     int waits=0; for(nq_node *node=j->first;node;node=node->next) waits|=node->kind==NQ_EVENT || node->kind==NQ_SYNC;
     nvn_cap_queue(q->serial,waits);
     pthread_mutex_lock(&nq_mu);

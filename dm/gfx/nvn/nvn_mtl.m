@@ -285,6 +285,9 @@ static void ws_report(uint64_t frame, uint64_t frames) {
         if (n && o < sizeof line - 160) o += snprintf(line + o, sizeof line - o, " %s %.2f/frame (blocked %.2f, %.3f ms);", ws_name[i], (double)n / frames, (double)b / frames, ns / 1e6 / frames); }
     MLOG("[waits] up to frame %llu, per frame:%s", (unsigned long long)frame, o ? line : " none");
 }
+static id<MTLRenderPipelineState> pso_future_resolve(id future);
+static void pso_future_collect(void);
+static Class g_pso_future_class;
 #include "nvn_rec.h"   // deferred encoding (DM_NVN_ENC_THREAD)
 static NSHashTable *g_res_objects;
 static _Atomic unsigned g_image_heap_n, g_big_n;   // g_big_n: large pools in chunks, whose buffers overlap (BIG_MIN)
@@ -1680,7 +1683,10 @@ static inline void enc_r_end_pass(id e) {
 }
 static inline id<MTL4RenderCommandEncoder> enc_r_begin(MTL4RenderPassDescriptor *d) { g_cm_enc++; cm_enc_mark(2); id<MTL4RenderCommandEncoder> e = [g_cb renderCommandEncoderWithDescriptor:d]; cm_enc_mark(0); [e barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:resource_vis()]; [e setArgumentTable:g_vt atStages:MTLRenderStageVertex]; [e setArgumentTable:g_ft atStages:MTLRenderStageFragment]; gp_begin(e, 'R', d); return e; }
 static inline void enc_r_end(id e) { m4_end(e); }
-static inline void enc_r_pso(id<MTL4RenderCommandEncoder> e, id<MTLRenderPipelineState> p) { [e setRenderPipelineState:p]; }
+static inline void enc_r_pso(id<MTL4RenderCommandEncoder> e, id<MTLRenderPipelineState> p) {
+    if (g_pso_future_class && object_getClass(p) == g_pso_future_class) { rec_t *r = rec_put(RO_R_PSO_FUTURE, 1); r->a[0] = rec_obj(p); }
+    else [e setRenderPipelineState:p];
+}
 static inline void enc_r_dss(id<MTL4RenderCommandEncoder> e, id<MTLDepthStencilState> s) { [e setDepthStencilState:s]; }
 static inline void enc_r_viewport(id<MTL4RenderCommandEncoder> e, MTLViewport v) { [e setViewport:v]; }
 static inline void enc_r_scissor(id<MTL4RenderCommandEncoder> e, MTLScissorRect r) { [e setScissorRect:r]; }
@@ -2540,6 +2546,7 @@ uint64_t mtl_sub_commit(void) {
     rec_commit(g_cb, o); g_cbgen++;   // the stores it holds come before any later upload batch (gsb_held)
     if (!lost_test) rec_signal(g_ev, fence);
     rec_drain();
+    pso_future_collect();   // publish completed future results and prewarm records on the submit thread alone
     g_alloc_fence[g_alloc_cur] = fence;
     g_cb = nil;
     atomic_store(&g_sub_on, 0);   // after ++g_fence and the last encoding: a buffer retired from now on waits for this fence at most
@@ -2989,10 +2996,26 @@ static unsigned g_up_seq;
 // a small first texture followed by a large one otherwise allocates and retires a fresh 32 MB overflow every frame. Keep one overflow as well, at most 64 MB per slot / 192 MB across all three.
 // Bursts beyond that budget and individual uploads larger than UP_BLOCK_SIZE still use temporary blocks, retired only after their GPU work. DM_NVN_UPLOAD_REUSE=0 keeps the original one-block policy.
 #define UP_SLOT_BLOCK (4u * 1024u * 1024u)
+#define UP_CACHE_BATCHES 32u
 static __strong id<MTLBuffer> g_up_slot_blk[3], g_up_slot_over[3]; static unsigned g_up_cur_slot;
 static size_t g_up_slot_want[3], g_up_batch_bytes; static int g_up_over_used;
+static size_t g_up_slot_recent[3]; static unsigned g_up_slot_batches[3];
 static int up_reuse(void) { static int on = -1; if (on < 0) { const char *e = getenv("DM_NVN_UPLOAD_REUSE"); on = !e || atoi(e); } return on; }
 static int up_retained(id<MTLBuffer> b, unsigned slot) { return b && (b == g_up_slot_blk[slot] || b == g_up_slot_over[slot]); }
+static size_t up_block_want(size_t demand) { size_t want = UP_SLOT_BLOCK; while (want < MIN(demand, UP_BLOCK_SIZE)) want <<= 1; return want; }
+// A streaming burst is not the cache size for the rest of the game. Keep each
+// slot's peak over a window, then age only after its last GPU upload completed.
+// Steady and recurring bursts keep their blocks; prolonged smaller uploads can
+// return unused capacity without a new GPU wait or a rendering-fence delay.
+static void up_cache_age(unsigned slot) {
+    if (!up_reuse() || g_up_slot_batches[slot] < UP_CACHE_BATCHES) return;
+    size_t demand = g_up_slot_recent[slot], want = demand ? up_block_want(demand) : 0;
+    g_up_slot_want[slot] = demand; g_up_slot_recent[slot] = 0; g_up_slot_batches[slot] = 0;
+    int removed = 0;
+    if (g_up_slot_blk[slot].length > want) { res_remove(g_up_slot_blk[slot]); g_up_slot_blk[slot] = nil; removed = 1; }
+    if (g_up_slot_over[slot] && demand <= want) { res_remove(g_up_slot_over[slot]); g_up_slot_over[slot] = nil; removed = 1; }
+    if (removed) res_commit();
+}
 typedef struct {
     __unsafe_unretained id<MTLBuffer> src;
     size_t off, row, image;
@@ -3080,7 +3103,7 @@ static void up_flush(void) {
     // Outside a submission nothing else hands the encode thread its current block until the next submission, so a batch flushed on the spot stayed a record and every wait for it
     // (nvnQueueFinish on any thread, up_begin on another) waited for that submission: hand it over now (from PR #141, which found the nvnQueueFinish half)
     if (!g_cb) rec_publish();
-    if (up_reuse()) g_up_slot_want[slot] = MAX(g_up_slot_want[slot], g_up_batch_bytes);
+    if (up_reuse()) { g_up_slot_want[slot] = MAX(g_up_slot_want[slot], g_up_batch_bytes); g_up_slot_recent[slot] = MAX(g_up_slot_recent[slot], g_up_batch_bytes); g_up_slot_batches[slot]++; }
     g_up_cb = nil;
     up_diag();
     g_nup_blits = 0;
@@ -3099,6 +3122,7 @@ static void up_begin(void) {
     atomic_store(&g_up_alloc_busy[slot], 1); g_up_cur_slot = slot;
     g_up_batch_bytes = 0; g_up_over_used = 0;
     [g_up_alloc4[slot] reset];
+    up_cache_age(slot);
     g_up_cb = [g_dev newCommandBuffer];
     [g_up_cb beginCommandBufferWithAllocator:g_up_alloc4[slot]];
     g_up_ce = [g_up_cb computeCommandEncoder];
@@ -3134,11 +3158,11 @@ static id<MTLBuffer> up_alloc(size_t n, size_t *off) {
         up_flush();
         up_begin();
     }
-    g_up_batch_bytes += MIN(need, UP_BLOCK_SIZE - g_up_batch_bytes);   // demand saturates at one retained block
+    g_up_batch_bytes += MIN(need, 2u * UP_BLOCK_SIZE - g_up_batch_bytes);   // demand saturates at the retained primary + overflow budget
     if (!g_up_block && need <= UP_BLOCK_SIZE) {   // first allocation of the batch: the slot's own block, grown to the next power of two that holds it (a movie frame re-uploaded every frame, 8 MB in Link's Awakening)
         __strong id<MTLBuffer> *sb = &g_up_slot_blk[g_up_cur_slot];
         size_t demand = up_reuse() ? MAX(need, g_up_slot_want[g_up_cur_slot]) : need;
-        size_t want = UP_SLOT_BLOCK; while (want < demand) want <<= 1;
+        size_t want = up_block_want(demand);
         if (*sb && (*sb).length < want) { defer_obj_release(*sb); *sb = nil; }   // the slot's previous batch has finished (up_begin waited for it)
         if (!*sb) { *sb = [g_dev newBufferWithLength:want options:MTLResourceStorageModePrivate]; if (!*sb) MDIE("failed to create the swizzled-upload staging block %#zx", want); res_add(*sb); g_up_blocks_new++; }
         g_up_block = *sb; g_up_block_size = (*sb).length; g_up_block_off = 0;
@@ -3403,7 +3427,15 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
         nvn_sparse_copy(t->pool, part, (uint64_t)(uintptr_t)t->mem, t->L.size); src = part;
     }
     up_begin();
-    id<MTLBuffer> stg = [g_dev newBufferWithLength:total ? total : 16 options:MTLResourceStorageModeShared];
+    size_t shared_bytes = total ? total : 16;
+    // Batch small CPU uploads within one staging block's budget. A larger
+    // individual stage is committed alone, preserving its old memory bound.
+    if (g_up_staging_bytes && shared_bytes > UP_BLOCK_SIZE - MIN(g_up_staging_bytes, UP_BLOCK_SIZE)) { up_flush(); up_begin(); }
+    id<MTLBuffer> stg = [g_dev newBufferWithLength:shared_bytes options:MTLResourceStorageModeShared];
+    if (!stg) MDIE("failed to create the CPU-upload staging block %#zx", shared_bytes);
+    size_t shared_cost = MAX(shared_bytes, stg.allocatedSize);   // tiny buffers can occupy a whole allocation page
+    if (g_up_staging_bytes && shared_cost > UP_BLOCK_SIZE - MIN(g_up_staging_bytes, UP_BLOCK_SIZE)) { up_flush(); up_begin(); }
+    g_up_staging_bytes += shared_cost;
     res_add(stg); [g_up_keep addObject:stg];
     size_t off = 0;
     int zb = zblock_on() && t->d.format >= 0x79 && t->d.format <= 0x94; if (zb) { g_zb_ser = t->serial; g_zb_n = (int)MIN(d.mipmapLevelCount, 16u); memset(g_zb, 0, sizeof g_zb); memset(g_zb_tot, 0, sizeof g_zb_tot); }
@@ -3425,8 +3457,9 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
             off += pitch * rows * z;
         }
     }
+    [g_up_texs addObject:mt];
     free(part); free(need);
-    up_flush();
+    if (!g_cb || shared_cost >= UP_BLOCK_SIZE) up_flush();
     return mt;
 }
 // ---------- Placement sparse textures ----------
@@ -9563,14 +9596,14 @@ static int pso_pend_slot(const pso_key *k, int spec, uint32_t *gen) {
 }
 static void pso_pend_start(int slot, uint32_t gen, MTLRenderPipelineDescriptor *d, int off, dispatch_queue_t q) {
     pthread_mutex_lock(&g_pp_mu); if (g_pp[slot].gen == gen) g_pp[slot].d = d; pthread_mutex_unlock(&g_pp_mu);   // only the submit thread takes a queued build, so none has yet
-    dispatch_async(q, ^{
+    dispatch_async(q, ^{ @autoreleasepool {
         pthread_mutex_lock(&g_pp_mu);
         int go = g_pp[slot].used && g_pp[slot].gen == gen && !g_pp[slot].run; if (go) { g_pp[slot].run = 1; g_pp[slot].d = nil; }
         pthread_mutex_unlock(&g_pp_mu);
         if (!go) return;   // the draw made it itself
         NSError *e = nil; id<MTLRenderPipelineState> ps = pso_build(d, off, &e);
         pthread_mutex_lock(&g_pp_mu); if (g_pp[slot].gen == gen) { g_pp[slot].ps = ps; g_pp[slot].done = 1; } pthread_cond_broadcast(&g_pp_cv); pthread_mutex_unlock(&g_pp_mu); g_pp_done_n++;
-    });
+    } });
 }
 static int pso_pend_kick(const pso_key *k, NvShader *vs, NvShader *fs) {   // Nonblocking admission of a speculative build: no speculative backlog in front of a demanded compile
     if (hm_get_id(&g_pso, k)) return 0;
@@ -9611,6 +9644,7 @@ static int pso_pend_try(const pso_key *k, id<MTLRenderPipelineState> *out) {
     pthread_mutex_unlock(&g_pp_mu);
     return st;
 }
+#include "nvn_pso_future.inc"
 // ---- Hybrid pipelines: a draw never waits for the Metal compiler ----
 // On a pipeline miss the draw first takes its pipeline without compiling (the base made already, or in the pipeline archive: pso_build_ex(..., 0)). Failing that it draws with the
 // pair's pulling pipeline (<key>_bp, dmsh_pull.py: no vertex descriptor; the vertex streams are read through a per-draw layout block, pull_bind), specialized with the draw's colour
@@ -9644,7 +9678,7 @@ static __unsafe_unretained id<MTLRenderPipelineState> hybrid_get(const pso_key *
         pbase_key bk; pbase_key_of(d, off, &bk); NSData *kd = [NSData dataWithBytes:&bk length:sizeof bk];
         os_unfair_lock_lock(&g_hy_lock); if (!g_hy_kick_set) g_hy_kick_set = [NSMutableSet set];
         int fresh = ![g_hy_kick_set containsObject:kd]; if (fresh) [g_hy_kick_set addObject:kd]; os_unfair_lock_unlock(&g_hy_lock);
-        if (fresh) { g_hy_kicked++; dispatch_async(pp_bg_queue(), ^{ NSError *be = nil; (void)pso_build(d, off, &be); }); }
+        if (fresh) { g_hy_kicked++; dispatch_async(pp_bg_queue(), ^{ @autoreleasepool { NSError *be = nil; (void)pso_build(d, off, &be); } }); }
         g_hy_none++; return nil;
     }
     g_hy_made++; hm_put_id(&g_pso_hy, k, ps);
@@ -9669,6 +9703,7 @@ void mtl_pso_line(char *o, size_t n) {
         snprintf(o + o2, n > o2 ? n - o2 : 0, "; compute pipelines from the archive bundled with the app %llu, from this device's archive %llu, built %llu (%.1f ms looking up, %.1f ms building)",
                  (unsigned long long)(ca - pca), (unsigned long long)(cr - pcr), (unsigned long long)(cb - pcb), (cl - pcl) / 1e6, (cn - pcn) / 1e6);
     pca = ca; pcr = cr; pcb = cb; pcl = cl; pcn = cn;
+    pso_future_line(o, n);
 }
 
 // ---- Prebuild: the base of every shader pair of the game, into the pipeline archive ----
@@ -9957,6 +9992,10 @@ static __unsafe_unretained id<MTLRenderPipelineState> pso_get_(NvProg *pr, MTLRe
     if (hm_get_id(&g_pso_fail, &k)) return nil;
     id<MTLRenderPipelineState> ps = nil; int took = 0;
     NSError *e = nil; uint64_t bt = bp_now(), pred0 = g_pt_pred_ns;
+    if (!g_pso_lmap && !ms_fn && pso_future_on()) {
+        id future = pso_future_issue(&k, vs, fs);
+        if (future) { g_bp_pso_n++; g_bp_pso_ns += bp_now() - bt; return future; }
+    }
     g_pso_pull = 0; int why = g_pso_lmap ? 1 : ms_fn ? 2 : 0;
     if (!took && !g_pso_lmap && !ms_fn && hybrid_on()) {
         why = !vs->has_pull || vs->layer_out ? 3 : 4;
