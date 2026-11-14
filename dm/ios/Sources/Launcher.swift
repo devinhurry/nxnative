@@ -276,28 +276,36 @@ private var gameSettingsOpening = false
 public func dmShowGameSettings(_ viewController: UnsafeMutableRawPointer, _ done: @convention(c) () -> Void) -> Bool {
     let parent = Unmanaged<UIViewController>.fromOpaque(viewController).takeUnretainedValue()
     guard parent.presentedViewController == nil, !gameSettingsOpening else { return false }
-    let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json")
-    let settings = url.flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(SettingsFile.self, from: $0) }?.settings ?? []
-    let model = sessionLauncherModel ?? LauncherModel(settings)
+    let model: LauncherModel
+    if let existing = sessionLauncherModel { model = existing }
+    else {
+        let url = Bundle.main.resourceURL?.appendingPathComponent("dm/launcher.json")
+        let settings = url.flatMap { try? Data(contentsOf: $0) }.flatMap { try? JSONDecoder().decode(SettingsFile.self, from: $0) }?.settings ?? []
+        model = LauncherModel(settings)
+    }
     sessionLauncherModel = model
     gameSettingsOpening = true
-    withGameSettingsBackground(model) { background in
-        gameSettingsOpening = false
-        guard parent.presentedViewController == nil else { done(); return }
-        model.beginRuntime()
-        var host: UIViewController?
-        let page = LauncherSettingsPage(m: model, gameBackground: background) {
-            guard let presented = host else { return }
-            host = nil
-            presented.dismiss(animated: false) { dm_launcher_settings_pause(0); done() }
-        }
-        let controller = DmHostingController(rootView: page)
-        controller.modalPresentationStyle = .fullScreen
-        controller.isModalInPresentation = true
-        host = controller
-        dm_launcher_settings_pause(1)
-        parent.present(controller, animated: false)
+    model.beginRuntime()
+    var host: UIViewController?
+    var cancelBackground: (() -> Void)?
+    let page = LauncherSettingsPage(m: model) {
+        guard let presented = host else { return }
+        cancelBackground?(); cancelBackground = nil
+        host = nil
+        presented.dismiss(animated: false) { setGameSettingsPaused(false, complete: done) }
     }
+    let controller = DmHostingController(rootView: page)
+    controller.modalPresentationStyle = .fullScreen
+    controller.isModalInPresentation = true
+    host = controller
+    // Register capture while the game view is visible, but never wait for it
+    // before presenting. Readiness and GPU/audio draining happen separately.
+    cancelBackground = prepareGameSettingsBackground(model) {
+        guard host != nil else { return }
+        setGameSettingsPaused(true)
+    }
+    parent.present(controller, animated: false)
+    gameSettingsOpening = false
     return true
 }
 

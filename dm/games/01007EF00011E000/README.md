@@ -29,6 +29,8 @@ No `tex_flush_upload` (a minute's boot saw it flush 32 CPU-filled textures with 
 
 ## Found on this game
 
+- **Implemented; physical iPhone acceptance pending:** [Opening settings waits for a background screenshot](../../../docs/reference/services.md#opening-settings-waits-for-a-background-screenshot). The FPS entry presents without waiting for capture/filtering or a UI-thread GPU drain; [validation](notes/touch.md#touch-and-menu-work).
+
 - **Resolved; launcher tests checked:** [Save copies retain the game's pipeline cache](../../../docs/reference/shaders.md#save-copies-retain-the-games-pipeline-cache). Repeated Mac launches with independent save copies share the game's pipeline storage; startup timing has not been remeasured.
 
 - **Implemented; Mac gameplay checked, physical iPhone acceptance pending:** [Final-picture filters](../../../docs/reference/rendering.md#picture-filters-in-the-final-present); this game's [validation and limits](notes/rendering.md#picture-filters-current).

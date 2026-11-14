@@ -19,10 +19,20 @@ enum BotwTouchPage: String, CaseIterable {
 }
 
 struct BotwTouchSettingsMenu: View {
+    #if os(iOS)
+    @AppStorage("botw.deferHomeGesture") private var deferHomeGesture = true
+    #endif
     @ObservedObject var m: LauncherModel
     let open: (BotwTouchPage) -> Void
     var body: some View {
         Section("BOTW touch settings") {
+            #if os(iOS)
+            Toggle("Require two swipes to leave the game", isOn: $deferHomeGesture)
+                .accessibilityIdentifier("settings.touch.deferHomeGesture")
+                .onChange(of: deferHomeGesture) { _ in
+                    NotificationCenter.default.post(name: Notification.Name("DMHomeGestureChanged"), object: nil)
+                }
+            #endif
             ForEach(BotwTouchPage.allCases, id: \.self) { page in
                 Button { open(page) } label: {
                     HStack {

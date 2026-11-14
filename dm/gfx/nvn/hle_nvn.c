@@ -1295,6 +1295,9 @@ static _Atomic uint64_t g_nvn_ns;   // Host time spent in submit / present this 
 // ---------- Lifecycle: dm_gfx_suspend (called before iOS goes to the background; equivalent to Switch suspend) ----------
 // on=1: subsequent submits / presents block until on=0; before returning, wait for in-progress submit / present calls to exit and for all in-flight GPU work to complete (iOS requires no GPU work in the background).
 static pthread_mutex_t g_susp_mu = PTHREAD_MUTEX_INITIALIZER;
+// Settings pause runs on a worker while app lifecycle callbacks may run on
+// the UI thread. Keep drains and resumes ordered, separately from API entry.
+static pthread_mutex_t g_susp_change_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_susp_cv = PTHREAD_COND_INITIALIZER;
 static int g_susp, g_inflight_api;
 static unsigned g_susp_reasons;
@@ -1307,6 +1310,7 @@ __attribute__((weak)) void dm_vk_drain(void) {}   // dm/gfx/vk/hle_vk.m: wait fo
 __attribute__((weak)) void dm_gl_drain(void) {}   // dm/gfx/gl/hle_gl.m: the same for the GL layer
 void dm_gfx_suspend_for(int reason, int on) {
     if ((unsigned)reason > DM_SUSPEND_SETTINGS) die("invalid graphics suspension reason %d", reason);
+    pthread_mutex_lock(&g_susp_change_mu);
     pthread_mutex_lock(&g_susp_mu);
     int was = g_susp;
     if (on) g_susp_reasons |= 1u << reason; else g_susp_reasons &= ~(1u << reason);
@@ -1316,6 +1320,7 @@ void dm_gfx_suspend_for(int reason, int on) {
     int resumed = was && !g_susp;
     pthread_mutex_unlock(&g_susp_mu);
     if (on) { dm_vk_drain(); dm_gl_drain(); mtl_drain(); LOG("[nvn] graphics suspended: in-flight GPU work drained"); } else if (resumed) LOG("[nvn] graphics resumed");   // the Vulkan and GL queues first: presents on the NVN queue wait for their frames
+    pthread_mutex_unlock(&g_susp_change_mu);
 }
 void dm_gfx_suspend(int on) { dm_gfx_suspend_for(DM_SUSPEND_LIFECYCLE, on); }
 // One submission at a time: the Metal replay keeps one command buffer and one upload batch for the submission in progress (nvn_mtl.m g_cb). Fire Emblem: Three Houses initializes two queues and

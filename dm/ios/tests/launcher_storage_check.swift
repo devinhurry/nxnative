@@ -146,8 +146,34 @@ func launcherFilterPreview(_ image: CGImage?, _ mode: UnsafePointer<CChar>, _ st
 func launcherLUTPreview(_ image: CGImage?, _ path: UnsafePointer<CChar>, _ strength: Float, _ width: Int32) -> CGImage? { nil }
 #if DM_HOST_UI
 private var nativeApplied: [String: String] = [:]
+private let settingsPauseLock = NSLock()
+private var settingsPauseEvents: [Int32] = []
+private var settingsPauseOnMain = false
+private var settingsPauseGate: DispatchSemaphore?
 @_cdecl("dm_launcher_settings_pause")
-func mockNativeSettingsPause(_ on: Int32) {}
+func mockNativeSettingsPause(_ on: Int32) {
+    settingsPauseLock.lock()
+    settingsPauseEvents.append(on)
+    settingsPauseOnMain = settingsPauseOnMain || Thread.isMainThread
+    let gate = on != 0 ? settingsPauseGate : nil
+    settingsPauseLock.unlock()
+    if let gate { _ = gate.wait(timeout: .now() + 1) }
+}
+func checkSettingsPauseQueue() -> Bool {
+    let gate = DispatchSemaphore(value: 0)
+    settingsPauseLock.lock()
+    settingsPauseEvents = []; settingsPauseOnMain = false; settingsPauseGate = gate
+    settingsPauseLock.unlock()
+    var completed = false
+    setGameSettingsPaused(true)
+    setGameSettingsPaused(false) { completed = true }
+    gate.signal()
+    let deadline = Date().addingTimeInterval(2)
+    while !completed && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    settingsPauseLock.lock()
+    defer { settingsPauseGate = nil; settingsPauseLock.unlock() }
+    return completed && !settingsPauseOnMain && settingsPauseEvents == [1, 0]
+}
 @_cdecl("dm_launcher_setting_is_live")
 func mockNativeSettingIsLive(_ key: UnsafePointer<CChar>) -> Int32 {
     ["DM_BOTW_MOVE_CURVE", "DM_RUMBLE", "DM_FPS_TARGET", "DM_FRAMEGEN", "DM_SHOW_FPS", "DM_PRESENT_FILTER", "DM_PRESENT_FILTER_STRENGTH"].contains(String(cString: key)) ? 1 : 0

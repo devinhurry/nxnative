@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <GameController/GameController.h>
 #import <CoreMotion/CoreMotion.h>
+#import "../Sources/DmTouchFeedback.h"
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -84,7 +85,7 @@ void dm_botw_touch_hud_publish(int active, float center_x, float center_y, float
 - (BOOL)dm_testCancelGuideHidden;
 - (CAShapeLayer *)dm_testRuneBadgeLayer;
 - (CALayer *)dm_testRuneIconLayer;
-- (void)dm_testSetTouchFeedback:(UIImpactFeedbackGenerator *)feedback;
+- (void)dm_testSetTouchFeedback:(DmTouchFeedback *)feedback;
 - (void)botwRuneIconChanged;
 - (CGPoint)dm_testStickHome;
 - (CGPoint)dm_testRuneButtonCenter;
@@ -180,6 +181,7 @@ static int g_camera_pose_modifier_count;
 int dm_look_enabled(void) { return g_look_enabled; }
 int dm_botw_touch_hud_available(void) { return g_botw_touchhud_available; }
 int dm_botw_touch_menu_active(void) { return g_botw_touch_menu_active; }
+int dm_botw_touch_message_active(void) { return 0; }
 int dm_botw_touch_menu_visible(void) { return (g_botw_touch_menu_active && !g_botw_scope_active) || g_botw_touch_menu_presented; }
 int dm_botw_touch_loadout_visible(void) { return g_botw_loadout_visible; }
 int dm_botw_touch_quick_select_active(void) { return g_botw_quick_select; }
@@ -449,12 +451,12 @@ static void save_pad_preview(DmGamepad *view, NSString *name) {
     }];
     [UIImagePNGRepresentation(preview) writeToFile:[[NSHomeDirectory() stringByAppendingPathComponent:@"Documents"] stringByAppendingPathComponent:name] atomically:YES];
 }
-@interface DmFeedbackSpy : UIImpactFeedbackGenerator
+@interface DmFeedbackSpy : DmTouchFeedback
 @property(nonatomic) NSUInteger count;
 @end
 @implementation DmFeedbackSpy
-- (void)prepare {}
-- (void)impactOccurredWithIntensity:(CGFloat)intensity { (void)intensity; self.count++; }
+- (void)setActive:(BOOL)active { (void)active; }
+- (BOOL)play { self.count++; return YES; }
 @end
 static void test_botw_button_artwork(DmGamepad *view) {
     g_botw_touchhud_available = YES;
@@ -827,7 +829,7 @@ static void test_botw_virtual_buttons(DmGamepad *view) {
     CHECK(g_lx == 0 && !(g_buttons&DM_BTN_B),
           "lifting the ordinary left stick clears its axis");
 
-    DmFeedbackSpy *cancelFeedback=[[DmFeedbackSpy alloc] initWithStyle:UIImpactFeedbackStyleLight];
+    DmFeedbackSpy *cancelFeedback=[DmFeedbackSpy new];
     [view dm_testSetTouchFeedback:cancelFeedback];
     CGPoint shoulder=[view dm_testDropCenter:7]; NSUInteger beforePress=cancelFeedback.count;
     FakeTouch *trigger=touch(shoulder.x,shoulder.y); began(view,trigger);
@@ -1136,7 +1138,7 @@ static void test_botw_stick_response(DmGamepad *view) {
 static void test_botw_stick_feedback(DmGamepad *view) {
     [view reset]; g_botw_touchhud_available=YES;
     [view dm_testSetTouchHudModeFull:YES tap:NO connected:NO]; [view setNeedsLayout]; [view layoutIfNeeded];
-    DmFeedbackSpy *feedback=[[DmFeedbackSpy alloc] initWithStyle:UIImpactFeedbackStyleLight];
+    DmFeedbackSpy *feedback=[DmFeedbackSpy new];
     [view dm_testSetTouchFeedback:feedback];
     CGPoint face=[view facePos:0]; NSUInteger beforeButton=feedback.count;
     FakeTouch *button=touch(face.x,face.y); began(view,button);
@@ -2025,7 +2027,7 @@ static void test_botw_manual_menu_pad(DmGamepad *view) {
     CHECK(![view dm_testL3ArtworkHidden] && ![view dm_testR3ArtworkHidden] &&
           ![view dm_testZLArtworkHidden] && [view dm_testSwapHidden],
           "the temporary menu pad shows its full controls without the layout switcher");
-    DmFeedbackSpy *manualStickFeedback=[[DmFeedbackSpy alloc] initWithStyle:UIImpactFeedbackStyleLight];
+    DmFeedbackSpy *manualStickFeedback=[DmFeedbackSpy new];
     [view dm_testSetTouchFeedback:manualStickFeedback];
     CGPoint manualStickHome=[view dm_testStickHome];
     FakeTouch *manualStick=touch(manualStickHome.x,manualStickHome.y);

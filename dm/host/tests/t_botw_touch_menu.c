@@ -46,6 +46,7 @@ static module_t test_modules[8];
 module_t *g_mod = test_modules;
 int g_nmod;
 static uint64_t current_guest_frame;
+float dm_aspect_ui_point_scale(void) { return 1; }
 static int mock_touch_hud_active = 1;
 static uintptr_t mock_guest_start;
 static size_t mock_guest_size;
@@ -200,7 +201,7 @@ static void init_inventory(void) {
 
 typedef struct {
     uint8_t manager[0x80], control[0x100], model[0x60], registry[0xb40];
-    uint8_t active[3], screen[0x3b20], state[0x80];
+    uint8_t active[3], screen[0x3c50], state[0x80];
     uint8_t entry[0x40], entry2[0x40], owner[0x100], owner2[0x100], pane[0x100];
     uint8_t item[0x28];
     uint8_t map_screen[0x4000], map_state[0x80], map_entry[0x40], map_owner[0x100];
@@ -394,7 +395,7 @@ static void test_inventory_equipment_press(void) {
     inventory_press_fixture(1);
     dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, x, y);
     selector_tick();
-    assert(!sample(10) && g_pointer_down); // focus does not consume the held gesture
+    assert(!sample(10) && g_pointer_down && !g_target_valid); // down does not request focus
     g_test_menu_time_ns += INVENTORY_MENU_HOLD_NS - 1;
     selector_tick();
     assert(!g_confirm_pending && !g_test_equip_count);
@@ -403,6 +404,44 @@ static void test_inventory_equipment_press(void) {
     assert(sample(10) == DM_BTN_A && !g_pointer_down && !g_test_equip_count);
     dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, x, y);
     assert(sample(11) == 0 && !g_test_equip_count); // lifting after the menu does nothing
+
+    // A hold recognizes an unfocused cell, then asks the native cursor to
+    // focus it; no focus request is staged before the hold threshold.
+    inventory_press_fixture(1);
+    put_ptr(selector.manager + 0x48, 0);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, x, y);
+    selector_tick();
+    assert(!g_target_valid && !get_ptr(selector.manager + 0x50));
+    g_test_menu_time_ns += INVENTORY_MENU_HOLD_NS;
+    selector_tick();
+    assert(g_target_valid && !g_pointer_down && g_confirm_pending);
+    assert(get_ptr(selector.manager + 0x50) == (uintptr_t)selector.entry);
+    assert(!sample(10)); // confirmation waits for the game's focus acknowledgement
+    put_ptr(selector.manager + 0x48, (uintptr_t)selector.entry);
+    selector_tick();
+    assert(sample(11) == DM_BTN_A && !g_test_equip_count);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, x, y);
+    assert(!sample(12));
+
+    // Ordinary finger jitter is still a tap, while a drag returning to the
+    // starting cell cannot focus, equip or open that cell on release.
+    inventory_press_fixture(1);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, x, y);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, x + 3.f/1280, y + 2.f/720);
+    selector_tick();
+    assert(!g_target_valid && !g_pointer_dragged);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, x + 3.f/1280, y + 2.f/720);
+    selector_tick();
+    assert(g_test_equip_count == 1);
+    inventory_press_fixture(1);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, x, y);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, x, y + 12.f/720);
+    g_test_menu_time_ns += INVENTORY_MENU_HOLD_NS;
+    selector_tick();
+    assert(g_pointer_dragged && !g_target_valid);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, x, y);
+    selector_tick();
+    assert(!g_target_valid && !g_test_equip_count && !sample(10));
 
     for (int disabled = 0; disabled < 2; disabled++) {
         inventory_press_fixture(0);
@@ -435,6 +474,23 @@ static void test_inventory_equipment_press(void) {
     assert(!g_test_equip_count && !sample(10));
     g_test_menu_time_ns = 0;
     dm_botw_touch_menu_reset();
+}
+
+static uint8_t drag_pages[3][0x138], drag_parts[3][0x20], drag_panes[3][0x40];
+static void inventory_swipe_fixture(void) {
+    inventory_press_fixture(1);
+    view.inventory_root = (uintptr_t)selector.pane;
+    publish(10);
+    memset(drag_pages, 0, sizeof drag_pages);
+    memset(drag_parts, 0, sizeof drag_parts);
+    memset(drag_panes, 0, sizeof drag_panes);
+    for (int i=0;i<3;i++) {
+        put_ptr(selector.screen + BOTW_INVENTORY_PAGES + i*8, (uintptr_t)drag_pages[i]);
+        put_ptr(drag_pages[i]+0x20, (uintptr_t)drag_parts[i]);
+        put_ptr(drag_parts[i]+0x18, (uintptr_t)drag_panes[i]);
+        put_ptr(drag_panes[i]+PANE_PARENT, view.inventory_root);
+        int32_t page=i==2 ? -1 : i; memcpy(drag_pages[i]+0x130,&page,4);
+    }
 }
 
 static void expect_no_virtual_input(uint64_t frame) {
@@ -575,7 +631,13 @@ static void test_quest_category_touch(void) {
     selector_list_categories_to_view((uintptr_t)selector.screen, (uintptr_t)root, 5000, &categories);
     assert(categories.list_category_widget == (uintptr_t)widget && categories.category_count == 2);
     assert(categories.category_ids[0] == 0 && categories.category_ids[1] == 3);
-    assert(fabsf(categories.categories[1][2] - .025f) < .0001f); // native B_Hit, not overlapping part bounds
+    assert(categories.categories[1][2] > .025f && categories.categories[1][2] < .137f);
+    assert(categories.categories[1][3] >= 44*dm_aspect_ui_point_scale()/720);
+    assert(categories.categories[0][0]+categories.categories[0][2] < categories.categories[1][0]);
+    for(int i=1;i<=2;i++) {
+        float disabled_x=(640-347+i*58)/1280.f;
+        assert(hit_rects(disabled_x,169/720.f,categories.categories,categories.category_count)<0);
+    }
     assert(!selector_list_category_descriptor((uintptr_t)widget, -1));
     assert(!selector_list_category_descriptor((uintptr_t)widget, 1));
     assert(!selector_list_category_descriptor((uintptr_t)widget, 4));
@@ -584,8 +646,9 @@ static void test_quest_category_touch(void) {
     descriptors[3][0x19c + 34] = '3';
     g_test_list_category_setter = (uintptr_t)mock_category_set;
     dm_botw_touch_menu_test_publish(&categories);
-    float x = categories.categories[1][0] + .0125f;
-    float y = categories.categories[1][1] + .0222f;
+    // The new padding outside the original 32x32 glyph selects its own tab.
+    float x = categories.categories[1][0] + .001f;
+    float y = categories.categories[1][1] + .001f;
     mock_category_calls = mock_category_jump_calls = 0;
     tap(x, y);
     assert(g_target_valid && g_target_category == 2);
@@ -642,8 +705,8 @@ static void test_quest_category_touch(void) {
     assert(!g_target_valid && sample(5001) == 0); // one native jump, no traversal or confirmation
     memcpy(widget + 0x288, &four, 4); memcpy(widget + 0x2a8, &four, 4);
     put_ptr(widget + 0x290, (uintptr_t)array);
-    // Vertical drags use the same native page setter on the row-owning
-    // widget and never confirm a row or emit virtual directional input.
+    // Keep the native page-setter contract independently covered; threshold
+    // recognition before finger-up is covered by the follow-up fixture.
     uint8_t row_descriptor[0x50] = {0};
     uintptr_t entry = (uintptr_t)selector.entry;
     put_ptr(row_descriptor + 0x28, entry);
@@ -662,9 +725,12 @@ static void test_quest_category_touch(void) {
     categories.generic_targets[0].root = (uintptr_t)root;
     set_rect(categories.generic_targets[0].rect, .2f, .3f, .3f, .2f);
     dm_botw_touch_menu_test_publish(&categories);
-    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .3f, .4f);
-    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .3f, .2f);
-    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, .3f, .2f);
+    menu_clear_target_locked();
+    g_target_valid=g_target_generic=1; g_target_index=-4; g_target_axis=1;
+    g_target_entry=entry; g_target_screen=(uintptr_t)selector.screen;
+    g_target_pane=g_target_owner_pane=(uintptr_t)native_panes[104].bytes;
+    g_target_root=(uintptr_t)root;
+    g_target_page_key=g_view.page_key; g_target_popup_key=g_view.popup_key;
     assert(g_target_valid && g_target_index == -4 && g_target_axis == 1);
     uint64_t serial = atomic_load_explicit(&g_target_serial, memory_order_acquire);
     assert(sample(5000) == 0);
@@ -1039,7 +1105,7 @@ static void test_cursorless_help_prompts(void) {
     dm_botw_touch_menu_test_publish(&camera);
     assert(dm_botw_touch_camera_active());
     assert(mock_menu_change_notifications == camera_notice_count + 2);
-    dm_botw_touch_menu_pinch(1.2f);
+    dm_botw_touch_menu_pinch(1.05f);
     assert(dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8994));
     assert(camera_buttons == DM_BTN_UP && camera_axes[1] == 0); // native camera zoom is D-pad up
     dm_botw_touch_menu_pinch(0.0f);
@@ -1052,7 +1118,7 @@ static void test_cursorless_help_prompts(void) {
     memset(camera_axes, 0, sizeof camera_axes); camera_buttons = 0;
     dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8996);
     assert(camera_buttons == 0);
-    dm_botw_touch_menu_pinch(.8f);
+    dm_botw_touch_menu_pinch(.95f);
     camera_buttons = 0; memset(camera_axes, 0, sizeof camera_axes);
     assert(dm_botw_touch_menu_apply(&camera_buttons, camera_axes, 8997));
     assert(camera_buttons == DM_BTN_DOWN); // pinch inward uses native D-pad down
@@ -1623,7 +1689,7 @@ static void test_inventory_category_touch_cells(void) {
     categories.clip_valid = 1; set_rect(categories.clip, 0, .27f, 1, .6f);
     for (int i = 0; i < 3; i++)
         set_rect(categories.categories[i], .2f + .045f * i, .2f, .025f, .044444f);
-    category_touch_rects(&categories);
+    category_touch_rects(&categories, 0);
     for (int i = 0; i < 3; i++) {
         const float *r = categories.categories[i];
         assert(r[2] > .044f && r[3] > .079f); // finger-sized surrounding cell
@@ -1858,18 +1924,25 @@ static void test_menu_animation_visibility(void) {
     mock_touch_hud_active=1;
     dm_botw_touch_menu_test_set_render_frame(8003); assert(!dm_botw_touch_vertical_dpad_active());
     dm_botw_touch_menu_test_set_render_frame(8000);
-    // Corner notifications can enter, remain and leave over the gameplay HUD
-    // without becoming a menu. Full tutorials and dialogues still own input.
+    // Automatic voice subtitles and corner notifications can enter, remain
+    // and leave over gameplay without becoming a menu. Full dialogues still
+    // own input; a cinematic still hides controls through the native HUD.
     selector.active[1] = 0;
-    const char *messages[] = {"MessageTipsRunTime_00", "MessageTipsPauseMenu_00", "PickUpWin_00", "ChallengeWin_00", "MessageTips_00", "MessageDialog_00"};
+    const char *messages[] = {"MessageDemo_00", "MessageTipsRunTime_00", "MessageTipsPauseMenu_00", "PickUpWin_00", "ChallengeWin_00", "MessageTips_00", "MessageDialog_00"};
     for (unsigned i = 0; i < sizeof messages / sizeof *messages; i++) {
         strcpy((char *)selector.map_screen + 0xa0, messages[i]);
-        assert(selector_pointer_screen_name(messages[i]) == (i >= 4));
+        assert(selector_pointer_screen_name(messages[i]) == (i >= 5));
         for (int mode = 1; mode <= 3; mode++) {
             selector.map_screen[0xfe] = mode;
             selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
-            assert(dm_botw_touch_menu_visible() == (i >= 4));
-            assert(dm_botw_touch_controls_visible() == (i < 4));
+            assert(dm_botw_touch_menu_visible() == (i >= 5));
+            assert(dm_botw_touch_controls_visible() == (i < 5));
+            if (i == 0) {
+                hud[0x59] = 0;
+                selector_publish_menu_presentation((uintptr_t)selector.manager, 8000);
+                assert(!dm_botw_touch_controls_visible());
+                hud[0x59] = 255;
+            }
         }
     }
     selector.active[1] = 0x80;
@@ -1917,11 +1990,115 @@ static void test_menu_animation_visibility(void) {
     assert(!dm_botw_touch_controls_visible());
 }
 
+static void test_gameplay_speech_controls(void) {
+    dm_botw_touch_menu_reset(); init_selector_fixture();
+    current_guest_frame = 8100;
+    dm_botw_touch_menu_test_set_render_frame(8100);
+    atomic_store(&g_selector_hook_installed, 1);
+    dm_botw_touch_menu_test_set_generic_selector(1, (uintptr_t)mock_native_group,
+                                                (uintptr_t)mock_native_shown);
+    put_ptr(selector.manager + 0x48, 0);
+    uint8_t mask[0x20] = {0}; mask[0x14] = 1u << 2;
+    put_ptr(selector.registry + 0xb18, (uintptr_t)mask);
+    strcpy((char *)selector.screen + 0x200, "MessageSp_00");
+    selector.screen[0xfe] = 2;
+    uint8_t *speech = fake_pane(70, "RootPane", -1, 1280, 720, 0, 0);
+    uint8_t *output = fake_pane(71, "N_TextOut_01", 70, 560, 150, 0, -235);
+    uint8_t *body = fake_pane(72, "P_Sh_01", 71, 560, 150, 0, -235);
+    link_child(speech, output); link_child(output, body);
+    put_ptr(selector.screen + 0x30, (uintptr_t)selector.apphome_wrapper);
+    put_ptr(selector.apphome_wrapper + 0x18, (uintptr_t)speech);
+    uint8_t *hud_root = fake_pane(80, "RootPane", -1, 1280, 720, 0, 0);
+    fake_pane(81, "N_All_00", 80, 0, 0, 0, 0);
+    fake_pane(82, "N_State_00", 81, 0, 0, 0, 0);
+    fake_pane(83, "Pa_HeartGauge_00", 82, 0, 0, 0, 0);
+    uint8_t *hearts = fake_pane(84, "N_InOut_00", 83, 0, 0, 0, 0);
+    for (int i = 80; i < 84; i++) link_child(native_panes[i].bytes, native_panes[i+1].bytes);
+    strcpy((char *)selector.map_screen + 0xa0, "MainScreen_00");
+    put_ptr(selector.map_screen + 0x30, (uintptr_t)selector.map_owner);
+    put_ptr(selector.map_owner + 0x18, (uintptr_t)hud_root);
+    put_ptr(selector.map_screen + 0x38, (uintptr_t)selector.map_state);
+    selector.map_state[0x38] = 2; selector.map_screen[0xfe] = 2;
+    selector.screen_list[1] = (uintptr_t)selector.map_screen;
+    uint32_t count = 2; memcpy(selector.registry + 0x28, &count, 4);
+    // Thunderblight's advice has an input-enabled MessageSp text plate over
+    // live gameplay. The MessageSp registry entry precedes MainScreen.
+    generic_hit_observe(body, 1);
+    for (int mode = 1; mode <= 3; mode++) {
+        selector.screen[0xfe] = mode;
+        selector_tick();
+        assert(g_presented_gameplay && dm_botw_touch_controls_visible());
+        assert(!dm_botw_touch_menu_visible() && !dm_botw_touch_message_active());
+        dm_botw_touch_menu_view message;
+        assert(!selector_message_prompt_view((uintptr_t)selector.manager, 8100, &message));
+        tap(.5f, .8f); expect_no_virtual_input(8100);
+    }
+    // The very same MessageSp plate remains interactive for goddess/terminal
+    // dialogue once the native gameplay HUD is hidden.
+    selector.screen[0xfe] = 2; hearts[0x59] = 0;
+    selector_tick(); observe_native_pane(body, 1);
+    assert(dm_botw_touch_menu_visible() && dm_botw_touch_message_active());
+    assert(!dm_botw_touch_controls_visible());
+    // Returning to gameplay invalidates an already published continuation,
+    // before another text-pane callback can refresh its cached geometry.
+    hearts[0x59] = 255;
+    selector_publish_menu_presentation((uintptr_t)selector.manager, 8100);
+    assert(dm_botw_touch_controls_visible() && !dm_botw_touch_menu_visible());
+    assert(!dm_botw_touch_message_active());
+    dm_botw_touch_menu_reset();
+}
+
 static void mock_pan_current(uintptr_t model, const float *point) {
     memcpy((void *)(model + 0x880), point, 8);
 }
 static void mock_pan_target(uintptr_t transform, const float *point) {
     memcpy((void *)(transform + 0x40), point, 8);
+}
+static void mock_map_rotate(float *point, float angle) {
+    float radians = angle * .01745329238474369f;
+    float x = point[0], y = point[1];
+    point[0] = cosf(radians) * x - sinf(radians) * y;
+    point[1] = sinf(radians) * x + cosf(radians) * y;
+}
+
+// Native stamps use DC2A20's cached translation; the map pane uses DC1E2C's
+// live origin. A saved mark and the same terrain point must project together.
+static void assert_map_stamp_position(float expected_x, float expected_y) {
+    float scale, angle, origin[2], offset[2], translation[2];
+    memcpy(&scale, selector.map_model + BOTW_MAP_SCALE, 4);
+    memcpy(&angle, selector.map_model + BOTW_MAP_ANGLE, 4);
+    memcpy(origin, selector.map_model + 0x880, 8);
+    memcpy(offset, selector.map_model + BOTW_MAP_OFFSET, 8);
+    memcpy(translation, selector.map_model + BOTW_MAP_TRANSLATION, 8);
+    const float saved_mark[2] = {120, -80};
+    float stamp[2] = {saved_mark[0] * scale, saved_mark[1] * scale};
+    float terrain[2] = {(saved_mark[0] + offset[0] + origin[0]) * scale,
+                        (saved_mark[1] + offset[1] + origin[1]) * scale};
+    mock_map_rotate(stamp, angle); mock_map_rotate(terrain, angle);
+    for (int i = 0; i < 2; i++) assert(fabsf(stamp[i] + translation[i] - terrain[i]) < .001f);
+    assert(fabsf(stamp[0] + translation[0] - expected_x) < .001f);
+    assert(fabsf(stamp[1] + translation[1] - expected_y) < .001f);
+}
+
+static void test_preview_rotation_continuity(void) {
+    dm_botw_touch_menu_reset(); init_inventory();
+    view.inventory_rotate_visible=1;
+    current_guest_frame=9900; dm_botw_touch_menu_test_set_render_frame(9900); publish(9900);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN,.7f,.5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE,.704f,.5f); // below threshold
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE,.708f,.5f);
+    int32_t axes[4]={0};
+    assert(sample_axes(9900,axes,NULL) && axes[2]>20960 && axes[2]<20980);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE,.710f,.5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE,.712f,.5f); // two events before one HID sample
+    assert(sample_axes(9901,axes,NULL) && axes[2]>10470 && axes[2]<10500);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE,.716f,.5f);
+    assert(sample_axes(9902,axes,NULL) && axes[2]>10470 && axes[2]<10500); // no forced zero frame
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE,.712f,.5f);
+    assert(sample_axes(9903,axes,NULL) && axes[2]<-10470); // reversal on the next sample
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END,.712f,.5f);
+    assert(sample_axes(9904,axes,NULL) && axes[2]==0);
+    dm_botw_touch_menu_reset();
 }
 
 static void test_inventory_preview_rotation(void) {
@@ -2056,6 +2233,33 @@ static void test_dungeon_focused_footer(void) {
     dm_botw_touch_menu_test_snapshot(&result);
     assert(result.generic_root == (uintptr_t)root && result.back_valid && result.prompt_owner_valid);
     assert(result.prompt_owner_screen == (uintptr_t)selector.apphome_screen);
+    // Leave-Area's AppSystemWindow uses AppHome's separate Back/Select bar.
+    strcpy((char *)selector.map_screen+0xa0,"AppSystemWindow_00");
+    g_native_view.guide_icon_valid[1]=g_native_view.guide_text_valid[1]=1;
+    g_native_view.guide_icon_seen[1]=g_native_view.guide_text_seen[1]=10000;
+    g_native_view.guide_icon_glyph[1]=0xe040;
+    set_rect(g_native_view.guide_icons[1],.92f,.9f,.03f,.05f);
+    set_rect(g_native_view.guide_texts[1],.86f,.9f,.06f,.05f);
+    selector_publish_generic_view((uintptr_t)selector.manager,(uintptr_t)selector.map_screen,
+        2,1,(uintptr_t)mock_native_shown,(uintptr_t)mock_native_group,0);
+    dm_botw_touch_menu_test_snapshot(&result);
+    assert(result.back_valid && result.prompt_owner_valid && result.footer_action_count);
+    // StampBox's outer B_Area can cover the entire footer. Visible, owned
+    // prompts take precedence over that broad native selection rectangle.
+    result.generic_count=1;
+    result.generic_targets[0]=(dm_botw_touch_menu_target){.pane=(uintptr_t)hit,
+        .owner_pane=(uintptr_t)hit,.entry=(uintptr_t)selector.entry,.root=(uintptr_t)root};
+    set_rect(result.generic_targets[0].rect,0,0,1,1);
+    dm_botw_touch_menu_test_publish(&result);
+    tap(result.back[0]+result.back[2]*.5f,result.back[1]+result.back[3]*.5f);
+    assert(g_target_valid && g_target_index==-1 && sample(10000)==DM_BTN_B);
+    sample(10001);
+    int select=-1;
+    for(int i=0;i<result.footer_action_count;i++)if(result.footer_action_buttons[i]==DM_BTN_A)select=i;
+    assert(select>=0);
+    tap(result.footer_actions[select][0]+result.footer_actions[select][2]*.5f,
+        result.footer_actions[select][1]+result.footer_actions[select][3]*.5f);
+    assert(g_target_valid && g_target_index==-3 && sample(10002)==DM_BTN_A);
     selector.apphome_screen[0xfe] = 0;
     selector_publish_generic_view((uintptr_t)selector.manager, (uintptr_t)selector.map_screen,
         2, 1, (uintptr_t)mock_native_shown, (uintptr_t)mock_native_group, 0);
@@ -2246,6 +2450,78 @@ static void test_map_draw_order(void) {
     dm_botw_touch_menu_reset();
 }
 
+static void test_map_place_label_prompt(void) {
+    uintptr_t saved_start=mock_guest_start; size_t saved_size=mock_guest_size;
+    for (int left=0;left<2;left++) {
+        dm_botw_touch_menu_reset(); init_selector_fixture(); dm_botw_touch_menu_test_set_native_ready(1);
+        mock_guest_start=(uintptr_t)native_panes; mock_guest_size=sizeof native_panes;
+        current_guest_frame=8900; dm_botw_touch_menu_test_set_render_frame(8900);
+        const char *names[]={"RootPane","N_InOut_00","N_Cut_01","N_Cursor_00","Pa_Cursor_00","N_InOut_00",
+            left?"N_Left_00":"N_Right_00",left?"N_NameIn_02":"N_NameIn_00","N_Align_00",
+            left?"T_Name_02":"T_Name_00","N_Align_01",left?"T_Name_04":"T_Name_03",
+            left?"N_HintIn_06":"N_HintIn_04",left?"T_Icon_03":"T_Icon_00",left?"T_Guide_03":"T_Guide_00"};
+        const int parents[]={-1,0,1,2,3,4,5,6,7,8,7,10,7,12,12};
+        uint8_t *panes[15];
+        for (int i=0;i<15;i++) {
+            panes[i]=fake_pane(i,names[i],parents[i],30,40,0,0);
+            if(i) link_child(panes[parents[i]],panes[i]);
+        }
+        float direction=left?-1:1;
+        panes[9]=fake_pane(9,names[9],8,240,35,direction*280,40);
+        panes[11]=fake_pane(11,names[11],10,220,24,direction*290,8);
+        panes[13]=fake_pane(13,names[13],12,34,34,direction*200,-30);
+        panes[14]=fake_pane(14,names[14],12,120,24,direction*265,-30);
+        // Reinitializing a fake leaf also resets its intrusive link.
+        *(uintptr_t *)(panes[8]+0x28)=0; link_child(panes[8],panes[9]);
+        *(uintptr_t *)(panes[10]+0x28)=0; link_child(panes[10],panes[11]);
+        *(uintptr_t *)(panes[12]+0x28)=0; link_child(panes[12],panes[13]); link_child(panes[12],panes[14]);
+        uint16_t title=0x5730,description=0x540d,a=0xe040;
+        put_ptr(panes[9]+0xe0,(uintptr_t)&title); put_ptr(panes[11]+0xe0,(uintptr_t)&description);
+        put_ptr(panes[13]+0xe0,(uintptr_t)&a);
+        memset(&view,0,sizeof view); view.map_visible=view.generic_mode=1; view.page_key=42;
+        view.map_root=view.generic_root=(uintptr_t)panes[0]; view.generic_screen=(uintptr_t)selector.map_screen;
+        set_rect(view.map,0,0,1,1); menu_add_action(&view,DM_BTN_A,(float[4]){.7f,.9f,.15f,.06f});
+        selector_map_place_prompts((uintptr_t)panes[0],&view);
+        assert(view.footer_action_count==2); // card A and footer A remain separate targets
+        float x=(640+direction*280)/1280, y=(360-40)/720.f;
+        assert(point_in_rect(x,y,view.footer_actions[1]));
+        assert(point_in_rect((640+direction*290)/1280,(360-8)/720.f,view.footer_actions[1]));
+        publish(8900); tap(x,y); assert(g_target_valid && !g_map_tap.pending && sample(8900)==DM_BTN_A);
+        assert(!sample(8901));
+        publish(8901); dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN,x,y);
+        panes[13][0x59]=0; view.footer_action_count=1;
+        selector_map_place_prompts((uintptr_t)panes[0],&view); assert(view.footer_action_count==1);
+        publish(8901); dm_botw_touch_menu_pointer(DM_BOTW_MENU_END,x,y);
+        assert(!g_target_valid && !g_map_tap.pending); // disappearing hint cancels a held name tap
+        panes[13][0x59]=255; a=0xe041;
+        selector_map_place_prompts((uintptr_t)panes[0],&view); assert(view.footer_action_count==1);
+        a=0xe040; panes[9][0x59]=panes[11][0x59]=0;
+        selector_map_place_prompts((uintptr_t)panes[0],&view); assert(view.footer_action_count==1);
+    }
+    mock_guest_start=saved_start; mock_guest_size=saved_size; dm_botw_touch_menu_reset();
+}
+
+static void test_map_duplicate_a_prompts(void) {
+    for (int order=0;order<2;order++) {
+        dm_botw_touch_menu_reset(); init_selector_fixture();
+        memset(&view,0,sizeof view); view.map_visible=view.generic_mode=1; view.page_key=43;
+        set_rect(view.map,0,0,1,.88f);
+        view.footer_action_count=2;
+        view.footer_action_buttons[0]=view.footer_action_buttons[1]=DM_BTN_A;
+        set_rect(view.footer_actions[order],.25f,.45f,.25f,.12f); // place A
+        set_rect(view.footer_actions[1-order],.65f,.89f,.13f,.08f); // footer Select A
+        const float points[][2]={{.38f,.5f},{.67f,.93f},{.76f,.93f}}; // name, Select text, A glyph
+        for (unsigned i=0;i<sizeof points/sizeof points[0];i++) {
+            uint64_t frame=8950+i*2;
+            current_guest_frame=frame; dm_botw_touch_menu_test_set_render_frame(frame); publish(frame);
+            tap(points[i][0],points[i][1]);
+            assert(g_target_valid && !g_map_tap.pending && sample(frame)==DM_BTN_A);
+            assert(!sample(frame+1));
+        }
+    }
+    dm_botw_touch_menu_reset();
+}
+
 static void test_map_displacement_drag(void) {
     dm_botw_touch_menu_reset(); init_selector_fixture();
     current_guest_frame = 9000;
@@ -2261,6 +2537,14 @@ static void test_map_displacement_drag(void) {
     float initial_origin[2] = {20,30}, initial_cursor[2] = {100,200};
     memcpy(selector.map_model + 0x880, initial_origin, 8);
     memcpy(selector.map_model + 0x3868, initial_cursor, 8);
+    float scale = .5f, angle = 0, offset[2] = {5,-10};
+    float scaled[2] = {10,15}, translation[2] = {12.5f,10};
+    memcpy(selector.map_model + BOTW_MAP_SCALE, &scale, 4);
+    memcpy(selector.map_model + BOTW_MAP_ANGLE, &angle, 4);
+    memcpy(selector.map_model + BOTW_MAP_OFFSET, offset, 8);
+    memcpy(selector.map_model + BOTW_MAP_PAN_SCALED, scaled, 8);
+    memcpy(selector.map_model + BOTW_MAP_TRANSLATION, translation, 8);
+    assert_map_stamp_position(72.5f, -30);
     g_native_view.map_transform_root = map.map_root;
     g_native_view.map_transform_map_pane = map.map_pane;
     g_native_view.map_transform_seen = 9000;
@@ -2270,6 +2554,7 @@ static void test_map_displacement_drag(void) {
     g_test_map_setter_target = (uintptr_t)mock_map_set_target;
     g_test_map_pan_current = (uintptr_t)mock_pan_current;
     g_test_map_pan_target = (uintptr_t)mock_pan_target;
+    g_test_map_rotate = (uintptr_t)mock_map_rotate;
     mock_map_cursor_updates = 0;
     dm_botw_touch_menu_test_publish(&map);
     dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .5f, .5f);
@@ -2282,10 +2567,14 @@ static void test_map_displacement_drag(void) {
     assert(fabsf(origin[0] - 84) < .001f && fabsf(origin[1] + 6) < .001f);
     assert(origin[0] == target[0] && origin[1] == target[1]);
     assert(fabsf(cursor[0] - 36) < .001f && fabsf(cursor[1] - 236) < .001f);
+    assert_map_stamp_position(104.5f, -48);
+    memcpy(scaled, selector.map_model + BOTW_MAP_PAN_SCALED, 8);
+    assert(fabsf(scaled[0] - 42) < .001f && fabsf(scaled[1] + 3) < .001f);
     // Holding still neither repeats displacement nor emits stick velocity.
     unsigned calls = mock_map_current_calls;
     for (int i = 0; i < 10; i++) selector_service_map_drag(9000, &map);
     assert(mock_map_current_calls == calls);
+    assert_map_stamp_position(104.5f, -48);
     int32_t axes[4] = {1,2,3,4};
     sample_axes(9000, axes, NULL);
     assert(!axes[0] && !axes[1] && axes[2] == 3 && axes[3] == 4);
@@ -2294,20 +2583,26 @@ static void test_map_displacement_drag(void) {
     selector_service_map_drag(9000, &map);
     memcpy(origin, selector.map_model + 0x880, 8);
     assert(fabsf(origin[0] - 116) < .001f && !g_map_tap.pending);
+    assert_map_stamp_position(120.5f, -48);
     // Rotated/nonuniform geometry still follows screen-space displacement.
     matrix[0]=0; matrix[1]=-.5f; matrix[3]=.25f; matrix[4]=0;
     memcpy(g_native_view.map_transform, matrix, sizeof matrix);
+    angle = 90;
+    memcpy(selector.map_model + BOTW_MAP_ANGLE, &angle, 4);
     dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .5f, .5f);
     dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .6f, .6f);
     selector_service_map_drag(9000, &map);
     memcpy(target, selector.map_model + 0x880, 8);
     assert(fabsf(target[0] - origin[0] + 288) < .002f);
     assert(fabsf(target[1] - origin[1] + 256) < .002f);
+    assert_map_stamp_position(176, -23.5f);
     dm_botw_touch_menu_pointer(DM_BOTW_MENU_MOVE, .7f, .7f);
     dm_botw_touch_menu_pointer(DM_BOTW_MENU_CANCEL, 0, 0);
     calls = mock_map_current_calls;
     selector_service_map_drag(9000, &map);
     assert(mock_map_current_calls == calls);
+    assert_map_stamp_position(176, -23.5f);
+    g_test_map_rotate = 0;
     g_test_map_pan_current = g_test_map_pan_target = 0;
     g_test_map_setter_current = g_test_map_setter_target = 0;
     mock_map_cursor_updates = 1;
@@ -2433,6 +2728,120 @@ static void test_shared_prompt_collection(void) {
     dm_botw_touch_menu_reset();
 }
 
+static uint64_t message_sample(uint64_t frame) {
+    selector_service_message_tap(&g_mod[0], (uintptr_t)selector.manager, menu_render_frame());
+    return sample(frame);
+}
+
+static unsigned mock_message_flushes;
+static void mock_message_flush(uintptr_t letter) {
+    mock_message_flushes++;
+    ((uint8_t *)letter)[0x60] = 2;
+}
+
+static void test_message_reveal_without_cancel(void) {
+    dm_botw_touch_menu_reset(); init_selector_fixture();
+    current_guest_frame = 6900;
+    dm_botw_touch_menu_test_set_render_frame(current_guest_frame);
+    strcpy((char *)selector.screen + 0x200, "MessageSp_00");
+    selector.screen[0xfe] = 2;
+    put_ptr(selector.manager + 0x48, 0);
+    uint8_t mask[0x20] = {0}; mask[0x14] = 1u << 2;
+    put_ptr(selector.registry + 0xb18, (uintptr_t)mask);
+    dm_botw_touch_menu_test_set_generic_selector(1, (uintptr_t)mock_native_group,
+                                                   (uintptr_t)mock_native_shown);
+    uint8_t *root = fake_pane(80, "RootPane", -1, 1280, 720, 0, 0);
+    fake_pane(81, "Pa_ABtn_00", 80, 60, 60, 400, -250);
+    uint8_t *arrow = fake_pane(82, "P_ArrowS_00", 81, 48, 48, 400, -250);
+    generic_hit_observe(arrow, 1);
+    put_ptr(selector.screen + 0x30, (uintptr_t)selector.apphome_wrapper);
+    put_ptr(selector.apphome_wrapper + 0x18, (uintptr_t)root);
+    uintptr_t base = (uintptr_t)g_mod[0].base;
+    uint8_t letters[2][0x80] = {{0}};
+    put_ptr(selector.screen, base + BOTW_MESSAGE_VTABLE);
+    selector.screen[BOTW_MESSAGE_STATE] = 1;
+    for (int i = 0; i < 2; i++) {
+        put_ptr(letters[i], base + BOTW_LETTER_VTABLE);
+        letters[i][BOTW_LETTER_LENGTH] = 24;
+        letters[i][BOTW_LETTER_ACTIVE] = 1;
+        put_ptr(selector.screen + (i ? BOTW_MESSAGE_LETTER_ALT : BOTW_MESSAGE_LETTER), (uintptr_t)letters[i]);
+    }
+    g_test_message_flush = (uintptr_t)mock_message_flush;
+    mock_message_flushes = 0;
+    selector_tick();
+    assert(g_view.message_typing && dm_botw_touch_message_active());
+    // Input polling before the UI update neither emits a pad button nor loses the tap.
+    tap(.1f, .1f);
+    assert(!sample(current_guest_frame) && g_target_valid && !mock_message_flushes);
+    observe_fake_pane(82); // speech keeps updating even when the cursor manager does not
+    assert(mock_message_flushes == 2 && !g_target_valid && !sample(current_guest_frame));
+    assert(selector.screen[BOTW_MESSAGE_REVEALED] && letters[0][0x60] == 2 && letters[1][0x60] == 2);
+    // Repeated taps and Seated/letterbox coordinates only reveal the current line.
+    for (int i = 0; i < 10; i++) {
+        tap(i & 1 ? -.1f : 1.1f, i & 1 ? 1.4f : -.2f);
+        observe_fake_pane(82);
+        assert(!sample(current_guest_frame) && !g_target_valid);
+    }
+    assert(mock_message_flushes == 22);
+    // The native event may prohibit text acceleration.
+    selector.screen[BOTW_MESSAGE_NO_SKIP] = 1;
+    tap(.5f, .5f); selector_tick(); assert(mock_message_flushes == 22 && !sample(current_guest_frame));
+    selector.screen[BOTW_MESSAGE_NO_SKIP] = 0;
+    selector.screen[BOTW_MESSAGE_KIND] = 5;
+    tap(.5f, .5f); selector_tick(); assert(mock_message_flushes == 22 && !sample(current_guest_frame));
+    selector.screen[BOTW_MESSAGE_KIND] = 4;
+    tap(.5f, .5f); selector_tick(); assert(mock_message_flushes == 22 && !sample(current_guest_frame));
+    selector.screen[BOTW_MESSAGE_ALLOW_SKIP] = 1;
+    tap(.5f, .5f); selector_tick(); assert(mock_message_flushes == 24 && !sample(current_guest_frame));
+    selector.screen[BOTW_MESSAGE_KIND] = 0;
+    // A reveal queued before the final letter never also advances the completed line.
+    tap(.5f, .5f);
+    for (int i = 0; i < 2; i++) {
+        letters[i][BOTW_LETTER_POSITION] = 24; letters[i][BOTW_LETTER_ACTIVE] = 0;
+    }
+    selector_tick(); assert(!sample(current_guest_frame) && !g_target_valid);
+    letters[0][BOTW_LETTER_CHOICES] = 2;
+    dm_botw_touch_menu_view choices_pending;
+    assert(!selector_message_prompt_view((uintptr_t)selector.manager, current_guest_frame, &choices_pending));
+    letters[0][BOTW_LETTER_CHOICES] = 0;
+    tap(.03f, .04f); observe_fake_pane(82);
+    assert(sample(current_guest_frame) == DM_BTN_A && !sample(current_guest_frame + 1));
+    tap(.03f, .04f); selector_tick();
+    assert(sample(current_guest_frame) == DM_BTN_A);
+    put_ptr(selector.manager + 0x48, (uintptr_t)selector.entry);
+    assert(!sample(current_guest_frame)); // native focus changes before the next pane observation
+    put_ptr(selector.manager + 0x48, 0);
+    // A choice appearing before UI service or after its acknowledgment cancels continuation.
+    for (int acknowledged = 0; acknowledged < 2; acknowledged++) {
+        tap(.03f, .04f);
+        if (acknowledged) selector_tick();
+        put_ptr(selector.manager + 0x48, (uintptr_t)selector.entry);
+        if (!acknowledged) selector_tick();
+        assert(!sample(current_guest_frame + 1) && !g_target_valid);
+        put_ptr(selector.manager + 0x48, 0);
+        selector_tick();
+    }
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .03f, .04f);
+    dm_botw_touch_menu_view choice = g_view;
+    choice.message_advance = 0; choice.generic_count = 1;
+    set_rect(choice.generic_targets[0].rect, 0, 0, .2f, .2f);
+    dm_botw_touch_menu_test_publish(&choice);
+    assert(!dm_botw_touch_message_active());
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_END, .03f, .04f);
+    assert(!g_target_valid && !sample(current_guest_frame + 1));
+    selector_tick();
+    tap(.03f, .04f); selector_tick();
+    assert(sample(current_guest_frame) == DM_BTN_A);
+    dm_botw_touch_menu_test_publish(&choice);
+    assert(!sample(current_guest_frame)); // no cached A replay into a same-frame choice
+    selector_tick();
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_BEGIN, .5f, .5f);
+    dm_botw_touch_menu_pointer(DM_BOTW_MENU_CANCEL, .5f, .5f);
+    assert(!g_target_valid);
+    g_test_message_flush = 0;
+    dm_botw_touch_menu_reset();
+}
+
 static void test_message_advance_owner(void) {
     dm_botw_touch_menu_reset(); init_selector_fixture();
     current_guest_frame = 7000;
@@ -2457,7 +2866,7 @@ static void test_message_advance_owner(void) {
            message.footer_action_buttons[0] == DM_BTN_A && message.prompt_owner_valid);
     dm_botw_touch_menu_test_publish(&message);
     tap(message.footer_actions[0][0] + .01f, message.footer_actions[0][1] + .01f);
-    assert(sample(7000) == DM_BTN_A && !sample(7001));
+    assert(message_sample(7000) == DM_BTN_A && !message_sample(7001));
     put_ptr(selector.manager + 0x48, (uintptr_t)selector.entry);
     assert(!selector_message_prompt_view((uintptr_t)selector.manager, 7000, &message));
     put_ptr(selector.manager + 0x48, 0);
@@ -2497,9 +2906,9 @@ static void test_message_advance_owner(void) {
     assert(selector_message_prompt_view((uintptr_t)selector.manager, 7000, &message));
     dm_botw_touch_menu_test_publish(&message);
     tap(.21f, .75f); // blank left padding of the window, far from its arrow
-    assert(sample(7000) == DM_BTN_A && !sample(7001));
+    assert(message_sample(7000) == DM_BTN_A && !message_sample(7001));
     tap(.1f, .75f);
-    assert(!sample(7001)); // the scene outside the window is not a continuation target
+    assert(message_sample(7001) == DM_BTN_A); // the scene also continues the dialogue
     put_ptr(selector.manager + 0x48, (uintptr_t)selector.entry);
     assert(!selector_message_prompt_view((uintptr_t)selector.manager, 7000, &message));
     dm_botw_touch_menu_view choice = message;
@@ -2525,8 +2934,8 @@ static void test_message_advance_owner(void) {
     observe_native_pane(speech, 1);
     dm_botw_touch_menu_test_snapshot(&message);
     assert(message.footer_action_count == 1 && message.footer_action_buttons[0] == DM_BTN_A);
-    tap(.4f, .82f); assert(sample(current_guest_frame) == DM_BTN_A && !sample(current_guest_frame+1));
-    tap(.15f, .82f); assert(!g_target_valid);
+    tap(.4f, .82f); assert(message_sample(current_guest_frame) == DM_BTN_A && !message_sample(current_guest_frame+1));
+    tap(.15f, .82f); assert(message_sample(current_guest_frame) == DM_BTN_A);
     speech_parent[0x59] = 0;
     assert(!selector_message_prompt_view((uintptr_t)selector.manager, current_guest_frame, &message));
     speech_parent[0x59] = 255;
@@ -2560,9 +2969,9 @@ static void test_message_advance_owner(void) {
         assert(message.generic_mode && message.prompt_owner_screen == (uintptr_t)selector.screen &&
                message.footer_action_count == 1 && message.footer_action_buttons[0] == DM_BTN_A);
         tap(i ? .5f : .7f,i ? .675f : .4f); // continuation arrow, or the card's blank padding
-        assert(sample(current_guest_frame) == DM_BTN_A && !sample(current_guest_frame+1));
+        assert(message_sample(current_guest_frame) == DM_BTN_A && !message_sample(current_guest_frame+1));
     }
-    tap(.1f,.5f); assert(!g_target_valid); // scene outside the card stays inert
+    tap(.1f,.5f); assert(message_sample(current_guest_frame) == DM_BTN_A);
     assert(!selector_message_prompt_view((uintptr_t)selector.manager,current_guest_frame+3,&message));
     card_parent[0x59] = 0; native_panes[81].bytes[0x59] = 0;
     assert(!selector_message_prompt_view((uintptr_t)selector.manager,current_guest_frame,&message));
@@ -2580,8 +2989,8 @@ static void test_message_advance_owner(void) {
     observe_native_pane(tips_body,1);
     dm_botw_touch_menu_test_snapshot(&message);
     assert(message.footer_action_count == 1 && message.footer_action_buttons[0] == DM_BTN_A);
-    tap(.3f,.3f); assert(sample(current_guest_frame) == DM_BTN_A && !sample(current_guest_frame+1));
-    tap(.1f,.3f); assert(!g_target_valid);
+    tap(.3f,.3f); assert(message_sample(current_guest_frame) == DM_BTN_A && !message_sample(current_guest_frame+1));
+    tap(.1f,.3f); assert(message_sample(current_guest_frame) == DM_BTN_A);
     tips_inout[0x59] = 0;
     assert(!selector_message_prompt_view((uintptr_t)selector.manager,current_guest_frame,&message));
     // MessageSp renders NPC, divine and terminal speech through the same text-output role.
@@ -2603,8 +3012,8 @@ static void test_message_advance_owner(void) {
         dm_botw_touch_menu_test_snapshot(&message);
         assert(message.footer_action_count == 1 && message.footer_action_buttons[0] == DM_BTN_A);
         tap(.27f, .82f); // window padding outside the rendered text and any continuation arrow
-        assert(sample(current_guest_frame) == DM_BTN_A && !sample(current_guest_frame+1));
-        tap(.1f, .82f); assert(!g_target_valid);
+        assert(message_sample(current_guest_frame) == DM_BTN_A && !message_sample(current_guest_frame+1));
+        tap(.1f, .82f); assert(message_sample(current_guest_frame) == DM_BTN_A);
         put_ptr(selector.manager + 0x48, (uintptr_t)selector.entry);
         assert(!selector_message_prompt_view((uintptr_t)selector.manager, current_guest_frame, &message));
         put_ptr(selector.manager + 0x48, 0);
@@ -2669,8 +3078,8 @@ static void test_new_item_inventory_prompt(void) {
         // action wins; ordinary card padding and its arrow keep native A.
         tap(i == 0 ? .705f : i == 1 ? .61f : i == 2 ? .65f : .5f,
             i < 2 ? .622f : i == 2 ? .5f : .675f);
-        assert(sample(current_guest_frame) == (i < 2 ? DM_BTN_PLUS : DM_BTN_A));
-        assert(!sample(current_guest_frame + 1));
+        assert(message_sample(current_guest_frame) == (i < 2 ? DM_BTN_PLUS : DM_BTN_A));
+        assert(!message_sample(current_guest_frame + 1));
     }
     float prompt[4];
     icon[PANE_FLAGS] = 0;
@@ -2716,7 +3125,7 @@ static void test_new_item_inventory_prompt(void) {
     mock_touch_hud_active = 0;
     assert(!selector_message_prompt_view((uintptr_t)selector.manager, current_guest_frame, &message));
     atomic_store(&g_test_ready, 0); // exercise the real controller-mode input gate
-    tap(.705f, .622f); assert(!sample(current_guest_frame));
+    tap(.705f, .622f); assert(!message_sample(current_guest_frame));
     atomic_store(&g_test_ready, 1);
     mock_touch_hud_active = 1;
     selector.state[0x38] = 0;
@@ -2732,7 +3141,7 @@ static void test_new_item_inventory_prompt(void) {
     dm_botw_touch_menu_test_publish(&message);
     tap(.705f, .622f);
     selector.state[0x38] = 0; // losing ownership before Npad apply cancels Plus
-    assert(!sample(current_guest_frame));
+    assert(!message_sample(current_guest_frame));
     selector.state[0x38] = 2;
     mock_guest_start = saved_guest_start; mock_guest_size = saved_guest_size;
     atomic_store(&g_validated_box_cursor_manager, 0);
@@ -2848,6 +3257,9 @@ static void test_passive_ui_audit(void) {
     atomic_store(&g_validated_box_cursor_manager, manager); mock_touch_hud_active = old_mode;
 }
 
+#include "t_botw_inventory_followup.inc"
+#include "t_botw_journal_followup.inc"
+
 int main(void) {
     // Native taps invert the full two-dimensional pane transform, including
     // rotation, nonuniform scale and translation.
@@ -2860,6 +3272,8 @@ int main(void) {
 
     uint16_t native_back_glyph = 0xe041;
     test_inventory_equipment_press();
+    test_inventory_menu_followup();
+    test_journal_menu_followup();
     test_selector_pointer_ranges();
     const float back_text[4] = {.40f, .48f, .12f, .04f};
     const float back_icon[4] = {.46f, .46f, .04f, .08f};
@@ -2935,15 +3349,25 @@ int main(void) {
     view.page_key = 21; view.render_frame = 20;
     set_rect(view.clip, .1f, .1f, .8f, .8f); set_rect(view.back, .9f, .9f, .05f, .05f);
     uint8_t *category_root = fake_pane(40, "RootPane", -1, 100, 100, 0, 0);
+    view.inventory_root = (uintptr_t)category_root;
     uint8_t *category_slide = fake_pane(41, "N_Slide_01", 40, 100, 100, 0, 0);
     uint8_t *category_row = fake_pane(42, "N_Cat_01", 41, 100, 100, 0, 0);
     uint8_t *category = fake_pane(43, "Pa_CategoryS_05", 42, 40, 40, 0, 0);
     uint8_t *category_invalid = fake_pane(44, "N_Invalid_00", 43, 40, 40, 0, 0);
     uint8_t *category_hit = fake_pane(45, "B_Hit_00", 44, 32, 32, 0, 0);
+    uint8_t *category_page_pane = fake_pane(46, "Pa_PagePorch_02", 40, 490, 600, 0, 0);
+    uint8_t *category_item_pane = fake_pane(47, "B_Hit_00", 46, 80, 80, 0, 0);
+    static uint8_t category_page[0x138], category_part[0x20];
+    memset(category_page, 0, sizeof category_page);
+    memset(category_part, 0, sizeof category_part);
+    put_ptr(category_page + BOTW_INVENTORY_PAGE_PART, (uintptr_t)category_part);
+    put_ptr(category_part + BOTW_INVENTORY_PART_PANE, (uintptr_t)category_page_pane);
+    put_ptr(selector.screen + BOTW_INVENTORY_PAGES + 2 * 8, (uintptr_t)category_page);
     (void)category_root; (void)category_slide; (void)category_row; (void)category; (void)category_invalid;
     put_ptr(selector.screen, (uintptr_t)(g_mod[0].base + 0x1cf9ad8));
     uint16_t category_flags = 0x202f; memcpy(selector.owner + 0x3a, &category_flags, sizeof category_flags);
-    put_ptr(selector.owner + 0x60, (uintptr_t)category_hit);
+    put_ptr(selector.owner + 0x60, (uintptr_t)category_item_pane);
+    put_ptr(selector.owner2 + 0x60, (uintptr_t)category_hit);
     int32_t count = 20, current_category = 0, current_page = 0, first_page = 12;
     memcpy(selector.screen + 0x363c, &count, 4);
     memcpy(selector.screen + 0x3a10, &current_category, 4);
@@ -2979,7 +3403,7 @@ int main(void) {
     int32_t transitioning = 1;
     memcpy(selector.screen + 0x368c, &transitioning, 4);
     selector_tick();
-    assert(g_test_category_relayout_count == 0); // wait for the active carousel transition
+    assert(g_test_category_relayout_count == 1); // a fresh category tap supersedes native easing
     transitioning = 0; memcpy(selector.screen + 0x368c, &transitioning, 4);
     selector_tick();
     assert(get_ptr(selector.manager + 0x50) == 0); // category entry is registered but not BoxCursor-focusable
@@ -3028,6 +3452,7 @@ int main(void) {
 
     // A native selection still in flight takes precedence over old focus.
     g_test_category_call_order_count = 0;
+    put_ptr(selector.owner2 + 0x60, (uintptr_t)category_item_pane);
     put_ptr(selector.manager + 0x50, (uintptr_t)selector.entry2);
     int32_t pending_id = 49; memcpy(selector.owner2 + 0x44, &pending_id, 4);
     selector_refresh_category_item((uintptr_t)selector.manager, (uintptr_t)selector.screen,
@@ -3485,7 +3910,7 @@ int main(void) {
     assert(!generic_view.map_visible && generic_view.generic_root == (uintptr_t)dialog_root);
     assert(!sample(guide_frame)); // release any preceding map-button pulse
     tap(.21f, .75f); // blank dialogue padding, not the map behind it
-    assert(sample(guide_frame + 1) == DM_BTN_A && !sample(guide_frame + 2));
+    assert(message_sample(guide_frame + 1) == DM_BTN_A && !sample(guide_frame + 2));
     dialog_root[0x59] = 0;
     observe_native_pane(map_pane, 1);
     dm_botw_touch_menu_test_snapshot(&generic_view);
@@ -4780,6 +5205,8 @@ int main(void) {
     test_quick_strip_touch();
     test_quest_category_touch();
     test_option_arrow_touch();
+    test_gameplay_speech_controls();
+    test_message_reveal_without_cancel();
     test_message_advance_owner();
     test_new_item_inventory_prompt();
     test_shared_prompt_collection();
@@ -4795,11 +5222,14 @@ int main(void) {
     test_shop_category_touch();
     test_cutscene_skip_prompt();
     test_inventory_preview_rotation();
+    test_preview_rotation_continuity();
     test_dungeon_captured_prompts();
     test_dungeon_focused_footer();
     test_dungeon_relative_rotation();
     test_dungeon_marker_taps();
     test_map_draw_order();
+    test_map_place_label_prompt();
+    test_map_duplicate_a_prompts();
     test_map_displacement_drag();
     test_long_hud_path();
     test_hero_path_native_guides();

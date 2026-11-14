@@ -41,8 +41,12 @@ uint64_t now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); r
 static dispatch_semaphore_t preparing, second_waiting, finish_prepare, prepared, suspended, returned;
 static __thread int second_submit;
 static _Atomic int prepares, commits, drains;
+static dispatch_semaphore_t drain_entered, finish_drain, change_waiting;
+static _Atomic int hold_drains, active_drains, overlapping_drains;
+static __thread int second_change;
 static int inflight_in_prepare, host_work_in_prepare, inflight_at_serial_wait, host_work_at_serial_wait;
 static int observed_mutex_lock(pthread_mutex_t *mutex) {
+    if (mutex == &g_susp_change_mu && second_change) dispatch_semaphore_signal(change_waiting);
     if (mutex == &g_sub_mu && second_submit) {   // reached only when the lock is contended (dm_host_mutex_lock tries first)
         pthread_mutex_lock(&g_susp_mu);
         inflight_at_serial_wait = g_inflight_api; host_work_at_serial_wait = dm_host_work;
@@ -66,7 +70,21 @@ void test_queue_activate(uint64_t serial) { (void)serial; }
 void test_queue_origin(int on) { (void)on; }
 void test_sub_index(const uint64_t *handles, int count) { (void)handles; (void)count; }
 void test_exec_rest(const uint64_t *handles, int count) { (void)handles; (void)count; }
-void test_drain(void) { atomic_fetch_add(&drains, 1); }
+void test_drain(void) {
+    atomic_fetch_add(&drains, 1);
+    if (atomic_load(&hold_drains)) {
+        if (atomic_fetch_add(&active_drains, 1)) atomic_store(&overlapping_drains, 1);
+        dispatch_semaphore_signal(drain_entered);
+        dispatch_semaphore_wait(finish_drain, DISPATCH_TIME_FOREVER);
+        atomic_fetch_sub(&active_drains, 1);
+    }
+}
+static void *change_reason(void *value) {
+    int reason = (int)(intptr_t)value;
+    second_change = reason == DM_SUSPEND_LIFECYCLE;
+    dm_gfx_suspend_for(reason, 1);
+    return NULL;
+}
 
 static NVNqueue queues[2];
 static void *submit(void *which) {
@@ -118,6 +136,23 @@ int main(void) {
     pthread_join(first, NULL); pthread_join(second, NULL);
     CHECK("both submissions commit", atomic_load(&commits) == 2);
     CHECK("graphics entries are balanced", g_inflight_api == 0);
+    drain_entered = dispatch_semaphore_create(0); finish_drain = dispatch_semaphore_create(0);
+    change_waiting = dispatch_semaphore_create(0); atomic_store(&hold_drains, 1);
+    pthread_create(&first, NULL, change_reason, (void *)(intptr_t)DM_SUSPEND_SETTINGS);
+    if (!reached(drain_entered, "settings pause enters its GPU drain")) return 1;
+    pthread_create(&second, NULL, change_reason, (void *)(intptr_t)DM_SUSPEND_LIFECYCLE);
+    if (!reached(change_waiting, "background pause reaches the transition lock")) return 1;
+    CHECK("background cannot drain concurrently with settings", dispatch_semaphore_wait(drain_entered,
+        dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC)) != 0);
+    dispatch_semaphore_signal(finish_drain);
+    if (!reached(drain_entered, "background drains after the settings drain")) return 1;
+    dispatch_semaphore_signal(finish_drain);
+    pthread_join(first, NULL); pthread_join(second, NULL);
+    CHECK("GPU drains never overlap", !atomic_load(&overlapping_drains));
+    CHECK("both independent pause reasons remain set", g_susp_reasons ==
+        ((1u << DM_SUSPEND_SETTINGS) | (1u << DM_SUSPEND_LIFECYCLE)));
+    atomic_store(&hold_drains, 0);
+    dm_gfx_suspend_for(DM_SUSPEND_SETTINGS, 0); dm_gfx_suspend(0);
     printf("graphics suspend: %d checks, %d failed\n", checks, failures);
     return failures != 0;
 }

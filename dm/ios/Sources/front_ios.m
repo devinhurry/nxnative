@@ -167,6 +167,7 @@ static void game_settings_done(void) { dm_gamepad_settings_done(); }
 }
 - (void)viewDidLoad {
     [super viewDidLoad];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(dmHomeGestureChanged:) name:@"DMHomeGestureChanged" object:nil];
     self.view.backgroundColor = UIColor.blackColor;
 #if __has_include(<UIKit/UIHingeInteraction.h>)
     if (@available(iOS 27.1, *)) {
@@ -304,8 +305,20 @@ static void game_settings_done(void) { dm_gamepad_settings_done(); }
     if (!dm_show_launcher((__bridge void *)self, launcher_done)) [self startGame];   // the settings screen first (Launcher.swift), when the app has one
 }
 - (void)openSettings:(id)sender { (void)sender; dm_gamepad_open_settings(); }
-- (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
-- (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }   // Edge gestures need two swipes, to avoid accidental exits
+- (BOOL)dmDeferHomeGesture {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    return [defaults objectForKey:@"botw.deferHomeGesture"] == nil || [defaults boolForKey:@"botw.deferHomeGesture"];
+}
+- (BOOL)prefersHomeIndicatorAutoHidden { return strcmp(DM_GAME_ID, "01007EF00011E000") || ![self dmDeferHomeGesture]; }
+- (void)dmHomeGestureChanged:(NSNotification *)notification {
+    (void)notification;
+    [self setNeedsUpdateOfScreenEdgesDeferringSystemGestures];
+    [self setNeedsUpdateOfHomeIndicatorAutoHidden];
+}
+- (UIRectEdge)preferredScreenEdgesDeferringSystemGestures {
+    if (strcmp(DM_GAME_ID, "01007EF00011E000")) return UIRectEdgeAll;
+    return [self dmDeferHomeGesture] ? UIRectEdgeBottom : UIRectEdgeNone;
+}
 - (BOOL)prefersStatusBarHidden { return YES; }
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
     return UIInterfaceOrientationMaskAll;

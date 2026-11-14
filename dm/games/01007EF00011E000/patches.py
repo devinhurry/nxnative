@@ -519,6 +519,15 @@ CAPABILITIES = {'cd57b23fa4bbad65803d9788c01821ee': ('DYNAMIC_RESOLUTION', 'REAL
 # checked here with the per-game rewrite rules, rather than embedding BOTW addresses in patch_nso.py.
 def validate_main(ctx):
     word = lambda off: struct.unpack_from('<I', ctx.image, off)[0]
+    assert tuple(word(o) for o in range(0xf55af4, 0xf55b00, 4)) == (
+        0x52800048, 0x39018008, 0xd65f03c0,
+    ), 'BOTW native letter flush changed; revalidate speech acceleration'
+    assert tuple(word(o) for o in range(0x13f4a78, 0x13f4abc, 4)) == (
+        0x34fffcd4, 0x395e2a69, 0x7100113f, 0x395e2668, 0x7a400900,
+        0x1a9f17e8, 0x7100153f, 0x54fffbe0, 0x3707fbc8, 0x395e2268,
+        0x35fffb88, 0x52800028, 0x391e1a68, 0x97ed8412, 0xf9419260,
+        0xb4fffae0, 0x97ed840f,
+    ), 'BOTW speech skip permissions or letter controls changed'
     assert tuple(word(o) for o in range(0xf71490, 0xf714d8, 4)) == (
         0x12001c39, 0x3877cb08, 0x6b19011f, 0x54000141, 0xb9402a88, 0xaa1303e1,
         0x6b16011f, 0xf9401a89, 0x1a9f82c8, 0xf868d920, 0xf9400008, 0xf9402d08,
@@ -722,6 +731,13 @@ def validate_main(ctx):
         0xd10103ff, 0xa9017bfd, 0xf90013f5, 0xa9034ff4,
         0x910043fd, 0xb942a808,
     ), 'BOTW native list page setter changed; revalidate category taps and list scrolling'
+    assert tuple(word(o) for o in range(0xd6e8e0, 0xd6e8f0, 4)) == (
+        0xa9be7bfd, 0xa9014ff4, 0x910003fd, 0x2f00e401,
+    ), 'BOTW native list displacement entry changed; revalidate journal viewport dragging'
+    assert tuple(word(o) for o in range(0xd6e93c, 0xd6e95c, 4)) == (
+        0xbd42d661, 0x1e202820, 0xbd02d660, 0x910b4261,
+        0x910bc262, 0x910ba263, 0xaa1303e0, 0x940000b6,
+    ), 'BOTW native vertical viewport fields changed; revalidate journal scroll axis'
     assert tuple(word(o) for o in range(0xd6bfa0, 0xd6bfb8, 4)) == (
         0xd101c3ff, 0x6d012beb, 0x6d0223e9, 0xa9037bfd, 0xa9045ff8, 0xa90557f6,
     ), 'BOTW native list transition entry changed; revalidate immediate Compendium categories'
@@ -743,6 +759,17 @@ def validate_main(ctx):
     assert tuple(word(o) for o in range(0xd7a938, 0xd7a94c, 4)) == (
         0xbd400020, 0xbd004000, 0xbd400420, 0xbd004400, 0xd65f03c0,
     ), 'BOTW target map origin setter changed; revalidate direct touch dragging'
+    assert tuple(word(o) for o in range(0xe83520, 0xe8353c, 4)) == (
+        0xb4000260, 0xd100c3ff, 0xa9017bfd, 0xf90013f3, 0x910043fd, 0x2d400801, 0xd00040e8,
+    ), 'BOTW map point rotation changed; revalidate stamp projection during dragging'
+    assert tuple(word(o) for o in range(0xdc1d70, 0xdc1e10, 4)) == (
+        0xf9446e68, 0x91214100, 0x97fee2e6, 0xf9446e68, 0x2d402408, 0x91214100, 0x97fee2dc,
+        0xf9446e68, 0x1e200901, 0x1e200920, 0x910023e1, 0x91214100, 0x2d0103e1, 0x97fee2c5,
+        0xf9446e68, 0x91214100, 0x97fee2c0, 0xf9446e68, 0x2d402809, 0x91214100, 0x97fee2ce,
+        0xf9446e68, 0x1e204008, 0x91214100, 0x97fee2bf, 0x1e280920, 0x1e280941, 0xf9446e68,
+        0x2d400c02, 0x91214100, 0x1e222800, 0x1e232821, 0x2d0107e0, 0x97fee2c5, 0x910023e0,
+        0x940305c9, 0xf9446e68, 0x910023e1, 0x91214100, 0x97fee2b2,
+    ), 'BOTW map pan projection changed; revalidate stamp and terrain alignment'
     assert tuple(struct.unpack_from('<Q', ctx.image, 0x1cdb958 + off)[0] for off in (0, 8, 0x20, 0x40)) == (
         0xf5466c, 0xd66bb0, 0xd6f034, 0xd66bd4,
     ), 'BOTW inventory list-widget vtable address point changed; revalidate OBS38 receiver class'

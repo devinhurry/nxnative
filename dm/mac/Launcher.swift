@@ -225,6 +225,7 @@ private final class GameSettingsWindow: NSObject, NSWindowDelegate {
     weak var parent: NSWindow?
     let done: @convention(c) () -> Void
     private var closed = false
+    var cancelBackground: (() -> Void)?
 
     init(model: LauncherModel, parent: NSWindow, background: Image?, done: @escaping @convention(c) () -> Void) {
         self.parent = parent; self.done = done
@@ -241,11 +242,11 @@ private final class GameSettingsWindow: NSObject, NSWindowDelegate {
     func finish() {
         guard !closed else { return }
         closed = true
+        cancelBackground?(); cancelBackground = nil
         parent?.endSheet(window); window.orderOut(nil)
         parent?.makeKeyAndOrderFront(nil)
         gameSettings = nil
-        dm_launcher_settings_pause(0)
-        done()
+        setGameSettingsPaused(false, complete: done)
     }
     func windowWillClose(_ notification: Notification) { finish() }
 }
@@ -259,11 +260,13 @@ public func dmMacShowGameSettings(_ parentPointer: UnsafeMutableRawPointer, _ do
     }
     let parent = Unmanaged<NSWindow>.fromOpaque(parentPointer).takeUnretainedValue()
     gameSettingsOpening = true
-    withGameSettingsBackground(model) { background in
-        gameSettingsOpening = false
-        model.beginRuntime()
-        dm_launcher_settings_pause(1)
-        gameSettings = GameSettingsWindow(model: model, parent: parent, background: background, done: done)
+    model.beginRuntime()
+    let settings = GameSettingsWindow(model: model, parent: parent, background: nil, done: done)
+    gameSettings = settings
+    gameSettingsOpening = false
+    settings.cancelBackground = prepareGameSettingsBackground(model) { [weak settings] in
+        guard let settings, gameSettings === settings else { return }
+        setGameSettingsPaused(true)
     }
     return 1
 }

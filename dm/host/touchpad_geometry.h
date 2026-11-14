@@ -99,9 +99,16 @@ static inline int dm_touchpad_seated_split(dm_touchpad_rect area, dm_touchpad_re
 #define DM_TP_BOTW_MENU_EDGE (DM_TP_BOTW_HEART_EDGE-(DM_TP_BOTW_MENU_SIZE-DM_TP_BOTW_MENU_GLYPH_SIZE)*.5f)
 #define DM_TP_BOTW_MENU_Y_OFFSET 4.0f
 #define DM_TP_BOTW_MENU_GAP 8.0f
+#define DM_TP_BOTW_PLUS_EXTRA_PT 4.0f
+#define DM_TP_BOTW_MINUS_Y_EXTRA_PT 4.0f
 #define DM_TP_BOTW_DOCK_TOP 8.0f
 static inline float dm_touchpad_botw_edge_margin(float safe, float fallback) {
     return safe > 0 ? safe : fallback;
+}
+static inline dm_touchpad_rect dm_touchpad_botw_menu_adjust(dm_touchpad_rect r, int minus) {
+    float extra = DM_TP_BOTW_PLUS_EXTRA_PT;
+    return (dm_touchpad_rect){r.x-extra, r.y+(minus ? DM_TP_BOTW_MINUS_Y_EXTRA_PT : 0),
+        r.width+extra, r.height+extra};
 }
 static inline dm_touchpad_rect dm_touchpad_seated_map(dm_touchpad_rect area) {
     float size=fminf(166.f*430/720,area.width*.16f);
@@ -112,8 +119,8 @@ static inline dm_touchpad_rect dm_touchpad_seated_map(dm_touchpad_rect area) {
 static inline dm_touchpad_rect dm_touchpad_seated_menu(dm_touchpad_rect area,int minus) {
     dm_touchpad_rect map=dm_touchpad_seated_map(area);
     float size=DM_TP_BOTW_MENU_SIZE*map.width/166;
-    return (dm_touchpad_rect){map.x+map.width+DM_TP_BOTW_MENU_GAP,
-        map.y+(minus ? size+DM_TP_BOTW_MENU_GAP : 0),size,size};
+    return dm_touchpad_botw_menu_adjust((dm_touchpad_rect){map.x+map.width+DM_TP_BOTW_MENU_GAP,
+        map.y+(minus ? size+DM_TP_BOTW_MENU_GAP : 0),size,size}, minus);
 }
 
 static inline float dm_touchpad_u(float height) {
@@ -255,9 +262,9 @@ static inline dm_touchpad_rect dm_touchpad_botw_menu_rect(float canvas_x, float 
     float scale = fminf(canvas_width, canvas_height) / 720.0f;
     float size = DM_TP_BOTW_MENU_SIZE * scale;
     float margin=dm_touchpad_botw_edge_margin(safe_right,DM_TP_BOTW_MENU_EDGE*scale+DM_TP_BOTW_EDGE_EXTRA);
-    return (dm_touchpad_rect){canvas_x + canvas_width - size - margin,
+    return dm_touchpad_botw_menu_adjust((dm_touchpad_rect){canvas_x + canvas_width - size - margin,
         canvas_y + (360.0f - DM_TP_BOTW_MAP_TOP) * scale + DM_TP_BOTW_MENU_Y_OFFSET +
-            (minus ? size + DM_TP_BOTW_MENU_GAP : 0), size, size};
+            (minus ? size + DM_TP_BOTW_MENU_GAP : 0), size, size}, minus);
 }
 
 static inline int dm_touchpad_cancel_outside(float x, float y, float cx, float cy, float radius) {

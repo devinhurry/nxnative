@@ -28,6 +28,8 @@ void dm_botw_rune_icon_draw_begin(uint8_t *pane) { (void)pane; }
 void dm_botw_rune_icon_draw_end(void) {}
 static int test_touch_active;
 int dm_botw_touch_hud_active(void) { return test_touch_active; }
+static int test_inventory_active;
+int dm_botw_touch_inventory_active(void) { return test_inventory_active; }
 static int test_keep_native_loadout, test_loadout_visible=1;
 int dm_botw_touch_hud_relocates_loadout(void) { return test_touch_active && !test_keep_native_loadout; }
 int dm_botw_touch_loadout_visible(void) { return test_loadout_visible; }
@@ -50,6 +52,296 @@ static void pane_child(uint8_t *parent, uint8_t *child) {
     *(uint8_t **)(child+0x10)=next?next:parent+0x20;
     *(uint8_t **)(child+0x18)=parent; *(uint8_t **)(parent+0x28)=child+8;
 }
+static void test_inventory_footer(void) {
+    uint8_t root[0x100],inout[0x100],down[0x100],row[0x100],title[0x100];
+    uint8_t bg[0x100],slide[0x100],base[0x100],line[0x100],black[0x100],capture[0x100];
+    pane_init(root,"RootPane",0,1280,720); pane_init(inout,"N_InOut_00",0,30,40); pane_child(root,inout);
+    pane_init(down,"N_TitleBarDown_00",0,30,40); pane_child(inout,down);
+    pane_init(title,"N_TitleBar_00",0,30,40); pane_child(inout,title);
+    pane_init(row,"N_Align_00",48,1044,40); pane_child(down,row); *(float *)(row+0x34)=-318;
+    pane_init(bg,"RootPane",0,1280,720); pane_init(slide,"N_Slide_01",0,64,69); pane_child(bg,slide);
+    pane_init(base,"N_InOut_01",0,30,40); pane_child(slide,base);
+    pane_init(capture,"N_InCap_00",0,30,40); pane_child(bg,capture);
+    pane_init(black,"W_BlackBG_00",0,4788,758); pane_child(base,black);
+    pane_init(line,"W_Line_00",0,4590,574); pane_child(base,line); *(float *)(line+0x34)=-19;
+    test_touch_active=test_inventory_active=1;
+    const float sizes[][2]={{932,430},{1280,720},{390,844},{1024,768}};
+    for (unsigned i=0;i<sizeof sizes/sizeof *sizes;i++) {
+        float w=sizes[i][0],h=sizes[i][1];
+        dm_aspect_set_display(w/h); dm_aspect_set_safe_area(w,h,0,0,0);
+        float unit=dm_aspect_ui_point_scale();
+        for (int frame=0;frame<20;frame++) { dm_aspect_ui_pane(row); dm_aspect_ui_pane(line); }
+        assert(fabsf((574-*(float *)(line+0x54))/unit-16)<.001f);
+        assert(fabsf(*(float *)(line+0x34)+*(float *)(line+0x54)*.5f-268)<.001f);
+        assert(fabsf((*(float *)(row+0x34)+318)/unit-8)<.001f);
+        assert(fabsf(*(float *)(row+0x48)-1.4f)<.001f && *(float *)(row+0x48)==*(float *)(row+0x4c));
+        assert(*(float *)(row+0x50)==1044);
+    }
+    // Quest/System, touch disabled and unrelated similarly named trees restore native geometry.
+    for (int mode=1;mode<3;mode++) {
+        test_touch_active=mode!=1; test_inventory_active=mode!=0;
+        if (mode==2) { memset(title+0xb8,0,16); strcpy((char *)title+0xb8,"OtherBar"); }
+        dm_aspect_ui_pane(row);
+        if (mode<2) dm_aspect_ui_pane(line);
+        assert(*(float *)(row+0x48)==1 && *(float *)(row+0x30)==48 && *(float *)(row+0x34)==-318);
+        assert(*(float *)(line+0x54)==574 && *(float *)(line+0x34)==-19);
+    }
+    test_touch_active=test_inventory_active=0;
+    dm_aspect_set_display(GAME_ASPECT); dm_aspect_set_safe_area(1280,720,0,0,0);
+}
+static void test_slate_footer(void) {
+    uint8_t root[0x100],slate[0x100],capture[0x100],boot[0x100],deco[0x100],timeline[0x100];
+    uint8_t row[0x100],inout[0x100],wall[0x100],moya[0x100],text[0x100],upper[0x100],camera[0x100];
+    uint8_t scan[0x100],left[0x100],next[0x100],right[0x100],seam[0x100],stone[0x100];
+    uint8_t upper_moya[0x100],upper_text[0x100],upper_seam[0x100];
+    uint8_t soft_seams[4][0x100];
+    uint8_t bar_shades[2][0x100];
+    uint8_t key_capture[2][0x100],key_icon[2][0x100];
+    uint8_t key_draw[2][0x100],key_picture[2][0x100],key_glow[2][0x100];
+    uint16_t glyphs[]={0xe05e,0xe05d}; // live map Move and Zoom glyphs
+    pane_init(root,"RootPane",0,1280,720);
+    pane_init(slate,"Pa_ScanningLine_00",0,1302,720); pane_child(root,slate);
+    pane_init(capture,"N_CaptureText_01",0,696,36); pane_child(slate,capture);
+    pane_init(boot,"P_BootBG_00",0,1280,720); pane_child(slate,boot);
+    pane_init(deco,"N_Deco_00",0,30,40); pane_child(slate,deco);
+    pane_init(timeline,"N_TimeLineDemo_00",0,30,40); pane_child(deco,timeline);
+    pane_init(row,"N_Align_00",48,800,40); pane_child(timeline,row); *(float *)(row+0x34)=-320;
+    pane_init(left,"Pa_Guide_05",-256,360,40); pane_child(row,left);
+    pane_init(next,"Pa_Guide_04",-127,360,40); pane_child(row,next);
+    pane_init(right,"Pa_Guide_00",389,360,40); pane_child(row,right);
+    uint8_t *keys[]={left,right};
+    for (int i=0;i<2;i++) {
+        keys[i][0x59]=255;
+        pane_init(key_capture[i],"N_CaptureText_00",-80,200,40); pane_child(keys[i],key_capture[i]);
+        pane_init(key_icon[i],"T_Icon_00",80,34,34); pane_child(key_capture[i],key_icon[i]);
+        memcpy(key_icon[i]+0xe0,&(uintptr_t){(uintptr_t)&glyphs[i]},sizeof(uintptr_t));
+        pane_init(key_draw[i],"N_InOut_00",0,30,40); pane_child(keys[i],key_draw[i]);
+        pane_init(key_picture[i],"P_Text_00",-80,200,40); pane_child(key_draw[i],key_picture[i]); key_picture[i][0x59]=255;
+        pane_init(key_glow[i],"P_Sh_00",-80,200,40); pane_child(key_draw[i],key_glow[i]); key_glow[i][0x59]=180;
+    }
+    next[0x59]=255;
+    pane_init(inout,"N_InOut_00",0,30,40); pane_child(slate,inout);
+    pane_init(wall,"P_WallD_00",0,1280,56); pane_child(inout,wall); *(float *)(wall+0x34)=-360;
+    pane_init(moya,"P_MoyaD_00",0,1280,64); pane_child(inout,moya); *(float *)(moya+0x34)=-304;
+    pane_init(text,"T_DecoD_00",4,1280,14); pane_child(deco,text); *(float *)(text+0x34)=-296;
+    pane_init(upper,"P_WallU_00",0,1280,56); pane_child(inout,upper); *(float *)(upper+0x34)=360;
+    for(int i=0;i<2;i++) {
+        pane_init(bar_shades[i],i?"P_MoyaD_01":"P_MoyaU_01",0,1280,58);
+        pane_child(inout,bar_shades[i]);*(float *)(bar_shades[i]+0x34)=i?-360:360;
+    }
+    pane_init(scan,"P_ScanningLine_00",0,1280,608); pane_child(inout,scan);
+    pane_init(seam,"P_Core_06",-550,1098,58); pane_child(deco,seam); seam[0x59]=159;
+    pane_init(stone,"P_Alb_09",543,908,26); pane_child(deco,stone); stone[0x59]=255;
+    pane_init(upper_seam,"P_Core_01",-505,997,58); pane_child(deco,upper_seam); upper_seam[0x59]=200;
+    const char *soft_names[]={"P_BlurSh_01","P_BlurSh_06","P_Abst_01","P_Abst_06"};
+    for(int i=0;i<4;i++) {
+        pane_init(soft_seams[i],soft_names[i],-496,979,68);pane_child(deco,soft_seams[i]);
+        soft_seams[i][0x59]=128+i;
+    }
+    uint8_t *panes[]={row,wall,moya,text,upper,scan,left,next,right,seam,stone,upper_seam,
+        key_picture[0],key_picture[1],key_glow[0],key_glow[1],soft_seams[0],soft_seams[1],soft_seams[2],soft_seams[3],bar_shades[0],bar_shades[1]};
+    pane_init(upper_moya,"P_MoyaU_00",0,1280,26); pane_child(deco,upper_moya); *(float *)(upper_moya+0x34)=304;
+    pane_init(upper_text,"T_DecoU_00",0,1280,20); pane_child(deco,upper_text); *(float *)(upper_text+0x34)=296;
+    const float sizes[][2]={{932,430},{1280,720},{390,844},{1024,768}};
+    test_touch_active=1;
+    for (unsigned i=0;i<sizeof sizes/sizeof *sizes;i++) {
+        dm_aspect_set_display(sizes[i][0]/sizes[i][1]);
+        dm_aspect_set_safe_area(sizes[i][0],sizes[i][1],0,0,0);
+        float unit=dm_aspect_ui_point_scale();
+        // AppHome keeps the same row across map, runes, album and compendium.
+        for (int frame=0;frame<80;frame++) for (unsigned n=0;n<sizeof panes/sizeof *panes;n++) dm_aspect_ui_pane(panes[n]);
+        assert(fabsf(*(float *)(row+0x48)-1.4f)<.001f && *(float *)(row+0x48)==*(float *)(row+0x4c));
+        assert(fabsf((*(float *)(row+0x34)+320)/unit-8)<.001f);
+        assert(fabsf((*(float *)(wall+0x54)-56)/unit-16)<.001f && *(float *)(wall+0x34)==-360);
+        assert(fabsf((*(float *)(moya+0x34)+304)/unit-16)<.001f);
+        assert(fabsf((*(float *)(text+0x34)+296)/unit-16)<.001f && *(float *)(text+0x50)==1280);
+        assert(fabsf((*(float *)(upper+0x54)-56)/unit-16)<.001f && *(float *)(upper+0x34)==360);
+        for(int s=0;s<2;s++) {
+            assert(fabsf(*(float *)(bar_shades[s]+0x54)-58-16*unit)<.001f);
+            assert(fabsf(*(float *)(bar_shades[s]+0x50)-1280*fmaxf(1,dm_aspect_ratio()/GAME_ASPECT))<.001f);
+            assert(*(float *)(bar_shades[s]+0x34)==(s?-360:360));
+        }
+        dm_aspect_ui_pane(upper_moya); dm_aspect_ui_pane(upper_text);
+        assert(fabsf((304-*(float *)(upper_moya+0x34))/unit-16)<.001f);
+        assert(fabsf((296-*(float *)(upper_text+0x34))/unit-16)<.001f && *(float *)(upper_text+0x50)==1280);
+        // Suppress only the luminous bottom seam, preserving the scan area,
+        // stone artwork and native geometry (including the glow's dimensions).
+        assert(seam[0x59]==0 && upper_seam[0x59]==0 && stone[0x59]==255 && *(float *)(stone+0x54)==26);
+        for(int s=0;s<4;s++)assert(soft_seams[s][0x59]==0);
+        assert(fabsf(*(float *)(seam+0x50)-(1098+1280*(fmaxf(1,dm_aspect_ratio()/GAME_ASPECT)-1)))<.001f && *(float *)(seam+0x54)==58);
+        assert(*(float *)(scan+0x34)==0 && *(float *)(scan+0x54)==608);
+        assert(*(float *)(left+0x30)==-226 && *(float *)(next+0x30)==-103 && *(float *)(right+0x30)==389);
+        assert(*(float *)(left+0x48)==1 && *(float *)(left+0x4c)==1 && *(float *)(left+0x34)==0);
+        assert(left[0x59]==255 && right[0x59]==255 && next[0x59]==255); // native Locater inputs remain unchanged
+        for(int k=0;k<2;k++) assert(key_picture[k][0x59]==0 && key_glow[k][0x59]==0);
+    }
+    // The same rightmost slot becomes Select in Album; hiding must not stick.
+    glyphs[1]=0xe040; dm_aspect_ui_pane(key_picture[1]); dm_aspect_ui_pane(key_glow[1]);
+    assert(key_picture[1][0x59]==255 && key_glow[1][0x59]==180);
+    glyphs[1]=0xe057; dm_aspect_ui_pane(key_picture[1]); assert(key_picture[1][0x59]==255); // press-stick is a real action
+    glyphs[1]=0xe05d; dm_aspect_ui_pane(key_picture[1]); assert(key_picture[1][0x59]==0);
+    seam[0x59]=77; dm_aspect_ui_pane(seam); assert(seam[0x59]==0); // native animation still updates
+    test_touch_active=0;
+    for (unsigned n=0;n<sizeof panes/sizeof *panes;n++) dm_aspect_ui_pane(panes[n]);
+    assert(*(float *)(row+0x48)==1 && *(float *)(row+0x30)==48 && *(float *)(row+0x34)==-320);
+    assert(*(float *)(wall+0x54)==56 && *(float *)(wall+0x34)==-360);
+    assert(*(float *)(moya+0x34)==-304 && *(float *)(text+0x34)==-296);
+    assert(*(float *)(scan+0x34)==0 && *(float *)(scan+0x54)==608 && *(float *)(left+0x30)==-256);
+    for(int s=0;s<2;s++)assert(*(float *)(bar_shades[s]+0x54)==58);
+    assert(seam[0x59]==77 && upper_seam[0x59]==200);
+    for(int s=0;s<4;s++)assert(soft_seams[s][0x59]==128+s);
+    assert(left[0x59]==255 && right[0x59]==255);
+    for(int k=0;k<2;k++) assert(key_picture[k][0x59]==255 && key_glow[k][0x59]==180);
+    // The telescope's nested copy must retain its gameplay layout.
+    pane_init(camera,"Pa_CameraPointer_00",0,1280,720); pane_child(root,camera); pane_child(camera,slate);
+    test_touch_active=1;
+    for (unsigned n=0;n<sizeof panes/sizeof *panes;n++) dm_aspect_ui_pane(panes[n]);
+    assert(*(float *)(row+0x48)==1 && *(float *)(row+0x34)==-320 && *(float *)(wall+0x54)==56);
+    assert(seam[0x59]==77 && *(float *)(left+0x30)==-256);
+    for(int s=0;s<2;s++)assert(*(float *)(bar_shades[s]+0x54)==58);
+    test_touch_active=0;
+    dm_aspect_set_display(GAME_ASPECT); dm_aspect_set_safe_area(1280,720,0,0,0);
+}
+static void test_slate_side_frames(void) {
+    _Alignas(16) static uint8_t p[13][0x100];
+    const char *names[]={"RootPane","N_InOut_00","Pa_ScanningLine_00","N_CaptureText_01",
+        "P_BootBG_00","N_Deco_00","P_Core_00","P_Core_01","P_Core_02","P_Text_00",
+        "N_Em_00","P_Em_00","Pa_CameraPointer_00"};
+    int parents[]={-1,0,0,2,2,2,5,5,5,5,5,10,0};
+    for(int i=0;i<13;i++) {pane_init(p[i],names[i],0,30,40); if(i) pane_child(p[parents[i]],p[i]);}
+    *(float *)(p[6]+0x30)=-640; *(float *)(p[6]+0x50)=135;
+    *(float *)(p[7]+0x30)=-505; *(float *)(p[7]+0x50)=997;
+    *(float *)(p[8]+0x30)=640; *(float *)(p[8]+0x50)=148;
+    *(float *)(p[9]+0x50)=696; *(float *)(p[11]+0x30)=-549;
+    const float ratios[]={16.f/9,21.f/9,32.f/9,16.f/9};
+    for(int camera=0;camera<2;camera++) {
+        *(uint8_t **)(p[2]+0x18)=p[camera ? 1 : 0];
+        for(unsigned r=0;r<sizeof ratios/sizeof *ratios;r++) {
+            dm_aspect_set_display(ratios[r]); float margin=640*(fmaxf(1,ratios[r]/GAME_ASPECT)-1);
+            for(int n=0;n<20;n++) for(int i=6;i<12;i++) dm_aspect_ui_pane(p[i]);
+            assert(fabsf(*(float *)(p[6]+0x30)-(-640-margin))<.001f && *(float *)(p[6]+0x50)==135);
+            assert(fabsf(*(float *)(p[8]+0x30)-(640+margin))<.001f && *(float *)(p[8]+0x50)==148);
+            assert(fabsf(*(float *)(p[7]+0x50)-(997+2*margin))<.001f);
+            assert(fabsf(*(float *)(p[6]+0x30)+135-*(float *)(p[7]+0x30))<.001f);
+            assert(fabsf(*(float *)(p[7]+0x30)+*(float *)(p[7]+0x50)-(*(float *)(p[8]+0x30)-148))<.001f);
+            assert(*(float *)(p[9]+0x30)==0 && *(float *)(p[9]+0x50)==696); // foreground unchanged
+            assert(fabsf(*(float *)(p[11]+0x30)-(-549-margin))<.001f);
+            uint64_t regs[31]={0}; regs[21]=(uintptr_t)p[7]; aspect_ui_draw(regs);
+            assert(dm_aspect_ui_background_drawing()==(ratios[r]>GAME_ASPECT)); aspect_ui_draw_end(regs);
+        }
+    }
+    // MainScreen's telescope shares the art but not the fullscreen frame.
+    *(uint8_t **)(p[2]+0x18)=p[12]; dm_aspect_set_display(32.f/9);
+    for(int i=6;i<12;i++) dm_aspect_ui_pane(p[i]);
+    assert(*(float *)(p[6]+0x30)==-640 && *(float *)(p[7]+0x50)==997);
+    dm_aspect_set_display(GAME_ASPECT);
+}
+
+static void test_menu_headers(void) {
+    _Alignas(16) static uint8_t p[13][0x100];
+    const char *names[]={"RootPane","Pa_ScanningLine_00","N_CaptureText_01","P_BootBG_00",
+        "N_Deco_00","N_TimeLineDemo_00","P_Text_00","P_Sh_00",
+        "N_InOut_00","N_TitleBar_00","N_TitleBarUp_00","Pa_BtnZL_00","Pa_BtnZR_00"};
+    int parents[]={-1,0,1,1,1,4,5,5,0,8,9,10,10};
+    for(int i=0;i<13;i++) { pane_init(p[i],names[i],0,40,36); if(i) pane_child(p[parents[i]],p[i]); }
+    *(float *)(p[6]+0x34)=*(float *)(p[7]+0x34)=320;
+    const float sizes[][2]={{932,430},{390,844},{1280,720},{1024,768}};
+    for(unsigned n=0;n<sizeof sizes/sizeof *sizes;n++) {
+        dm_aspect_set_display(sizes[n][0]/sizes[n][1]); dm_aspect_set_safe_area(sizes[n][0],sizes[n][1],0,0,0);
+        test_touch_active=1;
+        for(int repeat=0;repeat<20;repeat++) for(int i=6;i<13;i++) dm_aspect_ui_pane(p[i]);
+        for(int i=6;i<8;i++) {
+            assert(fabsf(*(float *)(p[i]+0x48)-1.4f)<.001f);
+            assert(fabsf(*(float *)(p[i]+0x34)-(320-8*dm_aspect_ui_point_scale()))<.001f);
+        }
+        for(int i=11;i<13;i++) assert(fabsf(*(float *)(p[i]+0x48)-1.4f)<.001f);
+        assert(*(float *)(p[9]+0x54)==36 && *(float *)(p[9]+0x4c)==1); // + top bar unchanged
+        test_touch_active=0;
+        for(int i=6;i<13;i++) dm_aspect_ui_pane(p[i]);
+        for(int i=6;i<13;i++) assert(*(float *)(p[i]+0x48)==1);
+        assert(*(float *)(p[6]+0x34)==320);
+    }
+    dm_aspect_set_display(GAME_ASPECT); dm_aspect_set_safe_area(1280,720,0,0,0);
+}
+static void test_dungeon_controls(void) {
+    _Alignas(16) static uint8_t p[22][0x140];
+    const char *names[]={"RootPane","N_Born_00","N_InOut_00","N_MiniMap_01",
+        "N_GuidePos_01","N_Device_03","N_GuidePos_00","P_Text_01","P_Sh_01",
+        "P_IconClear_01","P_IconSh_01","N_PosBase_00","N_CaptureText_01",
+        "T_A_00","T_GuideA_00","T_B_00","T_GuideB_00","W_SubTitleLineA_02",
+        "T_A_00_KR","T_B_00_KR","PaFireBtnNextMove_00","T_Guide_00"};
+    const int parents[]={-1,0,1,2,3,4,5,6,6,6,6,0,0,12,12,12,12,12,12,12,4,0};
+    for (int i=0;i<22;i++) {
+        pane_init(p[i],names[i],0,40,29);
+        if (i) pane_child(p[parents[i]],p[i]);
+    }
+    for (int i=7;i<=10;i++) {
+        *(float *)(p[i]+0x30)=i<=8 ? 194 : 169;
+        *(float *)(p[i]+0x34)=i<=8 ? -6 : 30;
+        *(float *)(p[i]+0x50)=i<=8 ? 400 : 250;
+        *(float *)(p[i]+0x54)=i<=8 ? 74 : 40;
+    }
+    for (int i=13;i<=19;i++) *(float *)(p[i]+0x34)=i==17 ? 20 : (i==15 || i==16 || i==19) ? -20 : 5;
+    *(float *)(p[14]+0x34)=6;
+    *(float *)(p[14]+0x54)=*(float *)(p[16]+0x54)=20;
+    *(float *)(p[17]+0x54)=20;
+    for (int i=13;i<=19;i++) if (i!=17) p[i][0x11e]=i>=18 ? 1 : 5;
+    const float sizes[][2]={{1280,720},{932,430},{2560,720},{390,844},{1024,768}};
+    for (unsigned n=0;n<sizeof sizes/sizeof *sizes;n++) {
+        dm_aspect_set_display(sizes[n][0]/sizes[n][1]);
+        dm_aspect_set_safe_area(sizes[n][0],sizes[n][1],0,0,0);
+        test_touch_active=1;
+        for (int repeat=0;repeat<20;repeat++) for (int i=7;i<22;i++) dm_aspect_ui_pane(p[i]);
+        for (int i=7;i<=10;i++) {
+            float scale=i<=8 ? 1.8f : 1.4f;
+            assert(fabsf(*(float *)(p[i]+0x48)-scale)<.001f);
+            assert(fabsf(*(float *)(p[i]+0x4c)-scale)<.001f);
+            assert(fabsf(*(float *)(p[i]+0x34)-((i<=8 ? -6 : 68)+16*dm_aspect_ui_point_scale()))<.001f);
+            assert(fabsf(*(float *)(p[i]+0x30)-(i<=8 ? 246.4f : 169))<.001f);
+            assert(*(float *)(p[i]+0x50)==(i<=8 ? 400 : 250));
+        }
+        float a=*(float *)(p[13]+0x34), b=*(float *)(p[15]+0x34);
+        assert(a==7 && b==-22 && (a-b)*1.8f>25*1.4f);
+        assert(*(float *)(p[14]+0x34)==a-2 && *(float *)(p[16]+0x34)==b-2);
+        assert(29*1.8f>=34*1.4f && 29*1.8f<34*1.4f*1.15f); // comparable to footer glyph
+        assert(fabsf((246.4f-131*1.8f)-(194-131*1.4f))<.001f);
+        float row_top=*(float *)(p[7]+0x34)+(a+29*.5f)*1.8f;
+        float title_bottom=*(float *)(p[9]+0x34)-40*1.4f*.5f;
+        assert(title_bottom-row_top>=7); // title stays clear of the enlarged A row
+        assert(a+29*.5f<37 && b-29*.5f>-37); // no capture cropping
+        assert(*(float *)(p[17]+0x34)==24 && 24+10<37);
+        assert(*(float *)(p[18]+0x34)==a && *(float *)(p[19]+0x34)==b);
+        for (int i=13;i<=19;i++) if (i!=17) {
+            assert(p[i][0x11e]==1);
+            if (i<18) assert(p[i][0x11c]&4);
+            p[i][0x11c]&=~4;
+            dm_aspect_ui_pane(p[i]);
+            assert(!(p[i][0x11c]&4));
+        }
+        assert(*(float *)(p[20]+0x48)==1 && *(float *)(p[21]+0x34)==0); // model controls and bottom guide untouched
+        test_touch_active=0;
+        for (int i=7;i<22;i++) dm_aspect_ui_pane(p[i]);
+        for (int i=7;i<=10;i++) {
+            assert(*(float *)(p[i]+0x48)==1 && *(float *)(p[i]+0x4c)==1);
+            assert(*(float *)(p[i]+0x34)==(i<=8 ? -6 : 30));
+            assert(*(float *)(p[i]+0x30)==(i<=8 ? 194 : 169));
+        }
+        assert(*(float *)(p[13]+0x34)==5 && *(float *)(p[15]+0x34)==-20);
+        assert(*(float *)(p[17]+0x34)==20);
+        for (int i=13;i<=19;i++) if (i!=17) assert(p[i][0x11e]==(i>=18 ? 1 : 5));
+    }
+    // A source animation becomes the new native value, then restores exactly.
+    test_touch_active=1; *(float *)(p[13]+0x34)=6;
+    dm_aspect_ui_pane(p[13]); assert(*(float *)(p[13]+0x34)==8);
+    dm_aspect_ui_pane(p[14]); assert(*(float *)(p[14]+0x34)==6);
+    test_touch_active=0; dm_aspect_ui_pane(p[13]); assert(*(float *)(p[13]+0x34)==6);
+    // Reused capture names outside the exact dungeon owner must not scale.
+    strcpy((char *)p[11]+0xb8,"Other_00"); test_touch_active=1;
+    dm_aspect_ui_pane(p[7]); dm_aspect_ui_pane(p[13]);
+    assert(*(float *)(p[7]+0x48)==1 && *(float *)(p[13]+0x34)==6);
+    test_touch_active=0;
+    dm_aspect_set_display(GAME_ASPECT); dm_aspect_set_safe_area(1280,720,0,0,0);
+}
 static void test_right_hud_padding(void) {
     uint8_t root[0x100],all[0x100],state[0x100],heart[0x100];
     pane_init(root,"RootPane",0,1280,720); pane_init(all,"N_All_00",0,30,30); pane_child(root,all);
@@ -69,11 +361,12 @@ static void test_right_hud_padding(void) {
             assert(fabsf(rect[0])<.001f && fabsf(rect[0]+rect[2]-w)<.001f);
             dm_touchpad_rect plus=dm_botw_layout_control(&layout,10,w,h,insets[i][0],0,insets[i][1],0,
                 (dm_touchpad_rect){rect[0],rect[1],rect[2],rect[3]});
-            float glyph_right=plus.x+(DM_TP_BOTW_MENU_SIZE+DM_TP_BOTW_MENU_GLYPH_SIZE)*scale*.5f;
-            float padding=insets[i][1]>0 ? insets[i][1]+10*scale : 58*scale+2;
+            float glyph_right=plus.x+plus.width*(1+DM_TP_BOTW_MENU_GLYPH_SIZE/DM_TP_BOTW_MENU_SIZE)*.5f;
+            float padding=(insets[i][1]>0 ? insets[i][1]+10*scale : 58*scale+2)+
+                2*(1-DM_TP_BOTW_MENU_GLYPH_SIZE/DM_TP_BOTW_MENU_SIZE);
             assert(fabsf(w-glyph_right-padding)<.001f);
             if (insets[i][1]>0) assert(fabsf(w-plus.x-plus.width-insets[i][1])<.001f);
-            assert(fabsf(plus.width-39*scale)<.001f);
+            assert(fabsf(plus.width-39*scale-4)<.001f);
             float extra=fmaxf(0,360*w/h-640),point_scale=1280/fminf(w,h*16.f/9);
             assert(fabsf(dm_aspect_hud_offset(1)-extra)<.001f);
             assert(fabsf(dm_aspect_hud_safe_right()-insets[i][1]*point_scale)<.001f);
@@ -535,5 +828,10 @@ int main(void) {
     test_seated_regions();
     test_left_hud_stack();
     test_touch_hud_target();
+    test_inventory_footer();
+    test_slate_footer();
+    test_slate_side_frames();
+    test_menu_headers();
+    test_dungeon_controls();
     free(g_mod[0].base); puts("aspect: camera, centered content/hit regions and independent fullscreen backgrounds passed");
 }

@@ -76,29 +76,48 @@ private struct SettingsSidebarHighlight: NSViewRepresentable {
 
 // Only the game process links the frame-capture adapter; the standalone Mac launcher does not.
 #if os(iOS) || DM_HOST_UI
-func withGameSettingsBackground(_ model: LauncherModel, _ complete: @escaping (Image?) -> Void) {
-    var delivered = false
-    model.picturePreviewFrame = nil
-    let finish: (Image?) -> Void = { image in
-        guard !delivered else { return }
-        delivered = true
-        complete(image)
+private let gameSettingsPauseQueue = DispatchQueue(label: "nxnative.settings-pause", qos: .userInitiated)
+
+func setGameSettingsPaused(_ paused: Bool, complete: (() -> Void)? = nil) {
+    // Draining submitted GPU/audio work can block; serialize pause/resume off the UI thread.
+    gameSettingsPauseQueue.async {
+        dm_launcher_settings_pause(paused ? 1 : 0)
+        if let complete { DispatchQueue.main.async(execute: complete) }
     }
-    dm_launcher_grab_filter_frame { image in
-        DispatchQueue.main.async {
-            guard !delivered else { return }
-            model.picturePreviewFrame = image
-            guard let image else { finish(nil); return }
-            let mode = model.values["DM_PRESENT_FILTER"] ?? "off"
-            let strength = Float(model.values["DM_PRESENT_FILTER_STRENGTH"] ?? "1") ?? 1
-            DispatchQueue.global(qos: .userInitiated).async {
-                let filtered = dm_launcher_filter_preview(image, mode, strength, 1280) ?? image
-                DispatchQueue.main.async { finish(Image(decorative: filtered, scale: 1)) }
+}
+
+@discardableResult
+func prepareGameSettingsBackground(_ model: LauncherModel, _ captureReady: @escaping () -> Void) -> () -> Void {
+    var active = true
+    var captured = false
+    model.picturePreviewFrame = nil
+    model.gameSettingsBackground = nil
+    let finish: (CGImage?) -> Void = { image in
+        guard active && !captured else { return }
+        captured = true
+        model.picturePreviewFrame = image
+        captureReady()
+        guard let image else { return }
+        let mode = model.values["DM_PRESENT_FILTER"] ?? "off"
+        let strength = Float(model.values["DM_PRESENT_FILTER_STRENGTH"] ?? "1") ?? 1
+        DispatchQueue.global(qos: .userInitiated).async {
+            let filtered = dm_launcher_filter_preview(image, mode, strength, 1280) ?? image
+            DispatchQueue.main.async {
+                if active { model.gameSettingsBackground = filtered }
             }
         }
     }
-    // A game that has stopped presenting must still allow settings to open.
+    dm_launcher_grab_filter_frame { image in
+        DispatchQueue.main.async { finish(image) }
+    }
+    // A stopped renderer must not keep the pause waiting for a frame. This
+    // deadline applies to capture only; filtering never gates presentation/pause.
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { finish(nil) }
+    return {
+        active = false
+        model.picturePreviewFrame = nil
+        model.gameSettingsBackground = nil
+    }
 }
 #endif
 
@@ -493,6 +512,9 @@ struct LauncherSettingsPage: View {
 
     private func sectionTitle(_ section: String) -> String { section == "Game" ? "Graphics" : section }
     private var detailTitle: String { selection == "Saves" ? "Save settings" : sectionTitle(selection) }
+    private var touchBackground: Image? {
+        gameBackground ?? m.gameSettingsBackground.map { Image(decorative: $0, scale: 1) }
+    }
 
     private func sectionIcon(_ section: String) -> String {
         switch section {
@@ -636,7 +658,7 @@ struct LauncherSettingsPage: View {
             if pictureFilterPage {
                 PictureFilterSettingsView(m: m, close: close) { pictureFilterPage = false }
             } else if let touchPage, touchPage != .stick {
-                BotwTouchSettingsView(m: m, portrait: touchPage == .compact, background: gameBackground,
+                BotwTouchSettingsView(m: m, portrait: touchPage == .compact, background: touchBackground,
                                       play: m.isRunning ? close : onPlay) { self.touchPage = nil }
                     .id(touchPage)
                     .accessibilityElement(children: .contain)

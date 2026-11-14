@@ -12,6 +12,7 @@ targets:
       - path: ../../Sources/GameMenu.swift
       - path: ../../Sources/LauncherSettings.swift
       - path: ../../Sources/DmGamepad.m
+      - path: ../../Sources/DmTouchFeedback.m
       - path: ../../Sources/front_ios.m
     dependencies:
       - sdk: UIKit.framework
@@ -22,6 +23,7 @@ targets:
       - sdk: QuartzCore.framework
       - sdk: Metal.framework
       - sdk: AVFAudio.framework
+      - sdk: CoreHaptics.framework
     info:
       path: Info.plist
       properties:

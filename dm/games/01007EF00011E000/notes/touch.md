@@ -2,6 +2,43 @@
 
 ## Touch and menu work
 
+Implemented; physical iPhone acceptance pending (2026-11-14):
+[Opening settings waits for a background screenshot](../../../../docs/reference/services.md#opening-settings-waits-for-a-background-screenshot).
+The FPS entry now presents immediately while preparing its optional background,
+and drains GPU/audio work off the UI thread.
+The launcher/documentation suite (15 tests), the settings state-owner test,
+and the CPU-only graphics-suspension fixture (23 checks) pass. Game regression
+preparation for BOTW and TOTK stops because neither has a standard Mac build
+under the local games folder. clang-tidy reports no added baseline pairs with
+local LLVM 19.1.5; the lint baseline uses LLVM 23.1.4, so the pinned-version
+lint result remains unchecked.
+
+Open, replacement implemented (2026-11-14): The user reports prompt button/game
+response followed by touch haptics one to two seconds later, including with
+game rumble disabled. The supplied iPhone log contains seven UIKit requests: event age
+12.532–21.252 ms, impact API call 0.047–0.122 ms, and prepare API call
+0.015–0.066 ms. These samples show no long application-side request delay;
+they do not measure physical playback. The cause of the delay inside the UIKit
+or system playback path remains unconfirmed. The replacement uses
+[a prepared Core Haptics player](../../../../docs/reference/services.md#late-iphone-touch-button-haptics).
+The user reports no delay with the replacement, but found the raw 0.6 transient
+too strong, while 0.18 was barely perceptible. Intensity is now 0.32, retaining
+a single short click and the prepared engine; matching the original Light feel
+remains under review.
+`DM_TOUCH_HAPTICS_TRACE=1` now logs
+`event_age_ms`, `player_call_ms` and `accepted`; a not-yet-ready player rejects
+the request instead of replaying it after initialization.
+
+Current (2026-11-14): The BOTW 1.9.0 touch port accepts screen-wide
+dialogue taps, reveals unfinished text through the validated native function,
+and preserves controls during automatic subtitles and combat advice. Menu
+footer and Divine Beast controls use enlarged native geometry and touch targets;
+direct map panning updates the stamp projection. Inventory swipes request a native
+page change while the finger remains down. Plus and Minus both grow by four
+frontend points. The iPhone touch settings can
+disable system edge-gesture protection. The menu and aspect fixtures pass;
+Mac gameplay and physical iPhone acceptance remain to be checked.
+
 Resolved: rewriting the UI-camera observation at `main+0xd44a2c` after
 `blr x8` was rejected by the generic post-call classifier. See
 [Observation gates on any relocatable instruction](../../../../docs/reference/rewriter.md#observation-gates-on-any-relocatable-instruction).

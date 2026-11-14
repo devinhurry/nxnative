@@ -32,7 +32,7 @@ $(B)/t_framegen_fps: t_framegen_fps.c ../loader.c ../dm.h ../../gfx/nvn/framegen
 framegen-fps: $(B)/t_framegen_fps
 	$(B)/t_framegen_fps
 run: framegen-fps
-run: $(B)/t_launcher_settings $(B)/t_memory_mode $(B)/t_language $(B)/t_aspect $(B)/t_look $(B)/t_botw_touchhud $(B)/t_botw_touch_actions $(B)/t_botw_touch_menu $(B)/t_botw_touch_trackpad $(B)/t_gate_obs_result $(B)/t_device_motion $(B)/t_botw_portrait $(B)/t_motion $(B)/t_heap_size $(B)/t_touch $(B)/t_gesture $(B)/t_oe $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_audio_spsc $(B)/t_swkbd $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pctl $(B)/t_sf $(B)/t_time $(B)/t_shared_font $(B)/t_vorbis $(B)/t_vorbis_divides $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple $(B)/t_pollwait $(B)/t_cheats $(B)/t_pad_hid
+run: $(B)/t_launcher_settings $(B)/t_memory_mode $(B)/t_language $(B)/t_aspect $(B)/t_look $(B)/t_botw_touchhud $(B)/t_botw_touch_actions $(B)/t_botw_touch_menu $(B)/t_botw_touch_trackpad $(B)/t_gate_obs_result $(B)/t_device_motion $(B)/t_botw_portrait $(B)/t_motion $(B)/t_heap_size $(B)/t_touch $(B)/t_gesture $(B)/t_oe $(B)/t_fs $(B)/t_fs_commit_list $(B)/t_thread_leak $(B)/t_fs_case $(B)/t_audio $(B)/t_audio_spsc $(B)/t_swkbd $(B)/t_altstack $(B)/t_condvar $(B)/t_condvar_old $(B)/t_pctl $(B)/t_sf $(B)/t_time $(B)/t_shared_font $(B)/t_vorbis $(B)/t_vorbis_divides $(B)/t_hid $(B)/t_haptics $(B)/t_haptics_apple $(B)/t_touch_feedback $(B)/t_pollwait $(B)/t_cheats $(B)/t_pad_hid
 	$(B)/t_launcher_settings
 	TMPDIR="$(abspath $(B))" $(B)/t_memory_mode
 	$(B)/t_language
@@ -96,6 +96,7 @@ run: $(B)/t_launcher_settings $(B)/t_memory_mode $(B)/t_language $(B)/t_aspect $
 	$(B)/t_pad_hid
 	$(B)/t_haptics
 	$(B)/t_haptics_apple
+	$(B)/t_touch_feedback
 	TMPDIR="$(abspath $(B))" $(B)/t_cheats $(QUIET)
 	$(B)/t_nro
 	$(B)/t_symbols
@@ -267,6 +268,9 @@ $(B)/t_haptics: t_haptics.c ../hle_haptics.c ../hle_haptics.h ../dm_input.h | $(
 	$(CLANG) -O1 -g -Wall -Werror -I.. -o $@ t_haptics.c ../hle_haptics.c
 $(B)/t_haptics_apple: t_haptics_apple.m ../haptics_apple.m ../haptics_apple.h ../hle_haptics.c ../hle_haptics.h | $(B)
 	$(CLANG) -O1 -g -fobjc-arc -Wall -Werror -I.. -o $@ t_haptics_apple.m ../hle_haptics.c -framework Cocoa -framework GameController -framework CoreHaptics -framework IOKit
+
+$(B)/t_touch_feedback: t_touch_feedback.m ../../ios/Sources/DmTouchFeedback.m ../../ios/Sources/DmTouchFeedback.h | $(B)
+	$(CLANG) -O1 -g -fobjc-arc -Wall -Werror -o $@ t_touch_feedback.m -framework Foundation -framework CoreHaptics -framework AVFAudio
 $(B)/t_time: t_time.c ../hle_time.c ../hle.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -Wall -Werror -Wno-unused-function -I.. $(GINC) -o $@ t_time.c
 $(B)/t_oe: t_oe.c ../hle_oe.c ../hle.h ../dm.h $(GAME_H) | $(B)
@@ -324,7 +328,7 @@ $(B)/t_botw_touch_actions: t_botw_touch_actions.c ../botw_touch_actions.h ../hle
 .PHONY: botw_touch_menu
 botw_touch_menu: $(B)/t_botw_touch_menu
 	$(B)/t_botw_touch_menu
-$(B)/t_botw_touch_menu: t_botw_touch_menu.c ../botw_touch_menu.h ../botw_touch_screens.inc ../botw_ui_audit.inc ../hle_botw_touch_menu.c ../front.h ../hle.h ../dm.h ../dm_input.h $(GAME_H) | $(B)
+$(B)/t_botw_touch_menu: t_botw_touch_menu.c t_botw_inventory_followup.inc t_botw_journal_followup.inc ../../games/01007EF00011E000/botw_inventory.h ../../games/01007EF00011E000/botw_journal.h ../botw_touch_menu.h ../botw_touch_screens.inc ../botw_ui_audit.inc ../hle_botw_touch_menu.c ../front.h ../hle.h ../dm.h ../dm_input.h $(GAME_H) | $(B)
 	clang -O1 -Wall -Werror -Wno-unused-function -DDM_TEST_HOOKS -I.. $(GINC) -o $@ t_botw_touch_menu.c -lpthread -lm
 $(B)/t_gate_obs_result: t_gate_obs_result.c ../hle.c ../dm.h $(GAME_H) | $(B)
 	clang -O1 -Wall -Werror -Wno-unused-function -ffunction-sections -fdata-sections -Wl,-dead_strip -I.. $(GINC) -o $@ t_gate_obs_result.c

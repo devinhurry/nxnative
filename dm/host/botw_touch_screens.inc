@@ -7,6 +7,9 @@ BOTW_UI_SCREEN(EXACT, "PauseMenuBG_00", PASSIVE)
 BOTW_UI_SCREEN(EXACT, "PauseMenuInfo_00", PASSIVE)
 BOTW_UI_SCREEN(EXACT, "AppCamera_00", MENU)
 BOTW_UI_SCREEN(PREFIX, "Message3D", PASSIVE)
+// Automatic voice subtitles also appear during playable Divine Beast fights.
+// Cinematics still hide controls through MainScreen's native gameplay HUD.
+BOTW_UI_SCREEN(EXACT, "MessageDemo_00", PASSIVE)
 BOTW_UI_SCREEN(EXACT, "MessageTipsRunTime_00", TIP)
 BOTW_UI_SCREEN(EXACT, "MessageTipsPauseMenu_00", TIP)
 BOTW_UI_SCREEN(EXACT, "BoxCursorTV", PASSIVE)

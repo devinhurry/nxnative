@@ -984,7 +984,8 @@ static BOOL preview_seated(void) { float region[4]; return dm_aspect_region(1,re
     dm_touchpad_point p = [self topPoint:e];
     _down = _last = NSMakePoint(p.x, p.y); _hasTouch = YES; _held = _cancelPending; _owner = PREVIEW_NONE;
     [self setBotwMenuActive:_active && !dm_botw_touch_controls_visible()];
-    if (_menuMode && !_settingsShortcutVisible && ((!_cameraPadVisible && !preview_seated()) || (preview_seated() && p.y<[self controlArea].y))) {
+    BOOL message = dm_botw_touch_message_active();
+    if (_menuMode && (message || !_settingsShortcutVisible) && (message || (!_cameraPadVisible && !preview_seated()) || (preview_seated() && p.y<[self controlArea].y))) {
         if (dm_botw_touch_menu_dpad_visible() && !preview_seated()) {
             dm_touchpad_point center=self.dpadCenter;
             uint64_t direction = hypotf(p.x-center.x,p.y-center.y)<=self.dpadRadius*DM_TP_DPAD_GRAB ? [self dpadAtTop:p] : 0;

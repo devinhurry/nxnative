@@ -19,7 +19,21 @@ final class LauncherHarnessRoot: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         guard !shown else { return }
-        shown = true; reopen()
+        shown = true
+        if CommandLine.arguments.contains("--check-in-game-settings") {
+            let start = Date()
+            let accepted = dmShowGameSettings(Unmanaged.passUnretained(self).toOpaque(), {})
+            let presented = presentedViewController != nil
+            let duplicate = dmShowGameSettings(Unmanaged.passUnretained(self).toOpaque(), {})
+            let result: [String: Any] = ["accepted": accepted, "presentedWithoutFrame": presented,
+                                         "duplicateRejected": !duplicate,
+                                         "requestMilliseconds": Date().timeIntervalSince(start) * 1000]
+            let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("settings-presentation.json")
+            try! JSONSerialization.data(withJSONObject: result, options: .sortedKeys).write(to: file)
+            return
+        }
+        reopen()
     }
     @objc func reopen() {
         _ = dmShowLauncher(Unmanaged.passUnretained(self).toOpaque(), {

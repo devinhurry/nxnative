@@ -233,6 +233,8 @@ typedef struct {
     char name[16];
     float native_width, written_width, native_height, written_height, native_x, written_x, native_y, written_y;
     float native_scale_x, written_scale_x, native_scale_y, written_scale_y;
+    uint8_t native_alpha, written_alpha;
+    uint8_t native_text_alignment, written_text_alignment;
 } aspect_ui_width;
 static void *g_ui_widths;
 static pthread_mutex_t g_ui_width_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -268,6 +270,49 @@ static uint8_t *aspect_ui_child(uint8_t *parent, const char *name) {
     }
     return NULL;
 }
+// AppMapDungeon's right-hand A/B controls are captured independently of the
+// bottom navigation bar. Adjust the composed pictures and their source rows.
+static int aspect_ui_dungeon_controls(uint8_t *pane) {
+    int rows=aspect_ui_named(pane,"P_Text_01") || aspect_ui_named(pane,"P_Sh_01");
+    int title=aspect_ui_named(pane,"P_IconClear_01") || aspect_ui_named(pane,"P_IconSh_01");
+    const char *name=(const char *)pane+0xb8;
+    int a=!strncmp(name,"T_A_00",6) || !strncmp(name,"T_GuideA_00",11);
+    int b=!strncmp(name,"T_B_00",6) || !strncmp(name,"T_GuideB_00",11);
+    int line=!strncmp(name,"W_SubTitleLineA_02",24);
+    if (!rows && !title && !a && !b && !line) return 0;
+    uint8_t *owner=aspect_ui_parent(pane), *root=NULL;
+    if ((a || b || line) && aspect_ui_named(owner,"N_CaptureText_01")) {
+        root=aspect_ui_parent(owner);
+    } else if ((rows || title) && aspect_ui_named(owner,"N_GuidePos_00")) {
+        static const char *const path[]={"N_Device_03","N_GuidePos_01","N_MiniMap_01",
+            "N_InOut_00","N_Born_00","RootPane"};
+        for (unsigned i=0;i<sizeof path/sizeof *path;i++) {
+            owner=aspect_ui_parent(owner);
+            if (!aspect_ui_named(owner,path[i])) return 0;
+        }
+        root=owner;
+    }
+    if (!aspect_ui_named(root,"RootPane") || !aspect_ui_child(root,"N_Born_00") ||
+        !aspect_ui_child(root,"N_PosBase_00") || !aspect_ui_child(root,"N_CaptureText_01")) return 0;
+    return rows ? 1 : title ? 2 : a ? 3 : b ? 4 : 5;
+}
+// AppHome and AppCamera instance the same decorative frame. Its small
+// corner/edge pictures are separate from the centered text and live controls.
+static int aspect_ui_slate_border(uint8_t *pane) {
+    if (!pane) return 0;
+    const char *name=(const char *)pane+0xb8;
+    uint8_t *deco=aspect_ui_parent(pane);
+    int emblem=!strncmp(name,"P_Em_",5) && aspect_ui_named(deco,"N_Em_00");
+    if (emblem) deco=aspect_ui_parent(deco);
+    if (!emblem && strncmp(name,"P_Core_",7) && strncmp(name,"P_BlurSh_",9) &&
+        strncmp(name,"P_Abst_",7) && strncmp(name,"P_Alb_",6) && strncmp(name,"P_Ind_",6)) return 0;
+    if (!aspect_ui_named(deco,"N_Deco_00")) return 0;
+    uint8_t *slate=aspect_ui_parent(deco), *owner=aspect_ui_parent(slate);
+    if (!aspect_ui_named(slate,"Pa_ScanningLine_00") || !aspect_ui_child(slate,"N_CaptureText_01") ||
+        !aspect_ui_child(slate,"P_BootBG_00")) return 0;
+    return aspect_ui_named(owner,"RootPane") ||
+        (aspect_ui_named(owner,"N_InOut_00") && aspect_ui_named(aspect_ui_parent(owner),"RootPane"));
+}
 static uint8_t *aspect_ui_map_cut(uint8_t *pane) {
     if (!aspect_ui_named(pane, "N_InOut_00") && !aspect_ui_named(pane, "N_InOut_01")) return NULL;
     uint8_t *root = aspect_ui_parent(pane);
@@ -280,6 +325,76 @@ static int aspect_ui_map_collapsed(uint8_t *cut) {
     if (!cut) return 0;
     float size[2]; memcpy(size, cut + 0x50, sizeof size);
     return fabsf(size[0] - 166) < 2 && fabsf(size[1] - 166) < 2;
+}
+// Match the native shared bars, independently of page focus and popup state:
+// + uses PauseMenuInfo/PauseMenuBG, - uses AppHome's scanning-line part.
+// Roles: 1 row, 2 pause frame, 3 bottom fill, 4 decoration, 5 key, 6 seam, 7 art;
+// 8 slate header capture destination, 9 top fill, 10 pause L/R, 11 top decoration, 12 pause shoulder labels, 13 bar shade.
+static int aspect_ui_menu_footer(uint8_t *pane) {
+    int row = aspect_ui_named(pane, "N_Align_00") || aspect_ui_named(pane, "N_Align_01");
+    int guide = aspect_ui_named(pane, "Pa_GuideB_00");
+    int border = aspect_ui_named(pane, "W_Line_00") || aspect_ui_named(pane, "W_Line_02") ||
+        aspect_ui_named(pane, "W_BlackBG_00");
+    int top_fill = aspect_ui_named(pane,"P_WallU_00");
+    int top_edge = aspect_ui_named(pane,"P_MoyaU_00") || aspect_ui_named(pane,"T_DecoU_00");
+    int bar_shade=aspect_ui_named(pane,"P_MoyaU_01") || aspect_ui_named(pane,"P_MoyaD_01");
+    int header = aspect_ui_named(pane,"P_Text_00") || aspect_ui_named(pane,"P_Sh_00");
+    int shoulder = aspect_ui_named(pane,"Pa_BtnZL_00") || aspect_ui_named(pane,"Pa_BtnZR_00");
+    int shoulder_label = aspect_ui_named(pane,"T_LeftText_00") || aspect_ui_named(pane,"T_LeftText_01") ||
+        aspect_ui_named(pane,"T_RightText_00") || aspect_ui_named(pane,"T_RightText_01");
+    int fill = aspect_ui_named(pane, "P_WallD_00");
+    int edge = aspect_ui_named(pane, "P_MoyaD_00") || aspect_ui_named(pane, "T_DecoD_00");
+    int seam = aspect_ui_named(pane,"P_Core_06") || aspect_ui_named(pane,"P_Core_01") ||
+        aspect_ui_named(pane,"P_BlurSh_06") || aspect_ui_named(pane,"P_BlurSh_01") ||
+        aspect_ui_named(pane,"P_Abst_06") || aspect_ui_named(pane,"P_Abst_01");
+    int key = !strncmp((const char *)pane + 0xb8,"Pa_Guide_0",10);
+    int art = aspect_ui_named(pane,"P_Text_00") || aspect_ui_named(pane,"P_Sh_00") ||
+        aspect_ui_named(pane,"P_Text_01");
+    if (!row && !border && !guide && !fill && !edge && !seam && !key && !art && !top_fill && !top_edge && !bar_shade && !header && !shoulder && !shoulder_label) return 0;
+    uint8_t *parent = aspect_ui_parent(pane), *owner = aspect_ui_parent(parent);
+    uint8_t *root = aspect_ui_parent(owner);
+    if ((shoulder || shoulder_label) && aspect_ui_named(parent,"N_TitleBarUp_00") &&
+        aspect_ui_named(owner,"N_TitleBar_00") && aspect_ui_named(root,"N_InOut_00") &&
+        aspect_ui_named(aspect_ui_parent(root),"RootPane")) return shoulder ? 10 : 12;
+    if (art && (aspect_ui_named(parent,"N_InOut_00") || aspect_ui_named(parent,"N_Capture_00")) &&
+        owner && aspect_ui_menu_footer(owner)==5) return 7;
+    uint8_t *slate = NULL;
+    if (row && aspect_ui_named(parent,"N_TimeLineDemo_00") && aspect_ui_named(owner,"N_Deco_00"))
+        slate = root;
+    if (key && (aspect_ui_named(parent,"N_Align_00") || aspect_ui_named(parent,"N_Align_01")) &&
+        aspect_ui_named(owner,"N_TimeLineDemo_00") && aspect_ui_named(root,"N_Deco_00"))
+        slate = aspect_ui_parent(root);
+    if (header && aspect_ui_named(parent,"N_TimeLineDemo_00") && aspect_ui_named(owner,"N_Deco_00"))
+        slate=root;
+    if ((fill || edge || seam || top_fill || top_edge || bar_shade) && (aspect_ui_named(parent,"N_InOut_00") || aspect_ui_named(parent,"N_Deco_00")))
+        slate = owner;
+    // The telescope reuses this artwork inside MainScreen's camera subtree.
+    // Only AppHome owns the part immediately under its RootPane.
+    if (aspect_ui_named(slate,"Pa_ScanningLine_00") && aspect_ui_named(aspect_ui_parent(slate),"RootPane") &&
+        aspect_ui_child(slate,"N_CaptureText_01") && aspect_ui_child(slate,"P_BootBG_00"))
+        return row ? 1 : key ? 5 : seam ? 6 : fill ? 3 : top_fill ? 9 : top_edge ? 11 : bar_shade ? 13 : header ? 8 : 4;
+    // Options, ability controls and DLC are independent + submenus; their
+    // footer rows are not descendants of PauseMenuInfo.
+    if (row) {
+        uint8_t *menu=NULL;
+        if (aspect_ui_named(parent,"RootPane")) menu=parent;
+        else if (aspect_ui_named(parent,"N_Option_01") && aspect_ui_named(owner,"RootPane")) menu=owner;
+        else if (aspect_ui_named(parent,"N_After_00") && aspect_ui_named(owner,"N_Option_00") &&
+                 aspect_ui_named(root,"RootPane")) menu=root;
+        if (menu && aspect_ui_child(menu,"N_Option_00") && aspect_ui_child(menu,"N_Capture_00") &&
+            aspect_ui_child(menu,"P_Capture_00")) return 1;
+    }
+    // Save/load's SystemWindow_01 owns a single bottom guide, not N_Align.
+    if (guide && aspect_ui_named(parent,"N_FileSelect_01") && aspect_ui_named(owner,"N_InOutGuide_00") &&
+        aspect_ui_named(root,"RootPane") && aspect_ui_child(root,"N_InOut_03") &&
+        aspect_ui_child(root,"N_Capture_01")) return 1;
+    if (!aspect_ui_named(root, "RootPane")) return 0;
+    if (row && aspect_ui_named(parent, "N_TitleBarDown_00") &&
+        aspect_ui_named(owner, "N_InOut_00") && aspect_ui_child(owner, "N_TitleBar_00")) return 1;
+    if (border &&
+        aspect_ui_named(parent, "N_InOut_01") && aspect_ui_named(owner, "N_Slide_01") &&
+        aspect_ui_child(parent, "W_BlackBG_00") && aspect_ui_child(root, "N_InCap_00")) return 2;
+    return 0;
 }
 // Move containers once so full/partial hearts and every map ornament retain
 // their authored spacing. Map identity stays known while the Slate is open,
@@ -355,7 +470,7 @@ static int aspect_ui_loading_fill(uint8_t *pane) {
     return 0;
 }
 static int aspect_ui_background_pane(uint8_t *pane) {
-    if (aspect_ui_title_shade(pane) || aspect_ui_title_art(pane) || aspect_ui_loading_fill(pane)) return 1;
+    if (aspect_ui_slate_border(pane) || aspect_ui_title_shade(pane) || aspect_ui_title_art(pane) || aspect_ui_loading_fill(pane)) return 1;
     if (!pane || !aspect_ui_background((char *)pane + 0xb8)) return 0;
     float width, height;
     memcpy(&width, pane + 0x50, 4); memcpy(&height, pane + 0x54, 4);
@@ -394,13 +509,18 @@ void dm_aspect_ui_pane(uint8_t *pane) {
     if (!pane || strcmp(DM_GAME_ID, "01007EF00011E000") || !dm_aspect_native()) return;
     if (aspect_ui_loading_fill(pane)) return;
     int hud = aspect_ui_hud_anchor(pane);
+    int footer = aspect_ui_menu_footer(pane);
+    int dungeon_controls = aspect_ui_dungeon_controls(pane);
+    int dungeon_text = dungeon_controls == 3 || dungeon_controls == 4;
+    int frame_border = aspect_ui_slate_border(pane);
+    int enlarge_footer = footer && dm_botw_touch_hud_active();
     int title_shade = aspect_ui_title_shade(pane);
     int title_right = title_shade && (aspect_ui_named(pane, "FBLayout_02") || aspect_ui_named(pane, "FBLayout_03"));
     if (title_shade && !title_right) return;
     int title_art = aspect_ui_title_art(pane);
     if (title_art == 2) return;
     // A background must not resize a container that owns foreground content.
-    if (!hud && !aspect_ui_background_pane(pane)) return;
+    if (!hud && !footer && !dungeon_controls && !frame_border && !aspect_ui_background_pane(pane)) return;
     float width, height, x, y, scale_x, scale_y;
     memcpy(&width, pane + 0x50, 4); memcpy(&height, pane + 0x54, 4);
     memcpy(&x, pane + 0x30, 4); memcpy(&y, pane + 0x34, 4);
@@ -425,7 +545,7 @@ void dm_aspect_ui_pane(uint8_t *pane) {
     // Leave the component's model geometry intact and resize the whole draw
     // in projection, so its pictures and background keep the same proportions.
     if (hud==1 && aspect_ui_named(pane,"Pa_Weather_00")) xscale=yscale=1;
-    if (!found && wide == 1 && !narrow && !dock && !left_hud) { pthread_mutex_unlock(&g_ui_width_mu); return; }
+    if (!found && wide == 1 && !narrow && !dock && !left_hud && !footer && !dungeon_controls && !frame_border) { pthread_mutex_unlock(&g_ui_width_mu); return; }
     if (!found) {
         aspect_ui_width *entry = calloc(1, sizeof *entry);
         if (!entry) die("[RED] aspect: cannot allocate background pane state");
@@ -440,6 +560,8 @@ void dm_aspect_ui_pane(uint8_t *pane) {
         entry->parent = parent; entry->type = type; memcpy(entry->name, pane + 0xb8, 16);
         entry->native_width = width; entry->native_height = height; entry->native_x = x; entry->native_y = y;
         entry->native_scale_x=scale_x; entry->native_scale_y=scale_y;
+        entry->native_alpha=pane[0x59];
+        if (dungeon_text) entry->native_text_alignment=pane[0x11e];
     }
     if (width != entry->written_width) entry->native_width = width;
     if (height != entry->written_height) entry->native_height = height;
@@ -447,7 +569,19 @@ void dm_aspect_ui_pane(uint8_t *pane) {
     if (y != entry->written_y) entry->native_y = y;
     if (scale_x != entry->written_scale_x) entry->native_scale_x=scale_x;
     if (scale_y != entry->written_scale_y) entry->native_scale_y=scale_y;
-    entry->written_width = entry->native_width * (hud ? 1 : wide);
+    if (dungeon_text) {
+        if (pane[0x11e] != entry->written_text_alignment) entry->native_text_alignment=pane[0x11e];
+        // The native text writer uses bits 2–3 for vertical alignment.
+        entry->written_text_alignment=dm_botw_touch_hud_active() ?
+            entry->native_text_alignment & ~0x0c : entry->native_text_alignment;
+        if (pane[0x11e] != entry->written_text_alignment) {
+            pane[0x11e]=entry->written_text_alignment;
+            pane[0x11c] |= 4;
+        }
+    }
+    entry->written_width = entry->native_width * (hud || dungeon_controls || footer == 1 || (footer >= 5 && footer != 9 && footer != 11 && footer != 13) ? 1 : wide);
+    if ((footer == 4 && aspect_ui_named(pane,"T_DecoD_00")) ||
+        (footer == 11 && aspect_ui_named(pane,"T_DecoU_00"))) entry->written_width = entry->native_width;
     // Title illustrations cover the display without distorting their artwork;
     // flat fills and Windows extend horizontally with their edge sizes intact.
     int cover = !hud && title_art == 1;
@@ -488,15 +622,112 @@ void dm_aspect_ui_pane(uint8_t *pane) {
         entry->written_width = entry->native_width + margin;
         entry->written_x += margin;
     }
+    if (enlarge_footer) {
+        float extra = 16 * dm_aspect_ui_point_scale();
+        if (footer == 1) {
+            // Enlarge the whole row uniformly around its native right edge.
+            // Descendant matrices also supply the live touch rectangles.
+            float scale = 1.4f;
+            entry->written_scale_x *= scale; entry->written_scale_y *= scale;
+            entry->written_x = 580 + (entry->native_x - 580) * scale;
+            entry->written_y += extra * .5f;
+        } else if (footer == 8 || footer == 10) {
+            entry->written_scale_x *= 1.4f; entry->written_scale_y *= 1.4f;
+            if (footer == 8) entry->written_y -= extra * .5f;
+            else entry->written_y += 6;
+        } else if (footer == 12) {
+            // PauseMenuInfo's labels are siblings of the enlarged button
+            // parts. Tighten the visible gap without resizing the top bar.
+            entry->written_y -= 2;
+        } else if (footer == 9 || footer == 13) {
+            // The outer-anchored gradient must cover the taller wall too.
+            entry->written_height += extra;
+        } else if (footer == 11) {
+            entry->written_y -= extra;
+        } else if (footer == 2) {
+            // Raise the lower border and its dark Window together, preserving
+            // their authored gap. The upper edge stays in place.
+            entry->written_height = fmaxf(1, entry->native_height - extra);
+            entry->written_y += extra * .5f;
+        } else if (footer == 3) {
+            // The slate panel's authored bottom origin stays at the screen edge.
+            entry->written_height += extra;
+        } else if (footer == 5) {
+            // Keep glyphs at 1.4x; close each inter-key gap by six native units.
+            int index = ((const char *)pane)[0xb8 + 10] - '0';
+            if (index >= 0 && index <= 5) entry->written_x += index * 6;
+        } else if (footer == 4) {
+            entry->written_y += extra;
+        }
+    }
+    if (dungeon_controls && dm_botw_touch_hud_active()) {
+        if (dungeon_controls <= 2) {
+            // A/B use 29-unit glyphs; the footer uses 34 at 1.4x. A 1.8x
+            // panel gives comparable visible buttons and roomier labels.
+            float scale=dungeon_controls==1 ? 1.8f : 1.4f;
+            entry->written_scale_x *= scale; entry->written_scale_y *= scale;
+            // The first glyph's left origin is 131 units left of the capture centre.
+            // Preserve that column when growing from 1.4x to 1.8x.
+            if (dungeon_controls==1) entry->written_x += 52.4f;
+            entry->written_y += 16*dm_aspect_ui_point_scale()+(dungeon_controls==2 ? 38 : 0);
+        } else {
+            // Keep both glyphs and the divider inside the native 74-unit
+            // capture. A/B centers gain four units before the 1.8x display.
+            entry->written_y += dungeon_controls==3 ? 2 : dungeon_controls==4 ? -2 : 4;
+            if (!strncmp((char *)pane+0xb8,"T_Guide",7)) {
+                uint8_t *icon=aspect_ui_child(aspect_ui_parent(pane),
+                    dungeon_controls==3 ? "T_A_00" : "T_B_00");
+                if (icon) {
+                    float iy; memcpy(&iy,icon+0x34,4);
+                    aspect_ui_width key={.pane=(uintptr_t)icon};
+                    aspect_ui_width **cached=tfind(&key,&g_ui_widths,aspect_ui_width_order);
+                    if(cached && iy==(*cached)->written_y)iy=(*cached)->native_y;
+                    // External_00's A/B artwork and the caption/shared fonts
+                    // have different ink bounds relative to their line metrics.
+                    // Native middle alignment only centers those metrics. Lower
+                    // both labels by two capture units (3.6 after the 1.8x
+                    // composition), keeping icons and the divider in place.
+                    if (isfinite(iy)) entry->written_y=iy+(dungeon_controls==3 ? 2 : -2)-2;
+                }
+            }
+        }
+    }
+    if (frame_border) {
+        // Authored side anchors have the same sign as x. Preserve corner
+        // artwork; only the long horizontal seams gain the extra span.
+        float margin=640*(wide-1);
+        entry->written_width=entry->native_width+(entry->native_width>=640 ? 2*margin : 0);
+        entry->written_x=entry->native_x+(entry->native_x<0 ? -margin : entry->native_x>0 ? margin : 0);
+    }
+    if (footer == 7 || footer == 6) {
+        int hide = footer == 6;
+        if (footer == 7) {
+            // Native slots change meaning between pages. Hide Move/Zoom by
+            // their directional stick glyphs, preserving A/B and press-stick hints.
+            // Only hide the composed pictures: Locater uses the part's alpha
+            // to arrange the row, so its container and text must stay native.
+            uint8_t *key=aspect_ui_parent(aspect_ui_parent(pane));
+            uint8_t *icon=aspect_ui_child(aspect_ui_child(key,"N_CaptureText_00"),"T_Icon_00");
+            uintptr_t text=0; uint16_t glyph=0;
+            if (icon) memcpy(&text,icon+0xe0,sizeof text);
+            if (text>=0x10000) memcpy(&glyph,(const void *)text,sizeof glyph);
+            hide = glyph==0xe05e || glyph==0xe05d;
+        }
+        // Restore the latest native animation alpha when a slot changes action
+        // or touch mode ends. The separate stone/albedo and corner art stay native.
+        if (pane[0x59] != entry->written_alpha) entry->native_alpha=pane[0x59];
+        entry->written_alpha=enlarge_footer && hide ? 0 : entry->native_alpha;
+        if (pane[0x59] != entry->written_alpha) { pane[0x59]=entry->written_alpha; pane[0x58] |= 0x10; }
+    }
     if (width != entry->written_width || height != entry->written_height ||
-        ((hud || title_right || cover) && x != entry->written_x) ||
-        ((hud || cover) && y != entry->written_y) ||
-        (hud && (scale_x != entry->written_scale_x || scale_y != entry->written_scale_y))) {
+        ((hud || title_right || cover || footer || frame_border || dungeon_controls) && x != entry->written_x) ||
+        ((hud || cover || footer || dungeon_controls) && y != entry->written_y) ||
+        ((hud || footer || dungeon_controls) && (scale_x != entry->written_scale_x || scale_y != entry->written_scale_y))) {
         memcpy(pane + 0x50, &entry->written_width, 4);
         memcpy(pane + 0x54, &entry->written_height, 4);
-        if (hud || title_right || cover) memcpy(pane + 0x30, &entry->written_x, 4);
-        if (hud || cover) memcpy(pane + 0x34, &entry->written_y, 4);
-        if (hud) { memcpy(pane+0x48,&entry->written_scale_x,4); memcpy(pane+0x4c,&entry->written_scale_y,4); }
+        if (hud || title_right || cover || footer || frame_border || dungeon_controls) memcpy(pane + 0x30, &entry->written_x, 4);
+        if (hud || cover || footer || dungeon_controls) memcpy(pane + 0x34, &entry->written_y, 4);
+        if (hud || footer || dungeon_controls) { memcpy(pane+0x48,&entry->written_scale_x,4); memcpy(pane+0x4c,&entry->written_scale_y,4); }
         pane[0x58] |= 0x10;
     }
     pthread_mutex_unlock(&g_ui_width_mu);

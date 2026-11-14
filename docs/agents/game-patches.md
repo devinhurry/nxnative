@@ -97,7 +97,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
 | [Subnautica: Below Zero](#subnautica-below-zero) | 1 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [Super Smash Bros. Ultimate](#super-smash-bros-ultimate) | 11 | 0 | 0 | 1 | 0 | `game` |
 | [Taiko Risshiden V DX](#taiko-risshiden-v-dx) | 1 | 0 | 0 | 2 | 0 | `game` |
-| [The Legend of Zelda: Breath of the Wild](#the-legend-of-zelda-breath-of-the-wild) | 7 | 17 | 48 | 0 | 3 | `build` → `game` ×3 |
+| [The Legend of Zelda: Breath of the Wild](#the-legend-of-zelda-breath-of-the-wild) | 7 | 19 | 48 | 0 | 3 | `build` → `game` ×3 |
 | [The Legend of Zelda: Link's Awakening](#the-legend-of-zelda-links-awakening) | 1 | 0 | 0 | 0 | 0 | `build` → `game` |
 | [The Legend of Zelda: Tears of the Kingdom](#the-legend-of-zelda-tears-of-the-kingdom) | 0 | 0 | 9 | 0 | 0 | `build` → `game` |
 | [Xenoblade Chronicles 3](#xenoblade-chronicles-3) | 6 | 0 | 0 | 0 | 0 | `build` → `game` |
@@ -555,6 +555,8 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - gate 31 at `+0xe1a628`: MainScreen3D update: correct its copied projection before rebuilding the world-label view
   - gate 33 at `+0xd58008`: shared stick getter: snapshot the selected raw child pair before the native dead-zone/filter branches
   - gate 32 at `+0xd5801c`: shared normalized stick getter: inject one frame of relative input after native filtering and before return
+  - gate 44 at `+0xdf2d20`: Dungeon map: provide the queued touch displacement as its private native stick pair
+  - gate 300 at `+0xdf2d7c`: Dungeon map: normalize the queued touch displacement by the current UI interval
   - gate 42 at `+0xbf0c4c`: CameraAiming common pitch target: add touch after gyro, before native clamp and smoothing
   - gate 298 at `+0xbf2ccc`: CameraAiming2 pitch target: add touch after gyro, before native smoothing
   - gate 43 at `+0xbf0e34`: CameraAiming final yaw: shift both native target and smoothed output by touch displacement
@@ -618,7 +620,7 @@ Every patch bound tighter than it could be: the open gaps, then the blocked, kep
   - render scale stub (the launcher offers DM_RENDER_SCALE)
   - launcher capabilities: DYNAMIC_RESOLUTION, REALTIME_FRAME_STEP
   - host [hle_botw_touch_actions.c:13](../../dm/host/hle_botw_touch_actions.c#L13): build check
-  - host [hle_botw_touch_menu.c:22](../../dm/host/hle_botw_touch_menu.c#L22): build check
+  - host [hle_botw_touch_menu.c:26](../../dm/host/hle_botw_touch_menu.c#L26): build check
   - host [hle_botw_touchhud.c:17](../../dm/host/hle_botw_touchhud.c#L17): build check
 
 ### The Legend of Zelda: Link's Awakening

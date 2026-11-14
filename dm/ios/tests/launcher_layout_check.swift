@@ -10,12 +10,19 @@ func checkLauncherLayout(_ model: LauncherModel, defaults: UserDefaults) -> Int 
         if !condition { failed += 1 }
     }
     var backgroundCalls = 0
-    withGameSettingsBackground(model) { image in
+    prepareGameSettingsBackground(model) {
         backgroundCalls += 1
-        expect(image == nil, "settings open without a game frame in the launcher-only fixture")
+        expect(model.picturePreviewFrame == nil, "a renderer without a frame still allows settings to pause")
     }
     RunLoop.current.run(until: Date().addingTimeInterval(0.6))
-    expect(backgroundCalls == 1, "a completed background request does not also open settings through its fallback")
+    expect(backgroundCalls == 1, "capture readiness signals pause once, including the no-frame timeout")
+    var cancelledCalls = 0
+    let cancel = prepareGameSettingsBackground(model) { cancelledCalls += 1 }
+    cancel()
+    RunLoop.current.run(until: Date().addingTimeInterval(0.6))
+    expect(cancelledCalls == 0 && model.picturePreviewFrame == nil && model.gameSettingsBackground == nil,
+           "closing settings cancels frame delivery and the timeout without a late pause")
+    expect(checkSettingsPauseQueue(), "GPU/audio pause and resume run in order off the UI thread")
     func fitting<V: View>(_ content: V, width: CGFloat) -> NSSize {
         let view = NSHostingView(rootView: content.defaultAppStorage(defaults))
         view.sizingOptions = []

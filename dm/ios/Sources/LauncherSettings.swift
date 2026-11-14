@@ -250,6 +250,7 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var pictureLUTName: String?
     @Published private(set) var pictureLUTs: [PictureLUT] = []
     @Published var picturePreviewFrame: CGImage?
+    @Published var gameSettingsBackground: CGImage?
     private var pictureLUTFilename: String?
     private let pictureLUTDirectory: URL
     private let pictureLUTOverride: String?

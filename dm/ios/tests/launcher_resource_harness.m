@@ -35,7 +35,12 @@ BOOL dm_startup_prepare(void) {
 void dm_launcher_settings_pause(int on) { fprintf(stderr, "fixture: settings paused=%d\n", !!on); }
 void dm_launcher_grab_game_frame(void (^callback)(CGImageRef)) { callback(NULL); }
 // This launcher fixture has no renderer, as in launcher_storage_check.swift.
-void dm_launcher_grab_filter_frame(void (^callback)(CGImageRef)) { callback(NULL); }
+void dm_launcher_grab_filter_frame(void (^callback)(CGImageRef)) {
+    // Simulate a renderer that does not deliver another frame. Presentation
+    // must already have happened before the background's timeout fires.
+    if ([NSProcessInfo.processInfo.arguments containsObject:@"--check-in-game-settings"]) return;
+    callback(NULL);
+}
 CGImageRef dm_launcher_filter_preview(CGImageRef image, const char *mode, float strength, int width) { return NULL; }
 CGImageRef dm_launcher_lut_preview(CGImageRef image, const char *path, float strength, int width) { return NULL; }
 int dm_launcher_lut_apply(const char *path) { return 0; }

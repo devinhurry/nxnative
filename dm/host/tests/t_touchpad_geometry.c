@@ -199,13 +199,15 @@ static void test_botw_new_touch_geometry(void) {
         float canvas_width = h * 16.0f / 9.0f;
         dm_touchpad_rect plus = dm_touchpad_botw_menu_rect(40,20,canvas_width,h,0,0);
         dm_touchpad_rect minus = dm_touchpad_botw_menu_rect(40,20,canvas_width,h,0,1);
-        nearf(plus.width,39*h/720,.01f); nearf(plus.height,plus.width,.01f);
-        float glyphRight=plus.x+plus.width*.5f+DM_TP_BOTW_MENU_GLYPH_SIZE*h/1440;
-        nearf(40+canvas_width-glyphRight,58*h/720+2,.01f);
+        nearf(plus.width,39*h/720+4,.01f); nearf(plus.height,plus.width,.01f);
+        float center=plus.x+plus.width*.5f;
+        nearf(40+canvas_width-center,(58+19*.5f)*h/720+4,.01f);
         float mapRight=40+canvas_width-dm_touchpad_botw_map_right_inset(720/h)*h/720;
-        nearf(plus.x-mapRight,8,.01f);
-        nearf(plus.y,20+20*h/720+4,.01f); // four frontend points below the minimap top
-        nearf(minus.x,plus.x,.001f); nearf(minus.y-plus.y-plus.height,8,.001f);
+        nearf(plus.x-(mapRight-4),8,.01f); // map shifts left by four frontend points when Plus is visible
+        nearf(plus.y,20+20*h/720+4,.01f); // expansion retains top and right anchors
+        nearf(minus.x,plus.x,.001f);
+        nearf(minus.width,plus.width,.001f); nearf(minus.height,plus.height,.001f);
+        nearf(minus.y-plus.y-plus.height,8,.001f);
         assert(dm_touchpad_rounded_rect_contains(plus,plus.width*.5f,plus.x+plus.width*.5f,plus.y+plus.height*.5f));
         assert(!dm_touchpad_rounded_rect_contains(plus,plus.width*.5f,plus.x,plus.y));
     }
@@ -378,7 +380,10 @@ static void test_portrait_layout(void) {
     dm_touchpad_rect canvas={0,0,932,430};
     dm_touchpad_rect plus=dm_botw_layout_control(&layout,10,932,430,0,0,0,0,canvas);
     dm_touchpad_rect safe_plus=dm_botw_layout_control(&layout,10,932,430,62,0,62,34,canvas);
+    dm_touchpad_rect safe_minus=dm_botw_layout_control(&layout,11,932,430,62,0,62,34,canvas);
     nearf(932-safe_plus.x-safe_plus.width,62,.001f); assert(plus.x!=safe_plus.x);
+    nearf(safe_minus.x,safe_plus.x,.001f);
+    nearf(safe_minus.width,safe_plus.width,.001f); nearf(safe_minus.height,safe_plus.height,.001f);
     const float modes[][5]={{390,844,0,0,1},{599.9f,1000,0,0,1},{600,1000,0,0,0},
         {600.1f,1000,0,0,0},{626,890,0,0,0},{744,1133,0,0,0},
         {620,1000,10,10,0},{620,1000,10,11,0},{600,599,20,20,0},{590,590,0,0,0}};
@@ -401,7 +406,11 @@ static void test_fold_regions(void) {
     assert(!dm_touchpad_seated_split(area,(dm_touchpad_rect){0,NAN,795,10},&picture,&controls));
     dm_touchpad_rect map=dm_touchpad_seated_map(controls),plus=dm_touchpad_seated_menu(controls,0),minus=dm_touchpad_seated_menu(controls,1);
     assert(map.y>=controls.y && map.y+map.height<=controls.y+controls.height);
-    assert(plus.x>map.x+map.width && minus.x==plus.x && minus.y>plus.y);
+    assert(plus.x>map.x+map.width && minus.y>plus.y);
+    nearf(plus.width,39*map.width/166+4,.001f);
+    nearf(minus.x,plus.x,.001f);
+    nearf(minus.width,plus.width,.001f); nearf(minus.height,plus.height,.001f);
+    nearf(minus.y-plus.y-plus.height,8,.001f);
     nearf(map.width,166.f*430/720,.001f);
 }
 int main(void) {

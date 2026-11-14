@@ -17,6 +17,8 @@
 #import <GameController/GameController.h>
 #import <CoreMotion/CoreMotion.h>
 #import <CoreText/CoreText.h>
+#import <AVFAudio/AVFAudio.h>
+#import "DmTouchFeedback.h"
 #include <pthread.h>
 #include <math.h>
 #include <stdatomic.h>
@@ -330,7 +332,8 @@ static void pads_start(void);   // Physical controllers, below
     UITouch *_botwMenuTouch; CGPoint _botwMenuLast, _botwMenuLastNorm;
     UITouch *_botwMapPinchTouch, *_botwCameraModifierTouch; CGFloat _botwMapPinchStart;
     dm_botw_camera_gesture _botwCameraGesture;
-    UIImpactFeedbackGenerator *_touchFeedback;       // one short feedback per touch-control press edge
+    DmTouchFeedback *_touchFeedback;                // one short feedback per touch-control press edge
+    NSTimeInterval _touchFeedbackEventTime;
     unsigned _hapticSticks;
     BOOL _stickShown;                              // the left stick was held at the last refresh
     BOOL _full, _tap;                              // the 3D layout / the Tap layout is current
@@ -386,9 +389,11 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
         self.multipleTouchEnabled = YES; self.opaque = NO; self.backgroundColor = UIColor.clearColor;
         const char *feedback = getenv("DM_TOUCH_HAPTICS");
         if (!feedback || atoi(feedback)) {
-            _touchFeedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-            [_touchFeedback prepare];
+            _touchFeedback = [DmTouchFeedback new];
         }
+        [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(touchFeedbackResumed:) name:UIApplicationDidBecomeActiveNotification object:nil];
+        [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(touchFeedbackSuspended:) name:UIApplicationWillResignActiveNotification object:nil];
+        [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(touchFeedbackInterrupted:) name:AVAudioSessionInterruptionNotification object:nil];
         _owner = [NSMapTable strongToStrongObjectsMapTable]; _faceOf = [NSMapTable strongToStrongObjectsMapTable];
         static dispatch_once_t once;
         dispatch_once(&once, ^{
@@ -509,6 +514,7 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
     return self;
 }
 - (void)applyLayout {   // show / hide the controls for the current layout
+    [self updateTouchFeedbackActive];
     [self syncBotwTouchProfile];
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     for (int b = 0; b < B_N; b++) _key[b].hidden = _tap || (fullOnly(b) && !_full);
@@ -588,9 +594,8 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
     }
     const char *feedback=getenv("DM_TOUCH_HAPTICS");
     if (!feedback || atoi(feedback)) {
-        if (!_touchFeedback) _touchFeedback=[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-        [_touchFeedback prepare];
-    } else _touchFeedback=nil;
+        [self setTouchFeedback:YES];
+    } else [self setTouchFeedback:NO];
     [self refreshTouchHudMode];
 }
 - (int)padLayout { return _tap ? 2 : _full ? 1 : 0; }
@@ -607,8 +612,21 @@ static BOOL botwSeated(void) { float region[4]; return dm_aspect_region(1,region
     [self reset]; _tap = NO; _full = NO; [self applyLayout]; [self setNeedsLayout];
 }
 - (void)setTouchFeedback:(BOOL)on {
-    if (!on) { _touchFeedback = nil; return; }
-    if (!_touchFeedback) { _touchFeedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight]; [_touchFeedback prepare]; }
+    if (!on) { [_touchFeedback setActive:NO]; _touchFeedback = nil; return; }
+    if (!_touchFeedback) _touchFeedback = [DmTouchFeedback new];
+    [self updateTouchFeedbackActive];
+}
+- (void)updateTouchFeedbackActive {
+    [_touchFeedback setActive:self.window != nil && !self.hidden && !_padOff &&
+        UIApplication.sharedApplication.applicationState == UIApplicationStateActive];
+}
+- (void)didMoveToWindow { [super didMoveToWindow]; [self updateTouchFeedbackActive]; }
+- (void)touchFeedbackResumed:(NSNotification *)notification { (void)notification; [self updateTouchFeedbackActive]; }
+- (void)touchFeedbackSuspended:(NSNotification *)notification { (void)notification; [_touchFeedback setActive:NO]; }
+- (void)touchFeedbackInterrupted:(NSNotification *)notification {
+    if ([notification.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue] == AVAudioSessionInterruptionTypeBegan)
+        [_touchFeedback setActive:NO];
+    else [self updateTouchFeedbackActive];
 }
 
 - (void)setPadLayout:(int)l {   // the in-game menu's pick: release every touch first (no key stays held), save, lay out again
@@ -1163,7 +1181,17 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     pthread_mutex_lock(&g_mu); g_touch_btn &= ~mask; pthread_mutex_unlock(&g_mu); publish();
 }
 - (void)emitTouchFeedback {
-    [_touchFeedback impactOccurredWithIntensity:0.6]; [_touchFeedback prepare];
+    const char *trace = getenv("DM_TOUCH_HAPTICS_TRACE");
+    if (!_touchFeedback || !trace || strcmp(trace, "1")) {
+        [_touchFeedback play];
+        return;
+    }
+    NSTimeInterval requested = CACurrentMediaTime();
+    BOOL accepted = [_touchFeedback play];
+    NSTimeInterval returned = CACurrentMediaTime();
+    LOG("touch haptics: event_age_ms=%.3f player_call_ms=%.3f accepted=%d (Core Haptics request timing, not hardware onset)",
+        _touchFeedbackEventTime > 0 ? (requested - _touchFeedbackEventTime) * 1000 : -1,
+        (returned - requested) * 1000, accepted);
 }
 - (void)leftStickDoubleTapped:(UITapGestureRecognizer *)recognizer {
     if (recognizer.state == UIGestureRecognizerStateRecognized && [self botwTouchControlsActive] &&
@@ -1404,6 +1432,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     return NO;
 }
 - (void)touchesBegan:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e {
+    _touchFeedbackEventTime = e ? e.timestamp : ts.anyObject.timestamp;
     motion_first_input();
     [self refreshBotwTouchMenuMode];
     if (_menuPadChord.count) { [_menuPadChord unionSet:ts]; return; }
@@ -1421,8 +1450,9 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     if (ts.count > 1) _botwLookTapPending = NO;
     BOOL game = NO;
     for (UITouch *t in ts) {
-        BOOL nativeMenuArea=botwSeated() ? [t locationInView:self].y<CGRectGetMinY([self botwControlArea]) : !_botwCameraPadVisible;
-        if (_botwMenuMode && !_manualMenuPad && nativeMenuArea) {
+        BOOL message = dm_botw_touch_message_active();
+        BOOL nativeMenuArea=message || (botwSeated() ? [t locationInView:self].y<CGRectGetMinY([self botwControlArea]) : !_botwCameraPadVisible);
+        if (_botwMenuMode && (message || !_manualMenuPad) && nativeMenuArea) {
             if ([self botwMenuDpadActive]) {
                 CGPoint p=[t locationInView:self];
                 uint64_t direction = dist(p,self.dpadCenter)<=self.dpadR*K_DPAD_GRAB ? [self dpadAt:p] : 0;
@@ -1601,6 +1631,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     [self recompute];
 }
 - (void)touchesMoved:(NSSet<UITouch *> *)ts withEvent:(UIEvent *)e {
+    _touchFeedbackEventTime = e ? e.timestamp : ts.anyObject.timestamp;
     [self refreshBotwTouchMenuMode];
     if (_menuPadChord.count) return;
     BOOL game = NO;
@@ -1654,6 +1685,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     [self recompute];
 }
 - (void)endTouches:(NSSet<UITouch *> *)ts tapped:(BOOL)ended {
+    _touchFeedbackEventTime = ts.anyObject.timestamp;
     [self refreshBotwTouchMenuMode];
     if (_menuPadChord.count) { [_menuPadChord minusSet:ts]; return; }
     BOOL swap = NO, game = NO;
@@ -2077,7 +2109,7 @@ static void layerDisplayScale(CALayer *layer, CGFloat scale) {
 - (BOOL)dm_testCancelGuideHidden { return _cancelRing.hidden && _cancelCue.hidden; }
 - (CAShapeLayer *)dm_testRuneBadgeLayer { return _runeBadge; }
 - (CALayer *)dm_testRuneIconLayer { return _runeIconLayer; }
-- (void)dm_testSetTouchFeedback:(UIImpactFeedbackGenerator *)feedback { _touchFeedback = feedback; }
+- (void)dm_testSetTouchFeedback:(DmTouchFeedback *)feedback { [_touchFeedback setActive:NO]; _touchFeedback = feedback; }
 - (CGPoint)dm_testShieldRingCenter {
     CGRect r = CGPathGetBoundingBox(_shieldRing.path);
     return CGPointMake(CGRectGetMidX(r), CGRectGetMidY(r));

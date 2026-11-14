@@ -18,6 +18,7 @@ enum {
 // True only while an exact-build BOTW native menu has a fresh touch target and
 // the validated selector hook is installed; controller/off-mode bypasses it.
 int dm_botw_touch_menu_active(void);
+int dm_botw_touch_message_active(void);
 
 // Menu presentation also includes native opening, closing and tab-slide
 // animations, when no target accepts input. Hide gameplay controls throughout.
@@ -104,10 +105,13 @@ typedef struct {
     uintptr_t map_root;
     int generic_group;
     int generic_mode;
+    int message_advance;
+    int message_typing;
     int generic_count;
     uintptr_t list_category_widget;
     dm_botw_touch_menu_target generic_targets[DM_BOTW_MENU_MAX_GENERIC_TARGETS];
     int inventory_visible;
+    uintptr_t inventory_root; // Stable owner while the native three-page ring moves.
     int carousel_valid; // A live generic item grid with the native horizontal pager.
     int carousel_buttons; // Full-size photo viewer uses native direction buttons.
     int inventory_rotate_visible; // Native exclusive character-preview mode.
