@@ -3,7 +3,7 @@
 // At a steady rate the step is the time on screen: even motion, and only steps the games' own interval logic uses (60 / 30 / 20 fps). Real time the game falls behind (a late
 // frame, a hitch) is a debt paid back one extra vsync per frame, so over time game time = real time. k follows the frames' cost: three late frames in a row step up to the cost
 // (30 fps when 60 does not hold: no 40 fps steps on 120 Hz screens) when the frames at k also fall short of it on average (FSTEP_LATE over the last FSTEP_RUN frames); 30 frames
-// in a row whose cost would fit k − 1 try it, and a trial that fails waits twice as long before the next (1 s → 8 s), so a device on the edge does not flap.
+// in a row whose cost fits k − 1's full budget try it. Failed trials wait twice as long (1 s → 8 s), independently per target.
 // The average: a frame late by FSTEP_LATE is the rate of a hold that does not hold (53 fps is not 60), but three such frames in a row among frames on time are not. Frames whose
 // cost scatters around k (Mario Kart World on an M4 Max: 20–30% of them 1–5 ms late, 57.5–61 fps and game time 0.99–1.02 of real time with no holds) met three in a row about once
 // a second and spent half the time at 30 or 20, up and down 30 times a session (issue #1823); a short hitch (pipeline compiles) stepped to 30 the same way. The late frames are
@@ -11,15 +11,14 @@
 // frame is slow motion) three late frames still raise the hold. The step goes to the cheapest of the three late frames' cost: a hitch as the third no longer meant 20 fps.
 // A game takes steps up to its stub's largest (smax; Mario Kart World's interval logic stops at 2): k and the paid-back step stay within it, or the frames held longer than the
 // game steps play in slow motion and the debt counted as paid is lost.
-// A probe is a trial back to kmin that the cost does not justify: while the caller reports the CPU slowed for reasons other than heat (an iPhone's performance controller
+// A probe is a trial at the next shorter hold that the cost does not justify: while the caller reports the CPU slowed for reasons other than heat (an iPhone's performance controller
 // parks a game that waits out a long hold on the efficiency cores at half the clock, where its cost never fits k − 1 again), the hold-off alone starts one. Its first
 // FSTEP_GRACE frames may be late without failing it, the time the controller needs to raise the clock for the shorter deadline; after them it is judged like a trial.
-// A probe that holds leaves the hold-off as it is, and the run at kmin it starts must last FSTEP_HOLD_MAX (8 s) before the hold-off returns to 1 s: a shorter one counts as
-// a failed probe, so a CPU that really cannot hold kmin is not probed every second.
+// A probe that holds leaves its target's hold-off as it is until its run lasts FSTEP_HOLD_MAX (8 s): a shorter run counts as a failure. Failure returns to its starting hold,
+// not the ceiling of a frame at the failed deadline, and waits FSTEP_GRACE frames before judging the return hold: present snapshots / GPU times can still belong to the trial.
 // A step up after a run at kmin of FSTEP_HOLD_MAX keeps the cost that held there, and a cost at the longer hold of at most FSTEP_SAME times it starts a probe too: the scene
-// costs what it did, so the step up came from a hitch (Breath of the Wild on an iPhone: pipeline compiles after a cutscene). The fit trial alone does not bring such a game
-// back: an iPhone lowers its GPU clock until the work fills most of the frame, so a GPU-bound game's cost sits near FSTEP_FIT at either hold (BotW: GPU 12.8–15.2 ms at hold
-// 2, p50, where hold 1 had held for minutes; the same 4,900 draws took 5.8 ms after a trip to the background and 13.5 ms half a minute later).
+// costs what it did, so the step up came from a hitch (Breath of the Wild on an iPhone: pipeline compiles after a cutscene). Full-budget trials recover work that fits;
+// probes also cover costs inflated by waiting at a slower clock. Above the adjacent hold, bounded probes run even without a slowed report so 20 cannot latch forever.
 // A cap that falls and rises again (a movie, hle_movie.c dm_movie_playing; the iOS thermal cap in hle_nvn.c) keeps what was learned at each kmin: the cost that held it
 // (cref) and the GPU reference (nvn_fgpu below); and the frames after the cap rises are a probe with its grace, as the clocks are still set for the longer hold. Before, the
 // rise set k to kmin with no grace, so three frames late while the clock rose stepped up again, with cref dropped at the cap change and a GPU reference taken at the 30 fps
@@ -33,7 +32,7 @@
 #define FSTEP_MAX 3           // the largest step: both games' own interval logic uses 1–3 (BotW clamps to [2, 3], TOTK picks 2 or 3), so their integer readers never see 4
 #define FSTEP_LATE 0.1        // a frame is late when it or its GPU work took this many vsyncs (1.7 ms) more than k: 53 fps is not 60 (start-to-start jitter on time is well below)
 #define FSTEP_SHORT_MAX 2.0  // a frame counts at most this many vsyncs past its hold toward the average (a load's stall is one long frame, not a rate)
-#define FSTEP_FIT 0.85        // a frame would fit k − 1 when its cost is at most this share of it
+#define FSTEP_FIT 1.0         // use the target's full work budget; judge the actual deadline during the trial instead of reserving 15% headroom
 #define FSTEP_RUN 30          // frames in a row that fit k − 1 before a trial, and frames a trial must hold
 #define FSTEP_DEBT_MAX 15.0   // debt kept at most (0.25 s): the rest of a long stall (a load) is dropped, not replayed
 #define FSTEP_HOLD0 60.0      // vsyncs since the last step up before a trial: 1 s, doubled after each failed trial up to 8 s
@@ -52,10 +51,12 @@ typedef struct {
     int kmin;                 // the last call's kmin (a lower one takes effect at once)
     double debt;              // real time the game is behind, in vsyncs
     int late_run, fit_run, trial;   // late frames in a row; frames in a row whose cost fits k − 1; frames left of a trial at k − 1 (0 = none)
-    int probe, grace;         // 1: the trial in progress is a probe; 2: a probe held and its run at kmin has not ended yet; frames left of the probe's grace
+    int probe, grace;         // 1: a probe trial is running; 2: it held; frames left of its clock-ramp grace
+    int target, fallback, settle;   // trial's hold and return hold; feedback / clock settling frames after returning from a failed trial
     int ramp;                 // set by the caller (kept): 1 = a probe's grace is renewed while its frames keep getting cheaper (FSTEP_RAMP; the host's DM_FSTEP_PROBE_RAMP)
     double pa, pb; int plate, ptotal;   // the current grace window: the cost of its first and second halves (sums), its late frames; grace frames this probe has taken in all
-    double hold, since;       // vsyncs a trial waits for after a step up; vsyncs since the last step up
+    double hold, since;       // next target's retry backoff (for diagnostics); vsyncs at this hold / since a completed trial
+    double retry_hold[FSTEP_MAX + 1], retry_since[FSTEP_MAX + 1];   // backoff and elapsed vsyncs for each trial target, independent of failures at another rate
     int per_vsync;            // set by the caller: the ticks a 1/60 s vsync is (0 = 1). At 120 fps the unit is 1/120 s (hle_nvn.c fps_high), and the waits between trials stay the same real time
     double shown_slack;       // vsyncs a frame on time may show longer than k (set by the caller): one refresh on screens whose rate is not a multiple of 60; the cost keeps FSTEP_LATE
     int screen;               // set by the caller before each call, then cleared: 0 = judge lateness by shown and cost; 1 = the screen showed a recent frame on time, 2 = late. With present
@@ -75,10 +76,17 @@ typedef struct {
 // Whether the cost at the longer hold is the cost that held kmin (a probe without a slowed report)
 static inline int nvn_fstep_same(const nvn_fstep *s) { return s->cref > 0 && s->cn >= FSTEP_RUN && s->ccur <= FSTEP_SAME * s->cref; }
 
+// A trial always tests the next shorter hold. A failed faster trial must return here before judging the sustainable rate again.
+static inline void nvn_fstep_trial(nvn_fstep *s, int probe) {
+    s->fallback = s->k; s->target = --s->k; s->downs++; s->trial = FSTEP_RUN;
+    s->probe = probe; s->grace = probe ? FSTEP_GRACE : 0; s->settle = 0;
+    s->fit_run = s->late_run = 0; s->since = 0; s->pa = s->pb = 0; s->plate = s->ptotal = 0;
+}
+
 // Once per frame. shown: real time since the previous frame's start, in vsyncs; cost: the frame's work, max(CPU, GPU), in vsyncs (a GPU that cannot keep up makes frames late too); kmin: 1 at a 60 fps cap, 2 at 30;
 // kmax: the longest hold (FSTEP_MAX; 2 at a 30 fps cap, where the display link runs at 30 Hz and holds only even counts); fixed: a step the game has set itself (BotW's
-// VFR override; 0 = none), which the host then holds as it is; slow: the CPU runs below its speed for reasons other than heat, so a cost above k − 1 is no evidence
-// against kmin (probes). Returns the step for the next frame; s->k is how long that frame stays on screen
+// VFR override; 0 = none), which the host then holds as it is; slow: the caller reports a CPU/GPU slowdown, so cost at the longer hold need not rule out an adjacent probe.
+// Returns the step for the next frame; s->k is how long that frame stays on screen
 static inline int nvn_fstep_next(nvn_fstep *s, double shown, double cost, int kmin, int kmax, int fixed, int slow) {
     const double hold0 = FSTEP_HOLD0 * (s->per_vsync ? s->per_vsync : 1), hold_max = FSTEP_HOLD_MAX * (s->per_vsync ? s->per_vsync : 1);
     if (kmin < 1) kmin = 1;
@@ -86,10 +94,15 @@ static inline int nvn_fstep_next(nvn_fstep *s, double shown, double cost, int km
     if (kmax > smax) kmax = smax;
     if (kmin > smax) kmin = smax;
     if (kmax < kmin) kmax = kmin;
+    for (int k = 1; k <= FSTEP_MAX; k++) {
+        if (!s->retry_hold[k]) s->retry_hold[k] = hold0;
+        s->retry_since[k] = fmin(hold_max, s->retry_since[k] + shown);
+    }
     if (!s->hold) s->hold = hold0;
     if (fixed > 0) {   // the game's own step: speed is right by construction, nothing to pay back
         s->k = s->step = fixed < smax ? fixed : smax;
         s->debt = 0; s->late_run = s->fit_run = s->trial = s->probe = s->grace = 0; s->run = 0;
+        s->target = s->fallback = s->settle = 0;
         s->kmin = FSTEP_MAX + 1;   // when it ends, k starts again from kmin
         return s->step;
     }
@@ -103,15 +116,20 @@ static inline int nvn_fstep_next(nvn_fstep *s, double shown, double cost, int km
     if (s->debt > FSTEP_DEBT_MAX) { s->dropped += s->debt - FSTEP_DEBT_MAX; s->debt = FSTEP_DEBT_MAX; }
     if (s->debt < -1) s->debt = -1;   // ahead (a frame shorter than its step): nothing slows the game down, so at most one vsync is remembered
     s->since += shown;
+    if (s->probe == 2 && s->since >= hold_max) s->retry_hold[s->target] = hold0;
     int cap_probe = kmin < s->kmin && s->kmin <= FSTEP_MAX && s->k > kmin;
-    if (cap_probe) {   // the cap rose: a probe at once, whose grace covers the clocks still set for the longer hold
-        s->k = kmin; s->probes++; s->trial = FSTEP_RUN; s->probe = 1; s->grace = FSTEP_GRACE; s->fit_run = s->late_run = 0; s->pa = s->pb = 0; s->plate = s->ptotal = 0;
-    } else if (kmin < s->kmin || s->k < kmin) s->k = kmin;   // the game's own step ended, or the cap fell
-    if (s->k > kmax) s->k = kmax;
+    if (cap_probe) {   // release a cap one level at a time; the old cap's frame does not consume the new trial's grace
+        nvn_fstep_trial(s, 1); s->probes++;
+    } else if (kmin < s->kmin || s->k < kmin || s->k > kmax) {
+        s->k = kmin; s->trial = s->probe = s->grace = s->settle = s->late_run = s->fit_run = 0;
+        s->target = s->fallback = 0; s->since = 0;
+    }
     s->kmin = kmin;
     int scr = s->screen; s->screen = 0;
-    int late = scr ? scr == 2 : shown > held + FSTEP_LATE + s->shown_slack || cost > held + FSTEP_LATE, grace = s->grace > 0;
-    if (grace && !cap_probe) {   // the completed frame at the old cap does not consume the new hold's grace
+    int settling = s->settle > 0;
+    if (settling) s->settle--;
+    int late = scr ? scr == 2 : shown > held + FSTEP_LATE + s->shown_slack || cost > held + FSTEP_LATE, grace = s->grace > 0 || settling;
+    if (s->grace && !cap_probe) {   // the completed frame at the old cap does not consume the new hold's grace
         if (s->grace > FSTEP_GRACE / 2) s->pa += cost; else s->pb += cost;
         s->plate += late; s->ptotal++;
         if (!--s->grace && s->ramp && s->plate && s->ptotal + FSTEP_GRACE <= FSTEP_PROBE_MAX && s->pb <= (1 - FSTEP_RAMP) * s->pa) { s->grace = FSTEP_GRACE; s->pa = s->pb = 0; s->plate = 0; }   // still getting cheaper: another window
@@ -141,15 +159,31 @@ static inline int nvn_fstep_next(nvn_fstep *s, double shown, double cost, int km
         int want = (int)ceil(c3 - 0.05);
         if (want < s->k + 1) want = s->k + 1;
         if (want > kmax) want = kmax;
-        if (s->trial || (s->probe == 2 && s->since < hold_max)) { s->failed++; s->trial = 0; s->hold = s->hold * 2 < hold_max ? s->hold * 2 : hold_max; }
-        else if (s->probe == 2) s->hold = hold0;   // the probe's run at kmin lasted
+        if (s->trial || (s->probe == 2 && s->since < hold_max)) {
+            int target = s->target;
+            s->failed++; s->trial = 0;
+            s->retry_hold[target] = fmin(hold_max, s->retry_hold[target] * 2);
+            s->retry_since[target] = 0;
+            want = s->fallback < kmax ? s->fallback : kmax;
+            s->settle = FSTEP_GRACE;   // old GPU timings / present snapshots belong to the failed trial, not to this returned hold
+        } else if (s->probe == 2) s->retry_hold[s->target] = hold0;   // the probe's run lasted
         if (held == kmin && s->run >= hold_max) s->cref = s->crun;   // kmin held 8 s at this cost
         s->k = want; s->ups++; s->late_run = s->fit_run = 0; s->since = 0; s->probe = 0;
-    } else if (s->trial && !grace && !--s->trial) { if (s->probe) { s->probe = 2; s->since = 0; } else s->hold = hold0; }   // the trial held (a probe's run at kmin is judged at the next step up)
-    if (!late) s->fit_run = s->k > kmin && cost <= FSTEP_FIT * (s->k - 1) ? s->fit_run + 1 : 0;
-    if (s->fit_run >= FSTEP_RUN && s->since >= s->hold && !s->trial) { s->k--; s->downs++; s->trial = FSTEP_RUN; s->fit_run = 0; }
-    else if ((slow || nvn_fstep_same(s)) && s->k > kmin && s->since >= s->hold && !s->trial) {   // probe: straight to kmin, so the controller sees the whole deadline
-        s->k = kmin; s->downs++; s->probes++; s->trial = FSTEP_RUN; s->probe = 1; s->grace = FSTEP_GRACE; s->fit_run = s->late_run = 0; s->pa = s->pb = 0; s->plate = s->ptotal = 0;
+        s->retry_since[want - 1] = 0;
+        s->over_k = 0;   // discard the failed deadline's lateness history before evaluating the return hold
+    } else if (s->trial && !grace && !--s->trial) {
+        if (s->probe) s->probe = 2; else s->retry_hold[s->target] = hold0;
+        s->since = 0;
+    }
+    // Use each target's whole budget; the trial then tests actual presentation rather than demanding unused performance in advance.
+    int next = s->k > kmin ? s->k - 1 : kmin;
+    s->hold = s->retry_hold[next];
+    if (!late && !settling) s->fit_run = s->k > kmin && cost <= FSTEP_FIT * next ? s->fit_run + 1 : 0;
+    if (s->k > kmin && s->since >= hold0 && s->retry_since[next] >= s->hold && !s->trial && !s->settle && !settling) {
+        if (s->fit_run >= FSTEP_RUN) nvn_fstep_trial(s, 0);
+        else if (s->k > kmin + 1 || slow || nvn_fstep_same(s)) {   // at 20, test 30 even without a clock signal: the cost at the longer hold can be self-fulfilling
+            nvn_fstep_trial(s, 1); s->probes++;
+        }
     }
     s->step = s->k + (s->debt >= 1 && s->k < smax);
     s->paid += s->step > s->k;

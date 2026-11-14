@@ -261,22 +261,22 @@ int main(void) {
         for (int i = 0; i < 600; i++) run(&m, 1, i % 2 ? 0.92 : 0.80, 1, 3, 0);
         check(m.s.k == 1 && m.s.probes == 1 && m.s.failed == 0, "  the scene gets lighter again, back to the cost that held: one probe back that holds");
     }
-    {   // hold 1 held only 5 s before the hitch: that run proves nothing (a device that steps up every few seconds keeps 30 rather than flap)
+    {   // No long-run reference yet, but the full target budget justifies an ordinary trial after the hitch.
         sim m = {0};
         for (int i = 0; i < 300; i++) run(&m, 1, i % 2 ? 0.92 : 0.80, 1, 3, 0);
         hitch(&m);
         for (int i = 0; i < 2000; i++) run(&m, 1, i % 2 ? 0.92 : 0.80, 1, 3, 0);
-        check(m.s.k == 2 && m.s.probes == 0 && m.s.cref == 0, "hitch after 5 s at hold 1: no cost that held, no probe");
+        check(m.s.k == 1 && m.s.probes == 0 && m.s.cref == 0, "hitch after 5 s at hold 1: fitting work recovers without a proven reference or probe");
     }
-    {   // the cost at hold 2 is what held, but hold 1 no longer fits (1.3 there): each probe fails, the probes spread out 1 → 2 → 4 → 8 s, and the cost that held is kept
+    {   // Hold 2 costs 1.04: just outside the full hold-1 budget but within 1.1 of its proven 0.96. The same-cost probe still covers this clock-dependent case.
         sim m = {0}; double last = 0, gaps[5]; int ng = 0; uint64_t probes = 0;
-        run(&m, 1200, 0.86, 1, 3, 0); hitch(&m);
+        run(&m, 1200, 0.96, 1, 3, 0); hitch(&m);
         for (int i = 0; i < 6000 && ng < 5; i++) {
-            run(&m, 1, m.s.k == 1 ? 1.3 : 0.86, 1, 3, 0);
+            run(&m, 1, m.s.k == 1 ? 1.3 : 1.04, 1, 3, 0);
             if (m.s.probes != probes) { probes = m.s.probes; gaps[ng++] = m.real - last; last = m.real; }
         }
         snprintf(b, sizeof b, "same cost at hold 2 but hold 1 does not fit: probes fail (%llu of %llu), cost that held kept at %.2f", (unsigned long long)m.s.failed, (unsigned long long)m.s.probes, m.s.cref);
-        check(ng == 5 && m.s.failed >= 4 && m.s.cref > 0.85 && m.s.cref < 0.87, b);
+        check(ng == 5 && m.s.failed >= 4 && m.s.cref > 0.95 && m.s.cref < 0.97, b);
         snprintf(b, sizeof b, "  probes %.0f, %.0f, %.0f, %.0f vsyncs apart; game time %.0f against real time %.2f (debt %.2f)", gaps[1], gaps[2], gaps[3], gaps[4], m.game, m.real, m.s.debt);
         check(gaps[1] >= 120 && gaps[2] >= 240 && gaps[3] >= 480 && gaps[4] >= 480 && gaps[4] < 600 && m.real - m.game - m.s.debt > -1.01 && m.real - m.game - m.s.debt < 1.01, b);
     }
@@ -287,11 +287,11 @@ int main(void) {
         check(sustained ? m.s.cref_at[1] > 0.85 && m.s.cref_at[1] < 0.87 : m.s.cref_at[1] == 0,
               sustained ? "first movie after 20 s at 60: save the sustained run without an earlier hitch"
                         : "first movie after only 5 s at 60: no proven cost to save");
-        run(&m, 60, 0.86, 1, 3, 0); uint64_t probes = m.s.probes; hitch(&m);
+        run(&m, 60, 0.86, 1, 3, 0); hitch(&m);
         for (int i = 0; i < 1200; i++) run(&m, 1, m.s.k == 1 ? 0.86 : 0.9, 1, 3, 0);
-        check(sustained ? m.s.k == 1 && m.s.probes > probes : m.s.k == 2 && m.s.probes == probes,
-              sustained ? "  hitch 1 s after the first movie: the saved run brings 60 back"
-                        : "  hitch after a short unproven run: keep 30 without a same-cost probe");
+        check(m.s.k == 1,
+              sustained ? "  hitch 1 s after the first movie: recover 60 with its reference or fitting work"
+                        : "  hitch after a short unproven run: fitting work alone recovers 60");
     }
     {   // Later movies keep the last proven cost through short runs, and replace it after another sustained run at a different cost.
         sim m = {0}; run(&m, 1200, 0.86, 1, 3, 0); run(&m, 120, 0.5, 2, 2, 0);
@@ -350,8 +350,8 @@ int main(void) {
                 nvn_fstep_next(&s, ms * 60 / 1000, 0.6, 1, 3, 0, 0);
             }
             snprintf(b, sizeof b, sl ? "165 Hz, cheap frames at hold 3, one refresh of slack: trials back to 2 and 1 (k %d, downs %llu)"
-                                     : "  without the slack the 54.5 ms frames count as late: hold 3 (20 fps) for good (k %d, downs %llu)", s.k, (unsigned long long)s.downs);
-            check(sl ? s.k == 1 && s.downs == 2 : s.k == 3 && s.downs == 0, b);
+                                     : "  without slack, false lateness prevents 60 despite adjacent recovery probes (k %d, downs %llu)", s.k, (unsigned long long)s.downs);
+            check(sl ? s.k == 1 && s.downs == 2 : s.k > 1 && s.probes > 0, b);
         }
         sim m = {0}; m.s.shown_slack = 60.0 / 165; run(&m, 60, 0.5, 1, 3, 0); run(&m, 300, 1.32, 1, 3, 0);
         check(m.s.k == 2, "  the slack does not hide work: 22 ms frames still step to hold 2");
@@ -394,6 +394,91 @@ int main(void) {
             snprintf(b, sizeof b, what[c], first_len, (unsigned long long)m.s.failed);
             check(first_len == want[c] && m.s.k == 2 && m.s.failed == 1, b);
         }
+    }
+    {   // 20 fps must not trap a scene that fits 30 but lacks the old 15% headroom (28.3 ms).
+        for (int ms = 28; ms <= 33; ms++) {
+            sim m = {.s = {.k = 3, .step = 3, .kmin = 1}, .next = 3};
+            run(&m, 600, ms * 60.0 / 1000, 1, 3, 0);
+            snprintf(b, sizeof b, "20 fps, constant %d ms work: recover to 30, without probing 60", ms);
+            check(m.s.k == 2 && m.s.downs == 1, b);
+        }
+    }
+    {   // A shortened deadline may take time to raise the clock. 30 fits, 60 does not: never jump 20 -> 60, or skip the proven 30 on failure.
+        sim m = {.s = {.k = 3, .step = 3, .kmin = 1}, .next = 3, .slow = 1};
+        int at2 = 0, skipped = 0, fell3 = 0;
+        for (int i = 0; i < 2400; i++) {
+            int old = m.s.k;
+            run(&m, 1, old == 1 ? 2.3 : 1.75, 1, 3, 0);
+            skipped += old == 3 && m.s.k == 1;
+            fell3 += old == 1 && m.s.k == 3;
+            at2 += i >= 1200 && m.s.k == 2;
+        }
+        snprintf(b, sizeof b, "30 fits, 60 fails: keep 30 (last 1200: %d at 30; skipped %d; fell to 20 %d)", at2, skipped, fell3);
+        check(m.s.k == 2 && at2 > 1000 && !skipped && !fell3 && m.s.failed >= 3, b);
+        check(fabs(m.real - m.game - m.s.debt - m.s.dropped) < 1.01, "  failed probes preserve game time accounting");
+    }
+    {   // Old present snapshots / GPU costs can report the failed 60 fps trial for another eight presents after returning to 30.
+        sim m = {0}; run(&m, 300, 1.5, 1, 3, 0); m.slow = 1;
+        for (int i = 0; i < 600 && !m.s.failed; i++) run(&m, 1, m.s.k == 1 ? 2.4 : 1.5, 1, 3, 0);
+        m.slow = 0;
+        for (int i = 0; i < 8; i++) { m.s.screen = 2; run(&m, 1, 2.4, 1, 3, 0); }
+        run(&m, 120, 1.75, 1, 3, 0);
+        check(m.s.k == 2 && m.s.ups == 2, "failed 60 trial: stale feedback does not push the proven 30 down to 20");
+    }
+    {   // Failure at 60 backs off that trial, not recovery from 20 to 30 after a later heavy scene.
+        sim m = {0}; run(&m, 300, 1.5, 1, 3, 0); m.slow = 1;
+        for (int i = 0; i < 5000 && (m.s.failed < 3 || m.s.k != 2); i++) run(&m, 1, m.s.k == 1 ? 1.5 : 1.2, 1, 3, 0);
+        m.slow = 0; run(&m, 120, 2.4, 1, 3, 0);
+        check(m.s.k == 3, "genuinely heavy 40 ms work can still lower 30 to 20");
+        run(&m, 40, 1.75, 1, 3, 0);
+        check(m.s.k == 2, "  failed 60 trials do not delay recovery to 30 behind their 8-second backoff");
+    }
+    {   // A genuinely 40 ms scene cannot hold 30: probes are adjacent and bounded, and failed 30 trials back off.
+        sim m = {.s = {.k = 3, .step = 3, .kmin = 1}, .next = 3, .slow = 1}; int at1 = 0; uint64_t downs = 0; double last = 0, gap = 1e9;
+        for (int i = 0; i < 4000; i++) {
+            run(&m, 1, 2.4, 1, 3, 0); at1 += m.s.k == 1;
+            if (m.s.downs != downs) { if (m.s.failed >= 3 && last) gap = fmin(gap, m.real - last); last = m.real; downs = m.s.downs; }
+        }
+        check(m.s.k == 3 && !at1 && m.s.failed >= 3 && gap >= FSTEP_HOLD_MAX, "40 ms scene: stay at 20, no 60 probe, failed 30 trials back off to 8 seconds");
+    }
+    {   // fps_hold=off bounds the hold at kmin; time compensation still runs.
+        sim m = {0}; run(&m, 600, 1.75, 1, 1, 0);
+        check(m.s.k == 1 && !m.s.ups && !m.s.downs && m.s.paid > 0, "hold off: no automatic lower rate, game time compensation remains");
+        check(fabs(m.real - m.game - m.s.debt - m.s.dropped) < 1.01, "  hold off: game time tracks real time");
+    }
+    {   // A light scene still reaches 60, with an actual trial at 30 first, even with a slowed report.
+        sim m = {.s = {.k = 3, .step = 3, .kmin = 1}, .next = 3, .slow = 1}; int at2 = 0, skipped = 0;
+        for (int i = 0; i < 600; i++) { int old = m.s.k; run(&m, 1, 0.6, 1, 3, 0); at2 += m.s.k == 2; skipped += old == 3 && m.s.k == 1; }
+        check(m.s.k == 1 && at2 >= FSTEP_RUN && !skipped, "light scene: 20 -> sustained 30 -> 60, never a direct 20 -> 60 probe");
+    }
+    {   // A longer hold can slow a serial CPU/GPU chain without a low P-core share or a GPU-alone slowdown signal.
+        sim m = {.s = {.k = 3, .step = 3, .kmin = 1}, .next = 3};
+        for (int i = 0; i < 1200; i++) run(&m, 1, m.s.k == 3 ? 2.74 : 1.75, 1, 3, 0);
+        check(m.s.k == 2 && m.s.probes == 1 && !m.s.failed, "no clock signal: a bounded 20 -> 30 probe recovers the sustainable rate");
+    }
+    {   // Performance-first recovery uses the full 60 fps budget too: no slowed signal or long-run reference is required for 16 ms work.
+        sim m = {.s = {.k = 3, .step = 3, .kmin = 1}, .next = 3};
+        run(&m, 600, 0.96, 1, 3, 0);
+        check(m.s.k == 1 && m.s.downs == 2 && m.s.probes <= 1, "16 ms work: recover through 30 to 60 without the old 15% reserve");
+    }
+    {   // Slowed clock at 20; the 30 fps probe needs 20 frames to settle, then 29 ms work holds it. Failed 60 probes return to 30.
+        sim m = {.s = {.k = 3, .step = 3, .kmin = 1}, .next = 3, .slow = 1}; int at2 = 0;
+        for (int i = 0; i < 1200; i++) {
+            double w = m.s.k == 3 ? 2.2 : m.s.k == 2 ? (at2++ < 20 ? 2.2 : 1.75) : 2.3;
+            run(&m, 1, w, 1, 3, 0);
+        }
+        m.slow = 0;
+        for (int i = 0; i < 60; i++) run(&m, 1, m.s.k == 1 ? 2.3 : 1.75, 1, 3, 0);   // finish any trial in progress at the sampling boundary
+        snprintf(b, sizeof b, "20 -> 30 probe tolerates clock ramp; retain 30 (k %d, at30 %d, failed %llu)", m.s.k, at2, (unsigned long long)m.s.failed);
+        check(m.s.k == 2 && at2 > 900, b);
+    }
+    {   // A cap or the game's own override cancels a trial; stale fallback state must not defeat either.
+        sim m = {0}; run(&m, 300, 1.5, 1, 3, 0); m.slow = 1;
+        for (int i = 0; i < 600 && m.s.probe != 1; i++) run(&m, 1, 1.5, 1, 3, 0);
+        run(&m, 120, 2.4, 2, 2, 0);
+        check(m.s.k == 2 && !m.s.trial && !m.s.probe, "a 30 fps cap cancels a 60 trial and its fallback state");
+        run(&m, 60, 0.5, 1, 3, 3);
+        check(m.s.k == 3 && m.next == 3 && !m.s.trial && !m.s.probe, "a game's own fixed step cancels the trial and still takes precedence");
     }
     printf("== %d checks, %d failed ==\n", checks, fail);
     return fail != 0;
