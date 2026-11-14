@@ -246,6 +246,7 @@ final class LauncherModel: ObservableObject {
     @Published var saveOperationBusy = false
     // Selection blocks Play without dimming the launcher while it is persisted.
     var saveSelectionPending = false
+    var selectedSave: (root: URL, id: String)?
     @Published private(set) var deferredSettings: Set<String> = []
     @Published private(set) var pictureLUTName: String?
     @Published private(set) var pictureLUTs: [PictureLUT] = []

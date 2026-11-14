@@ -140,6 +140,7 @@ private struct LauncherView: View {
     @State private var dlcCount = 0
     @State private var resourceStatus: String?
     @State private var importError: String?
+    @State private var startupError: String?
     @State private var importProgress: Double = 0
     @State private var graphicsVersion: String?
     @State private var graphicsMetal: String?
@@ -177,6 +178,9 @@ private struct LauncherView: View {
         .alert("Import failed", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
             Button("OK") { importError = nil }
         } message: { Text(importError ?? "") }
+        .alert("Cannot start the game", isPresented: Binding(get: { startupError != nil }, set: { if !$0 { startupError = nil } })) {
+            Button("OK") { startupError = nil }
+        } message: { Text(startupError ?? "") }
         .sheet(item: $importing) { kind in
             DocumentPicker(types: kind == .rom ? [.data] : [.graphicsPackage, .zip]) { url in
                 importing = nil
@@ -195,9 +199,13 @@ private struct LauncherView: View {
     }
 
     private func finishStart() {
+        guard !importBusy && !checkingResources && !m.saveOperationBusy && !m.saveSelectionPending else { return }
         m.apply()
-        if dm_startup_prepare() { sessionLauncherModel = m; play() }
-        else { refreshResources() }
+        do {
+            try SaveLibrary().validateForLaunch(owner: m)
+            if dm_startup_prepare() { sessionLauncherModel = m; play() }
+            else { refreshResources() }
+        } catch { startupError = NSLocalizedString(error.localizedDescription, comment: "Save startup error") }
     }
 
     private func refreshResources(autoImport: Bool = true) {

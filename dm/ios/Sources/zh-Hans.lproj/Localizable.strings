@@ -434,3 +434,17 @@
 "Show controls" = "\U663E\U793A\U9009\U9879";
 "Importing will not delete your current save." = "\U5bfc\U5165\U4e0d\U4f1a\U5220\U9664\U5f53\U524d\U5b58\U6863";
 "Require two swipes to leave the game" = "\U6ed1\U52a8\U4e24\U6b21\U624d\U8fd4\U56de\U4e3b\U5c4f\U5e55";
+
+"Cannot start the game" = "\U65e0\U6cd5\U542f\U52a8\U6e38\U620f";
+
+"Put each save folder in saves/Your name, then tap Refresh saves. Recognized game folders are organized automatically; the original folder is kept." = "\U5c06\U6bcf\U4e2a\U5b58\U6863\U6587\U4ef6\U5939\U653e\U5165 saves/\U5b58\U6863\U540d\Uff0c\U7136\U540e\U70b9\U51fb\U5237\U65b0\U5b58\U6863\U3002\U53ef\U8bc6\U522b\U7684\U6e38\U620f\U6587\U4ef6\U5939\U4f1a\U81ea\U52a8\U6574\U7406\Uff0c\U539f\U6587\U4ef6\U5939\U4f1a\U4fdd\U7559\U3002";
+
+"This folder does not contain one game save root. Import the folder containing its numbered progress folders." = "\U6b64\U6587\U4ef6\U5939\U672a\U5305\U542b\U552f\U4e00\U7684\U6e38\U620f\U5b58\U6863\U6839\U76ee\U5f55\U3002\U8bf7\U5bfc\U5165\U5305\U542b\U6570\U5b57\U7f16\U53f7\U8fdb\U5ea6\U6587\U4ef6\U5939\U7684\U76ee\U5f55\U3002";
+
+"The game save is inside extra folders. Import the folder containing its numbered progress folders." = "\U6e38\U620f\U5b58\U6863\U4f4d\U4e8e\U591a\U4f59\U7684\U5916\U5c42\U6587\U4ef6\U5939\U4e2d\U3002\U8bf7\U5bfc\U5165\U5305\U542b\U6570\U5b57\U7f16\U53f7\U8fdb\U5ea6\U6587\U4ef6\U5939\U7684\U76ee\U5f55\U3002";
+
+"Cannot normalize the imported save folder. The original save has been kept." = "\U65e0\U6cd5\U6574\U7406\U5bfc\U5165\U7684\U5b58\U6863\U6587\U4ef6\U5939\U3002\U539f\U5b58\U6863\U5df2\U4fdd\U7559\U3002";
+
+"The selected save changed. Reopen the save list and select it again." = "\U6240\U9009\U5b58\U6863\U5df2\U66f4\U6539\U3002\U8bf7\U91cd\U65b0\U6253\U5f00\U5b58\U6863\U5217\U8868\U5e76\U518d\U6b21\U9009\U62e9\U3002";
+
+"The selected save changed before mounting; refusing to load another save." = "\U6302\U8f7d\U524d\U6240\U9009\U5b58\U6863\U5df2\U66f4\U6539\Uff0c\U5df2\U963b\U6b62\U52a0\U8f7d\U5176\U4ed6\U5b58\U6863\U3002";

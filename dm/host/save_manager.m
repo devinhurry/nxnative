@@ -139,6 +139,21 @@ static NSArray<NSString *> *sm_ids(NSString *folder) {
     return [ids sortedArrayUsingSelector:@selector(compare:)];
 }
 static BOOL sm_has_save(NSString *p) { return sm_dir(p) && (sm_dir(sm_path(p,@"save")) || sm_dir(sm_path(p,@"save_device"))); }
+static BOOL sm_game_layout(NSString *slot,BOOL normalize,NSError **error) {
+    NSString *save=sm_path(slot,@"save");
+    if (!sm_dir(save)) return YES;
+    char found[PATH_MAX];int result=dm_saves_game_root(save.fileSystemRepresentation,found,sizeof found);
+    if (result<0) return sm_fail(error,@"This folder does not contain one game save root. Import the folder containing its numbered progress folders.");
+    if (!result || [@(found).stringByStandardizingPath isEqual:save.stringByStandardizingPath]) return YES;
+    if (!normalize) return sm_fail(error,@"The game save is inside extra folders. Import the folder containing its numbered progress folders.");
+    // Only rearrange the unpublished import copy; the user's source is untouched.
+    NSString *staged=sm_path(slot,@"save-normalized");
+    if (rename(found,staged.fileSystemRepresentation) ||
+        ![NSFileManager.defaultManager removeItemAtPath:save error:error] ||
+        rename(staged.fileSystemRepresentation,save.fileSystemRepresentation))
+        return sm_fail(error,@"Cannot normalize the imported save folder. The original save has been kept.");
+    return YES;
+}
 static NSArray<NSString *> *sm_slots(NSString *folder) {
     NSMutableArray *ids = [NSMutableArray array];
     for (NSString *slot in sm_ids(folder)) if (sm_has_save(sm_path(folder,slot)) || sm_json(sm_path(sm_path(folder,slot),@"info.json"))) [ids addObject:slot];
@@ -256,6 +271,7 @@ static BOOL sm_migrate(NSString *root, NSString *title, NSError **error) {
         !sm_publish(root,stage,slot,error)) return NO;
     return YES;
 }
+static BOOL sm_normalize_local(NSString *root,NSString *title,NSError **error);
 static BOOL sm_init(NSString *root, NSString *title, NSError **error) {
     NSString *base = sm_base(root);
     for (NSString *name in @[@"staging",@"trash"])
@@ -284,8 +300,8 @@ static BOOL sm_init(NSString *root, NSString *title, NSError **error) {
             !sm_publish(root,stage,@"default",error)) return NO;
     }
     if ((empty || madeDefault) && !sm_selection(root,@"current.json") && !sm_exists(sm_path(base,@"current.json")) && !sm_exists(sm_path(base,@"current.json.bak")))
-        return sm_select(root,@"default",error);
-    return YES;
+        if (!sm_select(root,@"default",error)) return NO;
+    return sm_normalize_local(root,title,error);
 }
 // Enumeration uses the provider's local directory listing. Actual save contents
 // are fetched, coordinated and checked by save_sync.c on first mount. There is
@@ -357,8 +373,9 @@ static BOOL sm_ready(NSString *slot, NSString *title, NSError **error) {
         [restored removeObjectForKey:@"guest_names"];
         if (!sm_write(sm_path(slot,@"info.json"),restored,error)) return NO;
     }
-    return ss_prepare_pending(sm_path(slot,@"save").fileSystemRepresentation,title.UTF8String) ||
-        sm_fail(error,@"This save exists in the cloud but has not downloaded yet. Connect to iCloud and retry; its existing progress has been kept.");
+    if (!ss_prepare_pending(sm_path(slot,@"save").fileSystemRepresentation,title.UTF8String))
+        return sm_fail(error,@"This save exists in the cloud but has not downloaded yet. Connect to iCloud and retry; its existing progress has been kept.");
+    return sm_game_layout(slot,NO,error);
 }
 static BOOL sm_copy_tree(NSString *from, NSString *to, NSError **error) {
     if (!sm_dir(from)) return !copyfile(from.fileSystemRepresentation,to.fileSystemRepresentation,NULL,COPYFILE_ALL|COPYFILE_CLONE|COPYFILE_EXCL|COPYFILE_NOFOLLOW) || sm_fail(error,@"Cannot copy the save files.");
@@ -374,6 +391,51 @@ static BOOL sm_copy_data(NSString *from, NSString *stage, NSError **error) {
         if (sm_exists(p) && (!sm_tree(p,error) || !sm_copy_tree(p,sm_path(stage,part),error))) return NO;
     }
     return sm_mkdir(sm_path(stage,@"save"),error);
+}
+
+// Publish the normalized copy atomically; keep the original in staging.
+static BOOL sm_normalize_local(NSString *root,NSString *title,NSError **error) {
+    for (NSString *id in sm_ids(sm_base(root))) {
+        NSString *slot=sm_slot(root,id),*save=sm_path(slot,@"save");
+        BOOL wrapped=sm_dir(save);
+        NSDictionary *info=sm_json(sm_path(slot,@"info.json"));
+        if (info[@"title_id"] && ![info[@"title_id"] isEqual:title]) continue;
+        char found[PATH_MAX];
+        int result=dm_saves_game_root((wrapped ? save : slot).fileSystemRepresentation,found,sizeof found);
+        if (result<0) return sm_fail(error,@"This folder does not contain one game save root. Import the folder containing its numbered progress folders.");
+        if (!result) continue;
+        NSString *gameRoot=[@(found) stringByStandardizingPath];
+        if (wrapped && [gameRoot isEqual:save.stringByStandardizingPath]) continue;
+        if (!wrapped) {
+            for (NSString *part in @[@"save-backups",@"save_device"])
+                if ([gameRoot isEqual:sm_path(slot,part)] || [gameRoot hasPrefix:[sm_path(slot,part) stringByAppendingString:@"/"]])
+                    return sm_fail(error,@"This folder does not contain one game save root. Import the folder containing its numbered progress folders.");
+        }
+        if (!sm_tree(slot,error)) return NO;
+        NSString *stage=sm_path(sm_path(sm_base(root),@"staging"),[@"original-" stringByAppendingString:NSUUID.UUID.UUIDString]);
+        BOOL ready=NO;
+        @try {
+            if (wrapped) {
+                if (!sm_copy_tree(slot,stage,error) || !sm_restore_names(info,stage,error) || !sm_game_layout(stage,YES,error)) return NO;
+            } else {
+                if (!sm_mkdir(stage,error) || !sm_copy_tree(@(found),sm_path(stage,@"save"),error)) return NO;
+                for (NSString *part in @[@"info.json",@"save_device",@"save.sync",@"save-backups",@"legacy.sync",@"cloud-pending"]) {
+                    NSString *path=sm_path(slot,part);
+                    if (sm_exists(path) && !sm_copy_tree(path,sm_path(stage,part),error)) return NO;
+                }
+                if (!sm_restore_names(info,stage,error)) return NO;
+            }
+            NSMutableDictionary *record=(info ?: sm_info(title,[id isEqual:@"default"] ? @"Default" : id,@"folder")).mutableCopy;
+            [record removeObjectForKey:@"guest_names"];
+            if (!sm_write(sm_path(stage,@"info.json"),record,error)) return NO;
+            if (renamex_np(stage.fileSystemRepresentation,slot.fileSystemRepresentation,RENAME_SWAP))
+                return sm_fail(error,@"Cannot normalize the imported save folder. The original save has been kept.");
+            ready=YES;
+        } @finally {
+            if (!ready) [NSFileManager.defaultManager removeItemAtPath:stage error:nil];
+        }
+    }
+    return YES;
 }
 
 static BOOL sm_zip_tree(struct archive *writer, NSString *folder, NSString *relative, NSString *wrapper, NSMutableDictionary *names, uint64_t budget[2], NSError **error) {
@@ -592,6 +654,38 @@ static BOOL sm_progress_slot(NSString *path) {
     }
     return YES;
 }
+int dm_saves_progress_slot(const char *path) { return path && sm_progress_slot(@(path)); }
+
+int dm_saves_game_root(const char *path, char *root, size_t size) {
+    if (!path || !root || !size) return -1;
+    // Loose files have lost their progress-slot number; never invent it.
+    if (sm_progress_slot(@(path))) return -1;
+    @autoreleasepool {
+        NSURL *base=[NSURL fileURLWithPath:@(path) isDirectory:YES];
+        __block BOOL failed=NO;
+        NSDirectoryEnumerator *entries=[NSFileManager.defaultManager enumeratorAtURL:base
+            includingPropertiesForKeys:@[NSURLIsDirectoryKey,NSURLIsSymbolicLinkKey]
+            options:NSDirectoryEnumerationSkipsHiddenFiles errorHandler:^BOOL(NSURL *url,NSError *error){
+                (void)url;(void)error;failed=YES;return NO;
+            }];
+        NSString *found=nil;
+        for (NSURL *entry in entries) {
+            NSDictionary *attributes=[entry resourceValuesForKeys:@[NSURLIsDirectoryKey,NSURLIsSymbolicLinkKey] error:nil];
+            if ([attributes[NSURLIsSymbolicLinkKey] boolValue]) { [entries skipDescendants];continue; }
+            if (![attributes[NSURLIsDirectoryKey] boolValue]) continue;
+            NSString *name=entry.lastPathComponent;
+            if (!sm_progress_slot(entry.path)) continue;
+            if (!name.length || [name rangeOfCharacterFromSet:[[NSCharacterSet characterSetWithCharactersInString:@"0123456789"] invertedSet]].location!=NSNotFound) return -1;
+            NSString *candidate=entry.URLByDeletingLastPathComponent.path;
+            if (found && ![found isEqual:candidate]) return -1;
+            found=candidate;
+            [entries skipDescendants];
+        }
+        if (failed) return -1;
+        if (!found) return 0;
+        return strlcpy(root,found.fileSystemRepresentation,size)<size ? 1 : -1;
+    }
+}
 static BOOL sm_numeric_folder(NSString *name) {
     return name.length && [name rangeOfCharacterFromSet:[[NSCharacterSet characterSetWithCharactersInString:@"0123456789"] invertedSet]].location == NSNotFound;
 }
@@ -742,6 +836,7 @@ static NSDictionary *sm_import_many(NSString *root, NSString *title, NSArray *so
                     if (entry[@"subdir"]) target = sm_path(target,entry[@"subdir"]);
                     if (!sm_mkdir(stage,&failure) || (isRaw ? !sm_copy_tree(from,target,&failure) :
                         (!sm_copy_data(from,stage,&failure) || !sm_restore_names(info,stage,&failure)))) return;
+                    if (!sm_game_layout(stage,YES,&failure)) return;
                     NSMutableDictionary *record = [sm_info(title,label,@"import") mutableCopy]; record[@"import_batch"] = job.lastPathComponent;
                     if (!sm_write(sm_path(stage,@"info.json"),record,&failure)) return;
                     [ids addObject:slot];
@@ -788,6 +883,12 @@ static NSArray *sm_listing(NSString *folder) {
 static NSDictionary *sm_operate(NSString *root, NSString *title, NSString *cmd, NSString *a, NSString *b, NSError **error) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *base = sm_base(root);
+    if ([cmd isEqual:@"validate"]) {
+        NSString *current=a.length ? sm_selection(root,@"current.json") : sm_current(root,error);
+        if (a.length && ![a isEqual:current]) { sm_fail(error,@"The selected save changed. Reopen the save list and select it again.");return nil; }
+        if (!current || !sm_ready(sm_slot(root,current),title,error)) return nil;
+        return @{@"current":current,@"path":sm_path(sm_slot(root,current),@"save")};
+    }
     if ([cmd isEqual:@"list"] || [cmd isEqual:@"inspect"]) {
         NSError *selectionError = nil;
         NSString *current = [cmd isEqual:@"inspect"] ? (sm_selection(root,@"current.json") ?: sm_selection(root,@"current.json.bak")) : sm_current(root,&selectionError);
@@ -857,7 +958,7 @@ static NSDictionary *sm_operate(NSString *root, NSString *title, NSString *cmd, 
         return @{@"id":a};
     }
     if (!sm_dir(slot)) { sm_fail(error,@"The save does not exist."); return nil; }
-    if ([cmd isEqual:@"select"]) return sm_select(root,a,error) ? @{@"current":a} : nil;
+    if ([cmd isEqual:@"select"]) return sm_game_layout(slot,NO,error) && sm_select(root,a,error) ? @{@"current":a} : nil;
     if ([cmd isEqual:@"rename"]) {
         if (!sm_name(b,error)) return nil;
         NSMutableDictionary *info = [NSMutableDictionary dictionaryWithDictionary:sm_json(sm_path(slot,@"info.json")) ?: sm_info(title,a,@"recovered")];
@@ -919,6 +1020,11 @@ int dm_saves_prepare(const char *root, const char *title, char *save, size_t siz
             NSString *current = sm_current(r,&failure);
             if (current && sm_ready(sm_slot(r,current),t,&failure)) {
                 NSString *p = sm_path(sm_slot(r,current),@"save");
+                const char *expected = getenv("DM_SAVE_EXPECTED");
+                if (expected && *expected && ![[@(expected) stringByStandardizingPath].stringByResolvingSymlinksInPath isEqual:p.stringByResolvingSymlinksInPath]) {
+                    sm_fail(&failure,@"The selected save changed before mounting; refusing to load another save.");
+                    close(fd); sm_error(failure,error,error_size); return -1;
+                }
                 if (strlcpy(save,p.fileSystemRepresentation,size) < size) { *lock_fd = fd; return 0; }
                 sm_fail(&failure,@"The save path is too long.");
             }

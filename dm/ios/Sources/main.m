@@ -167,7 +167,8 @@ int front_ios_prepare_game(void) {
     dm_cloud_saves_env();
     if (!getenv("DM_SAVE")) {
         char save[PATH_MAX];
-        if (dm_saves_prepare(doc.fileSystemRepresentation, DM_GAME_ID, save, sizeof save, &g_save_lock, g_save_error, sizeof g_save_error)) {
+        const char *root = getenv("DM_SAVES_ROOT") ?: doc.fileSystemRepresentation;
+        if (dm_saves_prepare(root, DM_GAME_ID, save, sizeof save, &g_save_lock, g_save_error, sizeof g_save_error)) {
             fprintf(stderr, "[RED] boot: %s\n", g_save_error); return 0;
         }
         setenv("DM_SAVE", save, 1);

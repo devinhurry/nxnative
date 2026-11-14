@@ -76,18 +76,19 @@ struct SaveProgress {
 
     static func latest(in folder: URL, rules: SavePreviewRules?, language: String) -> SaveProgress? {
         guard let rules, !rules.caption_file.contains("/"), !rules.image_file.contains("/"),
-              let files = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
-                                                         options: [.skipsHiddenFiles]) else { return nil }
+              let files = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+                                                                       options: [.skipsHiddenFiles]) else { return nil }
+        var root = [CChar](repeating: 0, count: 4096)
+        guard dm_saves_game_root(folder.path, &root, root.count) == 1,
+              URL(fileURLWithPath: String(cString: root)).standardizedFileURL == folder.standardizedFileURL else { return nil }
         var latest: SaveProgress?
-        var visited = 0
-        for case let url as URL in files {
-            visited += 1
-            if visited > 4096 { break } // ponytail: bounded scan; index if saves grow beyond this.
+        for url in files {
             let attributes = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-            if attributes?.isSymbolicLink == true { files.skipDescendants(); continue }
-            if files.level > 4 { files.skipDescendants(); continue }
-            if url.lastPathComponent == rules.caption_file,
-               let preview = read(url, rules: rules, language: language), preview.date > (latest?.date ?? .distantPast) { latest = preview }
+            guard attributes?.isDirectory == true, attributes?.isSymbolicLink != true,
+                  !url.lastPathComponent.isEmpty, url.lastPathComponent.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+                  dm_saves_progress_slot(url.path) != 0 else { continue }
+            if let preview = read(url.appendingPathComponent(rules.caption_file), rules: rules, language: language),
+               preview.date > (latest?.date ?? .distantPast) { latest = preview }
         }
         return latest
     }
@@ -105,6 +106,11 @@ struct ManagedSave: Decodable, Identifiable {
     enum CodingKeys: String, CodingKey { case id, name, path, saved_at, bytes, files, cloud_pending }
     var displayName: String { id == "default" && name == "Default" ? NSLocalizedString("Default", comment: "Save") : name }
     var date: Date? { progress?.date ?? (saved_at > 0 ? Date(timeIntervalSince1970: Double(saved_at)) : nil) }
+}
+
+private struct SaveLaunchSelection: Decodable {
+    let current: String
+    let path: String
 }
 
 private struct SaveInventory: Decodable {
@@ -166,6 +172,17 @@ final class SaveLibrary: ObservableObject {
         return Data(bytes: result, count: strlen(result))
     }
 
+    func validateForLaunch(owner: LauncherModel) throws {
+        unsetenv("DM_SAVE_EXPECTED")
+        guard !externalSave, let root, let title else { return }
+        if let selected = owner.selectedSave, selected.root.standardizedFileURL != root.standardizedFileURL {
+            throw NSError(domain: "nxnative.saves", code: 1, userInfo: [NSLocalizedDescriptionKey: "The selected save changed. Reopen the save list and select it again."])
+        }
+        let data = try Self.command(root: root, title: title, "validate", owner.selectedSave?.id ?? "")
+        let result = try JSONDecoder().decode(SaveLaunchSelection.self, from: data)
+        setenv("DM_SAVE_EXPECTED", result.path, 1)
+    }
+
     func perform(_ command: String = "list", _ first: String = "", _ second: String = "", language: String, readOnly: Bool = false, owner: LauncherModel? = nil,
                  completion: ((Bool) -> Void)? = nil) {
         guard !busy, !selecting, owner?.saveSelectionPending != true, let root, let title else { completion?(false); return }
@@ -177,6 +194,7 @@ final class SaveLibrary: ObservableObject {
                     self.selecting = false; owner?.saveSelectionPending = false
                     switch result {
                     case .success:
+                        owner?.selectedSave = (root, first)
                         var transaction = Transaction()
                         transaction.disablesAnimations = true
                         withTransaction(transaction) {
@@ -227,6 +245,7 @@ final class SaveLibrary: ObservableObject {
                 case .success(let (inventory, layout, count)):
                     if let inventory {
                         self.current = inventory.current; self.saves = inventory.slots; self.trash = inventory.trash; self.selectionError = inventory.selection_error
+                        owner?.selectedSave = inventory.current.map { (root, $0) }
                     }
                     self.importLayout = layout; self.importedCount = count
                     completion?(true)
@@ -348,7 +367,7 @@ struct SaveManagementPage: View {
             }
             #endif
             DisclosureGroup("Add a save folder manually") {
-                Text("Put your game save files in saves/Your name/save, then tap Refresh saves. No setup file is needed.")
+                Text("Put each save folder in saves/Your name, then tap Refresh saves. Recognized game folders are organized automatically; the original folder is kept.")
                     .font(.footnote).textSelection(.enabled)
                 #if os(iOS)
                 Text("Find this app under On My iPhone in Files.").font(.footnote)

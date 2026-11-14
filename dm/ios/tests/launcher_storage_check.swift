@@ -20,7 +20,10 @@ private func checkSavePreviews(_ expect: (Bool, String) -> Void) {
     }
     do {
         let older = folder.appendingPathComponent("0"), newer = folder.appendingPathComponent("1"), removed = folder.appendingPathComponent("2")
-        for url in [older, newer, removed] { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+        for url in [older, newer, removed] {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            try Data("progress".utf8).write(to: url.appendingPathComponent("game_data.sav"))
+        }
         try caption(1700000000).write(to: older.appendingPathComponent("caption.sav"))
         try caption(1700000100, big: true).write(to: newer.appendingPathComponent("caption.sav"))
         try caption(1700000200, deleted: true).write(to: removed.appendingPathComponent("caption.sav"))
@@ -29,6 +32,15 @@ private func checkSavePreviews(_ expect: (Bool, String) -> Void) {
         expect(progress?.date.timeIntervalSince1970 == 1700000100, "save preview uses embedded time across endian formats and ignores deleted progress")
         expect(progress?.location == "Localized village", "save preview resolves the game's localized location labels")
         expect(progress?.automatic == true && progress?.hardMode == true, "save preview preserves automatic and Master Mode flags")
+        let wrapped = folder.appendingPathComponent("extra/account/0")
+        try FileManager.default.createDirectory(at: wrapped, withIntermediateDirectories: true)
+        try Data("nested progress".utf8).write(to: wrapped.appendingPathComponent("game_data.sav"))
+        try caption(1700000300).write(to: wrapped.appendingPathComponent("caption.sav"))
+        expect(SaveProgress.latest(in: folder.appendingPathComponent("extra"), rules: rules, language: "USen") == nil,
+               "preview does not recognize progress below an extra account wrapper")
+        expect(SaveProgress.latest(in: folder, rules: rules, language: "USen") == nil,
+               "preview and loading both reject multiple game roots in one save")
+        try FileManager.default.removeItem(at: folder.appendingPathComponent("extra"))
         let link = folder.appendingPathComponent("linked.sav")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: newer.appendingPathComponent("caption.sav"))
         expect(SaveProgress.read(link, rules: rules, language: "USen") == nil, "save preview refuses symbolic links")
@@ -40,7 +52,7 @@ private func checkSavePreviews(_ expect: (Bool, String) -> Void) {
 
 private func checkSaveLibraryImports(_ expect: (Bool, String) -> Void) {
     let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let keys = ["DM_LAUNCHER_FILE", "DM_SAVES_ROOT", "DM_SAVE", "DM_SAVES_MANAGED", "DM_SAVE_SYNC"]
+    let keys = ["DM_LAUNCHER_FILE", "DM_SAVES_ROOT", "DM_SAVE", "DM_SAVES_MANAGED", "DM_SAVE_SYNC", "DM_SAVE_EXPECTED"]
     let previous = ProcessInfo.processInfo.environment
     defer {
         for key in keys { if let value = previous[key] { setenv(key, value, 1) } else { unsetenv(key) } }
@@ -127,6 +139,22 @@ private func checkSaveLibraryImports(_ expect: (Bool, String) -> Void) {
                "switching never refreshes or reorders the library or dims the launcher")
         expect(library.saves[0].progress?.image === image && library.saves[0].progress?.location == "Test village" && library.importedCount == count,
                "switching preserves the existing preview image, caption and import notice")
+        try library.validateForLaunch(owner: owner)
+        expect(ProcessInfo.processInfo.environment["DM_SAVE_EXPECTED"]?.hasSuffix("/saves/" + library.current! + "/save") == true,
+               "launch validation binds the displayed selection to its game root")
+        let changed = library.current == "default" ? order[0] : "default"
+        var selectionError = [CChar](repeating: 0, count: 2048)
+        let changedResult = dm_saves_command(root.path, "010015100B514000", "select", changed, "", &selectionError, selectionError.count)
+        expect(changedResult != nil, "the launch mismatch fixture changes the persisted selection")
+        if let changedResult { free(changedResult) }
+        do {
+            try library.validateForLaunch(owner: owner)
+            expect(false, "a changed selection must not launch another save")
+        } catch {
+            expect(ProcessInfo.processInfo.environment["DM_SAVE_EXPECTED"] == nil,
+                   "a mismatched selection blocks launch instead of binding another save")
+        }
+        expect(perform("select", library.current!, owner: owner), "the displayed selection can be restored after a blocked launch")
         let current = library.current
         expect(!perform("select", "missing-save", owner: owner) && library.current == current && library.error != nil && !owner.saveSelectionPending,
                "a failed switch keeps the previous selection and reports the error")

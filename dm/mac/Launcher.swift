@@ -40,6 +40,7 @@ struct LauncherView: View {
     @State private var settingsDestination: LauncherSettingsDestination?
     @State private var startAfterSettings = false
     @State private var availableMemory = dm_low_memory_available()
+    @State private var startupError: String?
 
     private var romfs: String {
         if let value = ProcessInfo.processInfo.environment["DM_ROMFS"] { return value }
@@ -72,17 +73,20 @@ struct LauncherView: View {
             shouldShowTouchNotice: {
                 ProcessInfo.processInfo.environment["DM_TOUCH_PREVIEW"] == "1" && GCController.controllers().isEmpty
             },
-            onPlay: { done(true) }, onSettings: { settingsDestination = .graphics },
+            onPlay: startPlay, onSettings: { settingsDestination = .graphics },
             onSaves: { settingsDestination = .saves },
             onImportROM: nil, onImportShaders: nil)
             .frame(minWidth: 720, minHeight: 420)
             .sheet(item: $settingsDestination, onDismiss: {
-                if startAfterSettings { startAfterSettings = false; done(true) }
+                if startAfterSettings { startAfterSettings = false; startPlay() }
             }) { destination in
                 LauncherSettingsPage(m: m, initialSection: destination.rawValue, onPlay: {
                     startAfterSettings = true; settingsDestination = nil
                 }) { settingsDestination = nil }.frame(width: 1000, height: 620)
             }
+            .alert("Cannot start the game", isPresented: Binding(get: { startupError != nil }, set: { if !$0 { startupError = nil } })) {
+                Button("OK") { startupError = nil }
+            } message: { Text(startupError ?? "") }
             .task {
                 while !Task.isCancelled {
                     availableMemory = dm_low_memory_available()
@@ -92,6 +96,11 @@ struct LauncherView: View {
             }
     }
 
+    private func startPlay() {
+        guard !m.saveOperationBusy && !m.saveSelectionPending else { return }
+        do { try SaveLibrary().validateForLaunch(owner: m); done(true) }
+        catch { startupError = NSLocalizedString(error.localizedDescription, comment: "Save startup error") }
+    }
 }
 
 /// Cloud saves: a folder the save is synced through (dm/host/save_sync.h), the one the iPhone app picks in its launcher's Cloud saves section. It is kept in this app's

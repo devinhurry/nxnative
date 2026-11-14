@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import shutil
 import struct
 import subprocess
 import sys
@@ -83,6 +84,86 @@ class SaveManager(unittest.TestCase):
 
     def save(self, slot='default', root=None):
         return (root or self.root) / 'saves' / slot / 'save'
+
+    def test_manual_numbered_roots_are_normalized_without_losing_identity_or_originals(self):
+        self.call('list')
+        for name, relative in [('Raw campaign', 'account/3'), ('Wrapped campaign', 'save/account/3')]:
+            with self.subTest(name=name):
+                slot = self.root / 'saves' / name
+                self.put(slot / relative / 'game_data.sav', 'progress')
+                self.put(slot / relative / 'caption.sav', 'damaged caption')
+                self.set_guest_name(slot / relative / 'game_data.sav', b'Game_Data.sav')
+                self.put(slot / 'save_device/common', 'device')
+                self.put(slot / 'save.sync', 'cloud baseline')
+                self.put(slot / 'save-backups/old', 'backup')
+                self.put(slot / 'info.json', json.dumps({'title_id': GAME, 'name': name, 'source': 'folder'}))
+                before = set((self.root / 'saves/staging').iterdir())
+                inventory = self.call('list')
+                self.assertIn(name, [item['id'] for item in inventory['slots']])
+                self.assertEqual((self.save(name) / '3/game_data.sav').read_text(), 'progress')
+                self.assertEqual(self.guest_name(self.save(name) / '3/game_data.sav'), b'Game_Data.sav')
+                for part, value in [('save_device/common', 'device'), ('save.sync', 'cloud baseline'), ('save-backups/old', 'backup')]:
+                    self.assertEqual((slot / part).read_text(), value)
+                originals = set((self.root / 'saves/staging').iterdir()) - before
+                self.assertEqual(len(originals), 1)
+                self.assertEqual((originals.pop() / relative / 'game_data.sav').read_text(), 'progress')
+                self.call('select', name)
+                self.assertEqual(self.prepare(), self.save(name))
+                after = set((self.root / 'saves/staging').iterdir())
+                self.call('list')
+                self.assertEqual(set((self.root / 'saves/staging').iterdir()), after)
+                self.assertEqual(self.call('list')['current'], name)
+
+    def test_import_normalizes_recognized_wrappers_and_rejects_multiple_roots_atomically(self):
+        source = self.folder / 'wrapped'
+        self.put(source / 'account/3/game_data.sav', 'progress')
+        self.put(source / 'account/3/caption.sav', 'caption')
+        slot = self.call('import-raw', source)['id']
+        self.assertEqual((self.save(slot) / '3/game_data.sav').read_text(), 'progress')
+        self.assertFalse((self.save(slot) / 'account').exists())
+        self.assertEqual((source / 'account/3/game_data.sav').read_text(), 'progress')
+        self.put(source / 'another/0/game_data.sav', 'other')
+        self.put(source / 'another/0/caption.sav', 'caption')
+        before = self.call('list')
+        self.assertIn('one game save root', self.call('import-raw', source, success=False))
+        self.assertEqual(self.call('list'), before)
+        self.assertIn('one game save root', self.call('import-many', json.dumps([str(self.save(slot).parent), str(source)]), '{}', success=False))
+        self.assertEqual(self.call('list'), before)
+
+    def test_manual_ambiguous_loose_and_backup_only_progress_fail_without_rearranging(self):
+        self.call('list')
+        slot = self.root / 'saves/Manual'
+        for paths in [('account/0', 'other/1'), ('',), ('save-backups/0',), ('save_device/0',)]:
+            with self.subTest(paths=paths):
+                for relative in paths:
+                    self.put(slot / relative / 'game_data.sav', 'progress')
+                    self.put(slot / relative / 'caption.sav', 'caption')
+                snapshot = {p.relative_to(slot): p.read_bytes() for p in slot.rglob('*') if p.is_file()}
+                self.assertIn('one game save root', self.call('list', success=False))
+                self.assertEqual({p.relative_to(slot): p.read_bytes() for p in slot.rglob('*') if p.is_file()}, snapshot)
+                self.assertFalse(any((self.root / 'saves/staging').iterdir()))
+                shutil.rmtree(slot)
+
+    def test_launch_validation_binds_selection_and_mount_refuses_a_changed_path(self):
+        self.call('list')
+        first = self.call('create', 'First')['id']
+        second = self.call('create', 'Second')['id']
+        self.call('select', first)
+        selected = self.call('validate', first)
+        self.assertEqual(selected['current'], first)
+        self.assertEqual(Path(selected['path']).resolve(), self.save(first))
+        self.env['DM_SAVE_EXPECTED'] = selected['path']
+        self.assertEqual(self.prepare(), self.save(first))
+        self.call('select', second)
+        self.assertIn('selected save changed', self.call('validate', first, success=False))
+        self.assertIn('refusing to load another save', self.prepare(success=False))
+        # Failed preparation releases the lifetime lock and leaves selection intact.
+        self.assertEqual(self.call('list')['current'], second)
+        self.call('select', first)
+        self.assertEqual(self.prepare(), self.save(first))
+        self.put(self.root / 'saves/current.json', '{broken')
+        self.assertIn('selected save changed', self.call('validate', first, success=False))
+        self.assertEqual((self.root / 'saves/current.json').read_text(), '{broken')
 
     def test_restartable_migration_keeps_both_saves_sync_and_backups(self):
         self.put(self.root / 'save/progress.dat', 'account')
