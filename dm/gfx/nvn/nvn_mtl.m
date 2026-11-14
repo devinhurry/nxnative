@@ -295,6 +295,7 @@ static void ws_report(uint64_t frame, uint64_t frames) {
     MLOG("[waits] up to frame %llu, per frame:%s", (unsigned long long)frame, o ? line : " none");
 }
 static id<MTLRenderPipelineState> pso_future_resolve(id future);
+static id<MTLRenderPipelineState> pso_future_bind(id future);
 static void pso_future_collect(void);
 static Class g_pso_future_class;
 #include "nvn_rec.h"   // deferred encoding (DM_NVN_ENC_THREAD)
@@ -10068,6 +10069,25 @@ static __unsafe_unretained id<MTLRenderPipelineState> pso_get_(NvProg *pr, MTLRe
                     if (pso_predict_due(st == 0)) { uint64_t t0 = bp_now(); pso_predict_rest(); g_bp_pso_ns += bp_now() - t0; }
                     return h;
                 }
+            }
+        }
+    }
+    if (!ps && !took && pso_future_on()) {
+        int pending = 0;
+        if (!g_pso_lmap && !ms_fn) {
+            int status = pso_pend_try(&k, &ps);
+            if (status == 2) took = 1; else pending = status == 1;
+        }
+        if (!ps && !took) {
+            MTLRenderPipelineDescriptor *d = pso_desc(&k, vs, fs, ms_fn ? ms_fn : g_pso_fsfn, g_pso_lmap != NULL);
+            // A ready base still specializes immediately. Only a real compile (or
+            // an already pending compile) takes the asynchronous maySkip path.
+            if (!pending) ps = pso_build_ex(d, !k.border, &e, 0);
+            if (!ps) {
+                id future = pso_future_submit(&k, vs, fs, d, 1, pending, !ms_fn);
+                g_bp_pso_n++; g_bp_pso_ns += bp_now() - bt;
+                if (pso_predict_due(!pending)) pso_predict_rest();
+                return future;
             }
         }
     }

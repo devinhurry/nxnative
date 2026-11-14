@@ -128,6 +128,11 @@ $(B)/t_heap_size: t_heap_size.c ../hle_svc.c ../dm.h $(GAME_H) | $(B)
 .PHONY: heap_size
 heap_size: $(B)/t_heap_size
 	$(B)/t_heap_size
+$(B)/t_ram_donor: t_ram_donor.c ../ram_donor.c ../ram_donor.h ../ram_donor_proto.h | $(B)
+	$(CLANG) -O1 -Wall -Werror -fsanitize=undefined -o $@ t_ram_donor.c
+.PHONY: ram_donor
+ram_donor: $(B)/t_ram_donor
+	$(B)/t_ram_donor
 $(B)/t_touch: t_touch.c ../hle_touch.c ../front.h ../dm.h $(GAME_H) | $(B)
 	$(CLANG) -O1 -Wno-unused-function -I.. $(GINC) -o $@ t_touch.c ../hle_touch.c
 $(B)/t_gesture: t_gesture.c ../hle_touch.c ../front.h ../dm.h $(GAME_H) | $(B)
