@@ -956,6 +956,7 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 - portrait gameplay overlaps the touch controls, touch coordinates land outside the game picture, or a TV's picture renders at 4K again after a layout pass. → [iOS layouts: portrait, a half-folded Duo, iPad windows](../reference/rendering.md#ios-layouts-portrait-a-half-folded-duo-ipad-windows)
 - with *Picture shape* at 1.43:1 (`DM_SCREEN_ASPECT`) the game renders 1920x1344, but on an iPhone Duo in Fit (the default) the picture comes out smaller than the 16:9 one, with black bars on all four sides; it fills the screen only in Fill. On the Mac a click lands off the point under the pointer (it was mapped on a 16:9 rectangle of the window). → [The picture laid out in the shape the game presents](../reference/rendering.md#the-picture-laid-out-in-the-shape-the-game-presents)
 - a broad prewarm list reduces first-use stalls, but keeping every shader and pipeline in the live cache increases memory use; missing an archived result still causes compilation during play. → [First-launch pipeline bake without retaining every pipeline](../reference/rendering.md#first-launch-pipeline-bake-without-retaining-every-pipeline)
+- a game rendering at 30 fps has only 30 distinct images on a 60 Hz or faster screen. → [Full-picture frame interpolation](../reference/rendering.md#full-picture-frame-interpolation)
 
 ## Shaders
 
