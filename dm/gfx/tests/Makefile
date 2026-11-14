@@ -698,3 +698,6 @@ check_t_pool_typebridge: t_pool_typebridge
 t_sparse_pool_cache: t_sparse_pool_cache.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_sparse_pool_cache.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
 check_t_sparse_pool_cache: RUN_ENV = MTL_DEBUG_LAYER=1
+
+t_pso_bake: t_pso_bake.m t_pso_prewarm.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_bake.m $(MTL_T_SRC) $(FW)
