@@ -287,3 +287,14 @@ See [BC textures on GPUs without BC support](../../../docs/reference/rendering.m
 for format coverage, memory tradeoffs and validation. Host checks cover native
 BC, forced decoding, low-memory transcoding and the encode thread. They do not
 establish physical A16 gameplay, memory usage or sustained frame rate.
+
+
+### Frame interpolation startup queue ownership (2026-11-15)
+
+A TouchNX interpolation build trapped immediately after creating its session.
+The phone backtrace and a standalone reproduction identify duplicate feedback-queue
+release during Metal 4 descriptor cleanup. The independent interpolation-present
+queue now uses Metal's default feedback executor; the native renderer and pair
+pacing remain unchanged. See [the ownership finding](../../../docs/reference/rendering.md#frame-interpolation-startup-traps-while-releasing-its-queue-descriptor).
+The standalone ownership reproduction passes with this change; the new iPhone
+build still requires physical-device gameplay verification.

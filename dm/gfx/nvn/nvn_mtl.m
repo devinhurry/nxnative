@@ -16951,11 +16951,11 @@ static int up_mfx_encode(NvShader *cs) {
 }
 // The present pass: src's valid rectangle drawn into dst (the drawable, or a screenshot's texture) as present_encode draws it, through MetalFX first where fx_encode takes it
 // (fx: the scaler state to use, nil = bilinear). uvb: the pass's crop constants (one buffer per present allocator, written by the CPU)
-static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4], id<MTLBuffer> uvb, fx_state *fx) {
+static int present_encode_m4_args(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4], id<MTLBuffer> uvb, fx_state *fx, id<MTL4ArgumentTable> args, int framegen_stage) {
     NSUInteger r[4]; if (!present_crop_rect(src, crop, r)) return 0;
     present_pipeline(dst.pixelFormat);
     double dw = dst.width, dh = dst.height;
-    MTLViewport vp = present_fit(src, dw, dh);
+    MTLViewport vp = framegen_stage == 1 ? (MTLViewport){0, 0, dw, dh, 0, 1} : present_fit(src, dw, dh);
     int full = vp.originX == 0 && vp.originY == 0 && vp.width == dw && vp.height == dh;
     id<MTLTexture> tex = present_raw_src(src), up = fx ? fx_encode(fx, cb, tex, r, vp, dst.pixelFormat, fx == &g_fx_present) : nil;
     if (up) { tex = up; r[0] = r[1] = 0; r[2] = up.width; r[3] = up.height; }   // the scaled picture, the viewport's size: drawn 1:1
@@ -16967,20 +16967,21 @@ static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MT
     id<MTL4RenderCommandEncoder> en = [cb renderCommandEncoderWithDescriptor:rp];
     if (!en) { MLOG("[RED] failed to create the M4 present render encoder"); return 0; }
     [en barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:resource_vis()];
-    [en setArgumentTable:g_present_args atStages:MTLRenderStageFragment];
-    [g_present_args setTexture:tex.gpuResourceID atIndex:0];
-    [g_present_args setSamplerState:g_blit_samp.gpuResourceID atIndex:0];
+    [en setArgumentTable:args atStages:MTLRenderStageFragment];
+    [args setTexture:tex.gpuResourceID atIndex:0];
+    [args setSamplerState:g_blit_samp.gpuResourceID atIndex:0];
     float *uv = uvb.contents; NSUInteger tw = tex.width, th = tex.height, cx = r[0], cy = r[1], cw = r[2], ch = r[3];
     uv[0] = (float)cx / tw; uv[1] = (float)cy / th; uv[2] = (float)cw / tw; uv[3] = (float)ch / th;
     uv[4] = (cx + 0.5f) / tw; uv[5] = (cy + 0.5f) / th; uv[6] = (cx + cw - 0.5f) / tw; uv[7] = (cy + ch - 0.5f) / th;
-    if (atomic_load_explicit(&g_origin_ll, memory_order_relaxed)) { uv[1] += uv[3]; uv[3] = -uv[3]; }   // lower-left origin: the window image is stored bottom-up
-    [g_present_args setAddress:uvb.gpuAddress atIndex:0];
+    if (framegen_stage != 2 && atomic_load_explicit(&g_origin_ll, memory_order_relaxed)) { uv[1] += uv[3]; uv[3] = -uv[3]; }   // lower-left origin: the window image is stored bottom-up
+    [args setAddress:uvb.gpuAddress atIndex:0];
     [en setViewport:vp]; [en setRenderPipelineState:g_blit_pso];
-    NX_GFX_PRESENT_METAL4(g_present_args,en,tex,dst,uv,uvb);
+    NX_GFX_PRESENT_METAL4(args,en,tex,dst,uv,uvb);
     [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     m4_end(en);
     return up ? PRESENT_METALFX : PRESENT_STANDARD;
 }
+static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, const int crop[4], id<MTLBuffer> uvb, fx_state *fx) { return present_encode_m4_args(cb, src, dst, crop, uvb, fx, g_present_args, 0); }
 // The present's picture drawn into an offscreen texture (out: private, render target) the way present_now draws it into the drawable, MetalFX included, on the Metal 4 queue;
 // returns whether it was submitted. Completion reports the encoding kind, or PRESENT_FAILED on a GPU error. Resources remain resident and retained until GPU completion.
 static int present_offscreen_m4(id<MTLTexture> src, const int crop[4], id<MTLTexture> out, void (^done)(int)) {
@@ -17026,7 +17027,6 @@ static double g_link_it_tin;   // Enqueue time of this source frame, owned by th
 #include "nvn_fg.inc"
 static uint64_t g_present_serial;   // allocator fences count every image; game tickets count only real frames
 static int present_now_image(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts, id<MTLTexture> generated) {
-    int paired = 0;
     if (g_present_stall_ns) { struct timespec ts = {0, (long)g_present_stall_ns}; nanosleep(&ts, NULL); }
     if (!generated) g_present_n++;
     if (!generated && bootprof() && (g_present_n == 1 || g_present_n % 120 == 0)) {
@@ -17041,16 +17041,6 @@ static int present_now_image(const tex_t *t, double period, uint64_t frame, uint
     id<MTLTexture> src = generated ?: tex_mtl(t);
     if (!src) { RED_ONCE(8, "present texture could not get an MTLTexture"); return 0; }
     res_commit();   // the capture can be this swapchain texture's first GPU reader too
-    if (!generated) {
-        if (!mtl_framegen_enabled()) { fg_refresh_request(0); if (g_fg.fi) fg_release(); }
-        if (!supplied && mtl_framegen_enabled()) {
-            id<MTLTexture> midpoint = fg_prepare(src, crop, period, g_link_it_tin > 0 ? g_link_it_tin : CACurrentMediaTime(), mtl_display_hz());
-            if (midpoint) {
-                // The captured midpoint already contains only the valid picture.
-                if (present_now_image(t, period / 2, frame, ticket, NULL, nil, 0, midpoint)) { period /= 2; paired = 1; }
-            }
-        }
-    }
     // The picture's shape for the front end's layout (front.h front_picture_shape): reported when its width / height changes by more than 0.1 %, not on a size change of the same
     // shape (1280x720 handheld, 1920x1080 docked)
     if (!generated) { static double last; double w, h; present_shape(src, &w, &h); double a = w / h;
@@ -17096,6 +17086,11 @@ static int present_now_image(const tex_t *t, double period, uint64_t frame, uint
     if (atomic_load(&g_gpu_lost)) return 0;   // the display command buffer would be ignored too: take no drawable from the screen the front end is about to close
     CAMetalLayer *layer = (__bridge CAMetalLayer *)front_metal_layer();
     if (!layer) return 0;
+    if (!supplied) {
+        double source_time = g_link_it_tin > 0 ? g_link_it_tin : CACurrentMediaTime();
+        int routed = fg_route(src, crop, ticket, source_time, layer);
+        if (routed >= 0) return routed;
+    }
     if (g_present_layer_resident != layer) { [g_q4 addResidencySet:layer.residencySet]; g_present_layer_resident = layer; }
 #if TARGET_OS_OSX
     if (!layer.displaySyncEnabled) layer.displaySyncEnabled = YES;   // Windowed mode follows the display's vsync to prevent tearing
@@ -17160,7 +17155,7 @@ static int present_now_image(const tex_t *t, double period, uint64_t frame, uint
     }];
     // Each frame is displayed for at least one present period: when the GPU completion time jitters around a 120 Hz refresh boundary, the paired "25 ms + 8.33 ms" stutter no longer appears
     if (target_ts > 0) [dr present];
-    else if (period > 0) [dr presentAfterMinimumDuration:period * (generated || paired ? .9 : 1.)]; else [dr present];
+    else if (period > 0) [dr presentAfterMinimumDuration:period]; else [dr present];
 #endif
     (void)frame;
     return 1;
@@ -17326,7 +17321,7 @@ static void link_sync(void) {   // Called every frame by the game's present thre
     static int applied;
     pthread_mutex_lock(&g_pq_mu);
     int want = g_dm_present_link;
-    if (mtl_framegen_enabled()) want = 0;   // the present thread inserts a midpoint before each real image
+    if (mtl_framegen_enabled() || atomic_load(&g_fg_phase) != FG_NATIVE) want = 0;   // the present thread inserts a midpoint before each real image
     if (want < 0 || want > 2) { g_dm_present_link = applied == 3 ? 1 : applied; pthread_mutex_unlock(&g_pq_mu); return; }
     if (g_rescue_mode && (want != g_rescue_mode || now_ns() >= g_rescue_back_at)) {
         g_rescue_mode = 0; g_stall_t0 = 0; __atomic_store_n(&g_link_tick_ns, now_ns(), __ATOMIC_RELAXED);
@@ -17364,6 +17359,7 @@ static void link_sync(void) {   // Called every frame by the game's present thre
 // waiting as-is for "the present queue to empty" would wait forever, the enter-background callback would not return, and the system would kill the process (the process disappears within 22 seconds after switching to another App).
 // These frames will not be seen anyway: discard them directly (accounted as dropped frames) and only wait for the one present already submitted to the GPU to finish.
 static void present_drop_for_suspend(void) {
+    fg_suspend();
     pthread_mutex_lock(&g_pq_mu);
     if (g_link_owns_layer) {
         uint64_t n = g_pq_in - g_pq_read;

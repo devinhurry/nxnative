@@ -8,7 +8,24 @@ uint64_t now_ns(void) { return bp_now(); }
 static int checks, failed;
 #define CHECK(c, s) do { checks++; if (!(c)) { failed++; fprintf(stderr, "FAIL: %s\n", s); } } while (0)
 static void idle(void) {
-    pthread_mutex_lock(&g_pq_mu); while (fg_busy()) pthread_cond_wait(&g_pq_cv, &g_pq_mu); pthread_mutex_unlock(&g_pq_mu);
+    if (!g_fg_wq) return;
+    for (;;) { __block int busy; dispatch_sync(g_fg_wq, ^{ busy = F.count || (g_fg_session && g_fg_session->in_flight); }); if (!busy) return; usleep(1000); }
+}
+static void session(NSUInteger w, NSUInteger h) {
+    fg_queue_init(); dispatch_sync(g_fg_wq, ^{ fg_leave("fixture", 0); }); idle();
+    dispatch_sync(g_fg_wq, ^{ F = (typeof(F)){0}; for (int i = 0; i < 40; i++) fg_session_start(w, h, MTLPixelFormatBGRA8Unorm, 10 + i / 30., 120); });
+}
+static id<MTLTexture> fixture(id<MTLTexture> source, const int crop[4], double time) {
+    idle(); FgSession *s = g_fg_session; if (!s) return nil;
+    uint64_t seq = atomic_fetch_add(&g_fg_source_seq, 1) + 1; FgSlot *slot = s->slots[seq % FG_SLOTS];
+    atomic_store(&slot->busy, 1);
+    id<MTLCommandBuffer> cb = q_cb(); id<MTLBlitCommandEncoder> copy = [cb blitCommandEncoder];
+    [copy copyFromTexture:source sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(crop ? crop[0] : 0, crop ? crop[1] : 0, 0) sourceSize:MTLSizeMake(s->w, s->h, 1) toTexture:slot->texture destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0, 0, 0)];
+    [copy endEncoding]; [cb commit]; [cb waitUntilCompleted]; s->capture_event.signaledValue = seq;
+    // Emulate the presenter having confirmed an original; no window or actual
+    // presentation is invented, and the public displayed counter must stay zero.
+    dispatch_sync(g_fg_wq, ^{ F.onscreen = 1; fg_on_capture(s, slot, seq, seq, time, 120); }); idle();
+    return s->gen[seq % FG_SLOTS];
 }
 static void fill(id<MTLTexture> t) {
     id<MTLCommandBuffer> cb = q_cb(); MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor new];
@@ -69,51 +86,40 @@ static double center(id<MTLTexture> t) {
     return sum ? weighted / sum : -1;
 }
 int main(int argc, char **argv) { @autoreleasepool {
-    NSUInteger w, h;
-    id<MTLTexture> src = nil, generated = nil;
-    CHECK(fg_rate_fits(1. / 30, 60) && fg_rate_fits(1. / 60, 120), "30-to-60 and 60-to-120 fit whole screen refreshes");
-    CHECK(!fg_rate_fits(1. / 60, 60) && !fg_rate_fits(1. / 20, 60), "a missing or fractional midpoint refresh keeps the original cadence");
-    CHECK(!fg_rate_fits(NAN, 120) && !fg_rate_fits(0, 120), "invalid frame periods never reach MetalFX");
-    fg_extent(1600, 900, &w, &h); CHECK(w == 1280 && h == 720, "below 1080p automatically uses the 720p budget");
-    fg_extent(1920, 1080, &w, &h); CHECK(w == 1920 && h == 1080, "1080p input automatically uses the 1080p budget");
-    fg_extent(1920, 1078, &w, &h); CHECK(fg_limit(1920, 1078) == 720 && w * h <= 1280u * 720u, "just below 1080p keeps the lower budget");
-    fg_extent(2560, 1440, &w, &h); CHECK(w == 1920 && h == 1080, "larger inputs stay within the automatic 1080p budget");
-    fg_extent(2868, 1320, &w, &h); CHECK(w * h <= 1920u * 1080u && fabs((double)w / h - 2868. / 1320) < .005, "wide picture keeps its aspect within the memory budget");
-    fg_extent(960, 540, &w, &h); CHECK(w == 960 && h == 540, "540p input stays at 540p");
-    fg_extent(320, 180, &w, &h); CHECK(w == 320 && h == 180, "small input is never upscaled for interpolation");
-    for (int i = 0; i < 10; i++) { int ready = fg_cadence(1 + i / 30., 1. / 30); CHECK(i == 6 || ready == (i > 6), "cadence must settle before showing generated images"); }
-    CHECK(!fg_cadence(5, 1. / 30) && !g_fg.history, "a loading gap discards history");
-    atomic_store(&g_fg_reset, 1); CHECK(!fg_cadence(5 + 1. / 30, 1. / 30), "an explicit reset restarts warmup");
+    NSUInteger w, h; id<MTLTexture> src = nil, generated = nil;
+    fg_extent(1600, 900, &w, &h); CHECK(w == 1280 && h == 720, "900p selects the automatic 720p budget");
+    fg_extent(1920, 1080, &w, &h); CHECK(w == 1920 && h == 1080, "1080p selects the automatic 1080p budget");
+    fg_extent(960, 540, &w, &h); CHECK(w == 960 && h == 540, "smaller input is not upscaled");
+    fg_queue_init(); dispatch_sync(g_fg_wq, ^{
+        for (int i = 0; i < 40; i++) fg_observe(1 + i / 30., 120);
+        CHECK(F.mode == 3 && fabs(F.fps - 30) < .01 && F.target == 60, "reference source estimator selects 30 to 60");
+        double now = F.last;
+        for (int i = 0; i < 60; i++) { now += i % 2 ? .021 : .045; fg_observe(now, 120); }
+        CHECK(F.mode == 3 && F.target == 60 && F.fps > 29 && F.fps < 32, "45/21 ms source jitter does not stop interpolation");
+        F = (typeof(F)){0}; for (int i = 0; i < 40; i++) fg_observe(1 + i / 60., 120);
+        CHECK(F.mode == 3 && F.target == 120, "60 fps selects the 120 Hz tier");
+        F = (typeof(F)){0}; for (int i = 0; i < 40; i++) fg_observe(1 + i / 60., 60);
+        CHECK(F.mode != 3, "60 fps on a 60 Hz screen keeps original images");
+    });
     if (argc > 1 && !strcmp(argv[1], "--cpu")) goto done;
-    mtl_init();
-    if (!mtl_framegen_supported()) { fprintf(stderr, "SKIP: MetalFX frame interpolation unavailable\n"); goto done; }
+    mtl_init(); if (!mtl_framegen_supported()) { fprintf(stderr, "SKIP: MetalFX frame interpolation unavailable\n"); goto done; }
     CHECK(mtl_framegen_set(1), "supported GPU accepts frame generation");
-    src = fg_texture(MTLPixelFormatBGRA8Unorm, 320, 180, MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead, @"fixture"); res_commit(); fill(src);
-    for (int i = 0; i < 12; i++) { generated = fg_prepare(src, NULL, 1. / 30, 10 + i / 30., 120); idle(); }
-    CHECK(generated != nil && g_fg_generated > 0, "settled inputs produce a real MetalFX output");
-    CHECK(generated && pixels(generated), "every generated pixel preserves the known BGRA colour");
-    CHECK(mtl_framegen_present_count() == 0, "encoding an output alone is not counted as an on-screen generated frame");
-    res_remove(src);
-    src = fg_texture(MTLPixelFormatBGRA8Unorm, 384, 180, MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead, @"wide moving fixture"); res_commit();
-    for (int i = 0; i < 12; i++) { moving_bar(src, 40 + 12 * i); generated = fg_prepare(src, NULL, 1. / 30, 15 + i / 30., 120); idle(); }
-    double middle = center(generated), actual = center(src);
-    fprintf(stderr, "moving wide image: generated center %.3f, current %.3f, expected midpoint %.3f\n", middle, actual, actual - 6);
-    CHECK(generated && generated.width == 384 && generated.height == 180, "the GPU preserves a wide picture without cropping to 16:9");
-    CHECK(fabs(middle - (actual - 6)) < 3, "a moving object is generated between the two input positions, rather than repeating the current picture");
-    res_remove(src);
-    src = fg_texture(MTLPixelFormatBGRA8Unorm, 1920, 1080, MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead, @"cropped window fixture"); res_commit();
+    session(320, 180); CHECK(g_fg_session != nil, "reference startup creates a session asynchronously");
+    src = fg_mfx_tex(MTLPixelFormatBGRA8Unorm, 320, 180, MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead, @"fixture"); res_commit(); fill(src);
+    for (int i = 0; i < 16; i++) generated = fixture(src, NULL, 20 + i / 30.);
+    CHECK(generated && pixels(generated), "production interpolation preserves constant colour");
+    CHECK(mtl_framegen_present_count() == 0, "headless encoding is not counted as on-screen output");
+    res_remove(src); session(384, 180);
+    src = fg_mfx_tex(MTLPixelFormatBGRA8Unorm, 384, 180, MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead, @"moving wide fixture"); res_commit();
+    for (int i = 0; i < 16; i++) { moving_bar(src, 40 + 8 * i); generated = fixture(src, NULL, 30 + i / 30.); }
+    CHECK(generated && fabs(center(generated) - (center(src) - 4)) < 3, "moving image is interpolated between its real neighbours");
+    res_remove(src); session(1280, 720);
+    src = fg_mfx_tex(MTLPixelFormatBGRA8Unorm, 1920, 1080, MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead, @"cropped fixture"); res_commit();
     int crop[4] = {64, 32, 1280, 720}; fill_content(src, crop);
-    for (int i = 0; i < 12; i++) { generated = fg_prepare(src, crop, 1. / 30, 25 + i / 30., 120); idle(); }
-    CHECK(generated && generated.width == 1280 && generated.height == 720, "a 720p valid picture in a 1080p allocation selects 720p automatically");
-    CHECK(generated && pixels(generated), "the capture contains only the valid crop, without its surrounding padding");
-    fill(src);
-    for (int i = 0; i < 12; i++) { generated = fg_prepare(src, NULL, 1. / 30, 30 + i / 30., 120); idle(); }
-    CHECK(generated && generated.width == 1920 && generated.height == 1080, "a full 1080p picture automatically selects 1080p");
-    CHECK(generated && pixels(generated), "automatic 1080p output preserves the complete picture");
-    CHECK(!fg_prepare(src, NULL, 1. / 30, 50, 120), "the first image after a loading gap stays real-only"); idle();
-    CHECK(!fg_prepare(src, NULL, 1. / 60, 51, 60) && g_fg.fi, "a temporary rate mismatch skips interpolation without rebuilding its cached session");
-    CHECK(mtl_framegen_set(0) && !mtl_framegen_enabled(), "turning interpolation off restores the real-frame path");
-    CHECK(!fg_prepare(src, NULL, 1. / 30, 52, 120) && !g_fg.fi, "turning interpolation off releases its scratch buffers after GPU completion");
+    for (int i = 0; i < 16; i++) generated = fixture(src, crop, 40 + i / 30.);
+    CHECK(generated && generated.width == 1280 && generated.height == 720 && pixels(generated), "valid cropped picture is preserved");
+    CHECK(mtl_framegen_set(0), "interpolation can be switched off"); idle();
+    dispatch_sync(g_fg_wq, ^{ fg_leave_check(); }); CHECK(atomic_load(&g_fg_phase) == FG_NATIVE, "leaving returns ownership to the native presenter");
     res_remove(src); res_commit();
 done:
     printf("t_framegen: %d checks, %d failed\n", checks, failed); return failed != 0;

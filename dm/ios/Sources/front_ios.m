@@ -8,6 +8,7 @@
 #import <Metal/Metal.h>
 #import <AVFAudio/AVFAudio.h>
 #include <errno.h>
+#include <stdatomic.h>
 #include "front.h"
 #include "hle.h"
 #include "dm.h"
@@ -98,20 +99,20 @@ static void tv_attach(void);
 static DmRootVC *g_root;
 @interface DmFramegenRefresh : NSObject
 @end
+static _Atomic uint64_t g_framegen_refresh_ticks;
+uint64_t front_framegen_rate_ticks(void) { return atomic_load(&g_framegen_refresh_ticks); }
 @implementation DmFramegenRefresh
-- (void)tick:(CADisplayLink *)link { (void)link; }
+- (void)tick:(CADisplayLink *)link { (void)link; atomic_fetch_add(&g_framegen_refresh_ticks, 1); }
 @end
 void front_framegen_rate(int fps) {
     dispatch_async(dispatch_get_main_queue(), ^{
         static CADisplayLink *link;
-        [link invalidate]; link = nil;
-        if (fps <= 0) { LOG("front end: frame generation's refresh request ended"); return; }
+        if (fps <= 0) { [link invalidate]; link = nil; LOG("front end: frame generation's refresh request ended"); return; }
         UIScreen *screen = g_root.game.window.screen ?: UIScreen.mainScreen;
         int hz = MIN(fps, (int)screen.maximumFramesPerSecond);
         if (hz <= 0) return;
-        link = [CADisplayLink displayLinkWithTarget:[DmFramegenRefresh new] selector:@selector(tick:)];
+        if (!link) { link = [CADisplayLink displayLinkWithTarget:[DmFramegenRefresh new] selector:@selector(tick:)]; [link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes]; }
         link.preferredFrameRateRange = CAFrameRateRangeMake(hz, hz, hz);
-        [link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
         LOG("front end: frame generation asks the screen for %d Hz", hz);
     });
 }
