@@ -123,6 +123,7 @@ HLE_FORCE("nvnBootstrapLoader", "the NVN graphics API is replaced wholesale with
 #define B(x) ((x) & 0xff)
 
 #include "nvn_obj.h"
+#include "nvn_extensions.h"
 #include "nvn_queue.h"
 #include "nvn_capture.h"   // DM_NVN_CAPTURE hooks
 
@@ -1277,23 +1278,25 @@ static void put32(uint8_t **q, uint32_t v) { memcpy(*q, &v, 4); *q += 4; }
 static void put64(uint8_t **q, uint64_t v) { memcpy(*q, &v, 8); *q += 8; }
 // Draws carry the indirect / multi-draw fields (ind onwards) only when they use them: a plain indexed draw record is 0x28 bytes instead of 0x40 (nvn_obj.h draw_rec)
 static void rec_draw(NVNcommandBuffer *c, p_draw d) {
-    if (g_rec_compact && !d.mdi_cnt && (uint32_t)d.prim < 0x100) {
+    NX_GFX_RECORD_DRAW(d);
+    if (g_rec_compact && !NX_GFX_DRAW_TAGGED(d) && !d.mdi_cnt && (uint32_t)d.prim < 0x100) {
         uint8_t *q;
         if (d.ind) { q = crec(c, OPC_DRAW_IND, (uint32_t)d.prim, 8); put64(&q, d.ind); return; }
         if (d.instances == 1 && !d.base_instance) { q = crec(c, OPC_DRAW, (uint32_t)d.prim, 8); put32(&q, (uint32_t)d.first); put32(&q, (uint32_t)d.count); return; }
         q = crec(c, OPC_DRAW_INST, (uint32_t)d.prim, 16); put32(&q, (uint32_t)d.first); put32(&q, (uint32_t)d.count); put32(&q, (uint32_t)d.base_instance); put32(&q, (uint32_t)d.instances); return;
     }
-    size_t n = d.ind || d.mdi_cnt ? sizeof d : offsetof(p_draw, ind); memcpy(rec(c, OP_DRAW, n), &d, n);
+    size_t n = d.ind || d.mdi_cnt || NX_GFX_DRAW_TAGGED(d) ? sizeof d : offsetof(p_draw, ind); memcpy(rec(c, OP_DRAW, n), &d, n);
 }
 static void rec_draw_idx(NVNcommandBuffer *c, p_draw_idx d) {
-    if (g_rec_compact && !d.mdi_cnt && (uint32_t)d.prim < 0x100 && (uint32_t)d.itype < 0x100) {
+    NX_GFX_RECORD_DRAW(d);
+    if (g_rec_compact && !NX_GFX_DRAW_TAGGED(d) && !d.mdi_cnt && (uint32_t)d.prim < 0x100 && (uint32_t)d.itype < 0x100) {
         uint32_t a = (uint32_t)d.prim | (uint32_t)d.itype << 8; uint8_t *q;
         if (d.ind) { if (d.count || d.base_vertex || d.base_instance || d.instances != 1) goto full; q = crec(c, OPC_DRAW_IDX_IND, a, 16); put64(&q, d.ibuf); put64(&q, d.ind); return; }
         if (d.instances == 1 && !d.base_instance) { q = crec(c, OPC_DRAW_IDX, a, 16); put32(&q, (uint32_t)d.count); put32(&q, (uint32_t)d.base_vertex); put64(&q, d.ibuf); return; }
         q = crec(c, OPC_DRAW_IDX_INST, a, 24); put32(&q, (uint32_t)d.count); put32(&q, (uint32_t)d.base_vertex); put32(&q, (uint32_t)d.base_instance); put32(&q, (uint32_t)d.instances); put64(&q, d.ibuf); return;
     }
 full:;
-    size_t n = d.ind || d.mdi_cnt ? sizeof d : offsetof(p_draw_idx, ind); memcpy(rec(c, OP_DRAW_IDX, n), &d, n);
+    size_t n = d.ind || d.mdi_cnt || NX_GFX_DRAW_TAGGED(d) ? sizeof d : offsetof(p_draw_idx, ind); memcpy(rec(c, OP_DRAW_IDX, n), &d, n);
 }
 // A compact record's canonical records, written to out (at least REC_EXPAND_MAX bytes); returns their bytes
 static uint8_t *xrec(uint8_t *out, size_t *n, uint32_t op, size_t payload) {

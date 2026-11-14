@@ -2,6 +2,7 @@
 // On the real device each goes through IPC or a system applet; the host gives results as single-player offline. Pure-computation SDK parts (hash, util, software Opus) are not taken over, the original implementation is used directly.
 #include "hle.h"
 #include <dirent.h>
+#include "host_extensions.h"
 
 // ---------- aoc add-on content (the DLC NSPs in the player's folder) / ec shop (excluded) ----------
 // Owned add-on content indices (ascending), fixed at the first query:
@@ -16,7 +17,16 @@ static void aoc_load(void) {
     if (g_naoc >= 0) return;
     g_naoc = 0;
     const char *e = getenv("DM_AOC_OWNED"), *dir = getenv("DM_AOC_DIR"); const char *why = "no DM_AOC_DIR";
+    int supplied = e && !strcmp(e, "0") ? -1 : NX_ADDON_CONTENT_LIST(g_aoc, (int)(sizeof g_aoc / sizeof *g_aoc));
     if (e && !strcmp(e, "0")) why = "DM_AOC_OWNED=0";
+    else if (supplied != -1) {
+        g_naoc = supplied;
+        if (g_naoc < 0 || g_naoc > (int)(sizeof g_aoc / sizeof *g_aoc)) die("read-only provider returned an invalid add-on list");
+        qsort(g_aoc, g_naoc, sizeof *g_aoc, aoc_int_cmp);
+        int unique = 0; for (int i = 0; i < g_naoc; i++) if (!i || g_aoc[i] != g_aoc[i - 1]) g_aoc[unique++] = g_aoc[i];
+        g_naoc = unique;
+        why = "read-only resource provider";
+    }
     else if (dir && *dir) {
         why = dir; DIR *d = opendir(dir); struct dirent *ent;
         while (d && (ent = readdir(d)) && g_naoc < (int)(sizeof g_aoc / sizeof *g_aoc)) {

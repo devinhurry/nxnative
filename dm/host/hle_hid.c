@@ -8,6 +8,7 @@
 #include "hle.h"
 #include "hle_haptics.h"
 #include "dm_input.h"
+#include "host_extensions.h"
 #include "front.h"
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -82,6 +83,10 @@ static void script_set(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int
     uint64_t old = atomic_exchange(&g_sc_btn, buttons); atomic_fetch_or(&g_sc_latch, buttons & ~old); atomic_fetch_or(&g_peek_latch, buttons & ~old); atomic_store(&g_sc_axes, pack(lx, ly, rx, ry));
     shake_note();
 }
+#ifdef NX_HOST_EXTENSION
+// Cancel a virtual edge without discarding a physical controller's edge.
+void nx_input_cancel_latch(uint64_t buttons) { atomic_fetch_and(&g_latch, ~buttons); }
+#endif
 uint64_t dm_input_samples(void) { return (uint64_t)atomic_load(&g_sampling); }
 // DM_KEYS scripted input (for tests): "seconds:key[+key][~hold seconds][*count/interval seconds],...", e.g. "8:A,12:A,15:Down~0.5,16:A+B,40:A*80/2" (A every 2 s from 40 s on, 80 times). Key names A B X Y LS RS L R ZL ZR (plus the sticks LLeft LUp LRight LDown and RLeft RUp RRight RDown) Plus Minus Left Up Right Down, left stick LLeft LUp LRight LDown,
 //   L<x>/<y> and R<x>/<y> = a stick tilted part way (each -1 to 1, y up: a cursor that a full tilt sweeps past its target), T<x>x<y> = a touch at normalized picture coordinates (origin top left) for the hold time, and Shake = the controller shaken for the hold time (at least one whole shake);
@@ -583,15 +588,37 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
         b = atomic_load(&g_btn) | atomic_exchange(&g_latch, 0);
         uint64_t k = atomic_load(&g_axes); for (int i = 0; i < 4; i++) a[i] = ax(k, i);
     }
+#ifdef NX_INPUT_FILTER
+    uint64_t vb = b, pb = 0;
+    int32_t va[4], pa[4] = {0}; memcpy(va, a, sizeof va);
+#endif
     for (int p = 0; p < DM_PLAYERS; p++) if (src >> p & 1) {
-        b |= atomic_load(&g_pad_btn[p]) | atomic_exchange(&g_pad_latch[p], 0);
-        uint64_t v = atomic_load(&g_pad_axes[p]); for (int i = 0; i < 4; i++) a[i] = pick(a[i], ax(v, i));
+        uint64_t pad = atomic_load(&g_pad_btn[p]) | atomic_exchange(&g_pad_latch[p], 0);
+        b |= pad;
+        uint64_t v = atomic_load(&g_pad_axes[p]);
+        for (int i = 0; i < 4; i++) {
+            a[i] = pick(a[i], ax(v, i));
+#ifdef NX_INPUT_FILTER
+            pa[i] = pick(pa[i], ax(v, i));
+#endif
+        }
+#ifdef NX_INPUT_FILTER
+        pb |= pad;
+#endif
     }
     if (!pl) {   // the physical sources so far (DM_REC records them, DM_BTN_SHAKE only from player 1's own controller and the keyboard, as shake_note), then the scripted path
         if (atomic_load_explicit(&g_rec_on, memory_order_relaxed)) rec_read((b & 0xffffull) | ((atomic_load(&g_btn) | atomic_load(&g_pad_btn[0])) & DM_BTN_SHAKE), a);
         b |= atomic_load(&g_sc_btn) | atomic_exchange(&g_sc_latch, 0);
-        uint64_t c = atomic_load(&g_sc_axes); for (int i = 0; i < 4; i++) a[i] = pick(a[i], ax(c, i));
+        uint64_t c = atomic_load(&g_sc_axes); for (int i = 0; i < 4; i++) {
+            a[i] = pick(a[i], ax(c, i));
+#ifdef NX_INPUT_FILTER
+            va[i] = pick(va[i], ax(c, i));
+#endif
+        }
     }
+#ifdef NX_INPUT_FILTER
+    NX_INPUT_FILTER(pl, &b, a, vb, va, pb, pa);
+#endif
     if (atomic_load(&g_hold)) { b = 0; memset(a, 0, sizeof a); }   // an applet is in front: the game reads nothing (the latches were taken all the same)
     s->lx = a[0]; s->ly = a[1]; s->rx = a[2]; s->ry = a[3];
     b &= 0xffffull;

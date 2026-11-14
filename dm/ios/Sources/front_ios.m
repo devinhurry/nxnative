@@ -13,6 +13,7 @@
 #include "dm.h"
 #include "haptics_apple.h"
 #include "save_sync.h"
+#include "host_extensions.h"
 #import "CloudSaves.h"
 
 void dm_gamepad_active(void);
@@ -118,7 +119,7 @@ static void launcher_done(void) { [g_root startGame]; }
 #endif
     front_ios_power_watch();
     front_ios_notify_setup();
-    if (!front_ios_boot_ok()) {   // No game files: show a hint and do not start the host
+    if (!NX_FRONT_BOOT_READY(front_ios_boot_ok())) {   // No game files: show a hint and do not start the host
         const char *why = front_ios_boot_message();
         [self showHint:why ? [NSString stringWithFormat:@"Game files unusable.\n%s", why] : @"Game files not found.\nPut the RomFS folder into this App's Documents as \"romfs\" (Files app), then restart."]; return;
     }
@@ -146,6 +147,7 @@ static void launcher_done(void) { [g_root startGame]; }
 // The game view, the pad and the frame-rate counter are made once the launcher has set the switches they read (DM_SHOW_FPS, DM_METAL_HUD); the host's loading began at app launch (main.m)
 - (void)startGame {
     if (self.game) return;
+    if (!NX_FRONT_START_READY()) return;
     dm_cloud_saves_env();   // DM_SAVE_SYNC from the launcher's Cloud saves pick, before the game's first save mount reads it (CloudSaves.m, save_sync.h)
     front_hud_env();   // before the process's first Metal device, which reads MTL_HUD_ENABLED (an env file's DM_METAL_HUD sets it in main.m already; GitHub issue #840)
     const char *dev = front_ios_device_check();   // that first device: a GPU without BC textures is refused here, not at launch, so the launcher's HUD switch counts
@@ -182,6 +184,7 @@ static void launcher_done(void) { [g_root startGame]; }
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGRect b = self.view.bounds; if (!self.game) return;
+    if (self.game.superview == self.view && NX_FRONT_LAYOUT((__bridge void *)self.view, (__bridge void *)self.game, (__bridge void *)self.pad, (__bridge void *)self.fps)) return;
     CGRect division = CGRectNull;   // an iPhone Duo's fold, as UIKit reports it (iOS 27.1)
     NSMutableArray<NSString *> *regionLog = [NSMutableArray array];
 #if __has_include(<UIKit/UIHingeInteraction.h>)
@@ -216,20 +219,21 @@ static void launcher_done(void) { [g_root startGame]; }
 }
 - (void)viewDidAppear:(BOOL)a {
     [super viewDidAppear:a];
-    if (!front_ios_boot_ok() && front_ios_boot_message() && !self.presentedViewController) {   // a slim build whose game file image is missing or another version (main.m)
+    if (!NX_FRONT_BOOT_READY(front_ios_boot_ok()) && front_ios_boot_message() && !self.presentedViewController) {   // a slim build whose game file image is missing or another version (main.m)
         UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Game files" message:@(front_ios_boot_message()) preferredStyle:UIAlertControllerStyleAlert];
         [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:a animated:YES completion:nil];
     }
-    if (self.launched || !front_ios_boot_ok()) return;
+    if (self.launched || !NX_FRONT_BOOT_READY(front_ios_boot_ok())) return;
     self.launched = YES; g_root = self;
+    NX_FRONT_PREPARE((__bridge void *)self);
     if (!dm_show_launcher((__bridge void *)self, launcher_done)) [self startGame];   // the settings screen first (Launcher.swift), when the app has one
     front_ios_notify_ask();
 }
 - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
 - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }   // Edge gestures need two swipes, to avoid accidental exits
 - (BOOL)prefersStatusBarHidden { return YES; }
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskAll; }
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return NX_FRONT_ORIENTATIONS((__bridge void *)self.view.window.windowScene); }
 @end
 UIViewController *front_ios_root(void) { return [DmRootVC new]; }
 

@@ -2,6 +2,7 @@
 // (The former 136 HLE entries for nn::os/mem/lmem/C++ ABI have been deleted: the SDK brings its own nn::os, and at load time not one of these entries was resolved and used.)
 #include <pthread.h>
 #include "hle.h"
+#include "host_extensions.h"
 #include <mach/mach_time.h>
 #include <stdatomic.h>
 
@@ -68,7 +69,9 @@ uint64_t guest_ticks(void) { return dm_sdk_ounce() ? guest_ns() / 32 : guest_ns(
 int dm_detclock_enabled(void) { return detclock_cfg() && atomic_load(&g_gdet_on); }
 void dm_guest_frame_tick(void) {
     crash_watch_frame();
-    atomic_fetch_add(&g_guest_frame, 1);
+    uint64_t frame = atomic_fetch_add(&g_guest_frame, 1) + 1;
+    NX_FRAME_TICK(frame);
+    (void)frame;
     if (!detclock_cfg()) return;
     if (!atomic_load(&g_gdet_on)) {
         atomic_store(&g_gdet, wall_guest_ns()); atomic_store(&g_gdet_on, 1);

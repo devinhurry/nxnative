@@ -13,6 +13,7 @@
 #include "romfs_image.h"
 #include "romfs_identity.h"
 #include "player_env.h"
+#include "host_extensions.h"
 #ifndef DM_PLAYER_BUILD
 #define DM_PLAYER_BUILD 0
 #endif
@@ -54,6 +55,7 @@ static NSArray<NSString *> *romfs_document_images(NSString *doc) {
     return imgs;
 }
 static NSString *romfs_locate(NSString *prog) {   // prog: a game of several programs, the running program's folder in the app (p<N>); nil otherwise
+    if (NX_IOS_RESOURCE_ENABLED()) return NX_IOS_RESOURCE_LOCATE(prog);
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)[0];
     if (prog) {   // the program's files are in the app (Documents holds one image, one program's)
@@ -116,6 +118,7 @@ const char *front_ios_device_check(void) {
     return msg;
 }
 static void romfs_identity_report(NSString *doc) {
+    if (NX_IOS_RESOURCE_ENABLED()) return;   // The external provider reports its trusted logical-source result.
     romfs_id want, got;
     int rc = romfs_id_check([NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"romfs.id"].fileSystemRepresentation,
                             (romfs_document_images(doc).firstObject ?: [doc stringByAppendingPathComponent:@"romfs.img"]).fileSystemRepresentation, &want, &got);

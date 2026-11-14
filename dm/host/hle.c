@@ -88,9 +88,10 @@ void stubs_report(void) { LOG("stubs=%u", g_nstub); }
 // Lookup: open-addressing hash, one hit (it used to do module_of + a linear compare over 110 entries on every gate call, keyed by in-module offset, which would collide across modules).
 enum { G_SVC, G_CNTPCT, G_CNTVCT, G_OBS, G_SPIN };
 // Observation gates (inserted offline from the rewriter's OBS table): number → read-only callback; with no callback attached the gate returns after one pass in and out
-static void (*g_obs_fn[OBS_MAX])(uint64_t *regs, int param); static int g_obs_have[OBS_MAX];
-void gate_obs_set(int id, void (*fn)(uint64_t *regs, int param)) { if (id <= 0 || id >= OBS_MAX) die("observation gate number out of range %d", id); g_obs_fn[id] = fn; }
-int gate_obs_present(int id) { return id > 0 && id < OBS_MAX && g_obs_have[id]; }
+enum { OBSERVATION_LIMIT = 256 };   // observation IDs occupy the low eight bits of a gate argument
+static void (*g_obs_fn[OBSERVATION_LIMIT])(uint64_t *regs, int param); static int g_obs_have[OBSERVATION_LIMIT];
+void gate_obs_set(int id, void (*fn)(uint64_t *regs, int param)) { if (id <= 0 || id >= OBSERVATION_LIMIT) die("observation gate number out of range %d", id); g_obs_fn[id] = fn; }
+int gate_obs_present(int id) { return id > 0 && id < OBSERVATION_LIMIT && g_obs_have[id]; }
 typedef struct { uint64_t ret; int kind, arg; uint64_t orig; } gate_t;
 #define GATE_BITS 15                     // 32768 slots, gate count ≤ 8192, load factor ≤ 1/4 (spin wait gates: Tears of the Kingdom's main has 843)
 static gate_t g_gate[1u << GATE_BITS];
@@ -100,7 +101,7 @@ static inline unsigned gate_h(uint64_t a) { return (unsigned)(((a >> 2) * 0x9E37
 void gate_register(uint64_t ret_abs, const char *kind, int arg, uint64_t orig) {
     int k = !strcmp(kind, "svc") ? G_SVC : !strcmp(kind, "cntpct") ? G_CNTPCT : !strcmp(kind, "cntvct") ? G_CNTVCT : !strcmp(kind, "obs") ? G_OBS : !strcmp(kind, "spin") ? G_SPIN : -1;
     if (k < 0) die("unknown gate kind %s", kind);
-    if (k == G_OBS) { if ((arg & 0xff) <= 0 || (arg & 0xff) >= OBS_MAX) die("observation gate number out of range %d", arg & 0xff); g_obs_have[arg & 0xff] = 1; }
+    if (k == G_OBS) { if ((arg & 0xff) <= 0 || (arg & 0xff) >= OBSERVATION_LIMIT) die("observation gate number out of range %d", arg & 0xff); g_obs_have[arg & 0xff] = 1; }
     if (++g_ngate > (1 << GATE_BITS) / 4) die("gate overflow");
     unsigned i = gate_h(ret_abs);
     while (g_gate[i].ret) { if (g_gate[i].ret == ret_abs) die("gate registered twice %#llx", ret_abs); i = (i + 1) & ((1u << GATE_BITS) - 1); }
