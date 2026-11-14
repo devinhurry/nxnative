@@ -603,3 +603,29 @@ The guest address space, heaps, pools, virtual address memory and the allocators
 - **Where it does not help:** a game that renders into a depth attachment this large: the same standalone program fails a load-and-draw pass into 12288x12288, scissored or not. Ocarina of Time only samples its 12288x12288 texture.
 - **Check:** `t_zero_depth` (Depth16 and Depth32F from 17x5 to 16384x129, with levels, layers and a cube, poisoned and read back as zero on the GPU, and the number of copies a level takes; under the Metal validation layer). With the clear pass, its copy counts fail.
 - **Found on:** [The Legend of Zelda: Ocarina of Time](../../dm/games/0400486024DEC000/README.md) (PR #2306: an M3 Pro, where about half the save loads ended at the 32-failures stop; 203 runs on its build with copies for depth textures of 16 MB and more, and a retry throttle not landed here, none failed).
+
+### Anonymous heap bytes retained after a failed release
+
+- **Symptom:** after an anonymous heap shrink whose replacement mapping fails, growing the heap again can expose the bytes it held before the shrink. Reproduced by injecting a mapping failure; not observed in a game.
+- **Cause:** `guest_release` falls back to `mprotect(PROT_NONE)` when the replacement fails, so the old anonymous pages remain. The heap growth path only cleared retained file-backed pages.
+- **Fix:** `SetHeapSize` remembers the upper extent of a failed anonymous release and zeroes the reopened portion on growth. Successful anonymous releases still use the fresh mapping without a zero scan. A failed release can still leave pages resident until they are reused.
+- **Check:** `dm/host/tests/t_heap_size.c` injects the failure, grows only part of the heap, shrinks again, and checks the old tail and live prefix. The same test fails on the old implementation. No iPhone gameplay measurement has been made.
+- **Found on:** fault injection in the host test; no game occurrence is known.
+
+### Temporary objects in background pipeline work
+
+- **Symptom:** temporary autoreleased objects created while building pipelines can outlive a background job and accumulate until a worker thread's pool drains. The lifetime is reproduced in a test; game memory impact has not been measured.
+- **Cause:** the speculative and demand jobs use dispatch queues without an explicit per-job autorelease pool. Dispatch's global queues do not guarantee a pool for every work item, and the private queues inherit their target's behavior.
+- **Fix:** put an `@autoreleasepool` around each pending pipeline build and each background pulling-pipeline build. Completed pipeline states kept in the caches remain strongly held.
+- **Check:** `dm/gfx/tests/t_pso_pending.m` places an autoreleased probe inside a pending build and verifies it is released before the next queued job, while the completed pipeline can still be taken. It fails without the pending job's pool.
+- **Found on:** a synthetic worker-lifetime test; no game memory growth has been attributed to this path.
+
+### Upload staging keeps a scene's peak after streaming settles
+
+- **Symptom:** a short burst leaves up to 192 MiB of reusable upload staging allocated for the rest of the run, even when subsequent batches use only 1 MiB. Reproduced through the real upload allocator on an Apple M2; not yet measured in iPhone gameplay.
+- **Cause:** each upload slot remembered the largest demand it had ever seen. Its primary and overflow buffers never shrank after the workload changed.
+- **Fix:** keep a peak-demand window of 32 batches per slot. At the slot's existing completion wait, age its target size to that window, release an oversized primary and an unused overflow from residency, and allocate a smaller primary lazily when needed. The sample includes both retained blocks, so repeated large batches and bursts within each window keep their cache. No additional GPU wait is introduced.
+- **Measured:** `t_upload_slots` fills all 192 MiB of staging, then runs 256 small batches. Before: retained staging 192 to 192 MiB and process footprint 210 to 210 MiB. After: retained staging 192 to 12 MiB and footprint 210 to 30 MiB. This is a controlled host workload, not a claim of 180 MiB saved in every game or on an iPhone.
+- **Check:** `make -C dm/gfx/tests GAME=<id> check_t_upload_slots` checks pending-batch reuse, exact edge bytes, the heavy-to-light transition, a return to sustained heavy uploads, and recurring bursts. Stable heavy and light phases and bursts within the window make no new staging buffers after warm-up. Run with and without `DM_NVN_ENC_THREAD=1` under Metal validation.
+- **Trade-off:** a large workload returning after a full low-demand window must grow its cache again; the test verifies it then settles without repeated allocation. A burst can stay in the sampled peak until the next complete low-demand window, and no cache aging runs while there are no upload batches.
+- **Found on:** a synthetic upload-cache workload; game and iPhone frame-time comparisons remain open.

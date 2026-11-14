@@ -6,6 +6,12 @@
 #include <stddef.h>
 
 void mtl_init(void);
+// Frame generation controls are atomic requests; the present thread applies them.
+int mtl_framegen_supported(void);
+int mtl_framegen_enabled(void);
+int mtl_framegen_set(int on);
+void mtl_framegen_reset(void);
+uint64_t mtl_framegen_present_count(void); // generated images confirmed by the drawable's presentation callback
 void mtl_vbuf_stats(uint64_t *resolve, uint64_t *reuse, uint64_t *set, uint64_t *skip, uint64_t *copies, uint64_t *copy_bytes);
 void mtl_set_depth_zero(int on);          // NVN depth mode: 1 = near is 0 (D3D / Metal), 0 = near is -w (GL, NVN's default); picks the vertex shaders' entry point (see shader_load in nvn_mtl.m)
 void mtl_set_origin_lower_left(int on);   // NVN window origin: 1 = lower left (GL, NVN's default), 0 = upper left (D3D / Metal); see nvn_mtl.m

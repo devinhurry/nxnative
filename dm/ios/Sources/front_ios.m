@@ -96,6 +96,25 @@ static void tv_attach(void);
 - (void)showFPS:(BOOL)on;
 @end
 static DmRootVC *g_root;
+@interface DmFramegenRefresh : NSObject
+@end
+@implementation DmFramegenRefresh
+- (void)tick:(CADisplayLink *)link { (void)link; }
+@end
+void front_framegen_rate(int fps) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        static CADisplayLink *link;
+        [link invalidate]; link = nil;
+        if (fps <= 0) { LOG("front end: frame generation's refresh request ended"); return; }
+        UIScreen *screen = g_root.game.window.screen ?: UIScreen.mainScreen;
+        int hz = MIN(fps, (int)screen.maximumFramesPerSecond);
+        if (hz <= 0) return;
+        link = [CADisplayLink displayLinkWithTarget:[DmFramegenRefresh new] selector:@selector(tick:)];
+        link.preferredFrameRateRange = CAFrameRateRangeMake(hz, hz, hz);
+        [link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+        LOG("front end: frame generation asks the screen for %d Hz", hz);
+    });
+}
 static CGFloat g_picture_aspect = DM_PICTURE_16_9;   // the presented picture's width / height (front_picture_shape); main thread
 static void launcher_done(void) { [g_root startGame]; }
 @implementation DmRootVC
@@ -210,7 +229,7 @@ static void launcher_done(void) { [g_root startGame]; }
     if (self.fps) {   // the top row's free stretch: right of DmGamepad.m's L3 key (102 + 17 of its units from the safe edge), level with − / + (22 units down); u is its unit
         CGRect s = CGRectIntersection(layout.controls, UIEdgeInsetsInsetRect(b, gameInsets));
         CGFloat u = layout.separated ? MIN(MIN(s.size.height / 430.0, s.size.width / 700.0), 1.3) : MIN(b.size.height / 430.0, 1.3);
-        self.fps.frame = CGRectMake(floor(CGRectGetMinX(s) + 130 * u), floor(CGRectGetMinY(s) + 22 * u - 11), 64, 22);
+        self.fps.frame = CGRectMake(floor(CGRectGetMinX(s) + 130 * u), floor(CGRectGetMinY(s) + 22 * u - 11), 88, 22);
     }
 }
 - (void)showFPS:(BOOL)on {   // the frame-rate counter: DM_SHOW_FPS at Play, then the in-game menu
@@ -290,6 +309,7 @@ bool dm_setting_live(const char *env, const char *value) {
         return true;
     }
     if (!strcmp(env, "DM_SHOW_FPS")) { if (value) [g_root showFPS:atoi(value) != 0]; return true; }
+    if (!strcmp(env, "DM_FRAMEGEN")) { if (value) { int mtl_framegen_set(int); return mtl_framegen_set(atoi(value) != 0); } return true; }
     if (!strcmp(env, "DM_TOUCH_HAPTICS")) { if (value) dm_gamepad_touch_feedback(atoi(value) != 0); return true; }
     if (!strcmp(env, "DM_RUMBLE")) { if (value) { dm_haptics_set_enabled(atoi(value) != 0); LOG("front end: game rumble %s (in-game menu)", atoi(value) ? "on" : "off"); } return true; }
     return false;
@@ -327,16 +347,19 @@ static void front_ios_power_watch(void) {
 // On when the IPA was built with it (the NSP script's SHOW_FPS / --show-fps → DMShowFPS in Info.plist); DM_SHOW_FPS=0 / 1 (the launcher, Documents/env.txt) overrides that without a rebuild,
 // and the in-game menu turns it on and off ([DmRootVC showFPS:])
 uint64_t mtl_present_count(void);
+uint64_t mtl_framegen_present_count(void);
 static UILabel *front_ios_fps_label(void) {
     UILabel *l = [UILabel new];
     l.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightSemibold]; l.textColor = UIColor.whiteColor; l.textAlignment = NSTextAlignmentCenter;
     l.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45]; l.layer.cornerRadius = 6; l.layer.masksToBounds = YES; l.userInteractionEnabled = NO;
     l.text = @"-- fps";
-    __block uint64_t n0 = mtl_present_count(); __block double t0 = CACurrentMediaTime();
+    __block uint64_t n0 = mtl_present_count(), f0 = mtl_framegen_present_count(); __block double t0 = CACurrentMediaTime();
     [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *t) {
-        (void)t; uint64_t n = mtl_present_count(); double now = CACurrentMediaTime();
-        if (now - t0 < 1.5) l.text = [NSString stringWithFormat:@"%.0f fps", (n - n0) / (now - t0)];   // a longer span is the time in the background: no reading
-        n0 = n; t0 = now;
+        (void)t; uint64_t n = mtl_present_count(), f = mtl_framegen_present_count(); double now = CACurrentMediaTime();
+        if (now > t0 && now - t0 < 1.5) l.text = f > f0
+            ? [NSString stringWithFormat:@"%.0f+%.0f fps", (n - n0) / (now - t0), (f - f0) / (now - t0)]
+            : [NSString stringWithFormat:@"%.0f fps", (n - n0) / (now - t0)];   // background time is not sampled
+        n0 = n; f0 = f; t0 = now;
     }];
     LOG("front end: frame-rate counter on");
     return l;

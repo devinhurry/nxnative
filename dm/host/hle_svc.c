@@ -31,6 +31,7 @@ static uint8_t *g_as;              // ASLR region base = the whole block
 static size_t g_reserve;           // its size: RESERVE less the profile's alias region plus the one in use (mem_init_once)
 static uint8_t *g_heap; static _Atomic size_t g_heap_cur; static size_t g_heap_cap;
 static size_t g_heap_seen;        // the largest heap opened so far: with the guest in files, SetHeapSize zeroes a heap that grows back below it
+static size_t g_heap_retained;    // anonymous shrink's replacement failed: old bytes may remain below this offset (g_map_lock)
 // The address range lies entirely within the currently opened (readable and writable) part of the guest heap: such reads need no kernel trap to check, memcpy directly (used where guest memory is read every tick, such as diag.c tk_rd)
 int dm_guest_heap_readable(uint64_t a, size_t n) { uint64_t b = (uint64_t)(uintptr_t)g_heap; size_t cur = g_heap_cur; return g_heap && a >= b && n <= cur && a - b <= cur - n; }
 // The opened heap span for callers that address guest memory by region (hle_cheats.c region 1, like dmnt's heap extents): the
@@ -495,8 +496,8 @@ static int guest_release(uintptr_t lo, uintptr_t hi, int alias) {
     if (mprotect((void *)lo, hi - lo, PROT_NONE)) die("guest_release mprotect %#lx+%#lx errno=%d", (unsigned long)lo, (unsigned long)(hi - lo), errno);
     return 0;
 }
-// Zero the 4 KB pages [a, a + n) over the files: one that reads 0 already is left as it is, since reading a hole maps a clean zero page and dirties nothing, where the memset would dirty it and the
-// kernel then write zeros back, as it would for all of a range the game mapped and unmapped without touching it
+// Zero retained backing in the 4 KB pages [a, a + n): one that reads 0 already is left as it is. Over the files, reading a hole maps a clean zero page and dirties nothing, where memset would dirty it
+// and the kernel then write zeros back, as it would for all of a range the game mapped and unmapped without touching it
 static void guest_zero(uint8_t *a, uint64_t n) {
     for (uint8_t *e = a + n; a < e; a += 4096) {
         uint64_t w[8], any = 0;
@@ -829,10 +830,15 @@ uint64_t svc_dispatch(int num, uint64_t *regs, uint64_t orig_addr) {
         }
         int rc = 0;
         if (size > g_heap_cur) rc = mprotect(g_heap + g_heap_cur, size - g_heap_cur, PROT_READ | PROT_WRITE);
-        else if (size < g_heap_cur) (void)guest_release((uintptr_t)g_heap + size, (uintptr_t)g_heap + g_heap_cur, 0);
+        else if (size < previous && !guest_release((uintptr_t)g_heap + size, (uintptr_t)g_heap + previous, 0) && !g_gf_n && previous > g_heap_retained)
+            g_heap_retained = previous;
         if (rc) die("SetHeapSize mprotect failed: req=%#zx errno=%d", size, errno);
-        // With the guest in files a heap given back kept its old bytes (guest_release): one that grows back over them reads 0 there, as the fresh mapping reads without the files
-        if (size > g_heap_cur && g_heap_seen > g_heap_cur && g_gf_n) guest_zero(g_heap + g_heap_cur, (size < g_heap_seen ? size : g_heap_seen) - g_heap_cur);
+        // Files, and an anonymous release whose replacement failed, may retain old bytes. Reopened memory reads zero; successful anonymous replacements remain lazy.
+        if (size > previous) {
+            size_t zero_to = g_gf_n ? g_heap_seen : g_heap_retained;
+            if (zero_to > previous) guest_zero(g_heap + previous, (size < zero_to ? size : zero_to) - previous);
+            if (size >= g_heap_retained) g_heap_retained = 0;
+        }
         if (size > g_heap_seen) g_heap_seen = size;
         if (g_flag.svc) LOG("SetHeapSize %#zx -> base %p mprotect=%d errno=%d", size, g_heap, rc, errno);
         else if (size > g_heap_cur) LOG("[mem] heap %.2f GB (heap region %.2f GB)", size / 1073741824.0, g_heap_cap / 1073741824.0);
