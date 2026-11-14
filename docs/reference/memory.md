@@ -31,6 +31,14 @@ The guest address space, heaps, pools, virtual address memory and the allocators
 
 ## Heap and application pool
 
+### Donor-backed guest pages must retain their shared VM object
+
+- **Symptom:** replacing a released donor-backed guest span with anonymous pages would charge its reopened pages to the main app again.
+- **Cause:** the donor extension creates shared purgeable-nonvolatile memory; the host's anonymous release path changes that ownership.
+- **Fix:** the iOS donor backs the reserved heap, stack and alias ranges with shared pages from donor processes. Release splits at donor boundaries, clears those pages while writable, and restores protection without replacing their VM object. File-backed guest memory keeps its existing path. Diagnostic totals separate donor objects and their Metal aliases. Implementation and licensing are in [Donor/README.md](../../dm/ios/Donor/README.md).
+- **Found on:** synthetic donor policy and heap-release checks for [Breath of the Wild](../../dm/games/01007EF00011E000/README.md); physical-device gameplay remains unverified.
+- **Check:** `make -C dm/host/tests GAME=<id> heap_size ram_donor` covers chunk/headroom policy, partial failure, shared zero/reopen and mixed donor/anonymous heap release; iOS source compilation covers the extension/XPC path. Actual extension startup and kernel footprint on an iPhone remain unverified.
+
 ### Provisional Unreal layout leaves no heap
 
 - **Symptom:** `SetHeapSize OOM: req 0x600000 > cap 0`, followed by an SDK abort in `nninitStartup` on the first provisional boot.

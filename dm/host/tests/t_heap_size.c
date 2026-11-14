@@ -115,6 +115,16 @@ static void used_memory(size_t heap_size) {
     assert(svc_dispatch(0x29, r, 0) == 0);
     assert(r[0] == 0 && r[1] == heap_size + DM_GAME_MEM_USED);
 }
+static int donor_clears;
+static uintptr_t donor_run_fixture(uintptr_t lo, uintptr_t hi, int *donated) {
+    uintptr_t start = (uintptr_t)g_heap + page, end = start + page;
+    *donated = lo >= start && lo < end;
+    return *donated ? (end < hi ? end : hi) : lo < start && start < hi ? start : hi;
+}
+static void donor_clear_fixture(uintptr_t lo, uintptr_t hi) {
+    assert(lo == (uintptr_t)g_heap + page && hi == lo + page);
+    memset((void *)lo, 0, hi - lo); donor_clears++;
+}
 int main(void) {
     mem_init();
     page = (size_t)getpagesize(); g_heap_cap = 4 * page;
@@ -147,8 +157,20 @@ int main(void) {
     memset(g_heap, 0x2a, 3 * page);
     success(0); success(3 * page);           // a later successful replacement still reads zero
     success(0);
+    // Only the donated middle page is cleared through its callback; the last
+    // page is replaced normally. Reopening must preserve the live first page.
+    success(3 * page); memset(g_heap, 0x6b, 3 * page);
+    const dm_donor_hooks donor = {NULL, donor_run_fixture, donor_clear_fixture};
+    svc_donor_attach(&donor); request(page);
+    assert(g_heap_cur == page && donor_clears == 1 && map_calls == 1 && calls == 2);
+    assert(regs[0] == 0 && regs[1] == (uint64_t)g_heap);
+    request(3 * page);
+    assert(g_heap_cur == 3 * page && map_calls == 0 && calls == 1);
+    for (size_t i = 0; i < page; i++) assert(g_heap[i] == 0x6b);
+    for (size_t i = page; i < 3 * page; i++) assert(!g_heap[i]);
+    svc_donor_attach(NULL); success(0);
     free(g_alias_bits); free(g_alias_exposed);
     assert(munmap(g_as, RESERVE) == 0);
-    puts("SetHeapSize production dispatcher: growth, shrink, unchanged, zero, failure state and fail-fast passed");
+    puts("SetHeapSize production dispatcher: growth, shrink, unchanged, zero, failure state, mixed donor backing and fail-fast passed");
     return 0;
 }

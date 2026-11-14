@@ -17,15 +17,17 @@ static void wait_for(dispatch_semaphore_t s) { if (dispatch_semaphore_wait(s, di
 @interface FixtureLibrary : NSObject @end
 @implementation FixtureLibrary
 - (id)newFunctionWithName:(NSString *)name { FixtureFunction *f = [FixtureFunction new]; f->type = [name isEqualToString:@"vs"] ? MTLFunctionTypeVertex : MTLFunctionTypeFragment; return f; }
+- (id)newFunctionWithName:(NSString *)name constantValues:(id)constants error:(NSError **)error { (void)constants; (void)error; return [self newFunctionWithName:name]; }
 @end
 @interface FixturePipeline : NSObject { @public MTLColorWriteMask mask; } @end
 @implementation FixturePipeline
 - (MTL4RenderPipelineDescriptor *)newRenderPipelineDescriptorForSpecialization { return [MTL4RenderPipelineDescriptor new]; }
 @end
-@interface FixtureCompiler : NSObject { @public int fail; } @end
+@interface FixtureCompiler : NSObject { @public int fail, hold; dispatch_semaphore_t entered, release; } @end
 @implementation FixtureCompiler
 - (id)newRenderPipelineStateWithDescriptor:(id)d compilerTaskOptions:(id)o error:(NSError **)e {
     (void)d; (void)o;
+    if (hold) { dispatch_semaphore_signal(entered); wait_for(release); }
     if (fail) { if (e) *e = [NSError errorWithDomain:@"fixture" code:1 userInfo:nil]; return nil; }
     return [FixturePipeline new];
 }
@@ -33,6 +35,10 @@ static void wait_for(dispatch_semaphore_t s) { if (dispatch_semaphore_wait(s, di
     FixturePipeline *result = [self newRenderPipelineStateWithDescriptor:d compilerTaskOptions:p error:e];
     if (result) result->mask = ((MTL4RenderPipelineDescriptor *)d).colorAttachments[0].writeMask; return result;
 }
+@end
+@interface FixtureDevice : FixtureCompiler @end
+@implementation FixtureDevice
+- (id)newRenderPipelineStateWithDescriptor:(id)d error:(NSError **)error { return [self newRenderPipelineStateWithDescriptor:d compilerTaskOptions:nil error:error]; }
 @end
 @interface FixtureArchive : NSObject { @public dispatch_semaphore_t entered, release; int hold, miss; _Atomic int calls; } @end
 @implementation FixtureArchive
@@ -55,8 +61,8 @@ static NvProg *program(void) {
     p->sh[1]->fn = fn4_note([lib newFunctionWithName:@"fs"], lib, @"fs", nil);
     return p;
 }
-typedef struct { NvProg *program; dispatch_semaphore_t done; id result; } request;
-static void *request_main(void *arg) { @autoreleasepool { request *r = arg; r->result = pso_get_(r->program, nil); dispatch_semaphore_signal(r->done); } return NULL; }
+typedef struct { NvProg *program; dispatch_semaphore_t done; id result, future; } request;
+static void *request_main(void *arg) { @autoreleasepool { request *r = arg; r->result = r->future ? pso_future_bind(r->future) : pso_get_(r->program, nil); dispatch_semaphore_signal(r->done); } return NULL; }
 static void drop_pipeline(const pso_key *k, MTLRenderPipelineDescriptor *d) {
     void *p = nvn_hm_del(&g_pso, k); if (p) hm_rel(p); p = nvn_hm_del(&g_pso_fail, k); if (p) hm_rel(p);
     pbase_key b; pbase_key_of(d, !k->border, &b);
@@ -108,6 +114,10 @@ static int gpu_check(void) {
 }
 int main(int argc, char **argv) { @autoreleasepool {
     if (argc > 1 && !strcmp(argv[1], "--gpu")) return gpu_check();
+    if (argc > 1 && !strcmp(argv[1], "--workers")) { printf("PSO_WORKERS=%d\n", pso_workers()); return 0; }
+    setenv("DM_PSO_WORKERS", "2", 1);
+    int no_workers = argc > 1 && !strcmp(argv[1], "--no-workers");
+    if (no_workers) g_pso_future_started = 1;   // reproduce pthread_create failing before the first worker starts
     alarm(30); int sync = argc > 1 && !strcmp(argv[1], "--sync");
     setenv("DM_PSO_FUTURE", sync ? "0" : "1", 1); setenv("DM_PSO_ARCHIVE", "off", 1); setenv("DM_PSO_USER", "/dev/null", 1);
     char path[] = "/tmp/t_pso_future.XXXXXX"; int fd = mkstemp(path); if (fd < 0) abort(); close(fd); setenv("DM_PSO_RECORD", path, 1);
@@ -115,6 +125,17 @@ int main(int argc, char **argv) { @autoreleasepool {
     state_reset(); g_pass.cfmt[0] = MTLPixelFormatRGBA8Unorm; g_pass.samples = 1;
     NvProg *pr = program(); pso_key key; pso_key_fill(&key, pr->sh[0], pr->sh[1], g_pass.cfmt, 0, 0, 1, 0);
     MTLRenderPipelineDescriptor *d = pso_desc(&key, pr->sh[0], pr->sh[1], nil, 0);
+    if (no_workers) {
+        FixtureEncoder *enc = [FixtureEncoder new]; g_rx_enc = enc;
+        id future = pso_get_(pr, nil);
+        CHECK(object_getClass(future) == PsoFuture.class && ((PsoFuture *)future)->may_skip, "cold pipeline is eligible to skip unready draws");
+        CHECK(g_pso_future_workers == 0, "fixture reproduces no available worker");
+        rec_t bind = {.op = RO_R_PSO_FUTURE, .nobj = 1}; bind.a[0] = rec_obj(future); rec_exec(&bind);
+        rec_t draw = {.op = RO_R_DRAW}; draw.a[0] = MTLPrimitiveTypeTriangle; draw.a[2] = 3; rec_exec(&draw);
+        CHECK(enc->draws == 1 && enc->bound != nil, "no-worker fallback resolves and renders instead of skipping forever");
+        CHECK(g_pfu_own == 1 && !g_pso_future_queue.count, "encoder removes its own fallback from the queue");
+        pso_future_collect(); unlink(path); printf("PSO_FUTURE no-workers checks=%d failed=%d\n", checks, failed); return failed != 0;
+    }
     uint64_t ak = arch_key(pso_desc4(d, 1, !key.border)); CHECK(ak != 0, "fixture has the production archive key");
     FixtureArchive *archive = [FixtureArchive new]; archive->hold = 1; archive->entered = dispatch_semaphore_create(0); archive->release = dispatch_semaphore_create(0);
     g_arch_ixf = @[(id)archive]; nvn_hm_put(&g_arch_ix, &ak, (__bridge void *)archive);
@@ -123,7 +144,15 @@ int main(int argc, char **argv) { @autoreleasepool {
     int returned = dispatch_semaphore_wait(r.done, dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_MSEC)) == 0;
     CHECK(returned == !sync, "future lookup returns while archive is held; synchronous lookup waits");
     CHECK(archive->calls == 1, "one archive lookup for the key");
+    request binding = {.done = dispatch_semaphore_create(0)}; pthread_t bind_thread;
+    if (!sync) {
+        binding.future = r.result;
+        CHECK(!((PsoFuture *)binding.future)->may_skip, "an archive hit cannot skip its draw");
+        if (pthread_create(&bind_thread, NULL, request_main, &binding)) abort();
+        CHECK(dispatch_semaphore_wait(binding.done, dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_MSEC)) != 0, "the encoder still waits for an unfinished archive fetch");
+    }
     dispatch_semaphore_signal(archive->release); if (!returned) wait_for(r.done); pthread_join(th, NULL);
+    if (!sync) { wait_for(binding.done); pthread_join(bind_thread, NULL); CHECK(binding.result != nil, "the waited archive result remains drawable"); }
     FixtureEncoder *enc = [FixtureEncoder new]; g_rx_enc = enc;
     if (!sync) {
         CHECK(object_getClass(r.result) == PsoFuture.class, "pipeline lookup returns a deferred result");
@@ -138,18 +167,8 @@ int main(int argc, char **argv) { @autoreleasepool {
     CHECK(enc->draws == 1 && object_getClass(enc->bound) == FixturePipeline.class, "deferred encoder binds the real result and preserves the draw");
     archive->hold = 0;
     if (!sync) {
-        // Both workers are busy with other work. The encoder can take a queued future without waiting for either queue.
-        dispatch_semaphore_t entered = dispatch_semaphore_create(0), release = dispatch_semaphore_create(0);
-        dispatch_queue_t q[PSO_FUTURE_WORKERS];
-        for (int i = 0; i < PSO_FUTURE_WORKERS; i++) { q[i] = pso_future_queue(); dispatch_async(q[i], ^{ dispatch_semaphore_signal(entered); wait_for(release); }); }
-        for (int i = 0; i < PSO_FUTURE_WORKERS; i++) wait_for(entered);
-        drop_pipeline(&key, d); uint64_t own = g_pfu_own;
-        id future = pso_get_(pr, nil); CHECK(object_getClass(future) == PsoFuture.class, "queued request has a future");
-        CHECK(pso_future_resolve(future) != nil && g_pfu_own == own + 1, "encoder steals its queued request");
-        int calls = archive->calls;
-        for (int i = 0; i < PSO_FUTURE_WORKERS; i++) dispatch_semaphore_signal(release);
-        for (int i = 0; i < PSO_FUTURE_WORKERS; i++) dispatch_sync(q[i], ^{});
-        CHECK(archive->calls == calls, "the late worker does not build a stolen request again"); pso_future_collect();
+        CHECK(g_pso_future_workers == 2, "configured worker count starts real threads");
+        id future;
         // An index can outlive usable binaries: retain the normal compiler fallback and cache a failure without issuing any draw with the old pipeline.
         drop_pipeline(&key, d); archive->miss = 1; uint64_t fallback = g_pfu_fallback;
         future = pso_get_(pr, nil); CHECK(pso_future_resolve(future) != nil && g_pfu_fallback == fallback + 1, "stale archive entry falls back to compilation"); pso_future_collect();
@@ -159,39 +178,41 @@ int main(int argc, char **argv) { @autoreleasepool {
         CHECK(hm_get_id(&g_pso_fail, &key) && pso_get_(pr, nil) == nil, "failed future is cached and not retried");
         bind.op = RO_R_PSO; bind.a[0] = rec_obj([FixturePipeline new]); rec_exec(&bind); rec_exec(&draw);
         CHECK(enc->draws == 2, "a later valid pipeline restores draws");
-        compiler->fail = 0; archive->miss = 0; drop_pipeline(&key, d);
-        for (int i = 0; i < PSO_FUTURE_WORKERS; i++) { q[i] = pso_future_queue(); dispatch_async(q[i], ^{ dispatch_semaphore_signal(entered); wait_for(release); }); }
-        for (int i = 0; i < PSO_FUTURE_WORKERS; i++) wait_for(entered);
-        int admitted = 0;
-        for (unsigned i = 0; i < PSO_FUTURE_MAX; i++) { pso_key variant = key; variant.chmask = i; admitted += pso_future_issue(&variant, pr->sh[0], pr->sh[1]) != nil; }
-        CHECK(admitted == PSO_FUTURE_MAX && g_pso_futures.count == PSO_FUTURE_MAX, "a blocked burst stays within the pending descriptor limit");
-        pso_key extra = key; extra.chmask = PSO_FUTURE_MAX;
-        CHECK(pso_future_issue(&extra, pr->sh[0], pr->sh[1]) == nil, "a full future queue retains the original synchronous fallback");
-        int lookups = archive->calls; uint64_t compiled = g_pb_built, specialized = g_pb_spec;
-        for (int i = 0; i < PSO_FUTURE_WORKERS; i++) dispatch_semaphore_signal(release);
-        for (int i = 0; i < PSO_FUTURE_WORKERS; i++) dispatch_sync(q[i], ^{});
-        pso_future_collect(); CHECK(g_pso_futures.count == 0, "the completed burst releases pending descriptors");
-        CHECK(archive->calls == lookups + 1 && g_pb_built == compiled && g_pb_spec == specialized + PSO_FUTURE_MAX, "parallel color configurations share one archived base without compilation");
-        pso_key none = key, all = key; none.chmask = 0; all.chmask = 15;
-        FixturePipeline *no_writes = hm_get_id(&g_pso, &none), *all_writes = hm_get_id(&g_pso, &all);
-        CHECK(no_writes->mask == MTLColorWriteMaskNone && all_writes->mask == MTLColorWriteMaskAll, "shared bases retain each pipeline's distinct color write mask");
-        // Collection must not hide a backlog of dispatch blocks behind stalled workers.
-        for (int i = 0; i < PSO_FUTURE_WORKERS; i++) { q[i] = pso_future_queue(); dispatch_async(q[i], ^{ dispatch_semaphore_signal(entered); wait_for(release); }); }
-        for (int i = 0; i < PSO_FUTURE_WORKERS; i++) wait_for(entered);
-        __weak id collected = nil; admitted = 0;
-        for (unsigned i = 0; i < PSO_FUTURE_MAX; i++) @autoreleasepool {   // each collected result's submission pool has ended, while both queues remain held
-            pso_key variant = key; variant.chmask = 128 + i; drop_pipeline(&variant, d);
-            id item = pso_future_issue(&variant, pr->sh[0], pr->sh[1]); if (!item) break; admitted++; collected = item;
-            (void)pso_future_resolve(item); pso_future_collect(); item = nil;
-        }
-        CHECK(admitted == PSO_FUTURE_MAX && !collected, "late queued blocks do not retain stolen and collected futures");
-        extra.chmask = 256;
-        CHECK(g_pso_future_jobs == PSO_FUTURE_MAX && pso_future_issue(&extra, pr->sh[0], pr->sh[1]) == nil, "the dispatch backlog also has a hard limit");
-        for (int i = 0; i < PSO_FUTURE_WORKERS; i++) dispatch_semaphore_signal(release);
-        for (int i = 0; i < PSO_FUTURE_WORKERS; i++) dispatch_sync(q[i], ^{});
-        CHECK(g_pso_future_jobs == 0, "retired dispatch blocks restore admission capacity");
-        drop_pipeline(&key, d); nvn_hm_del(&g_arch_ix, &ak); uint64_t issued = g_pfu_issued;
-        CHECK(object_getClass(pso_get_(pr, nil)) == FixturePipeline.class && g_pfu_issued == issued, "an unindexed pipeline keeps the original lookup path");
+        compiler->fail = 0; drop_pipeline(&key, d); nvn_hm_del(&g_arch_ix, &ak);
+        compiler->hold = 1; compiler->entered = dispatch_semaphore_create(0); compiler->release = dispatch_semaphore_create(0);
+        future = pso_get_(pr, nil); wait_for(compiler->entered);
+        CHECK(object_getClass(future) == PsoFuture.class && ((PsoFuture *)future)->may_skip, "an unindexed cold compile has a maySkip future");
+        CHECK(pso_get_(pr, nil) == future, "repeated cold draw retains one unfinished future");
+        bind.op = RO_R_PSO_FUTURE; bind.a[0] = rec_obj(future); rec_exec(&bind); rec_exec(&draw);
+        CHECK(enc->draws == 2, "unready cold compile skips the draw without binding the previous pipeline");
+        CHECK(g_pfu_skipped == 1, "skipping is counted separately from a compile failure");
+        compiler->hold = 0; dispatch_semaphore_signal(compiler->release); dispatch_group_wait(((PsoFuture *)future)->ready, DISPATCH_TIME_FOREVER);
+        bind.a[0] = rec_obj(future); rec_exec(&bind); rec_exec(&draw);
+        CHECK(enc->draws == 3 && enc->bound != nil, "the ready cold result binds and restores drawing");
+        pso_future_collect(); CHECK(object_getClass(hm_get_id(&g_pso, &key)) == FixturePipeline.class, "the completed cold result stays cached");
+        // An existing predictor build remains the owner of a pending compile.
+        drop_pipeline(&key, d); uint32_t generation;
+        pthread_mutex_lock(&g_pp_mu); int slot = pso_pend_slot(&key, 0, &generation); g_pp[slot].run = 1; pthread_mutex_unlock(&g_pp_mu);
+        future = pso_get_(pr, nil);
+        CHECK(object_getClass(future) == PsoFuture.class && ((PsoFuture *)future)->pending && ((PsoFuture *)future)->may_skip, "a running predicted compile is wrapped instead of synchronously waited");
+        bind.a[0] = rec_obj(future); rec_exec(&bind); rec_exec(&draw);
+        CHECK(enc->draws == 3, "an unfinished pending compile skips its draw");
+        pthread_mutex_lock(&g_pp_mu); g_pp[slot].ps = (id)[FixturePipeline new]; g_pp[slot].done = 1; pthread_cond_broadcast(&g_pp_cv); pthread_mutex_unlock(&g_pp_mu);
+        dispatch_group_wait(((PsoFuture *)future)->ready, DISPATCH_TIME_FOREVER);
+        bind.a[0] = rec_obj(future); rec_exec(&bind); rec_exec(&draw);
+        CHECK(enc->draws == 4 && enc->bound != nil, "the existing predictor result later binds and renders");
+        pso_future_collect();
+        // Futures depend on deferred encoding, independently of the Metal 4 compiler.
+        drop_pipeline(&key, d); g_comp4 = nil;
+        FixtureDevice *device = [FixtureDevice new]; device->hold = 1;
+        device->entered = dispatch_semaphore_create(0); device->release = dispatch_semaphore_create(0); g_dev = (id)device;
+        future = pso_get_(pr, nil); wait_for(device->entered);
+        CHECK(object_getClass(future) == PsoFuture.class && ((PsoFuture *)future)->may_skip, "MTLDevice cold builds also use the future path");
+        bind.a[0] = rec_obj(future); rec_exec(&bind); rec_exec(&draw);
+        CHECK(enc->draws == 4, "an unready MTLDevice compile skips its draw");
+        device->hold = 0; dispatch_semaphore_signal(device->release); dispatch_group_wait(((PsoFuture *)future)->ready, DISPATCH_TIME_FOREVER);
+        bind.a[0] = rec_obj(future); rec_exec(&bind); rec_exec(&draw);
+        CHECK(enc->draws == 5, "a ready MTLDevice result restores drawing"); pso_future_collect();
     }
     unlink(path); printf("PSO_FUTURE mode=%s checks=%d failed=%d submit_returned_before_archive=%d\n", sync ? "sync" : "future", checks, failed, returned);
     return failed != 0;

@@ -16,12 +16,18 @@
 #include <os/proc.h>
 #endif
 #include "dm.h"
+#include "ram_donor.h"
 
 void svc_guest_range(uint8_t **base, size_t *size);
-enum { C_GUEST, C_CODE, C_MALLOC, C_GPU, C_STACK, C_FILE, C_OTHER, NC };
-static const char *k_cls[NC] = {"guest", "code", "malloc", "gpu", "stack", "file", "other"};
+enum { C_GUEST, C_CODE, C_MALLOC, C_GPU, C_STACK, C_FILE, C_OTHER, C_DONOR, NC };
+static const char *k_cls[NC] = {"guest", "code", "malloc", "gpu", "stack", "file", "other", "donor"};
+static _Thread_local uint32_t donor_objects[1024];
+static _Thread_local int donor_object_count;
+static void donor_snapshot(void) { donor_object_count = dm_ram_donor_objects(donor_objects, 1024); }
 
 static int classify(vm_address_t a, const vm_region_submap_info_data_64_t *in) {
+    // A no-copy Metal alias of a donated guest object has the same owner too.
+    for (int i = 0; i < donor_object_count; i++) if (in->object_id == donor_objects[i]) return C_DONOR;
     uint8_t *gb; size_t gs; svc_guest_range(&gb, &gs);
     if (gb && a >= (vm_address_t)gb && a < (vm_address_t)gb + gs) return C_GUEST;
     for (int i = 0; i < g_nmod; i++)
@@ -39,6 +45,7 @@ static int classify(vm_address_t a, const vm_region_submap_info_data_64_t *in) {
 
 // DM_MEMSTAT_DUMP=seconds: at that second, write every VM region ≥1 MiB line by line to <tsv>.regions (for diagnosing the accounting method)
 static void dump_regions(const char *path) {
+    donor_snapshot();
     FILE *f = fopen(path, "w"); if (!f) return;
     fprintf(f, "start	size MiB	class	user_tag	share_mode	obj_id	ref_count	resident MiB	dirty MiB	swapped MiB	file\n");
     vm_address_t a = 0; vm_size_t sz; natural_t depth = 0; vm_size_t pg = vm_page_size;
@@ -59,6 +66,7 @@ static void dump_regions(const char *path) {
 // a few GB of address space (docs/reference/memory.md): a thread's stack, a realloc or a Metal heap that finds no room aborts there with the footprint far below the memory limit
 // (GitHub issue #2444). Regions inside a submap (the dyld shared cache) are "system" here and never a gap. Only mach calls and fprintf: it runs in the signal handler
 void dm_vm_census(FILE *f) {
+    donor_snapshot();
     enum { C_SYS = NC, NCC };
     uint64_t virt[NCC] = {0}, gap[3] = {0}, gap_at = 0, prev = 0, lo = 0, hi = 0, nreg = 0, tag[256] = {0};   // tag: "other" by VM user tag
     task_vm_info_data_t vi; mach_msg_type_number_t n = TASK_VM_INFO_COUNT;
@@ -102,6 +110,7 @@ void dm_vm_census(FILE *f) {
 }
 
 static void sample(FILE *f, double t, id<MTLDevice> dev) {
+    donor_snapshot();
     task_vm_info_data_t vi; mach_msg_type_number_t n = TASK_VM_INFO_COUNT;
     uint64_t fp = task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vi, &n) == KERN_SUCCESS ? vi.phys_footprint : 0;
     uint64_t avail = 0;
@@ -126,7 +135,7 @@ static void sample(FILE *f, double t, id<MTLDevice> dev) {
         }
         a += sz; continue;
     }
-    uint64_t sum = 0; for (int c = 0; c < NC; c++) sum += bill[c];
+    uint64_t sum = 0; for (int c = 0; c < NC; c++) if (c != C_DONOR) sum += bill[c];
     fprintf(f, "%.0f\t%llu\t%llu\t%llu\t%llu\t%llu\t%lld\t%lld", t, fp >> 20, avail >> 20, (unsigned long long)(dev.currentAllocatedSize >> 20),
             vi.internal >> 20, vi.compressed >> 20, (vi.ledger_tag_graphics_footprint + vi.ledger_tag_graphics_footprint_compressed) >> 20,
             (long long)(vi.limit_bytes_remaining >> 20));
@@ -138,7 +147,7 @@ static void sample(FILE *f, double t, id<MTLDevice> dev) {
 static void *memstat_thread(void *p) {
     FILE *f = fopen((const char *)p, "w");
     if (!f) { LOG("memstat: cannot open %s", (const char *)p); return NULL; }
-    fprintf(f, "# unit MiB; kernel accounting internal / compressed / graphics ledger / headroom to the limit; class columns = virtual/resident/charged (deduplicated per object); charged total = Σ private charged; unattributed = phys_footprint − charged total\nseconds\tphys_footprint\tavailable\tmetal_alloc\tinternal\tcompressed\tgraphics\theadroom");
+    fprintf(f, "# unit MiB; kernel accounting internal / compressed / graphics ledger / headroom to the limit; class columns = virtual/resident/charged (deduplicated per object); donor = RAM donor VM objects, excluded from charged total; charged total = Σ private charged; unattributed = phys_footprint − charged total\nseconds\tphys_footprint\tavailable\tmetal_alloc\tinternal\tcompressed\tgraphics\theadroom");
     for (int c = 0; c < NC; c++) fprintf(f, "\t%s", k_cls[c]);
     fprintf(f, "\tcharged total\tunattributed\n");
     id<MTLDevice> dev = MTLCreateSystemDefaultDevice();   // The same device object as the graphics backend (the system default device singleton)

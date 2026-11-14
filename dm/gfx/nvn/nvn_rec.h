@@ -130,7 +130,7 @@ static void rec_note_wait(_Atomic uint64_t *p, uint64_t v) {
 
 // ---------- The encode thread ----------
 static id g_rx_cb, g_rx_enc;   // the encode thread's real command buffer and open encoder
-static int g_rx_pso_failed;   // a failed future skips its draws until another pipeline is bound
+static int g_rx_pso_failed;   // an unready cold or failed future skips its draws until another pipeline is bound
 static void rec_exec(const rec_t *r) {
     const uint64_t *a = r->a; id e = g_rx_enc;
     if (g_rx_pso_failed && r->op >= RO_R_DRAW && r->op <= RO_R_MESH_IND) return;   // these records retain no objects
@@ -157,7 +157,7 @@ static void rec_exec(const rec_t *r) {
     case RO_BAR_ENCODER: [(id<MTL4CommandEncoder>)e barrierAfterEncoderStages:a[0] beforeEncoderStages:a[1] visibilityOptions:a[2]]; break;
     case RO_R_TABLE: [(id<MTL4RenderCommandEncoder>)e setArgumentTable:rec_id(a[0]) atStages:a[1]]; break;
     case RO_R_PSO: [(id<MTL4RenderCommandEncoder>)e setRenderPipelineState:rec_id(a[0])]; g_rx_pso_failed = 0; break;
-    case RO_R_PSO_FUTURE: { id<MTLRenderPipelineState> p = pso_future_resolve(rec_id(a[0])); g_rx_pso_failed = !p; if (p) [(id<MTL4RenderCommandEncoder>)e setRenderPipelineState:p]; break; }
+    case RO_R_PSO_FUTURE: { id<MTLRenderPipelineState> p = pso_future_bind(rec_id(a[0])); g_rx_pso_failed = !p; if (p) [(id<MTL4RenderCommandEncoder>)e setRenderPipelineState:p]; break; }
     case RO_R_DSS: [(id<MTL4RenderCommandEncoder>)e setDepthStencilState:rec_id(a[0])]; break;
     case RO_R_VIEWPORT: { MTLViewport v; memcpy(&v, a, sizeof v); [(id<MTL4RenderCommandEncoder>)e setViewport:v]; break; }
     case RO_R_SCISSOR: { MTLScissorRect s; memcpy(&s, a, sizeof s); [(id<MTL4RenderCommandEncoder>)e setScissorRect:s]; break; }

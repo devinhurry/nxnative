@@ -1,6 +1,7 @@
 // Horizon kernel system calls (triggered by the SDK runtime once the SDK is loaded). Only what the P1 boot chain needs is implemented: memory layout + heap + query + debug output + timing.
 // Register convention: inputs w1.. / outputs w0=Result, x1=value (GetInfo / SetHeapSize), consistent with the public Horizon ABI.
 #include "dm.h"
+#include "ram_donor.h"
 #include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/resource.h>
@@ -32,6 +33,8 @@ static size_t g_reserve;           // its size: RESERVE less the profile's alias
 static uint8_t *g_heap; static _Atomic size_t g_heap_cur; static size_t g_heap_cap;
 static size_t g_heap_seen;        // the largest heap opened so far: with the guest in files, SetHeapSize zeroes a heap that grows back below it
 static size_t g_heap_retained;    // anonymous shrink's replacement failed: old bytes may remain below this offset (g_map_lock)
+static const dm_donor_hooks *g_donor;
+void svc_donor_attach(const dm_donor_hooks *hooks) { g_donor = hooks; }
 // The address range lies entirely within the currently opened (readable and writable) part of the guest heap: such reads need no kernel trap to check, memcpy directly (used where guest memory is read every tick, such as diag.c tk_rd)
 int dm_guest_heap_readable(uint64_t a, size_t n) { uint64_t b = (uint64_t)(uintptr_t)g_heap; size_t cur = g_heap_cur; return g_heap && a >= b && n <= cur && a - b <= cur - n; }
 // The opened heap span for callers that address guest memory by region (hle_cheats.c region 1, like dmnt's heap extents): the
@@ -267,6 +270,10 @@ static int guest_files_map(const char *dir, size_t chunk, int n, struct statfs *
 }
 static void guest_file_init(void) {
     const double G = 1073741824.0; const char *e = getenv("DM_GUEST_FILE"), *d = getenv("DM_GUEST_FILE_DIR"), *mf = getenv("DM_GUEST_FILE_MIN_FREE");
+    // Donor mode defaults to shared RAM rather than automatic fileheap.
+    // An explicit file choice still takes precedence over donor backing.
+    const char *donor = getenv("DM_RAM_DONOR");
+    if (g_donor && !(donor && !strcmp(donor, "0")) && !(e && *e)) { LOG("[mem] guest memory: donor backing selected; automatic fileheap is not used"); return; }
 #if TARGET_OS_IPHONE
     uint64_t room = os_proc_available_memory();
     int want = guest_file_wanted(e, DM_GAME_APP_POOL, room);
@@ -335,6 +342,12 @@ static void mem_init_once(void) {
     if (!(g_alias_exposed = calloc(g_alias_cap / pg / 64 + 1, sizeof *g_alias_exposed))) die("alias exposure bitmap calloc");
     if (!(g_alias_rel = calloc(g_alias_cap / pg / 64 + 1, sizeof *g_alias_rel)) || !(g_alias_aged = calloc(g_alias_cap / pg / 64 + 1, sizeof *g_alias_aged))) die("alias release bitmap calloc");
     LOG("guest AS %p +%#llx  heap %p alias %p stack %p", g_as, (unsigned long long)g_reserve, g_heap, g_alias, g_stack);
+    // Donor backing maps these reserved ranges before the game opens
+    // them. An explicitly selected file heap keeps its own backing unchanged.
+    if (g_donor && !g_gf_n) {
+        const dm_donor_range ranges[] = {{(uintptr_t)g_heap, g_heap_cap, "heap"}, {(uintptr_t)g_stack, g_stack_cap, "stack"}, {(uintptr_t)g_alias, g_alias_cap, "alias"}};
+        g_donor->back(ranges, 3);
+    }
     if ((uint64_t)(uintptr_t)g_alias > UINT64_C(1) << 39) LOG("[mem] the heap and stacks reach past 2^39, which a Switch's addresses never do: a crash on a cut-off pointer points here (DM_ALIAS_SIZE=<profile's mem_alias> keeps them lower)");
     const char *aw = getenv("DM_ALIAS_WINDOWS");
     if (aw && atoi(aw) > 0) { pthread_t th; if (!pthread_create(&th, NULL, alias_windows_thread, (void *)(uintptr_t)atoi(aw))) pthread_detach(th); }
@@ -484,7 +497,7 @@ static void alias_query(uint64_t addr, uint64_t *base, uint64_t *size, int *mapp
 // bytes, so the call returns 0 and alias_initialize zeroes what does not read 0 when they are mapped again
 // alias: the range lies in the alias region, where the game maps and unmaps the same ranges every frame (Zelda: about 0.5 GB a second): punching those at once would make every page fault
 // in again from a hole; they are only marked (g_alias_rel), and guest_file_sweep punches those still given back after a whole sweep interval. The heap's are punched at once
-static int guest_release(uintptr_t lo, uintptr_t hi, int alias) {
+static int guest_release_own(uintptr_t lo, uintptr_t hi, int alias) {
     if (g_gf_n) {
         if (mprotect((void *)lo, hi - lo, PROT_NONE)) die("guest_release mprotect %#lx+%#lx errno=%d", (unsigned long)lo, (unsigned long)(hi - lo), errno);
         if (g_gf_punch && !alias) guest_file_punch(lo, hi);
@@ -495,6 +508,23 @@ static int guest_release(uintptr_t lo, uintptr_t hi, int alias) {
     static _Atomic int nred; if (atomic_fetch_add(&nred, 1) < 8) LOG("[RED] guest memory %#lx+%#lx not given back (errno %d): it stays resident", (unsigned long)lo, (unsigned long)(hi - lo), errno);
     if (mprotect((void *)lo, hi - lo, PROT_NONE)) die("guest_release mprotect %#lx+%#lx errno=%d", (unsigned long)lo, (unsigned long)(hi - lo), errno);
     return 0;
+}
+// Donated spans must not be replaced with anonymous pages: that changes their
+// ownership and charges reopened pages to this app. The original clears them
+// while writable, then restores PROT_NONE, retaining the shared VM object.
+static int guest_release(uintptr_t lo, uintptr_t hi, int alias) {
+    if (!g_donor || g_gf_n) return guest_release_own(lo, hi, alias);
+    int fresh = 1;
+    while (lo < hi) {
+        int donated = 0; uintptr_t end = g_donor->run(lo, hi, &donated);
+        if (donated) {
+            if (mprotect((void *)lo, end - lo, PROT_READ | PROT_WRITE)) die("guest_release donor reopen %#lx+%#lx errno=%d", (unsigned long)lo, (unsigned long)(end - lo), errno);
+            g_donor->zero(lo, end);
+            if (mprotect((void *)lo, end - lo, PROT_NONE)) die("guest_release donor protect %#lx+%#lx errno=%d", (unsigned long)lo, (unsigned long)(end - lo), errno);
+        } else fresh &= guest_release_own(lo, end, alias);
+        lo = end;
+    }
+    return fresh;
 }
 // Zero retained backing in the 4 KB pages [a, a + n): one that reads 0 already is left as it is. Over the files, reading a hole maps a clean zero page and dirties nothing, where memset would dirty it
 // and the kernel then write zeros back, as it would for all of a range the game mapped and unmapped without touching it

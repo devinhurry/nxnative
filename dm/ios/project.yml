@@ -22,6 +22,9 @@ targets:
       - path: Gen/src         # Source files from the compile commands of dm/host/Makefile (linked in by tools/gen_build.py)
       - path: Gen/main/main.c
         compilerFlags: "-Dmain=dm_main"
+    dependencies:
+      - target: DmRamDonor
+        embed: true
     postBuildScripts:
       - name: Copy game resources
         script: /bin/bash "${SRCROOT}/tools/stage_resources.sh"
@@ -86,6 +89,37 @@ targets:
       SWIFT_OBJC_BRIDGING_HEADER: Sources/DmIOS-Bridging-Header.h   # CloudSaves.h (the cloud-save folder pick)
       DEBUG_INFORMATION_FORMAT: dwarf
       GCC_WARN_INHIBIT_ALL_WARNINGS: YES
+  DmRamDonor:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Donor/main.m
+      - path: Donor/LICENSE
+        buildPhase: resources
+    info:
+      path: Gen/Donor-Info.plist
+      properties:
+        CFBundleDisplayName: RAM donor
+        CFBundleShortVersionString: ${DM_APP_VERSION}
+        CFBundleVersion: ${DM_APP_VERSION}
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.ar.viewer
+          NSExtensionPrincipalClass: DmRamDonorHandler
+          NSExtensionContextClass: NSExtensionContext
+          NSExtensionContextHostClass: NSExtensionContext
+          NSExtensionAttributes:
+            NSExtensionActivationRule: FALSEPREDICATE
+    settings:
+      PRODUCT_NAME: DmRamDonor
+      PRODUCT_BUNDLE_IDENTIFIER: ${DM_BUNDLE_ID}.RamDonor
+      DEVELOPMENT_TEAM: ${DM_TEAM_ID}
+      CODE_SIGN_STYLE: Automatic
+      MARKETING_VERSION: ${DM_APP_VERSION}
+      CURRENT_PROJECT_VERSION: ${DM_APP_VERSION}
+      CLANG_ENABLE_OBJC_ARC: YES
+      GCC_C_LANGUAGE_STANDARD: gnu11
+      OTHER_LDFLAGS: "-e _NSExtensionMain -framework Foundation -framework CoreFoundation"
+      SKIP_INSTALL: YES
 schemes:
   ${DM_SCHEME_NAME}:
     build:
