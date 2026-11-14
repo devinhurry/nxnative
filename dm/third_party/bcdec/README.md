@@ -1,0 +1,2 @@
+Source: https://github.com/iOrange/bcdec commit 80859ed (version 0.985), unmodified. License in LICENSE (MIT or public domain, at your choice).
+Use: on GPUs without BC compressed formats, dm/gfx/tex/bcdec_msl.py adapts the scalar algorithms to Metal address spaces and embeds them in nvn_bcdec_msl.h. The replay layer's nvn_bc.inc decodes BC1-7 on the GPU. The original header remains unmodified; the generated Metal source omits the unused C-union float conversion and uses the half-float BC6H entry point.

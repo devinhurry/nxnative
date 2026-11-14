@@ -4,6 +4,17 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 
 ## Textures and formats
 
+### BC textures on GPUs without BC support
+
+- **Symptom:** an A16 device aborts while uploading a texture: `MTLTextureDescriptor has invalid pixelFormat (140)`, `CRASH sig=6`, with `pkg_upload` in the backtrace.
+- **Cause:** format 140 is BC4_RUnorm. The NVN format mapping was correct, but this GPU has no BC texture formats, and the old decompression path had been removed.
+- **Fix:** `supportsBCTextureCompression` selects native BC or GPU decoding once at initialization. Native BC keeps its descriptors, uploads and copies. The fallback (`nvn_bc.inc`) uses bcdec's scalar algorithms adapted to Metal for BC1-7, including signed channels and BC6H. It stores the compressed blocks separately from the sampled pixels, so buffer and texture copies, readbacks, mip/array views and block render targets preserve the original bytes. Writes decode their destination region after the GPU copy; a BC4 block-encoder render pass continues through its existing shadow. No CPU wait is needed to decode a GPU-written source.
+- **Check:** `t_bc` compares every BC format against native GPU decoding across mip levels and array layers (allowing interpolation/8-bit quantization differences for BC1-5), and checks GPU-written partial copies plus loaded 2D/3D BC4 render-target passes, in native and forced-fallback modes and with the encoding thread. `bcdec_msl.py --check` verifies the generated source. A forced Mac run cannot establish physical A16 memory or performance acceptance; decoded textures use more memory.
+- **Port on `1114-optimize-bc`:** BC changes from `9cbe8984` and `50381fae` are adapted to the current partial-upload, GPU storage-writeback and texture-view APIs. The independent experimental driver metadata cache is not imported. The iOS preflight accepts a Metal GPU without native BC and leaves format selection to the renderer. `DM_LOW_MEMORY=1` selects low-memory BC transcoding; it does not relocate archives or activate a file-backed heap.
+- **Optional memory tradeoff:** Low-memory mode uses MacNativeGames' MIT-licensed BC1/2/3/7-to-ASTC and unsigned BC4/5-to-EAC GPU kernels for eligible sampled 2D/array/cube assets. It retains the original BC blocks for byte-exact copies and readbacks; a later image-write/render-target upgrade restores the decoded representation. Re-compression can lose detail, so ordinary mode keeps decoding; `DM_NVN_BC_TRANSCODE=0` also disables it under the low-memory preset. The component flag cannot bypass the preset. Native BC, signed channels, BC6H and 3D retain their existing paths. Tests sample every eligible format across mip levels and array layers, check GPU-written partial updates, and preserve raw blocks and later writable upgrades.
+- **Lifetime:** the fallback retires block allocations and completed upload staging/views on its own queue, outside Metal completion callbacks that may wait on the residency lock. Native BC retains its existing reclamation route. This port keeps the current upload-source implementation; it does not import the old file-backed heap or transient-upload preset.
+- **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md), user-provided A16 log (`log-susan.txt`, build `68b7dd4e663e`, 2026-11-01).
+
 ### Null textures in diagnostic logs
 
 - **Symptom:** clang reports null dereferences in `nvnWindowInitialize` and `clear_tex`; clearing a null texture crashes with `DM_NVN_PASSDUMP=1`.
@@ -501,6 +512,8 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Note:** the A16 has no BC formats; the host used to store BC textures decompressed on such GPUs (about 3.9 GB instead of 2.8 GB for BotW, over iOS's limit on a 6 GB iPhone), and that path has since been removed: only GPUs with BC are supported ([GPUs without BC textures are refused at start](#gpus-without-bc-textures-are-refused-at-start)).
 
 ### GPUs without BC textures are refused at start
+
+Historical policy: this feature branch restores [BC decoding](#bc-textures-on-gpus-without-bc-support) instead. The iOS preflight now rejects only a missing Metal device; the renderer still enforces its Metal feature requirements. The original rejection below describes upstream behavior before the restoration.
 
 - **Symptom:** on an iPhone before the A17 Pro, the game runs until its first BC texture, then `failed assertion 'Texture Descriptor Validation' … MTLTextureDescriptor has invalid pixelFormat (134).` (or another number from 130 to 153, Metal's BC formats; 134 is `BC3_RGBA`) and `CRASH sig=6`, the backtrace through `tex_mtl`, `tex_by_id` and `encode_args`.
 - **Cause:** BC textures are created and uploaded as BC, with no decompression path ([Compressed textures as render targets](#compressed-textures-as-render-targets-through-an-uncompressed-shadow), note), and the A16 and older iPhone GPUs have no BC formats (`MTLDevice.supportsBCTextureCompression` false). The format mapping is right; the device cannot make the texture.
