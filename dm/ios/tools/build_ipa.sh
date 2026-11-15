@@ -124,11 +124,16 @@ else cp "$GD/shader_map.tsv" "$GD/pso_manifest.tsv" "$GD/c1_full.tsv" $TD/ || di
   # the shader pairs, beside the shader map where the pipeline prebuild reads them (nvn_mtl.m pso_prebuild): without them the app makes no pulling bases, and a hybrid draw has no stand-in
   for f in shader_pairs.tsv pso_pairs.tsv; do if [ -f "$GD/$f" ]; then cp "$GD/$f" $TD/ || die "copy $f"; fi; done; fi   # optional
 if [ "$GFXAPI" = nvn ]; then
-  BAKE=${DM_PSO_BAKE_LIST:-$GD/pso_bake.tsv}
-  if [ -n "${DM_PSO_BAKE_LIST:-}" ] || [ -f "$BAKE" ]; then
-    [ -f "$BAKE" ] || die "pipeline bake list not found: $BAKE"
-    cp "$BAKE" "$TD/pso_bake.tsv" || die "copy pipeline bake list"
+  EXTENDED=${DM_PSO_EXTENDED_LIST-${DM_PSO_BAKE_LIST-}}
+  if [ -z "$EXTENDED" ]; then
+    EXTENDED=$GD/pso_extended.tsv
+    if [ ! -f "$EXTENDED" ]; then EXTENDED=$GD/pso_bake.tsv; fi  # legacy profiles
   fi
+  if [ -n "${DM_PSO_EXTENDED_LIST-${DM_PSO_BAKE_LIST-}}" ] || [ -f "$EXTENDED" ]; then
+    [ -f "$EXTENDED" ] || die "extended pipeline list not found: $EXTENDED"
+    cp "$EXTENDED" "$TD/pso_extended.tsv" || die "copy extended pipeline list"
+  fi
+  rm -f "$TD/pso_bake.tsv"  # stale resource from an earlier incremental build
 fi
 # The launcher's settings for this game (Launcher.swift): dm/games/settings.tsv filtered by the profile, main's rewriter table and the game's languages (dm/games/settings.py)
 L=$(GFXAPI="$GFXAPI" python3 "$DM/games/settings.py" "$GAME" "$PATCHED" "$VNACP" $TD/launcher.json) || die "launcher settings (dm/games/settings.py)"; t "launcher: $L"

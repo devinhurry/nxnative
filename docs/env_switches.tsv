@@ -304,6 +304,8 @@ DM_PROGRAM_ID	switch	`=<hex>`: the program ID the host reports from `svcGetInfo(
 DM_PSO_ARCHIVE	path	The folder of the per-game Metal 4 pipeline archive of pipeline bases (default `pso_archive/` beside `pso_user.tsv`); `off` keeps no archive
 DM_PSO_BUNDLE	path	The pipeline archive made offline (`<GPU architecture>.mtl4a`, `prebuilt.tsv`), read only; the iOS app and Mac launcher set it to their `pso/` folder; `off` ignores it
 DM_PSO_GPUS	switch	`build_ipa.sh`: the GPU architectures, comma-separated, to build the offline pipeline archive for (`none` builds none); unset, a profile with `pso_mtl4 on` gets its `pso_gpu` list or `g18p` when absent; profiles with `pso_mtl4 off` get none
+DM_PSO_EXTENDED	path	The extended pipeline list prepared into the device archive before normal prewarm (default: `pso_extended.tsv` beside the shader map); `off` or `0` disables it. Legacy `DM_PSO_BAKE` and `pso_bake.tsv` remain fallbacks
+DM_PSO_EXTENDED_LIST	path	`build_ipa.sh`: package this extended pipeline list as `dm/pso_extended.tsv`; otherwise use the profile list. Legacy `DM_PSO_BAKE_LIST` remains a fallback
 DM_PSO_HYBRID	switch	`0`: a draw whose pipeline is not built yet waits for it instead of drawing with its shader pair's pulling pipeline meanwhile (on by default with the Metal 4 path)
 DM_PSO_IOS_MIN	switch	`build_ipa.sh`: the minimum iOS version of the offline pipeline archives (default the SDK's major version); a device of another major version cannot open them and builds the bases itself
 DM_PSO_MANIFEST	path	The prewarm manifest to use instead of the profile's `pso_manifest.tsv` and the device's `pso_user.tsv` (also the list the prebuild tool, `DM_PSO_PREBUILD=tool`, builds); `off` turns the prewarm off

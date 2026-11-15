@@ -6138,8 +6138,8 @@ void mtl_set_depth_zero(int on) {
 // specialized with, not an MTLFunction, so every function made from a library is noted here as it is made. A function with no note (the diagnostic fragment overrides
 // DM_NVN_HILITE and DM_NVN_MAGSCAN) keeps the MTLDevice path
 static os_unfair_lock g_fn4_lock = OS_UNFAIR_LOCK_INIT;
-static _Thread_local int g_bake_thread;
-static NSMapTable *g_bake_fn4, *g_bake_fn_dev, *g_bake_fn_off;
+static _Thread_local int g_extended_thread;
+static NSMapTable *g_extended_fn4, *g_extended_fn_dev, *g_extended_fn_off;
 static NSMapTable *g_fn4;   // id<MTLFunction> → MTL4FunctionDescriptor
 static id<MTLFunction> fn4_note(id<MTLFunction> f, id<MTLLibrary> lib, NSString *name, MTLFunctionConstantValues *cv) {
     if (!f || !lib || !name) return f;
@@ -6147,7 +6147,7 @@ static id<MTLFunction> fn4_note(id<MTLFunction> f, id<MTLLibrary> lib, NSString 
     MTL4FunctionDescriptor *d = ld;
     if (cv) { MTL4SpecializedFunctionDescriptor *sd = [MTL4SpecializedFunctionDescriptor new]; sd.functionDescriptor = ld; sd.constantValues = cv; d = sd; }
     os_unfair_lock_lock(&g_fn4_lock);
-    NSMapTable *__strong *map = g_bake_thread ? &g_bake_fn4 : &g_fn4;
+    NSMapTable *__strong *map = g_extended_thread ? &g_extended_fn4 : &g_fn4;
     if (!(*map)) (*map) = [[NSMapTable alloc] initWithKeyOptions:NSPointerFunctionsStrongMemory | NSPointerFunctionsObjectPointerPersonality valueOptions:NSPointerFunctionsStrongMemory capacity:0];   // by identity: a function made again from the same library and name (other constants: bf_fn) is another function
     [(*map) setObject:d forKey:f];
     os_unfair_lock_unlock(&g_fn4_lock);
@@ -6155,7 +6155,7 @@ static id<MTLFunction> fn4_note(id<MTLFunction> f, id<MTLLibrary> lib, NSString 
 }
 static MTL4FunctionDescriptor *fn4_of(id<MTLFunction> f) {
     if (!f) return nil;
-    os_unfair_lock_lock(&g_fn4_lock); MTL4FunctionDescriptor *d = g_bake_thread ? [g_bake_fn4 objectForKey:f] : nil; if (!d) d = [g_fn4 objectForKey:f]; os_unfair_lock_unlock(&g_fn4_lock);
+    os_unfair_lock_lock(&g_fn4_lock); MTL4FunctionDescriptor *d = g_extended_thread ? [g_extended_fn4 objectForKey:f] : nil; if (!d) d = [g_fn4 objectForKey:f]; os_unfair_lock_unlock(&g_fn4_lock);
     return d;
 }
 // A function that declares function constants, specialized with cv (an empty set keeps every default). On the Metal 4 path the pipeline's descriptor specializes it (fn4_note
@@ -6179,7 +6179,7 @@ static id<MTLFunction> fn_spec(id<MTLLibrary> lib, NSString *name, MTLFunctionCo
     if (!f) { if (e) *e = [NSError errorWithDomain:@"dm" code:1 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"no function %@ in the library", name]}]; return nil; }
     if (!f.functionConstantsDictionary.count) return fn4_note(f, lib, name, nil);
     os_unfair_lock_lock(&g_fn_dev_lock);
-    NSMapTable *__strong *map = g_bake_thread ? &g_bake_fn_dev : &g_fn_dev;
+    NSMapTable *__strong *map = g_extended_thread ? &g_extended_fn_dev : &g_fn_dev;
     if (!(*map)) (*map) = [[NSMapTable alloc] initWithKeyOptions:NSPointerFunctionsStrongMemory | NSPointerFunctionsObjectPointerPersonality valueOptions:NSPointerFunctionsStrongMemory capacity:0];
     if (![(*map) objectForKey:f]) [(*map) setObject:[FnDev new] forKey:f];
     os_unfair_lock_unlock(&g_fn_dev_lock);
@@ -6188,7 +6188,7 @@ static id<MTLFunction> fn_spec(id<MTLLibrary> lib, NSString *name, MTLFunctionCo
 // The function an MTLDevice pipeline is built from: f specialized through its library (once) when fn_spec left it unspecialized, else f itself
 static id<MTLFunction> fn_dev(id<MTLFunction> f) {
     if (!f) return f;
-    os_unfair_lock_lock(&g_fn_dev_lock); FnDev *dev = g_bake_thread ? [g_bake_fn_dev objectForKey:f] : nil; if (!dev) dev = [g_fn_dev objectForKey:f]; os_unfair_lock_unlock(&g_fn_dev_lock);
+    os_unfair_lock_lock(&g_fn_dev_lock); FnDev *dev = g_extended_thread ? [g_extended_fn_dev objectForKey:f] : nil; if (!dev) dev = [g_fn_dev objectForKey:f]; os_unfair_lock_unlock(&g_fn_dev_lock);
     if (!dev) return f;
     // Only callers of this function wait for its compilation; the map lock never covers a library/compiler call.
     @synchronized(dev) {
@@ -6215,7 +6215,7 @@ static FnOff *fn_off(id<MTLFunction> f) {
     MTL4FunctionDescriptor *fd = fn4_of(f);
     if (!fd) return nil;   // no library to specialize from (diagnostic overrides)
     os_unfair_lock_lock(&g_fn_off_lock);
-    NSMapTable *__strong *map = g_bake_thread ? &g_bake_fn_off : &g_fn_off;
+    NSMapTable *__strong *map = g_extended_thread ? &g_extended_fn_off : &g_fn_off;
     if (!(*map)) (*map) = [[NSMapTable alloc] initWithKeyOptions:NSPointerFunctionsStrongMemory | NSPointerFunctionsObjectPointerPersonality valueOptions:NSPointerFunctionsStrongMemory capacity:0];
     FnOff *o = [(*map) objectForKey:fd];
     if (!o) { o = [FnOff new]; [(*map) setObject:o forKey:fd]; }
@@ -6351,7 +6351,7 @@ static NvShader *shader_load(NSString *pc, int stage, int layer) {
         if (o->arg_len != (NSUInteger)(8 * (max_aid + 1)) || (o->arg_len & 7) || max_aid >= NVN_REFL_MAXARG)
             MDIE("shader %s has an unexpected argument buffer layout: encodedLength=%lu maxAid=%d", o->key, (unsigned long)o->arg_len, max_aid);
     }
-    if (o->rf.has_c1 && !g_bake_thread) c1_store(o);   // the bake builds descriptors; it never binds constants for a draw
+    if (o->rf.has_c1 && !g_extended_thread) c1_store(o);   // extended preparation builds descriptors; it never binds constants for a draw
     NSString *ext = g_cb_ext[[pc hasSuffix:@"_b"] ? [pc substringToIndex:pc.length - 2] : pc];   // bytes each uniform slot can read (cb_len), storage slots never written (sb_ro)
     for (NSString *f in [ext componentsSeparatedByString:@" "]) { int r = 0, n = 0;
         if (sscanf(f.UTF8String, "%d:%d", &r, &n) == 2 && r >= 0 && r < 16 && n > 0) o->cb_ext[r] = (uint32_t)n;
@@ -8871,7 +8871,7 @@ static nvn_hmap g_pbase_miss = {.klen = sizeof(pbase_key)};
 @interface PbaseBuild : NSObject { @public dispatch_group_t done; id<MTLRenderPipelineState> ps; NSError *error; int compiled; } @end
 @implementation PbaseBuild @end
 static nvn_hmap g_pbase_pending = {.klen = sizeof(pbase_key)};
-static nvn_hmap g_bake_pbase = {.klen = sizeof(pbase_key)}, g_bake_miss = {.klen = sizeof(pbase_key)}, g_bake_pending = {.klen = sizeof(pbase_key)};
+static nvn_hmap g_extended_pbase = {.klen = sizeof(pbase_key)}, g_extended_miss = {.klen = sizeof(pbase_key)}, g_extended_pending = {.klen = sizeof(pbase_key)};
 static os_unfair_lock g_pbase_lock = OS_UNFAIR_LOCK_INIT;
 static NSString *pso_user_path(void);
 // The pipeline archive made offline (dm/gfx/tools/pso_offline.py, metal-tt) and bundled with the app: DM_PSO_BUNDLE=<folder> (the iOS app sets it to its pso/ folder when it has one;
@@ -9327,7 +9327,7 @@ static id<MTLComputePipelineState> cps_new_b(id<MTLFunction> f, int off, NSError
         atomic_fetch_add(&g_cps_look_ns, bp_now() - t0);
         if (ps) return ps;
     }
-    if (g_bake_thread && !d) return nil;
+    if (g_extended_thread && !d) return nil;
     uint64_t t1 = bp_now();
     ps = [g_dev newComputePipelineStateWithFunction:fn_dev_b(f, off) error:e];
     if (ps) { atomic_fetch_add(&g_cps_built, 1); atomic_fetch_add(&g_cps_build_ns, bp_now() - t1); arch_harvest(d, 0); }
@@ -9514,16 +9514,16 @@ static id<MTLRenderPipelineState> pso_build_ex(MTLRenderPipelineDescriptor *d, i
     // A pipeline specialized from a base with open colour state gives its fragment function 0 for [[primitive_id]], where one built whole gives the real IDs (macOS 27.2, Apple M6: 4 triangles of a draw
     // counted per ID, 16384 0 0 0 against 4096 each, whatever the vertex function). So a fragment shader that reads the ID gets a whole pipeline, with no base to share. Fire Emblem Fortune's Weave's
     // ambient occlusion draws 4 triangles and writes the array layer of each one's primitive ID: every one wrote layer 0, so 3 pixels in 4 had no sun light. A platform limit: the ID has no other source
-    if (g_bake_thread && (!g_comp4 || [d.label isEqualToString:PSO_WHOLE])) return nil;
+    if (g_extended_thread && (!g_comp4 || [d.label isEqualToString:PSO_WHOLE])) return nil;
     if (rast && g_comp4 && [d.label isEqualToString:PSO_WHOLE]) {
         MTL4RenderPipelineDescriptor *whole = pso_desc4(d, 0, off);
         if (whole) { if (!compile) return nil; return [g_comp4 newRenderPipelineStateWithDescriptor:whole compilerTaskOptions:nil error:e]; }
     }
     MTL4RenderPipelineDescriptor *b = g_comp4 ? pso_desc4(d, rast, off) : nil;   // with rasterization off there is no colour state to leave open: the base is the pipeline
-    if (!b && g_bake_thread) return nil;
+    if (!b && g_extended_thread) return nil;
     if (!b) { if (!compile) return nil; g_pb_legacy++; return pso_build_dev(d, off, e); }
     pbase_key bk; pbase_key_of(d, off, &bk);
-    nvn_hmap *bases = g_bake_thread ? &g_bake_pbase : &g_pbase, *misses = g_bake_thread ? &g_bake_miss : &g_pbase_miss, *pending = g_bake_thread ? &g_bake_pending : &g_pbase_pending;
+    nvn_hmap *bases = g_extended_thread ? &g_extended_pbase : &g_pbase, *misses = g_extended_thread ? &g_extended_miss : &g_pbase_miss, *pending = g_extended_thread ? &g_extended_pending : &g_pbase_pending;
     id<MTLRenderPipelineState> base = nil; PbaseBuild *job = nil; int owner = 0, known = 0;   // known: the archives have been searched for it and lack it
     for (;;) {
         os_unfair_lock_lock(&g_pbase_lock);
@@ -9574,7 +9574,7 @@ static id<MTLRenderPipelineState> pso_build_ex(MTLRenderPipelineDescriptor *d, i
         os_unfair_lock_unlock(&g_pbase_lock);
         if (!base) { if (compile && e) *e = job->error; return nil; }
     }
-    if (!rast || g_pre_tool || g_bake_thread) return base;   // the prebuild tool wants the base alone (a specialization is never archived: g_comp4 has no serializer), its colour state is the device's
+    if (!rast || g_pre_tool || g_extended_thread) return base;   // the prebuild tool wants the base alone (a specialization is never archived: g_comp4 has no serializer), its colour state is the device's
     uint64_t ts = bp_now();
     MTL4RenderPipelineDescriptor *s = spec_desc(base, &g_spec_own);
     for (int i = 0; i < 8; i++) pso_col4(s.colorAttachments[i], d.colorAttachments[i]);
@@ -10233,9 +10233,9 @@ static void warm_task(WarmTask *t) {
         }
         if (t->kind == 2) {
             NvShader *cs = warm_shader(t->key, 5); NSError *e = nil; id ps = cs ? cps_new_b(cs->fn, 1, &e) : nil;   // the common pipeline (g_cps)
-            if (g_bake_thread && !ps) g_pre_warm_failed++;
+            if (g_extended_thread && !ps) g_pre_warm_failed++;
             if (cs && !ps) MLOG("[RED] background compute pipeline creation failed: %s", e.localizedDescription.UTF8String);
-            if (ps && (g_pre_tool || g_bake_thread)) g_warm_cps++;   // the prebuild tool: captured for the archive, nothing kept
+            if (ps && (g_pre_tool || g_extended_thread)) g_warm_cps++;   // the prebuild tool: captured for the archive, nothing kept
             else if (ps) { WarmItem *item = [WarmItem new]; item->kind = 2; item->key = t->key; item->shader = cs; item->object = ps; warm_enqueue(item); g_warm_cps++; }
             g_warm_done++; return;
         }
@@ -10248,7 +10248,7 @@ static void warm_task(WarmTask *t) {
                 (t->tkey ? (ts && ts->stage == 3 && ts->mesh_kind == 1 && ts->fn && !vs->mesh_notask) : vs->mesh_notask)) {
                 NSError *error = nil;
                 id<MTLRenderPipelineState> ps = mtk_build(&sk.k, ts, vs, fs, &error, NULL);
-                if (ps && (g_pre_tool || g_bake_thread)) g_warm_mps++;   // the prebuild tool: captured for the archive, nothing kept
+                if (ps && (g_pre_tool || g_extended_thread)) g_warm_mps++;   // the prebuild tool: captured for the archive, nothing kept
                 else if (ps) {
                     WarmItem *item = [WarmItem new]; item->kind = 3; item->pso = sk.k; item->object = ps;
                     item->vs = vs; item->vs_key = t->vkey; item->fs = fs; item->fs_key = t->fkey; item->ts = ts; item->ts_key = t->tkey;
@@ -10260,18 +10260,18 @@ static void warm_task(WarmTask *t) {
         }
         for (NSData *row in t->rs) {
             [row getBytes:&sk length:sizeof sk];
-            if (!vs || (t->fkey.length && !fs)) { if (g_bake_thread) g_pre_warm_failed++; g_warm_done++; continue; }
+            if (!vs || (t->fkey.length && !fs)) { if (g_extended_thread) g_pre_warm_failed++; g_warm_done++; continue; }
             id<MTLFunction> fsfn = nil;
             int amplified = sk.fz && sk.fz_desc.kind == 2 && !sk.merged;
             if (sk.fz && !amplified) {
                 if (sk.fz_desc.kind == 1 && fs) { int fx[32]; for (int i = 0; i < 32; i++) fx[i] = sk.fz_desc.fx[i]; fsfn = bf_fn(fs, fx, sk.fz_desc.fbmask, sk.k.lmap); }
-                if (!fsfn) { if (g_bake_thread) g_pre_warm_failed++; g_warm_skip_fz++; g_warm_done++; continue; }
+                if (!fsfn) { if (g_extended_thread) g_pre_warm_failed++; g_warm_skip_fz++; g_warm_done++; continue; }
             }
             pso_key k = sk.k; k.vs = (__bridge void *)vs; k.fs = (__bridge void *)fs; k.fsfn = amplified ? AMP_MARK : (__bridge void *)fsfn;   // pso_skey_parse normalized rows written before the key was
             NSError *e = nil; id ps = pso_build(pso_desc(&k, vs, fs, fsfn, sk.merged), !k.border, &e);
             g_warm_done++;
             if (!ps) { g_pre_warm_failed++; MLOG("[RED] background render pipeline creation failed: %s", e.localizedDescription.UTF8String); continue; }
-            if (g_pre_tool || g_bake_thread) { g_warm_rps++; continue; }   // the prebuild tool: the base is in the serializer; keep nothing
+            if (g_pre_tool || g_extended_thread) { g_warm_rps++; continue; }   // the prebuild tool: the base is in the serializer; keep nothing
             WarmItem *item = [WarmItem new]; item->kind = 1; item->vs_key = t->vkey; item->fs_key = t->fkey; item->vs = vs; item->fs = fs; item->fsfn = fsfn; item->pso = k; item->object = ps;
             warm_enqueue(item); g_warm_rps++;
         }
@@ -10469,14 +10469,14 @@ int mtl_pso_prebuild_tool(void) {
     if (!g_comp4 || !g_arch_cap) { MLOG("[RED] pipeline prebuild: no Metal 4 compiler or pipeline serializer: nothing for the app"); return 2; }
     return pre_bundle_out(g_pre_out, lines);
 }
-#include "nvn_pso_bake.inc"
+#include "nvn_pso_extended.inc"
 
 static void warm_start(void) {
     if (g_warm_started++) return;
     NSArray<NSString *> *paths = warm_paths(getenv("DM_PSO_MANIFEST"));
-    if (!paths && !bake_path()) return;
+    if (!paths && !extended_path()) return;
     pso4_init();
-    if (prepare_on()) bake_start();
+    if (prepare_on()) extended_start();
     if (!paths) return;
     warm_load_begin();   // the pipeline archive opens before the prewarm builds from it
     g_warm_t0 = bp_now();
