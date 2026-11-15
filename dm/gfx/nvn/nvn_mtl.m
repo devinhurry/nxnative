@@ -8687,7 +8687,7 @@ enum { PSO_ARCH_COMPACT = 8 };
 static int g_compact_enabled;   // immutable after pso4_init; unlike g_compact_files, never cleared by the archive queue
 static _Atomic int g_compact_bases; static _Atomic uint64_t g_compact_ns;   // render bases captured again and their time (the prepare line)
 static NSArray<NSString *> *g_compact_files; static _Atomic int g_compacted;
-static unsigned char *g_compact_state;   // per run file of g_compact_files (g_arch4's order): 1 when the compaction replaces it; immutable after pso4_init
+static unsigned char *g_compact_state;   // per run file of g_compact_files (g_arch4's order): 1 when the compaction replaces it; finalized before warm workers start, after extended preparation protects its dependencies
 // g_compact_periods: periods that may hold recaptured bases, handed over and not written yet; g_compact_closed: the last of them is handed over (the first flush after the prewarm);
 // g_compact_bad: one was not written, or a base the prewarm took from an old file was not captured again: the old files stay (arch_compact_finish); g_compact_harvests: recaptures
 // queued on the harvest queue (arch_harvest) and not in a period yet: the compaction closes only once there are none, so a late one is in a compacting period and its failure keeps the
@@ -10476,7 +10476,7 @@ static void warm_start(void) {
     NSArray<NSString *> *paths = warm_paths(getenv("DM_PSO_MANIFEST"));
     if (!paths && !extended_path()) return;
     pso4_init();
-    if (prepare_on()) extended_start();
+    extended_start(prepare_on());
     if (!paths) return;
     warm_load_begin();   // the pipeline archive opens before the prewarm builds from it
     g_warm_t0 = bp_now();

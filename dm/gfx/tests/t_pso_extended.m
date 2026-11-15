@@ -14,6 +14,77 @@ static NSDictionary *archive_snapshot(NSString *dir) {
     return snapshot;
 }
 
+// A small ordinary warm list must not discard the wider extended preparation
+// when unrelated gameplay files push its archive tier over the compact limit.
+static int compact_child(NSString *mode) {
+    mtl_init(); shmap_load(); pso4_init();
+    NvShader *vs = shader_load(@"warm-vs", 0, 0), *fs = shader_load(@"warm-fs", 1, 0);
+    if ([mode isEqual:@"append"]) {
+        for (unsigned i = 8; i < 16; i++) {
+            pso_key k = key_at(vs, fs, 4 * i); k.stream[0].stride = 128;
+            EXPECT("gameplay pipeline created", 1, pso_build(desc_of(&k, vs, fs), !k.border, nil) != nil);
+            arch_flush_wait();
+        }
+        return failed != 0;
+    }
+    while (atomic_load(&g_warm_running)) usleep(1000);
+    arch_flush_wait(); if (g_arch_q) dispatch_sync(g_arch_q, ^{});
+    NSData *json = [NSData dataWithContentsOfFile:[g_arch_dir stringByAppendingPathComponent:@"extended.json"]];
+    NSDictionary *record = json ? [NSJSONSerialization JSONObjectWithData:json options:0 error:nil] : nil;
+    EXPECT("completed preparation survives the whole startup", 1,
+           extended_record_matches(record, extended_identity([NSData dataWithContentsOfFile:extended_path()])));
+    if ([mode hasSuffix:@"reuse"]) EXPECT("no prepared base recompiled at startup", 0, g_pb_built);
+    if ([mode isEqual:@"compact-reuse"] || [mode isEqual:@"background-reuse"]) {
+        EXPECT("unrelated archives still compacted", 1, g_compacted > 0);
+        EXPECT("unrelated old files removed", 2, mtl4a(g_arch_dir).count);
+    }
+    uint64_t built = g_pb_built;
+    for (unsigned i = 0; i < 7; i++) {
+        pso_key k = key_at(vs, fs, 4 * i); k.stream[0].stride = 128;
+        EXPECT("every extended pipeline remains usable", 1, pso_build(desc_of(&k, vs, fs), !k.border, nil) != nil);
+    }
+    EXPECT("no extended base lost to compaction", built, g_pb_built);
+    return failed != 0;
+}
+static void compact_cycles(NSString *root, NvShader *vs, NvShader *fs) {
+    NSString *archive = [root stringByAppendingPathComponent:@"compact-archive"], *path = [root stringByAppendingPathComponent:@"compact-list.tsv"];
+    NSString *manifest = [root stringByAppendingPathComponent:@"compact-warm.tsv"];
+    NSMutableString *list = [NSMutableString string], *warm = [NSMutableString string];
+    for (unsigned i = 0; i < 9; i++) {
+        pso_key k = key_at(vs, fs, 4 * i); k.stream[0].stride = 128; NSString *row = row_of(&k);
+        if (i < 7) [list appendString:row];
+        if (!i || i == 8) [warm appendString:row];
+    }
+    put(path, list); put(manifest, warm);
+    NSMutableDictionary *env = [@{@"DM_PSO_ARCHIVE": archive, @"DM_PSO_EXTENDED": path,
+        @"DM_PSO_MANIFEST": manifest, @"DM_PSO_PREPARE": @"1", @"DM_PSO_PREPARE_THREADS": @"2"} mutableCopy];
+    int (^run)(NSString *) = ^int(NSString *mode) {
+        return run_self(@[@"--compact", root, mode], env, [root stringByAppendingFormat:@"/compact-%@.log", mode]);
+    };
+    EXPECT("compaction fixture prepared", 0, run(@"cold"));
+    NSString *stamp = [archive stringByAppendingPathComponent:@"extended.json"];
+    NSData *record = [NSData dataWithContentsOfFile:stamp];
+    NSDictionary *inventory = [NSJSONSerialization JSONObjectWithData:record options:0 error:nil][@"files"];
+    NSDictionary *snapshot = archive_snapshot(archive);
+    for (int round = 0; round < 3; round++) {
+        env[@"DM_PSO_EXTENDED"] = @"off"; env[@"DM_PSO_MANIFEST"] = @"off";
+        EXPECT("small gameplay archives accumulated", 0, run(@"append"));
+        EXPECT("archive tier reaches compaction threshold", 9, mtl4a(archive).count);
+        env[@"DM_PSO_EXTENDED"] = path; env[@"DM_PSO_MANIFEST"] = manifest;
+        if (round == 1) EXPECT("legacy record used during compaction", 1,
+            [NSFileManager.defaultManager moveItemAtPath:stamp toPath:[archive stringByAppendingPathComponent:@"baked.json"] error:nil]);
+        env[@"DM_PSO_PREPARE"] = round == 2 ? @"0" : @"1";
+        EXPECT("compacting startup retains the completed preparation", 0, run(round == 2 ? @"background-reuse" : @"compact-reuse"));
+        env[@"DM_PSO_PREPARE"] = @"1";
+        EXPECT("following process skips extended preparation", 0, run(@"after-reuse"));
+        EXPECT("completion record preserved byte for byte", 1, [record isEqual:[NSData dataWithContentsOfFile:stamp]]);
+        NSDictionary *after = archive_snapshot(archive);
+        for (NSString *name in inventory) EXPECT("protected archive and index bytes and mtimes preserved", 1, [snapshot[name] isEqual:after[name]]);
+        NSString *log = slurp([root stringByAppendingPathComponent:@"compact-after-reuse.log"]);
+        EXPECT("following startup did not traverse the extended list", 1, [log containsString:@"completion record matches; nothing to build"]);
+    }
+}
+
 static int extended_child(NSString *mode) {
     g_arch_period_max = 64;   // cross serializer periods as well as memory batches
     mtl_init(); shmap_load();
@@ -66,6 +137,7 @@ static int extended_child(NSString *mode) {
 int main(int argc, char **argv) { @autoreleasepool {
     alarm(240);
     if (argc == 4 && !strcmp(argv[1], "--extended")) return extended_child(@(argv[3]));
+    if (argc == 4 && !strcmp(argv[1], "--compact")) return compact_child(@(argv[3]));
     if (argc == 3 && !strcmp(argv[1], "--validate")) {
         setenv("DM_PSO_EXTENDED", "off", 1); setenv("DM_PSO_MANIFEST", "off", 1);
         mtl_init(); shmap_load();
@@ -98,7 +170,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     [list appendFormat:@"R\t%s\n", ahex];
     NSString *path = [tables stringByAppendingPathComponent:@"pso_bake.tsv"], *archive = [root stringByAppendingPathComponent:@"archive"];
     put(path, list);
-    NSMutableDictionary *env = [@{@"DM_PSO_ARCHIVE": archive, @"DM_PSO_EXTENDED": path, @"DM_PSO_PREPARE": @"1", @"DM_PSO_PREPARE_THREADS": @"2", @"DM_PSO_COMPACT": @"off"} mutableCopy];
+    NSMutableDictionary *env = [@{@"DM_PSO_ARCHIVE": archive, @"DM_PSO_EXTENDED": path, @"DM_PSO_PREPARE": @"1", @"DM_PSO_PREPARE_THREADS": @"2"} mutableCopy];
     int (^run)(NSString *) = ^int(NSString *mode) {
         return run_self(@[@"--extended", root, mode], env, [root stringByAppendingFormat:@"/%@.log", mode]);
     };
@@ -126,6 +198,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     EXPECT("renamed list reuses all existing pipelines", 0, run(@"renamed-reuse"));
     EXPECT("renaming preserves archive bytes and mtimes", 1, [snapshot isEqual:archive_snapshot(archive)]);
     EXPECT("renaming preserves completion record bytes", 1, [record isEqual:[NSData dataWithContentsOfFile:stamp]]);
+    compact_cycles(root, vs, fs);
 
     // Default discovery prefers the new name, falls back to the old name, and
     // never lets a legacy variable override an explicit new value or opt-out.
@@ -144,15 +217,18 @@ int main(int argc, char **argv) { @autoreleasepool {
     EXPECT("multiple batches produced archives", 1, files.count >= 2);
     if (files.count) [NSFileManager.defaultManager removeItemAtPath:[archive stringByAppendingPathComponent:files[0]] error:nil];
     EXPECT("missing archive repaired at next start", 0, run(@"repair"));
+    EXPECT("missing archive reason logged", 1, [slurp([root stringByAppendingPathComponent:@"repair.log"]) containsString:@"recorded file is missing:"]);
     put([msl stringByAppendingPathComponent:@"inputs.tsv"], @"game\t01007EF00011E000\ninputs\tfixture-v2\n");
     EXPECT("changed library-generation stamp rechecks the list", 0, run(@"refresh"));
     NSString *refresh = [NSString stringWithContentsOfFile:[root stringByAppendingPathComponent:@"refresh.log"] encoding:NSUTF8StringEncoding error:nil];
     EXPECT("changed generation did not skip", 0, [refresh containsString:@"completion record matches; nothing to build"]);
+    EXPECT("changed generation reason logged", 1, [refresh containsString:@"identity changed: inputs"]);
     NSString *refresh2 = [root stringByAppendingPathComponent:@"archive/extended.json"];
     [NSFileManager.defaultManager removeItemAtPath:refresh2 error:nil];
     EXPECT("existing captures reused after an interrupted completion write", 0, run(@"refresh"));
     [list appendString:@"# changed list identity\n"]; put(path, list);
     EXPECT("changed list rechecked without recompiling known bases", 0, run(@"refresh"));
+    EXPECT("changed list reason logged", 1, [slurp([root stringByAppendingPathComponent:@"refresh.log"]) containsString:@"identity changed: list"]);
     NSString *stampbad = [root stringByAppendingPathComponent:@"stamp-failure-archive"];
     [NSFileManager.defaultManager createDirectoryAtPath:[stampbad stringByAppendingPathComponent:@"extended.json"] withIntermediateDirectories:YES attributes:nil error:nil];
     env[@"DM_PSO_ARCHIVE"] = stampbad;

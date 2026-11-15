@@ -19,6 +19,7 @@ static NSString *extended_hash(NSData *data) {
     return @(hex);
 }
 static NSDictionary *extended_identity(NSData *list) {
+    if (!list) return nil;
     NSString *inputs = extended_hash(msl_data([g_msl_dir stringByAppendingPathComponent:@"inputs.tsv"]));
     NSString *map = extended_hash([NSData dataWithContentsOfFile:g_shmap_path]);
     if (!inputs || !map) return nil;   // no trusted generation to reuse next time
@@ -43,21 +44,43 @@ static NSDictionary *extended_files(void) {
     }
     return files;
 }
-static int extended_record_matches(NSDictionary *record, NSDictionary *identity) {
-    if (!identity || ![record isKindOfClass:NSDictionary.class] || ![record[@"identity"] isEqual:identity]) return 0;
+static NSString *extended_record_mismatch(NSDictionary *record, NSDictionary *identity) {
+    if (!identity) return @"shader generation or list is unavailable";
+    if (![record isKindOfClass:NSDictionary.class]) return @"completion record is missing or unreadable";
+    if (![record[@"identity"] isEqual:identity]) {
+        NSDictionary *old = record[@"identity"];
+        if (![old isKindOfClass:NSDictionary.class]) return @"completion identity is missing or malformed";
+        for (NSString *field in @[@"schema", @"chain", @"inputs", @"map", @"list", @"gpu", @"os", @"depth"])
+            if (![old[field] isEqual:identity[field]]) return [NSString stringWithFormat:@"identity changed: %@", field];
+        return @"completion identity changed";
+    }
     NSDictionary *files = record[@"files"];
-    if (![files isKindOfClass:NSDictionary.class] || !files.count) return 0;
+    if (![files isKindOfClass:NSDictionary.class] || !files.count) return @"completion file inventory is missing or malformed";
     int archives = 0;
     for (NSString *name in files) {
-        if (![name isKindOfClass:NSString.class] || ![name isEqualToString:name.lastPathComponent]) return 0;
+        if (![name isKindOfClass:NSString.class] || ![name isEqualToString:name.lastPathComponent]) return @"invalid completion file name";
         NSString *path = [g_arch_dir stringByAppendingPathComponent:name];
-        if (![files[name] isEqual:extended_file_state(path)]) return 0;
+        NSDictionary *state = extended_file_state(path);
+        if (!state) return [NSString stringWithFormat:@"recorded file is missing: %@", name];
+        if (![files[name] isEqual:state]) return [NSString stringWithFormat:@"recorded file changed: %@", name];
         if ([name.pathExtension isEqualToString:@"mtl4a"]) {
-            if (!arch_file_ok(path)) return 0;
+            if (!arch_file_ok(path)) return [NSString stringWithFormat:@"recorded archive is invalid: %@", name];
             archives++;
         }
     }
-    return archives > 0;
+    return archives ? nil : @"completion inventory contains no archives";
+}
+static int extended_record_matches(NSDictionary *record, NSDictionary *identity) {
+    return extended_record_mismatch(record, identity) == nil;
+}
+static void extended_protect(NSDictionary *files) {
+    // Before normal warm workers start. Compaction recaptures only their lists,
+    // which need not cover every pipeline in the completed extended preparation.
+    int kept = 0;
+    for (NSUInteger i = 0; g_compact_state && i < g_compact_files.count; i++) {
+        if (g_compact_state[i] && files[[g_compact_files[i] lastPathComponent]]) { g_compact_state[i] = 0; kept++; }
+    }
+    if (kept) MLOG("extended pipelines: %d completion archives protected from partial compaction", kept);
 }
 // Validate before warm_parse's deliberately permissive old-version handling:
 // skipped or malformed rows must not turn incomplete preparation into a success.
@@ -113,11 +136,11 @@ static int extended_open_new(NSMutableSet<NSString *> *opened) {
     g_arch_run = run; g_arch_ixf = indexed; g_arch4 = plain;
     return ok;
 }
-static int extended_start(void) {
+static int extended_start(int prepare) {
     NSString *path = extended_path();
-    if (!path) return 0;
+    if (!path || (!prepare && !g_compact_enabled)) return 0;
     if (!g_comp4 || !arch_capturing() || !g_arch_dir) {
-        MLOG("[RED] extended pipelines: no Metal 4 compiler or writable archive; normal rendering continues"); return -1;
+        if (prepare) MLOG("[RED] extended pipelines: no Metal 4 compiler or writable archive; normal rendering continues"); return -1;
     }
     NSData *data = [NSData dataWithContentsOfFile:path];
     NSString *text = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : nil;
@@ -128,11 +151,14 @@ static int extended_start(void) {
     for (NSString *name in @[@"extended.json", @"baked.json"]) {
         NSData *old = [NSData dataWithContentsOfFile:[g_arch_dir stringByAppendingPathComponent:name]];
         NSDictionary *record = old ? [NSJSONSerialization JSONObjectWithData:old options:0 error:nil] : nil;
-        if (!extended_record_matches(record, identity)) continue;
+        NSString *reason = extended_record_mismatch(record, identity);
+        if (reason) { MLOG("extended pipelines: %s not reusable: %s", name.UTF8String, reason.UTF8String); continue; }
+        extended_protect(record[@"files"]);
         if (![name isEqualToString:@"extended.json"] && ![old writeToFile:stamp options:NSDataWritingAtomic error:nil])
             MLOG("extended pipelines: legacy completion record reused; name migration deferred");
         MLOG("extended pipelines: completion record matches; nothing to build"); return 0;
     }
+    if (!prepare) return 0;   // background warm-up still preserves valid completed archives
     int valid = 0; @autoreleasepool { valid = extended_valid(text); }
     if (!identity || !valid) { MLOG("[RED] extended pipelines: invalid list or missing shader-generation stamp: %s", path.UTF8String); return -1; }
     // Keep the old record until a successful atomic replacement. Its identity or
@@ -194,6 +220,7 @@ static int extended_start(void) {
         NSData *json = [NSJSONSerialization dataWithJSONObject:@{@"identity": identity, @"files": files, @"pipelines": @(total)} options:NSJSONWritingPrettyPrinted error:nil];
         ok = json && [json writeToFile:stamp options:NSDataWritingAtomic error:nil];
     } else ok = 0;
+    if (ok) extended_protect(files);
     MLOG("%sextended pipelines: %llu render / %llu compute in %.1f s; completion record %s", ok ? "" : "[RED] ",
          (unsigned long long)(g_warm_rps - r0), (unsigned long long)(g_warm_cps - c0), (bp_now() - t0) / 1e9, ok ? "written" : "not written; retry next start");
     g_warm_done = done0; g_warm_rps = r0; g_warm_cps = c0;
