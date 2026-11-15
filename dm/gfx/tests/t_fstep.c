@@ -23,6 +23,40 @@ static void run(sim *m, int n, double w, int kmin, int kmax, int fixed) {
 static void hitch(sim *m) { run(m, 6, 1.6, 1, 3, 0); }
 
 int main(void) {
+    {   // Foreground recovery bypasses old failure backoff once and ignores the entire paused sample.
+        sim m = {0}; m.s.k = m.s.step = 2; m.s.kmin = 1; m.s.resume = 1;
+        m.s.debt = 15; m.s.late_run = 2; m.s.screen = 2; m.s.retry_hold[1] = FSTEP_RETRY_MAX;
+        m.next = nvn_fstep_next(&m.s, 1800, 1800, 1, 3, 0, 0);
+        check(m.s.k == 1 && m.s.probe == 1 && m.s.fallback == 2 && m.s.grace == FSTEP_GRACE,
+              "resume: immediately probe 60 from 30, keeping the known return hold");
+        check(m.s.debt == 0 && m.s.late == 0 && m.s.retry_since[1] == 0 && m.s.retry_hold[1] == FSTEP_HOLD0,
+              "resume: discard paused time, stale lateness and previous retry backoff");
+        run(&m, 120, 0.9, 1, 3, 0);
+        check(m.s.k == 1 && m.s.failed == 0 && m.s.probes == 1, "resume: a capable scene keeps 60 after one recovery probe");
+        m.s.k = m.s.step = 2; m.s.resume = 1;
+        m.next = nvn_fstep_next(&m.s, 1800, 1800, 1, 3, 0, 0);
+        run(&m, FSTEP_GRACE + 4, 1.4, 1, 3, 0);
+        check(m.s.k == 2 && m.s.failed == 1 && m.s.settle > 0,
+              "resume: a genuinely slow scene returns to 30, not 20");
+        m.s.resume = 1; m.next = nvn_fstep_next(&m.s, 1800, 1800, 2, 2, 0, 0);
+        check(m.s.k == 2 && !m.s.probe && !m.s.trial, "resume: an explicit 30 fps cap stays at 30");
+        m.s.resume = 1; m.next = nvn_fstep_next(&m.s, 1800, 1800, 1, 1, 0, 0);
+        run(&m, 120, 1.4, 1, 1, 0);
+        check(m.s.k == 1, "resume: hold-off mode never adds a forced 30 fps hold");
+        m.s.k = m.s.step = 3; m.s.resume = 1;
+        m.next = nvn_fstep_next(&m.s, 1800, 1800, 1, 3, 0, 0);
+        check(m.s.k == 2 && m.s.fallback == 3 && m.s.target == 2, "resume: 20 first probes adjacent 30, without jumping to 60");
+        m.s.resume = 1; m.next = nvn_fstep_next(&m.s, 1800, 1800, 1, 3, 2, 0);
+        check(m.s.k == 2 && m.next == 2 && !m.s.probe && !m.s.grace, "resume: the game's own fixed step remains authoritative");
+        m.s = (nvn_fstep){.k = 1, .step = 1, .kmin = 1, .resume = 1};
+        m.next = nvn_fstep_next(&m.s, 1800, 1800, 1, 3, 0, 0);
+        run(&m, 6, 1.6, 1, 3, 0);
+        check(m.s.k == 1 && m.s.grace == FSTEP_GRACE - 6, "resume: already at 60, transient wake-up frames do not force 30");
+        m.s = (nvn_fstep){.k = 2, .step = 2, .kmin = 1, .per_vsync = 2, .no_payback = 1, .resume = 1};
+        m.next = nvn_fstep_next(&m.s, 3600, 3600, 1, 2, 0, 0);
+        check(m.s.k == 1 && m.s.fallback == 2 && m.s.retry_hold[1] == FSTEP_HOLD0 * 2 && m.s.no_payback,
+              "resume: fixed-target 120 fps preserves its units, bounds and no-payback mode");
+    }
     {   // 120 fps (hle_nvn.c fps_high): kmin 1, kmax 2, in ticks of 1/120 s. The target follows the hold, so a hold above what frames take is the game at the right speed
         sim m = {0}; m.s.per_vsync = 2; m.s.no_payback = 1;
         run(&m, 120, 0.7, 1, 2, 0); check(m.s.k == 1, "120 fps: frames of 5.8 ms hold 120");
@@ -40,8 +74,8 @@ int main(void) {
         check(m.s.k == 1 && m.s.ups == 0 && m.s.paid == 0 && m.game == m.real, "steady 60: hold 1, step 1, game time = real time");
     }
     {   sim m = {0}; run(&m, 120, 0.5, 1, 3, 0); run(&m, 600, 1.32, 1, 3, 0);   // 22 ms frames
-        snprintf(b, sizeof b, "steady 22 ms frames: 30 fps after three late frames, no flapping (k %d, ups %llu, downs %llu)", m.s.k, (unsigned long long)m.s.ups, (unsigned long long)m.s.downs);
-        check(m.s.k == 2 && m.s.ups == 1 && m.s.downs == 0, b);
+        snprintf(b, sizeof b, "steady 22 ms frames: hold 30 between bounded, backed-off 60 trials (k %d, ups %llu, downs %llu)", m.s.k, (unsigned long long)m.s.ups, (unsigned long long)m.s.downs);
+        check(m.s.k == 2 && m.s.ups == m.s.downs + 1 && m.s.failed == m.s.downs, b);
         snprintf(b, sizeof b, "  game time %.0f against real time %.2f (debt %.2f)", m.game, m.real, m.s.debt);
         check(m.real - m.game - m.s.debt > -1.01 && m.real - m.game - m.s.debt < 1.01 && m.s.debt < 1, b);
     }
@@ -77,7 +111,7 @@ int main(void) {
         check(m.s.k == 2, "120 fps, no payback: three frames late by 2 ms step down to 60");
     }
     {   sim m = {0}; run(&m, 120, 0.5, 1, 3, 0); run(&m, 300, 1.12, 1, 3, 0);   // 18.7 ms frames: 53 fps
-        check(m.s.k == 2 && m.s.ups == 1, "steady 18.7 ms frames (53 fps): 30 fps, not 53 with a payback every 8 frames");
+        check(m.s.k == 2 && m.s.failed > 0, "steady 18.7 ms frames (53 fps): 30 fps, not 53 with a payback every 8 frames");
     }
     {   sim m = {0}; run(&m, 120, 0.5, 1, 3, 0);   // present snapshots: the caller judges lateness by the screen
         for (int i = 0; i < 20; i++) { m.s.screen = 1; m.next = nvn_fstep_next(&m.s, 1.0, 1.3, 1, 3, 0, 0); }
@@ -91,8 +125,8 @@ int main(void) {
         for (int i = 0; i < 600; i++) { m.s.screen = 1; m.next = nvn_fstep_next(&m.s, 1.0, 1.12, 1, 3, 0, 0); }
         for (int i = 0; i < 3; i++) { m.s.screen = 2; m.next = nvn_fstep_next(&m.s, 1.0, 1.12, 1, 3, 0, 0); }
         for (int i = 0; i < 600; i++) { m.s.screen = 1; m.next = nvn_fstep_next(&m.s, 2.0, 1.12, 1, 3, 0, 0); }
-        snprintf(b, sizeof b, "snapshots, 18.7 ms work shown on time at hold 1, then late: hold 2 stays, no probes (k %d, probes %llu)", m.s.k, (unsigned long long)m.s.probes);
-        check(m.s.k == 2 && m.s.probes == 0 && m.s.downs == 0, b);
+        snprintf(b, sizeof b, "snapshots, 18.7 ms work shown on time at hold 1, then late: on-time snapshots allow a periodic trial (k %d, probes %llu)", m.s.k, (unsigned long long)m.s.probes);
+        check(m.s.k == 1 && m.s.probes > 0, b);
     }
     {   sim m = {0}; run(&m, 60, 0.5, 1, 3, 0);
         m.real += 6; m.game += m.next; m.next = nvn_fstep_next(&m.s, 6, 6, 1, 3, 0, 0);   // one 100 ms hitch
@@ -107,7 +141,7 @@ int main(void) {
         snprintf(b, sizeof b, "0.5 s stall: 15 vsyncs paid back, %.0f dropped, not replayed (paid %llu)", m.s.dropped, (unsigned long long)m.s.paid);
         check(m.s.dropped == 14 && m.s.paid == 15 && m.real - m.game == 14 && m.s.k == 1, b);
     }
-    {   sim m = {0}; run(&m, 60, 0.5, 1, 3, 0); run(&m, 300, 1.3, 1, 3, 0);   // a heavy scene: 30 fps
+    {   sim m = {.s = {.k = 2, .step = 2, .kmin = 1}, .next = 2};   // begin at 30 before any recovery trial
         check(m.s.k == 2, "heavy scene: hold 2");
         run(&m, 29, 0.6, 1, 3, 0);
         check(m.s.k == 2, "  cost drops: 29 frames that fit 1 are not enough");
@@ -116,8 +150,8 @@ int main(void) {
         run(&m, FSTEP_RUN + 10, 0.6, 1, 3, 0);
         check(m.s.k == 1 && m.s.trial == 0 && m.s.hold == FSTEP_HOLD0 && m.s.failed == 0, "  the trial holds: 60 fps again");
     }
-    {   // the cost says 0.6, but frames at hold 1 take 1.5 (the cost misses something): each trial fails, and the trials spread out 1 → 2 → 4 → 8 s
-        sim m = {0}; run(&m, 60, 0.5, 1, 3, 0); run(&m, 30, 1.5, 1, 3, 0);
+    {   // the cost says 0.6, but frames at hold 1 take 1.5 (the cost misses something): each trial fails, and the trials back off toward 30 s
+        sim m = {0}; run(&m, 60, 0.5, 1, 3, 0); run(&m, 7, 1.5, 1, 3, 0);
         check(m.s.k == 2, "frames at hold 1 take 1.5 vsyncs: hold 2");
         double last = m.real, gaps[4]; int ng = 0; uint64_t downs = m.s.downs;
         for (int i = 0; i < 4000 && ng < 4; i++) {
@@ -155,12 +189,13 @@ int main(void) {
         run(&m, 2, 0.5, 1, 3, 0);
         check(m.s.k == 1 && m.next == 1 && m.s.late == 0, "  the override ends: hold 1, step 1, no late frame counted");
     }
-    {   // a parked CPU: 20 ms frames at hold 2 never fit hold 1, and without the slow report nothing tries it
-        sim m = {0}; run(&m, 60, 0.5, 1, 3, 0); run(&m, 300, 1.3, 1, 3, 0); run(&m, 2000, 1.2, 1, 3, 0);
-        check(m.s.k == 2 && m.s.downs == 0 && m.s.probes == 0, "not slowed: 1.2-vsync frames at hold 2 stay at hold 2, no probe");
+    {   // No CPU slowdown signal: a real 20 ms scene still receives bounded retries.
+        sim m = {0}; run(&m, 60, 0.5, 1, 3, 0); run(&m, 15, 1.3, 1, 3, 0); run(&m, 2000, 1.2, 1, 3, 0);
+        for (int i = 0; i < FSTEP_GRACE + FSTEP_RUN && m.s.k == 1; i++) run(&m, 1, 1.2, 1, 3, 0);
+        check(m.s.k == 2 && m.s.probes > 0 && m.s.failed > 0, "not slowed: 20 ms work returns to 30 between bounded 60 retries");
     }
     {   // the same with the CPU reported slowed: the probe goes to hold 1, its frames take 1.5 vsyncs for 20 frames while the clock rises, then 0.6
-        sim m = {0}; run(&m, 60, 0.5, 1, 3, 0); run(&m, 300, 1.3, 1, 3, 0); m.slow = 1;
+        sim m = {0}; run(&m, 60, 0.5, 1, 3, 0); run(&m, 15, 1.3, 1, 3, 0); m.slow = 1;
         int at1 = 0, up_during_grace = 0; uint64_t ups = m.s.ups;
         for (int i = 0; i < 400; i++) {
             double w = m.s.k == 1 ? (at1++ < 20 ? 1.5 : 0.6) : 1.2;
@@ -172,8 +207,8 @@ int main(void) {
         snprintf(b, sizeof b, "  20 late frames in the grace are paid back: game time %.0f against real time %.2f (debt %.2f)", m.game, m.real, m.s.debt);
         check(m.real - m.game - m.s.debt > -1.01 && m.real - m.game - m.s.debt < 1.01 && m.s.dropped == 0, b);
     }
-    {   // slowed, but hold 1 really does not fit: each probe fails after its grace, and the probes spread out 1 → 2 → 4 → 8 s
-        sim m = {0}; run(&m, 60, 0.5, 1, 3, 0); run(&m, 300, 1.3, 1, 3, 0); m.slow = 1;
+    {   // slowed, but hold 1 really does not fit: each probe fails after its grace, and the probes back off toward 30 s
+        sim m = {0}; run(&m, 60, 0.5, 1, 3, 0); run(&m, 15, 1.3, 1, 3, 0); m.slow = 1;
         double last = m.real, gaps[5]; int ng = 0, at1 = 0, first_len = -1; uint64_t probes = m.s.probes;
         for (int i = 0; i < 6000 && ng < 5; i++) {
             run(&m, 1, m.s.k == 1 ? 1.5 : 1.2, 1, 3, 0);
@@ -183,12 +218,12 @@ int main(void) {
         snprintf(b, sizeof b, "slowed, hold 1 does not fit: the first probe lasts its grace + 3 late frames (%d frames at hold 1)", first_len);
         check(first_len == FSTEP_GRACE + 3, b);
         snprintf(b, sizeof b, "  probes %.0f, %.0f, %.0f, %.0f vsyncs apart; %llu failed", gaps[1], gaps[2], gaps[3], gaps[4], (unsigned long long)m.s.failed);
-        check(ng == 5 && gaps[1] >= 120 && gaps[2] >= 240 && gaps[3] >= 480 && gaps[4] >= 480 && gaps[4] < 600 && m.s.failed >= 4, b);
+        check(ng == 5 && gaps[1] >= 120 && gaps[2] >= 240 && gaps[3] >= 480 && gaps[4] >= 960 && gaps[4] < 1200 && m.s.failed >= 4, b);
         snprintf(b, sizeof b, "  game time %.0f against real time %.2f (debt %.2f, dropped %.0f)", m.game, m.real, m.s.debt, m.s.dropped);
         check(m.real - m.game - m.s.debt > -1.01 && m.real - m.game - m.s.debt < 1.01 && m.s.dropped == 0, b);
     }
     {   // slowed, hold 1 holds for a while: a probe that holds but whose run at hold 1 ends within 8 s counts as failed, and the next waits twice as long
-        sim m = {0}; run(&m, 60, 0.5, 1, 3, 0); run(&m, 300, 1.3, 1, 3, 0); m.slow = 1;
+        sim m = {0}; run(&m, 60, 0.5, 1, 3, 0); run(&m, 15, 1.3, 1, 3, 0); m.slow = 1;
         for (int i = 0; i < 1000 && m.s.probe != 2; i++) run(&m, 1, m.s.k == 1 ? 0.6 : 1.2, 1, 3, 0);
         double hold0 = m.s.hold; uint64_t failed = m.s.failed;
         run(&m, 120, 0.6, 1, 3, 0); hitch(&m);
@@ -221,12 +256,12 @@ int main(void) {
     {   // a heavier scene at the same clock: 0.86 at hold 1, then 1.12 (19 ms) for good, which is 1.3 times less than enough to call the GPU slowed
         sim m = {0}; nvn_fgpu g = {0};
         for (int i = 0; i < 2000; i++) { double w = i < 600 ? 0.86 : 1.12; m.slow = nvn_fstep_gpu_slowed(&g, w, m.s.k ? m.s.k : 1, 1, m.s.probe); run(&m, 1, w, 1, 3, 0); }
-        check(m.s.k == 2 && m.s.probes == 0, "heavier scene, GPU 0.86 → 1.12 at hold 2: not slowed, no probe");
+        check(m.s.k == 2 && m.s.probes > 0 && m.s.failed > 0, "heavier scene below GPU-slow threshold: failed 60 retries return to 30");
     }
     {   // a loading screen: the GPU at 0.03, then lag on the CPU steps to 2, where the GPU takes 0.17 (5.7 times as much but 3 ms): the CPU holds the frame back, not the GPU
         sim m = {0}; nvn_fgpu g = {0}; int slowed = 0;
         for (int i = 0; i < 1200; i++) { double gp = i < 600 || m.s.k == 1 ? 0.03 : 0.17, w = i < 600 ? 0.5 : 1.3; m.slow = nvn_fstep_gpu_slowed(&g, gp, m.s.k ? m.s.k : 1, 1, m.s.probe); slowed |= m.slow; run(&m, 1, w, 1, 3, 0); }
-        check(m.s.k == 2 && !slowed && m.s.probes == 0, "GPU 0.03 → 0.17 under CPU lag: a GPU at 3 ms is not called slowed, no probe");
+        check(m.s.k == 2 && !slowed && m.s.probes > 0, "GPU at 3 ms is not called slowed; periodic CPU-bound 60 retries still run");
     }
     {   // the GPU stays slow at hold 1 too: each probe fails, the reference stays the hold-1 time from before, and the probes spread out
         sim m = {0}; nvn_fgpu g = {0}; double last = 0, gaps[4]; int ng = 0; uint64_t probes = 0;
@@ -242,7 +277,7 @@ int main(void) {
         check(gaps[1] >= 120 && gaps[2] >= 240 && gaps[3] >= 480 && m.real - m.game - m.s.debt > -1.01 && m.real - m.game - m.s.debt < 1.01, b);
     }
     {   // Breath of the Wild on an iPhone (2026-10-21): frames of 0.80 / 0.92 vsyncs at hold 1 for 20 s, pipeline compiles step to 2, and the scene costs the same there:
-        // every other frame is above FSTEP_FIT, so no 30 fit in a row; the cost that held hold 1 starts one probe, which holds
+        // The periodic deadline starts a probe after the hitch; fitting work then sustains it, with the earlier proven reference preserved.
         sim m = {0};
         for (int i = 0; i < 1200; i++) run(&m, 1, i % 2 ? 0.92 : 0.80, 1, 3, 0);
         hitch(&m);
@@ -253,20 +288,20 @@ int main(void) {
         snprintf(b, sizeof b, "  game time %.0f against real time %.2f (debt %.2f, dropped %.0f)", m.game, m.real, m.s.debt, m.s.dropped);
         check(m.real - m.game - m.s.debt > -1.01 && m.real - m.game - m.s.debt < 1.01 && m.s.dropped == 0, b);
     }
-    {   // the scene gets heavier (1.15 / 1.25 at hold 1, 1.4 times what held): hold 2 and no probe; back to the old scene, the cost that held starts one
+    {   // A heavier scene rejects faster trials, while the return to the old scene succeeds at a subsequent finite retry.
         sim m = {0};
         for (int i = 0; i < 1200; i++) run(&m, 1, i % 2 ? 0.92 : 0.80, 1, 3, 0);
         for (int i = 0; i < 1200; i++) run(&m, 1, i % 2 ? 1.25 : 1.15, 1, 3, 0);
-        check(m.s.k == 2 && m.s.probes == 0 && m.s.downs == 0, "heavier scene, cost 1.4 times what held hold 1: hold 2, no probe");
-        for (int i = 0; i < 600; i++) run(&m, 1, i % 2 ? 0.92 : 0.80, 1, 3, 0);
-        check(m.s.k == 1 && m.s.probes == 1 && m.s.failed == 0, "  the scene gets lighter again, back to the cost that held: one probe back that holds");
+        check(m.s.k == 2 && m.s.probes > 0 && m.s.failed > 0, "heavier scene, 1.4 times the proven cost: failed periodic trials keep 30");
+        for (int i = 0; i < 2400; i++) run(&m, 1, i % 2 ? 0.92 : 0.80, 1, 3, 0);
+        check(m.s.k == 1 && m.s.probes > 1, "  a lighter scene recovers 60 after the finite retry backoff");
     }
     {   // No long-run reference yet, but the full target budget justifies an ordinary trial after the hitch.
         sim m = {0};
         for (int i = 0; i < 300; i++) run(&m, 1, i % 2 ? 0.92 : 0.80, 1, 3, 0);
         hitch(&m);
         for (int i = 0; i < 2000; i++) run(&m, 1, i % 2 ? 0.92 : 0.80, 1, 3, 0);
-        check(m.s.k == 1 && m.s.probes == 0 && m.s.cref == 0, "hitch after 5 s at hold 1: fitting work recovers without a proven reference or probe");
+        check(m.s.k == 1 && m.s.cref == 0, "hitch after 5 s at hold 1: recover without a proven reference");
     }
     {   // Hold 2 costs 1.04: just outside the full hold-1 budget but within 1.1 of its proven 0.96. The same-cost probe still covers this clock-dependent case.
         sim m = {0}; double last = 0, gaps[5]; int ng = 0; uint64_t probes = 0;
@@ -278,7 +313,7 @@ int main(void) {
         snprintf(b, sizeof b, "same cost at hold 2 but hold 1 does not fit: probes fail (%llu of %llu), cost that held kept at %.2f", (unsigned long long)m.s.failed, (unsigned long long)m.s.probes, m.s.cref);
         check(ng == 5 && m.s.failed >= 4 && m.s.cref > 0.95 && m.s.cref < 0.97, b);
         snprintf(b, sizeof b, "  probes %.0f, %.0f, %.0f, %.0f vsyncs apart; game time %.0f against real time %.2f (debt %.2f)", gaps[1], gaps[2], gaps[3], gaps[4], m.game, m.real, m.s.debt);
-        check(gaps[1] >= 120 && gaps[2] >= 240 && gaps[3] >= 480 && gaps[4] >= 480 && gaps[4] < 600 && m.real - m.game - m.s.debt > -1.01 && m.real - m.game - m.s.debt < 1.01, b);
+        check(gaps[1] >= 120 && gaps[2] >= 240 && gaps[3] >= 480 && gaps[4] >= 960 && gaps[4] < 1200 && m.real - m.game - m.s.debt > -1.01 && m.real - m.game - m.s.debt < 1.01, b);
     }
     for (int sustained = 0; sustained < 2; sustained++) {
         // The first movie follows an uninterrupted run: no earlier hitch has saved cref. Only a run of at least 8 s proves that this cost held 60.
@@ -321,7 +356,7 @@ int main(void) {
     for (int c = 0; c < 3; c++) {
         static const char *const what[] = {"thermal cap ends: the probe's grace covers the clock, hold 1 at once and it stays (k %d, %d steps up after the cap, at hold 1 %d of the last 600)",
                                            "  the clock takes 1 s: the probe fails, the GPU against hold 1's own reference starts another (k %d, %d steps up, at hold 1 %d of the last 600)",
-                                           "  hold 1 no longer fits (1.3): a probe at most every 8 s, at hold 1 %d of the last 600; game time %.0f against real time %.2f (probes %llu)"};
+                                           "  hold 1 no longer fits (1.3): backed-off periodic probes, at hold 1 %d of the last 600; game time %.0f against real time %.2f (probes %llu)"};
         int rise = 600 + 1800, since1 = 0, at1 = 0, n = rise + 3600; uint64_t probes = 0, ups = 0; double last = 0, gap = 1e9;
         sim m = {0}; nvn_fgpu g = {0};
         for (int i = 0; i < n; i++) {
@@ -350,16 +385,16 @@ int main(void) {
                 nvn_fstep_next(&s, ms * 60 / 1000, 0.6, 1, 3, 0, 0);
             }
             snprintf(b, sizeof b, sl ? "165 Hz, cheap frames at hold 3, one refresh of slack: trials back to 2 and 1 (k %d, downs %llu)"
-                                     : "  without slack, false lateness prevents 60 despite adjacent recovery probes (k %d, downs %llu)", s.k, (unsigned long long)s.downs);
-            check(sl ? s.k == 1 && s.downs == 2 : s.k > 1 && s.probes > 0, b);
+                                     : "  without slack, periodic trials still escape false lateness at 20 / 30 (k %d, downs %llu)", s.k, (unsigned long long)s.downs);
+            check(s.k == 1 && s.downs == 2 && (sl || s.probes > 0), b);
         }
         sim m = {0}; m.s.shown_slack = 60.0 / 165; run(&m, 60, 0.5, 1, 3, 0); run(&m, 300, 1.32, 1, 3, 0);
-        check(m.s.k == 2, "  the slack does not hide work: 22 ms frames still step to hold 2");
+        check(m.s.ups > 0 && m.s.failed > 0, "  the slack does not hide work: 22 ms frames reject 60 trials");
     }
     {   // A controller that raises the clock slowly (the Mac): the probe's frames at hold 1 start at 1.5 vsyncs and get 0.6% cheaper each frame, so they fit only after about 52 frames.
         // Without the ramp rule the probe fails after its 30 grace frames and 3 late ones; with it (nvn_fstep.ramp) the grace is renewed while the frames keep getting cheaper and the probe holds
         for (int ramp = 0; ramp <= 1; ramp++) {
-            sim m = {0}; run(&m, 60, 0.5, 1, 3, 0); run(&m, 300, 1.3, 1, 3, 0); m.slow = 1; m.s.ramp = ramp;
+            sim m = {0}; run(&m, 60, 0.5, 1, 3, 0); run(&m, 15, 1.3, 1, 3, 0); m.slow = 1; m.s.ramp = ramp;
             int at1 = 0, first_len = -1;
             for (int i = 0; i < 400; i++) {
                 double w = m.s.k == 1 ? fmax(0.6, 1.5 * pow(0.994, at1)) : 1.2;
@@ -384,7 +419,7 @@ int main(void) {
                                            "  the cost keeps falling without reaching the hold: the grace ends at FSTEP_PROBE_MAX (%d frames at hold 1, failed %llu)"};
         static const int want[] = {FSTEP_GRACE + 3, 2 * FSTEP_GRACE + 3, FSTEP_PROBE_MAX + 3};
         for (int c = 0; c < 3; c++) {
-            sim m = {0}; run(&m, 60, 0.5, 1, 3, 0); run(&m, 300, 1.3, 1, 3, 0); m.slow = 1; m.s.ramp = 1;
+            sim m = {0}; run(&m, 60, 0.5, 1, 3, 0); run(&m, 15, 1.3, 1, 3, 0); m.slow = 1; m.s.ramp = 1;
             int at1 = 0, first_len = -1;
             for (int i = 0; i < 600 && first_len < 0; i++) {
                 double w = m.s.k != 1 ? 1.2 : c == 0 ? 1.5 : c == 1 ? fmax(1.3, 1.6 * pow(0.99, at1)) : 3.0 * pow(0.995, at1);
@@ -399,8 +434,8 @@ int main(void) {
         for (int ms = 28; ms <= 33; ms++) {
             sim m = {.s = {.k = 3, .step = 3, .kmin = 1}, .next = 3};
             run(&m, 600, ms * 60.0 / 1000, 1, 3, 0);
-            snprintf(b, sizeof b, "20 fps, constant %d ms work: recover to 30, without probing 60", ms);
-            check(m.s.k == 2 && m.s.downs == 1, b);
+            snprintf(b, sizeof b, "20 fps, constant %d ms work: recover 30; failed 60 trials return to 30", ms);
+            check(m.s.k == 2 && m.s.downs > 1 && m.s.failed == m.s.downs - 1, b);
         }
     }
     {   // A shortened deadline may take time to raise the clock. 30 fits, 60 does not: never jump 20 -> 60, or skip the proven 30 on failure.
@@ -418,20 +453,20 @@ int main(void) {
         check(fabs(m.real - m.game - m.s.debt - m.s.dropped) < 1.01, "  failed probes preserve game time accounting");
     }
     {   // Old present snapshots / GPU costs can report the failed 60 fps trial for another eight presents after returning to 30.
-        sim m = {0}; run(&m, 300, 1.5, 1, 3, 0); m.slow = 1;
+        sim m = {0}; run(&m, 15, 1.5, 1, 3, 0); m.slow = 1;
         for (int i = 0; i < 600 && !m.s.failed; i++) run(&m, 1, m.s.k == 1 ? 2.4 : 1.5, 1, 3, 0);
         m.slow = 0;
         for (int i = 0; i < 8; i++) { m.s.screen = 2; run(&m, 1, 2.4, 1, 3, 0); }
-        run(&m, 120, 1.75, 1, 3, 0);
+        run(&m, 40, 1.75, 1, 3, 0);
         check(m.s.k == 2 && m.s.ups == 2, "failed 60 trial: stale feedback does not push the proven 30 down to 20");
     }
     {   // Failure at 60 backs off that trial, not recovery from 20 to 30 after a later heavy scene.
-        sim m = {0}; run(&m, 300, 1.5, 1, 3, 0); m.slow = 1;
+        sim m = {0}; run(&m, 15, 1.5, 1, 3, 0); m.slow = 1;
         for (int i = 0; i < 5000 && (m.s.failed < 3 || m.s.k != 2); i++) run(&m, 1, m.s.k == 1 ? 1.5 : 1.2, 1, 3, 0);
         m.slow = 0; run(&m, 120, 2.4, 1, 3, 0);
         check(m.s.k == 3, "genuinely heavy 40 ms work can still lower 30 to 20");
         run(&m, 40, 1.75, 1, 3, 0);
-        check(m.s.k == 2, "  failed 60 trials do not delay recovery to 30 behind their 8-second backoff");
+        check(m.s.k == 2, "  failed 60 trials do not delay recovery to 30 behind their independent backoff");
     }
     {   // A genuinely 40 ms scene cannot hold 30: probes are adjacent and bounded, and failed 30 trials back off.
         sim m = {.s = {.k = 3, .step = 3, .kmin = 1}, .next = 3, .slow = 1}; int at1 = 0; uint64_t downs = 0; double last = 0, gap = 1e9;
@@ -454,7 +489,7 @@ int main(void) {
     {   // A longer hold can slow a serial CPU/GPU chain without a low P-core share or a GPU-alone slowdown signal.
         sim m = {.s = {.k = 3, .step = 3, .kmin = 1}, .next = 3};
         for (int i = 0; i < 1200; i++) run(&m, 1, m.s.k == 3 ? 2.74 : 1.75, 1, 3, 0);
-        check(m.s.k == 2 && m.s.probes == 1 && !m.s.failed, "no clock signal: a bounded 20 -> 30 probe recovers the sustainable rate");
+        check(m.s.k == 2 && m.s.probes > 1 && m.s.failed > 0, "no clock signal: 20 -> 30 recovers, failed 60 trials return to 30");
     }
     {   // Performance-first recovery uses the full 60 fps budget too: no slowed signal or long-run reference is required for 16 ms work.
         sim m = {.s = {.k = 3, .step = 3, .kmin = 1}, .next = 3};
@@ -473,12 +508,54 @@ int main(void) {
         check(m.s.k == 2 && at2 > 900, b);
     }
     {   // A cap or the game's own override cancels a trial; stale fallback state must not defeat either.
-        sim m = {0}; run(&m, 300, 1.5, 1, 3, 0); m.slow = 1;
+        sim m = {0}; run(&m, 15, 1.5, 1, 3, 0); m.slow = 1;
         for (int i = 0; i < 600 && m.s.probe != 1; i++) run(&m, 1, 1.5, 1, 3, 0);
         run(&m, 120, 2.4, 2, 2, 0);
         check(m.s.k == 2 && !m.s.trial && !m.s.probe, "a 30 fps cap cancels a 60 trial and its fallback state");
         run(&m, 60, 0.5, 1, 3, 3);
         check(m.s.k == 3 && m.next == 3 && !m.s.trial && !m.s.probe, "a game's own fixed step cancels the trial and still takes precedence");
+    }
+    {   // No CPU slowdown report; GPU is only 1.25x its proven reference, below the 1.3x heuristic. A 60 fps deadline nevertheless restores 16 ms work.
+        for (int resumed = 0; resumed < 2; resumed++) {
+            sim m = {0}; nvn_fgpu g = {0};
+            for (int i = 0; i < 1200; i++) { (void)nvn_fstep_gpu_slowed(&g, 0.96, m.s.k ? m.s.k : 1, 1, m.s.probe); run(&m, 1, 0.96, 1, 3, 0); }
+            if (resumed) run(&m, 1, 1800, 1, 3, 0);   // time away in the background; only the existing bounded debt is retained
+            hitch(&m);
+            int stayed30 = m.s.k == 2, first = -1, signalled = 0;
+            for (int i = 0; i < 600; i++) {
+                double w = m.s.k == 1 ? 0.96 : 1.2;
+                int slow = nvn_fstep_gpu_slowed(&g, w, m.s.k ? m.s.k : 1, 1, m.s.probe);
+                signalled |= slow || nvn_fstep_same(&m.s);
+                run(&m, 1, w, 1, 3, 0);
+                if (m.s.k == 1 && first < 0) first = i;
+            }
+            snprintf(b, sizeof b, "%s: no slowdown signal, 20 ms at 30 / 16 ms at 60; recover (first %d)", resumed ? "background resume" : "temporary hitch", first);
+            check(stayed30 && !signalled && first >= 0 && first < 90 && m.s.k == 1, b);
+            check(fabs(m.real - m.game - m.s.debt - m.s.dropped) < 1.01, "  no-signal recovery keeps real-time accounting, including a bounded background gap");
+        }
+    }
+    {   // No proven 60 fps reference at all: the periodic path cannot require the app to have held 60 earlier.
+        sim m = {.s = {.k = 2, .step = 2, .kmin = 1}, .next = 2};
+        for (int i = 0; i < 180; i++) run(&m, 1, m.s.k == 1 ? 0.96 : 1.2, 1, 3, 0);
+        check(m.s.k == 1 && m.s.probes == 1 && !m.s.cref && !m.s.failed, "no history and no slowdown signal: periodic 30 -> 60 trial can succeed");
+    }
+    {   // A genuine 20 ms scene still cannot hold 60. No clock signal is needed to test again; failed attempts retain bounded, per-target backoff.
+        sim m = {.s = {.k = 2, .step = 2, .kmin = 1}, .next = 2};
+        int at30 = 0, fell20 = 0, signals = 0; uint64_t probes = 0; double last = 0, min_gap = 1e9;
+        for (int i = 0; i < 6000; i++) {
+            signals |= nvn_fstep_same(&m.s);
+            run(&m, 1, 1.2, 1, 3, 0);
+            at30 += i >= 4800 && m.s.k == 2; fell20 += m.s.k == 3;
+            if (m.s.probes != probes) {
+                if (m.s.failed >= 6 && last) min_gap = fmin(min_gap, m.real - last);
+                last = m.real; probes = m.s.probes;
+            }
+        }
+        check(!signals && m.s.failed >= 7 && probes > 7 && m.s.retry_hold[1] == FSTEP_RETRY_MAX && min_gap >= FSTEP_RETRY_MAX && !fell20 && at30 > 1000,
+              "no signal, genuine 20 ms scene: periodically try 60, fail back to 30, back off to 30 s");
+        check(fabs(m.real - m.game - m.s.debt - m.s.dropped) < 1.01, "  repeated no-signal trials preserve game time");
+        for (int i = 0; i < 1000; i++) run(&m, 1, m.s.k == 1 ? 0.96 : 1.2, 1, 3, 0);
+        check(m.s.k == 1, "  capacity returns after failed trials: recover 60 without a clock signal or a new cost at 30");
     }
     printf("== %d checks, %d failed ==\n", checks, fail);
     return fail != 0;

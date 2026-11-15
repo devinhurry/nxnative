@@ -19,6 +19,12 @@ static int observed_mutex_lock(pthread_mutex_t *mutex);
 #define mtl_exec test_exec
 #define mtl_set_frame test_set_frame
 #define mtl_drain test_drain
+#define mtl_gpu_ms test_gpu_ms
+#define mtl_snap_on test_snap_on
+#define mtl_link_active test_link_active
+#define mtl_probe_ramp_on test_probe_ramp_on
+#define mtl_link_stalled test_link_stalled
+#define mtl_presented_time test_presented_time
 #include "../nvn/hle_nvn.c"
 #undef pthread_mutex_lock
 #undef mtl_prepare
@@ -31,12 +37,27 @@ static int observed_mutex_lock(pthread_mutex_t *mutex);
 #undef mtl_exec
 #undef mtl_set_frame
 #undef mtl_drain
+#undef mtl_gpu_ms
+#undef mtl_snap_on
+#undef mtl_link_active
+#undef mtl_probe_ramp_on
+#undef mtl_link_stalled
+#undef mtl_presented_time
 
 module_t *g_mod; int g_nmod;
 void *front_metal_layer(void) { return NULL; }
 module_t *module_of(const void *p) { (void)p; return NULL; }
 void svc_thread_dump(void) {}
-uint64_t now_ns(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }   // the host's clock (hle_os.c: Mach absolute time), which Metal's timestamps are on
+static uint64_t test_clock;
+uint64_t now_ns(void) { return test_clock ? test_clock : clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }   // the host's clock (hle_os.c: Mach absolute time), which Metal's timestamps are on
+
+static int gpu_reads, screen_reads;
+double test_gpu_ms(uint64_t frame) { (void)frame; gpu_reads++; return 1000; }   // stale pre-suspend work, never a reason to reject recovery
+int test_snap_on(void) { return 1; }
+int test_link_active(void) { return 1; }
+int test_probe_ramp_on(void) { return 0; }
+int test_link_stalled(void) { return 0; }
+double test_presented_time(uint64_t frame) { (void)frame; screen_reads++; return -1; }
 
 static dispatch_semaphore_t preparing, second_waiting, finish_prepare, prepared, suspended, returned, committed;
 static __thread int second_submit;
@@ -146,6 +167,31 @@ int main(void) {
     CHECK("exactly the three intended command prefixes committed", atomic_load(&commits) == 3);
     CHECK("resume leaves the graphics gate balanced", g_inflight_api == 0);
     h_nvnQueueFinalize(&queues[0]); h_nvnQueueFinalize(&queues[1]);
+    // Force a known 30 fps hold with exhausted retry backoff and stale frame timing, then resume through the real graphics gate.
+    setenv("DM_FPS_HOLD", "on", 1);
+    win_t window = {.presents = 100};
+    test_clock = 10000000000ull; atomic_store(&g_frame, 100);
+    fstep_tick(&window, 60);   // establish the pre-background timestamp / consume earlier lifecycle transitions
+    g_fs = (nvn_fstep){.k = 2, .step = 2, .kmin = 1, .debt = 15, .late_run = 2, .screen = 2};
+    g_fs.retry_hold[1] = FSTEP_RETRY_MAX;
+    uint64_t epoch = atomic_load(&g_fstep_resume_epoch);
+    dm_gfx_suspend(0);
+    CHECK("a repeated active callback does not restart recovery", atomic_load(&g_fstep_resume_epoch) == epoch);
+    dm_gfx_suspend(1); test_clock += 30000000000ull; dm_gfx_suspend(0);
+    CHECK("a genuine background/foreground transition requests one recovery", atomic_load(&g_fstep_resume_epoch) == epoch + 1);
+    g_fs_start = test_clock - 29000000000ull; g_fs_wait = 1000000000ull;
+    gpu_reads = screen_reads = 0; window.presents++;
+    fstep_tick(&window, 60);
+    CHECK("foreground recovery immediately probes 60 from 30", g_fs.k == 1 && g_fs.fallback == 2 && g_fs.probe == 1);
+    CHECK("the paused interval adds no game-time debt or late-frame verdict", g_fs.debt == 0 && g_fs.late == 0 && g_fs.late_run == 0);
+    CHECK("recovery starts with all grace frames and fresh retry timing", g_fs.grace == FSTEP_GRACE && g_fs.retry_hold[1] == FSTEP_HOLD0 && g_fs.retry_since[1] == 0);
+    CHECK("pre-background GPU timestamps are excluded", gpu_reads == 0);
+    test_clock += 16666667; window.presents++; fstep_tick(&window, 60);
+    CHECK("the next frame consumes recovery once without resetting grace", g_fs.grace == FSTEP_GRACE - 1 && g_fs.probes == 1);
+    CHECK("the next frame has no suspended-time debt", fabs(g_fs.debt) < .01);
+    CHECK("pre-background presentation snapshots are excluded", screen_reads == 0);
+    for (int i = 0; i < 9; i++) { test_clock += 16666667; window.presents++; fstep_tick(&window, 60); }
+    CHECK("presentation feedback resumes after its delayed snapshots are fresh", screen_reads == 2);
     printf("graphics suspend: %d checks, %d failed\n", checks, failures);
     return failures != 0;
 }
