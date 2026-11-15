@@ -11,6 +11,7 @@ int mtl_framegen_supported(void);
 int mtl_framegen_enabled(void);
 int mtl_framegen_set(int on);
 void mtl_framegen_reset(void);
+void mtl_framegen_resume(void);          // foreground: allow a failed session to restart without changing the setting
 uint64_t mtl_framegen_present_count(void); // generated images confirmed by the drawable's presentation callback
 void mtl_vbuf_stats(uint64_t *resolve, uint64_t *reuse, uint64_t *set, uint64_t *skip, uint64_t *copies, uint64_t *copy_bytes);
 void mtl_set_depth_zero(int on);          // NVN depth mode: 1 = near is 0 (D3D / Metal), 0 = near is -w (GL, NVN's default); picks the vertex shaders' entry point (see shader_load in nvn_mtl.m)

@@ -101,6 +101,12 @@ int mtl_framegen_set(int on) {
     fg_queue_init(); dispatch_async(g_fg_wq, ^{ F.failed = 0; if (!on && was > 0) fg_leave("setting_off", 0); }); return 1;
 }
 void mtl_framegen_reset(void) { atomic_store(&g_fg_reset, 1); }
+void mtl_framegen_resume(void) {
+    if (!g_fg_wq) return;
+    // Suspend resets cadence and history. Rearm startup on the same worker
+    // before the resumed renderer queues frames, preserving the user's choice.
+    dispatch_async(g_fg_wq, ^{ F.failed = 0; fg_leave_check(); });
+}
 uint64_t mtl_framegen_present_count(void) { return atomic_load(&g_fg_displayed); }
 static NSUInteger fg_limit(NSUInteger w, NSUInteger h) { return MIN(w, h) >= 1080 ? 1080 : 720; }
 static void fg_extent(NSUInteger w, NSUInteger h, NSUInteger *ow, NSUInteger *oh) {
@@ -253,6 +259,17 @@ static void fg_on_presented(FgPresent *p, double time) {
     MLOG("[fg] presentation stall recovery %d (%s): queued frames dropped, pairs start again", F.recoveries, reason);
     fg_jobs_clear(); F.primed = F.warm = 0; s->pending = 0;
 }
+static void fg_on_present_completed(FgSession *s, NSError *error, void (^completed)(void)) {
+    s->in_flight--;
+    if (completed) completed();
+    // A retired session can finish after suspend or the handover timeout.
+    // Always release its resources; its errors must not fail the next session.
+    if (error && s->epoch == atomic_load(&g_fg_gen)) {
+        MLOG("[RED] [fg] present command buffer: %s", error.description.UTF8String);
+        fg_leave("present_command_buffer_failed", 1);
+    }
+    fg_leave_check();
+}
 static int fg_present(FgSession *s, id<MTLTexture> texture, int original, uint64_t ticket, double duration, void (^completed)(void)) {
     if (atomic_load(&g_gpu_lost)) return 0;
     CAMetalLayer *layer = (__bridge CAMetalLayer *)front_metal_layer(); if (!layer) return 0;
@@ -281,12 +298,7 @@ static int fg_present(FgSession *s, id<MTLTexture> texture, int original, uint64
         (void)keep; atomic_store(&p->gpu_done, 1);
         pthread_mutex_lock(&g_pq_mu); g_pq_inflight--; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu);
         res_remove(uv); res_commit();
-        dispatch_async(g_fg_wq, ^{
-            s->in_flight--;
-            if (completed) completed();
-            if (feedback.error) { MLOG("[RED] [fg] present command buffer: %s", feedback.error.description.UTF8String); fg_leave("present_command_buffer_failed", 1); }
-            fg_leave_check();
-        });
+        dispatch_async(g_fg_wq, ^{ fg_on_present_completed(s, feedback.error, completed); });
     }];
     [s->present_queue commit:&cb count:1 options:options]; [s->present_queue signalDrawable:drawable];
     if (duration > 0) [drawable presentAfterMinimumDuration:duration]; else [drawable present];

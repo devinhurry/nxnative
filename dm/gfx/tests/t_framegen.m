@@ -85,6 +85,39 @@ static double center(id<MTLTexture> t) {
     for (NSUInteger y = 40; y < 140; y++) for (NSUInteger x = 0; x < t.width; x++) { double value = p[4 * (y * t.width + x)]; sum += value; weighted += x * value; }
     return sum ? weighted / sum : -1;
 }
+static void lifecycle(void) {
+    FgSession *old = [FgSession new], *current = [FgSession new];
+    for (int i = 0; i < FG_SLOTS; i++) { old->slots[i] = [FgSlot new]; current->slots[i] = [FgSlot new]; }
+    NSError *error = [NSError errorWithDomain:MTLCommandBufferErrorDomain code:MTLCommandBufferErrorNotPermitted userInfo:nil];
+    dispatch_sync(g_fg_wq, ^{
+        F = (typeof(F)){0}; old->epoch = atomic_fetch_add(&g_fg_gen, 1) + 1; old->in_flight = 1;
+        g_fg_session = old; atomic_store(&g_fg_phase, FG_ACTIVE); atomic_store(&g_fg_requested, 1);
+    });
+    fg_suspend();
+    dispatch_sync(g_fg_wq, ^{
+        CHECK(atomic_load(&g_fg_phase) == FG_LEAVING, "background retires the active session");
+        F.failed = 1; // A failure already recorded around the background transition.
+    });
+    dm_gfx_suspend(0); // Production foreground entry, without submitting GPU work.
+    dispatch_sync(g_fg_wq, ^{
+        CHECK(!F.failed && atomic_load(&g_fg_requested) == 1, "foreground rearms interpolation and preserves the enabled setting");
+        F.leave_time = CACurrentMediaTime() - 3; fg_leave_check();
+        CHECK(atomic_load(&g_fg_phase) == FG_NATIVE, "a delayed old session can hand back presentation");
+        current->epoch = atomic_load(&g_fg_gen); current->in_flight = 1;
+        g_fg_session = current; atomic_store(&g_fg_phase, FG_ACTIVE);
+        __block int released = 0; fg_on_present_completed(old, error, ^{ released++; });
+        CHECK(old->in_flight == 0 && released == 1, "retired feedback still releases its resources");
+        CHECK(!F.failed && g_fg_session == current && atomic_load(&g_fg_phase) == FG_ACTIVE, "retired feedback cannot fail the resumed session");
+        fg_on_present_completed(current, error, nil);
+        CHECK(F.failed && atomic_load(&g_fg_phase) == FG_NATIVE, "a current-session GPU error still stops interpolation");
+        atomic_store(&g_fg_requested, 0);
+    });
+    dm_gfx_suspend(0);
+    dispatch_sync(g_fg_wq, ^{
+        CHECK(!F.failed && atomic_load(&g_fg_requested) == 0 && atomic_load(&g_fg_phase) == FG_NATIVE, "foreground preserves the disabled setting");
+        F = (typeof(F)){0}; atomic_store(&g_fg_requested, -1);
+    });
+}
 int main(int argc, char **argv) { @autoreleasepool {
     NSUInteger w, h; id<MTLTexture> src = nil, generated = nil;
     fg_extent(1600, 900, &w, &h); CHECK(w == 1280 && h == 720, "900p selects the automatic 720p budget");
@@ -101,6 +134,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         F = (typeof(F)){0}; for (int i = 0; i < 40; i++) fg_observe(1 + i / 60., 60);
         CHECK(F.mode != 3, "60 fps on a 60 Hz screen keeps original images");
     });
+    lifecycle();
     if (argc > 1 && !strcmp(argv[1], "--cpu")) goto done;
     mtl_init(); if (!mtl_framegen_supported()) { fprintf(stderr, "SKIP: MetalFX frame interpolation unavailable\n"); goto done; }
     CHECK(mtl_framegen_set(1), "supported GPU accepts frame generation");

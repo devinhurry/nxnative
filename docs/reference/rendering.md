@@ -1964,6 +1964,14 @@ Digimon Story Cyber Sleuth: Complete Edition (Media.Vision's MVGL engine, SDK 6.
 - **Quality and layout:** a valid cropped picture with short edge at least 1080 pixels uses the 1080p budget; other pictures use the 720p budget, and smaller pictures are never upscaled. Quality selection is automatic. Capture suppresses frontend layout/filter processing; final drawing applies the shared layout and filters exactly once, without flipping a captured image twice. No game shader translation chain changes.
 - **Validation:** iOS compilation results are recorded in the accompanying build receipt. The user requested no regression test runs. Synthetic readback and physical-device gameplay validation remain open.
 
+### Frame interpolation does not restart after returning to the foreground
+
+- **Symptom:** interpolation is enabled before an iOS app goes into the background, but produces no generated images after returning to the foreground until the player toggles the setting again.
+- **Cause:** `fg_leave` latches `F.failed` after a GPU or presentation failure. Background suspension resets cadence and retires the session, but the graphics resume path did not clear that latch. A retired presentation's delayed GPU feedback also called `fg_leave` without checking its session epoch, so it could fail a replacement session after the two-second handover. Background command buffers can be rejected by the system; see [Apple's Metal lifecycle guidance](https://developer.apple.com/documentation/metal/preparing-your-metal-app-to-run-in-the-background).
+- **Fix:** `dm_gfx_suspend(0)` queues `mtl_framegen_resume` before waking renderer threads. It clears the failure latch on the serial interpolation worker, keeps the player's enabled or disabled choice, and allows the usual cadence gate to create the next session. Presentation completion always releases its old resources, but only the current session's GPU errors may stop interpolation. Current-session errors retain the existing failure behaviour.
+- **Check:** `make -C dm/gfx/tests GAME=01007EF00011E000 t_framegen` and `dm/gfx/tests/t_framegen --cpu`: 14 checks, zero failures. The lifecycle cases exercise the production foreground entry, a late failed completion after handover, resource cleanup, current-session failure, and an unchanged disabled setting. No GPU commands or game are run; physical iPhone lifecycle validation remains open.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md), iOS player report 2026-11-15; lifecycle state reproduced without a game.
+
 ### Frame interpolation startup traps while releasing its queue descriptor
 
 - **Symptom:** enabling interpolation logs the new 1280x720 session, then immediately traps with `SIGTRAP`; the app backtrace ends at the session-start block's ARC cleanup. The queue descriptor remains in x19/x21, its feedback queue is the released object, and the active selector is `dealloc`.

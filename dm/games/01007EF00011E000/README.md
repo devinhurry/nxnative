@@ -298,3 +298,12 @@ queue now uses Metal's default feedback executor; the native renderer and pair
 pacing remain unchanged. See [the ownership finding](../../../docs/reference/rendering.md#frame-interpolation-startup-traps-while-releasing-its-queue-descriptor).
 The standalone ownership reproduction passes with this change; the new iPhone
 build still requires physical-device gameplay verification.
+
+### Frame interpolation after returning to the foreground (2026-11-15)
+
+A player reports that interpolation needs a manual setting toggle after a
+background/foreground transition. Graphics resume now rearms the interpolation
+session without changing the setting, and retired GPU feedback cannot stop a
+replacement session. See [the lifecycle finding](../../../docs/reference/rendering.md#frame-interpolation-does-not-restart-after-returning-to-the-foreground).
+The CPU lifecycle cases pass; iPhone gameplay and repeated app switching remain
+unverified for this change.
