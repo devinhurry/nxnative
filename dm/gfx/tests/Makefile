@@ -725,3 +725,7 @@ check_t_sparse_pool_cache: RUN_ENV = MTL_DEBUG_LAYER=1
 
 t_pso_extended: t_pso_extended.m t_pso_prewarm.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_extended.m $(MTL_T_SRC) $(FW)
+
+# Opt-in real-frame timing accumulator (no GPU or game).
+t_realtime_step: t_realtime_step.c ../nvn/nvn_realtime_step.h
+	$(CC) -O2 -Wall -Wextra -o $@ t_realtime_step.c -lm

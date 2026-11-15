@@ -307,3 +307,7 @@ session without changing the setting, and retired GPU feedback cannot stop a
 replacement session. See [the lifecycle finding](../../../docs/reference/rendering.md#frame-interpolation-does-not-restart-after-returning-to-the-foreground).
 The CPU lifecycle cases pass; iPhone gameplay and repeated app switching remain
 unverified for this change.
+
+### Embedded frontend timing and filter capture
+
+An external build-checked profile can extend this build's native frame step with [real-time source rates](../../../docs/reference/frame-rate.md#opt-in-real-time-source-rates-for-an-embedded-frontend). Whole-window screenshots now run before the interpolation route so [filter capture works while frame generation is active](../../../docs/reference/rendering.md#missing-whole-window-screenshots-while-frame-generation-owns-presentation). Host GPU, loader and emitted ARM64 checks passed; physical iPhone gameplay remains open.

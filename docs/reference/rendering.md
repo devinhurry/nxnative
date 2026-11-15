@@ -1980,3 +1980,11 @@ Digimon Story Cyber Sleuth: Complete Edition (Media.Vision's MVGL engine, SDK 6.
 - **Fix:** create the interpolation-present queue with `newMTL4CommandQueue`, using Metal's default feedback executor. Its callbacks continue dispatching state changes to the existing serial `g_fg_wq`; pair selection, timing and the original renderer queue are unchanged. No new dispatch retain/release scheme or descriptor lifetime workaround is introduced.
 - **Evidence:** supplied phone log `16d8e758-c60e-454e-9993-7bfe354f5de4-1794672355991.txt`, session-start line followed by the trap; the shipped executable maps `__fg_route_block_invoke_3+0x770` to the instruction after `objc_release_x21`, where x21 is the descriptor. The standalone reproduction fails on releasing the second shared-feedback descriptor; the corrected path completes 30 create/release cycles while retaining the original native queue. This checks the ownership failure, not iPhone gameplay or interpolation performance.
 - **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md), iOS report 2026-11-15. The same ownership failure was reproduced on the Mac without loading any game.
+
+### Missing whole-window screenshots while frame generation owns presentation
+
+- **Symptom:** a frontend's filter preview receives no image callback while frame generation is active or handing presentation back.
+- **Cause:** `present_now_image` returned from `fg_route` before reaching `grab_present`. The ordinary screenshot test did not exercise this path.
+- **Fix:** consume original-frame screenshot requests before routing that frame to interpolation. Reuse the asynchronous offscreen renderer, raw-capture hooks and GPU-owned resource lifetime; generated pictures never consume the request.
+- **Check:** the embedding frontend's GPU probe invokes `present_now_image` with an ordinary frame, a leaving interpolation session and an active real session. All three return non-black wide images; the production off/warm/cool/vivid/cinematic preview shaders produce non-black thumbnails. This is host GPU validation, not physical iPhone gameplay.
+- **Found on:** [Breath of the Wild 1.9.0](../../dm/games/01007EF00011E000/README.md).
