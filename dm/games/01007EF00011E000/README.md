@@ -209,6 +209,7 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 
 ## Found on this game
 
+- [Repeated iOS backup exclusion changes an unchanged image's identity](../../../docs/reference/packing.md#repeated-ios-backup-exclusion-changes-an-unchanged-images-identity): resolved in startup; simulator fixture verified, physical-device confirmation pending.
 - [A library that depends on its source's file name](../../../docs/reference/shaders.md#a-library-that-depends-on-its-sources-file-name): 3,936 of its 10,560 pixel shaders share their `_bl` source.
 - **Resolved in the host: the taller picture was drawn smaller than the 16:9 one on the phone** (`DM_SCREEN_ASPECT=1.43`, Fit): [The picture laid out in the shape the game presents](../../../docs/reference/rendering.md#the-picture-laid-out-in-the-shape-the-game-presents).
 - **Resolved in the host: the encode thread stopped at a depth plane copy** (PR #930, on the Mac with `DM_NVN_ENC_THREAD=1`; not run here): [Depth plane copies on the encode thread](../../../docs/reference/rendering.md#depth-plane-copies-on-the-encode-thread).

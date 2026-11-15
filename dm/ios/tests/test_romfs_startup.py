@@ -22,7 +22,7 @@ class Startup(unittest.TestCase):
         main = (REPO / 'dm/ios/Sources/main.m').read_text()
         locator = main[main.index('static int romfs_image_complete'):main.index('// Add-on content (DLC)')]
         source = root / 'locator.m'
-        source.write_text('#import <Foundation/Foundation.h>\n#include <stdio.h>\n#include "romfs_image.h"\n#include "romfs_identity.h"\n'
+        source.write_text('#import <Foundation/Foundation.h>\n#include <stdio.h>\n#include "romfs_image.h"\n#include "romfs_identity.h"\n#include "host_extensions.h"\n'
                           'static NSString *fixture_doc, *fixture_tmp, *fixture_bundle;\n#define DM_GAME_ROMFS_MARKER "marker"\n'
                           '@interface FixtureBundle : NSObject\n+ (instancetype)mainBundle;\n- (NSString *)resourcePath;\n@end\n'
                           '@implementation FixtureBundle\n+ (instancetype)mainBundle { return [self new]; }\n'

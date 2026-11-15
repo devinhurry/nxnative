@@ -136,6 +136,13 @@
 
 ## RomFS images
 
+### Repeated iOS backup exclusion changes an unchanged image's identity
+
+- **Symptom:** a frontend rehashes its entire RomFS on every launch despite a successful previous verification.
+- **Cause:** `boot_env` unconditionally rewrote `NSURLIsExcludedFromBackupKey`. On iOS, setting an already-enabled flag can update ctime without changing the image's bytes or mtime, invalidating a frontend's cached file identity. The write normally precedes gameplay; this finding does not establish the cause of a historical in-game resource-change crash.
+- **Fix:** read the flag first and set it only when not enabled or unreadable. Keep the original error reporting, save backup policy and resource identity checks. `dm/ios/tests/test_backup_startup.py` runs the actual startup loop in separate processes and counts metadata writes, including on macOS where redundant writes need not change ctime.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game) through TouchNX startup logs. Reproduced with a small fixture on iOS 27.1 Simulator; physical-device verification of the fix remains pending.
+
 ### RomFS folder transfers fail or leave stale game files
 
 - **Symptom:** `devicectl` copying a large RomFS folder fails with POSIX error 24 (`EMFILE`) or spends most of its time on small files; deleting an old folder during iOS startup hits the launch watchdog. A push after changing extracted files can also keep sending old assets if an image is reused solely because it exists.
