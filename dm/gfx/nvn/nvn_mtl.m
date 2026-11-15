@@ -8675,6 +8675,11 @@ static id<MTL4Compiler> g_comp4;
 // g_arch4: the files that may hold bases with a vertex layout, g_arch4p: the files that hold none (p<seq>.mtl4a: the prebuild's, and any flush whose bases all read their vertices
 // themselves). A base with a layout is looked up in g_arch4 alone: each file a lookup misses in costs about 0.06 ms, and a cold start's misses were for such bases, in the 13 prebuilt files
 static NSArray<id<MTL4Archive>> *g_arch4, *g_arch4p; static NSString *g_arch_dir; static int g_arch_seq;
+static NSString *arch_extended_dir(void) { return [g_arch_dir stringByAppendingPathComponent:@"extended"]; }
+static int arch_extended_exists(void) { struct stat st; return g_arch_dir && !lstat(arch_extended_dir().fileSystemRepresentation, &st) && S_ISDIR(st.st_mode); }
+static int g_extended_legacy, g_extended_migration_checked;   // a deferred migration retains its validated legacy dependencies this run
+static void extended_migrate(void);
+static void extended_archive_used(id<MTL4Archive> archive);
 // Compaction: every start writes a file or more (each flush captures only what is new), Breath of the Wild 5-7 per start, Ocarina of Time 13-273 in a play session. A file with
 // an index (see arch_key) costs a lookup nothing, one without (written before the index) about 0.06 ms for each lookup it misses, and a start opens every file (about 15 ms each,
 // in parallel) and the disk keeps them. Run files are taken by size tier (arch_tier, from the pipeline count in the name), each PSO_ARCH_COMPACT times the one below; a full
@@ -8687,7 +8692,7 @@ enum { PSO_ARCH_COMPACT = 8 };
 static int g_compact_enabled;   // immutable after pso4_init; unlike g_compact_files, never cleared by the archive queue
 static _Atomic int g_compact_bases; static _Atomic uint64_t g_compact_ns;   // render bases captured again and their time (the prepare line)
 static NSArray<NSString *> *g_compact_files; static _Atomic int g_compacted;
-static unsigned char *g_compact_state;   // per run file of g_compact_files (g_arch4's order): 1 when the compaction replaces it; finalized before warm workers start, after extended preparation protects its dependencies
+static unsigned char *g_compact_state;   // per run file of g_compact_files (g_arch4's order): 1 when the compaction replaces it; immutable before warm workers start; a deferred legacy migration can protect its dependencies
 // g_compact_periods: periods that may hold recaptured bases, handed over and not written yet; g_compact_closed: the last of them is handed over (the first flush after the prewarm);
 // g_compact_bad: one was not written, or a base the prewarm took from an old file was not captured again: the old files stay (arch_compact_finish); g_compact_harvests: recaptures
 // queued on the harvest queue (arch_harvest) and not in a period yet: the compaction closes only once there are none, so a late one is in a compacting period and its failure keeps the
@@ -8727,7 +8732,7 @@ static dispatch_queue_t g_arch_q; static _Atomic int g_arch_new, g_arch_new_vd, 
 // with the front end at -O2: 33.7 minutes until Metal gave up, GitHub issue #294) held the flush, and the flush every compile and draw that came after it. Now such a compile
 // holds back the file of its own period and nothing else
 @interface ArchEpoch : NSObject { @public id<MTL4Compiler> comp; id<MTL4PipelineDataSetSerializer> ser; dispatch_group_t busy; _Atomic int active, n, vd, cs, ms, failed; int compacting;
-    NSMutableData *keys; os_unfair_lock klock; _Atomic int unkeyed; } @end
+    NSMutableData *keys; os_unfair_lock klock; _Atomic int unkeyed; NSString *directory; } @end
 // n: pipelines captured; vd, cs, ms: those of them that are bases with a vertex layout, compute pipelines, native mesh pipelines; failed: a capture in it failed (arch_cap_failed); compacting: it may hold
 // recaptured bases (arch_flush); keys: the index keys of what it captured (arch_key, under klock), unkeyed: it captured a pipeline with no key, so its index is not complete
 @implementation ArchEpoch @end
@@ -8831,6 +8836,9 @@ static int arch_keys_old(NSString *path) {   // an index of keys by library file
 // order (arch_compact_takes). g_arch_asks: archive files asked for a pipeline (the tests)
 static nvn_hmap g_arch_ix = {.klen = sizeof(uint64_t)};
 static NSArray<id<MTL4Archive>> *g_arch_ixf, *g_arch_run;
+static NSMapTable *g_arch_paths;   // local archive -> path, read by joined extended workers only
+static NSMutableSet<NSString *> *g_extended_used;
+static _Atomic int g_extended_preparing;   // timer flushes must not fragment extended preparation
 static _Atomic uint64_t g_arch_asks;
 // A pipeline from the archive: the file the index names for its key alone, else each file without a complete index (the bundle first among the p files, which plain skips: a base
 // with a vertex layout and a compute pipeline are never in one). *from_run: it came from a run file this compaction takes, so the compacting prewarm captures it again
@@ -8846,11 +8854,12 @@ static id arch_lookup(MTL4PipelineDescriptor *d, int plain, int *from_run) {
     id<MTL4Archive> named = k ? (__bridge id<MTL4Archive>)nvn_hm_get(&g_arch_ix, &k) : nil;
     if (named) {
         id ps = ask(named);
+        if (ps && g_extended_thread) extended_archive_used(named);
         if (ps && from_run) *from_run = arch_compact_takes(named);
         return ps;
     }
-    if (!plain) for (id<MTL4Archive> a in g_arch4p) { id ps = ask(a); if (ps) return ps; }
-    for (id<MTL4Archive> a in g_arch4) { id ps = ask(a); if (ps) { if (from_run) *from_run = arch_compact_takes(a); return ps; } }
+    if (!plain) for (id<MTL4Archive> a in g_arch4p) { id ps = ask(a); if (ps) { if (g_extended_thread) extended_archive_used(a); return ps; } }
+    for (id<MTL4Archive> a in g_arch4) { id ps = ask(a); if (ps) { if (g_extended_thread) extended_archive_used(a); if (from_run) *from_run = arch_compact_takes(a); return ps; } }
     return nil;
 }
 static ArchEpoch *g_ep; static os_unfair_lock g_ep_lock = OS_UNFAIR_LOCK_INIT;   // the current period
@@ -9096,7 +9105,7 @@ static void arch_compact_pick(NSArray<NSString *> *paths) {   // at the open: th
 }
 static int arch_compact_takes(id<MTL4Archive> a) {   // a pipeline was found in a: this compaction takes that file (every run file without a pick, as before)
     if (!g_compact_enabled || !g_compact_state) return g_compact_enabled;
-    NSUInteger i = [g_arch_run.count ? g_arch_run : g_arch4 indexOfObjectIdenticalTo:a]; return i != NSNotFound && g_compact_state[i];   // g_arch4: a start that found no run file (the tests set it, files of no index)
+    NSUInteger i = [g_arch_run.count ? g_arch_run : g_arch4 indexOfObjectIdenticalTo:a]; return i != NSNotFound && i < g_compact_files.count && g_compact_state[i];   // g_arch4: a start that found no run file (the tests set it, files of no index)
 }
 static _Atomic int g_arch_write_errors;
 static _Atomic int g_arch_cap_off;   // capturing failed in a period that held nothing yet: the store was not full, so no more captures this run (arch_cap_failed)
@@ -9168,6 +9177,8 @@ static void pso4_init(void) {
         if (!pso4_on() || ![(id)g_dev respondsToSelector:@selector(newCompilerWithDescriptor:error:)]) return;   // no Metal 4 compiler (t_pso_pending's fake device): the MTLDevice path
         const char *e = getenv("DM_PSO_ARCHIVE"); NSString *user = pso_user_path();
         g_arch_dir = e && !strcmp(e, "off") ? nil : e && *e ? @(e) : user ? [user.stringByDeletingLastPathComponent stringByAppendingPathComponent:@"pso_archive"] : nil;
+        if (g_arch_dir && !g_pre_tool) extended_migrate();
+        g_arch_paths = [NSMapTable mapTableWithKeyOptions:NSPointerFunctionsStrongMemory | NSPointerFunctionsObjectPointerPersonality valueOptions:NSPointerFunctionsStrongMemory];
         NSMutableArray<id<MTL4Archive>> *arch = [NSMutableArray array], *archp = [NSMutableArray array];
         arch_open_begin();   // every archive opened from here to arch_open_end is mapped: the bundled one and the device's
         pso_bundle_open(archp);   // first: it holds every pair's base
@@ -9185,8 +9196,12 @@ static void pso4_init(void) {
             uint64_t t0 = bp_now(); unsigned long long bytes = 0;
             NSMutableArray<NSString *> *runf = [NSMutableArray array];
             NSArray<NSString *> *all = [NSFileManager.defaultManager contentsOfDirectoryAtPath:g_arch_dir error:nil]; NSSet<NSString *> *present = [NSSet setWithArray:all ?: @[]];
-            NSArray<NSString *> *names = [[all filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"self ENDSWITH '.mtl4a'"]] sortedArrayUsingComparator:^NSComparisonResult(NSString *x, NSString *y) {
-                int a = [x substringFromIndex:[x hasPrefix:@"p"]].intValue, b = [y substringFromIndex:[y hasPrefix:@"p"]].intValue;
+            NSMutableArray<NSString *> *local = [[all filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"self ENDSWITH '.mtl4a'"]] mutableCopy] ?: [NSMutableArray array];
+            if (!g_pre_tool && arch_extended_exists()) for (NSString *n in [NSFileManager.defaultManager contentsOfDirectoryAtPath:arch_extended_dir() error:nil])
+                if ([n.pathExtension isEqual:@"mtl4a"]) [local addObject:[@"extended" stringByAppendingPathComponent:n]];
+            NSArray<NSString *> *names = [local sortedArrayUsingComparator:^NSComparisonResult(NSString *x, NSString *y) {
+                NSString *xn = x.lastPathComponent, *yn = y.lastPathComponent;
+                int a = [xn substringFromIndex:[xn hasPrefix:@"p"]].intValue, b = [yn substringFromIndex:[yn hasPrefix:@"p"]].intValue;
                 return a > b ? NSOrderedAscending : a < b ? NSOrderedDescending : NSOrderedSame;   // newest first, p files among the others: the newest file a key's index names holds it
             }];
             for (NSString *n in all) if ([n hasSuffix:@".keys"] && ![present containsObject:[n.stringByDeletingPathExtension stringByAppendingString:@".mtl4a"]])
@@ -9197,7 +9212,7 @@ static void pso4_init(void) {
             NSMutableArray<NSString *> *keep = [NSMutableArray array]; int nold = 0, pold = 0;
             for (NSString *n in names) {
                 NSString *p = [g_arch_dir stringByAppendingPathComponent:n];
-                if (!arch_keys_old(arch_keys_path(p))) { [keep addObject:n]; continue; }
+                if (![n isEqualToString:n.lastPathComponent] || !arch_keys_old(arch_keys_path(p))) { [keep addObject:n]; continue; }
                 unlink(p.fileSystemRepresentation); unlink(arch_keys_path(p).fileSystemRepresentation); nold++; pold += [n hasPrefix:@"p"];
             }
             if (pold) unlink([g_arch_dir stringByAppendingPathComponent:@"prebuilt.tsv"].fileSystemRepresentation);
@@ -9218,8 +9233,9 @@ static void pso4_init(void) {
             } });
             NSMutableArray<id<MTL4Archive>> *ixf = [NSMutableArray array], *run = [NSMutableArray array]; int nopen = 0, np = 0, nidx = 0; unsigned long nkeys = 0;
             for (NSUInteger i = 0; i < nn; i++) {
-                NSString *n = names[i], *p = [g_arch_dir stringByAppendingPathComponent:n]; int pf = [n hasPrefix:@"p"];
-                g_arch_seq = MAX(g_arch_seq, [n substringFromIndex:pf].intValue + 1);
+                NSString *n = names[i], *p = [g_arch_dir stringByAppendingPathComponent:n]; int pf = [n.lastPathComponent hasPrefix:@"p"];
+                BOOL runtime = [n isEqualToString:n.lastPathComponent];
+                g_arch_seq = MAX(g_arch_seq, [n.lastPathComponent substringFromIndex:pf].intValue + 1);
                 if (opened[i] == NSNull.null) {
                     MLOG("[RED] pipeline archive file %s not usable (%s): its bases are built again", p.UTF8String, why[i] != NSNull.null ? [why[i] UTF8String] : "not a pipeline archive");
                     continue;
@@ -9227,7 +9243,8 @@ static void pso4_init(void) {
                 id<MTL4Archive> a = opened[i]; NSArray *ix = ixs[i] != NSNull.null ? ixs[i] : nil;
                 bytes += [[NSFileManager.defaultManager attributesOfItemAtPath:p error:nil] fileSize];
                 nopen++; np += pf; nidx += ix != nil;
-                if (!pf) { [runf addObject:p]; [run addObject:a]; }
+                [g_arch_paths setObject:p forKey:a];
+                if (!pf && runtime) { [runf addObject:p]; [run addObject:a]; }
                 if (!ix) { [pf ? archp : arch addObject:a]; continue; }
                 NSData *keys = ix[0]; const uint64_t *kv = keys.bytes; NSUInteger nk = keys.length / sizeof(uint64_t);
                 for (NSUInteger j = 0; j < nk; j++) if (!nvn_hm_get(&g_arch_ix, &kv[j])) { nvn_hm_put(&g_arch_ix, &kv[j], (__bridge void *)a); nkeys++; }   // newest first: the first holds it
@@ -9344,9 +9361,10 @@ static void arch_write(ArchEpoch *ep) {
 static void arch_write_file(ArchEpoch *ep) {
     int n = atomic_load(&ep->n), vd = atomic_load(&ep->vd), cs = atomic_load(&ep->cs), ms = atomic_load(&ep->ms);   // exact: no compile of the period is under way
     if (!n) return;
-    [NSFileManager.defaultManager createDirectoryAtPath:g_arch_dir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *directory = ep->directory ?: g_arch_dir;   // only extended periods override the native runtime destination
+    [NSFileManager.defaultManager createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:nil];
     uint64_t t0 = bp_now(); NSError *e = nil;
-    NSString *path = [g_arch_dir stringByAppendingPathComponent:vd || cs ? [NSString stringWithFormat:@"%05d-%d.mtl4a", g_arch_seq++, n] : [NSString stringWithFormat:@"p%05d.mtl4a", g_arch_seq++]], *tmp = [path stringByAppendingString:@".tmp"];
+    NSString *path = [directory stringByAppendingPathComponent:vd || cs ? [NSString stringWithFormat:@"%05d-%d.mtl4a", g_arch_seq++, n] : [NSString stringWithFormat:@"p%05d.mtl4a", g_arch_seq++]], *tmp = [path stringByAppendingString:@".tmp"];
     ser_begin();   // no compile meanwhile (ser_compile_begin)
     if (g_pre_out) prewarm_script(ep->ser, path);   // the prebuild tool's bundle form: the period as a pipelines script too, for the other GPUs
     if (ep->compacting) arch_mark(1);
@@ -9387,6 +9405,7 @@ static void arch_hand_over(ArchEpoch *only, int any_time) {
     os_unfair_lock_lock(&g_ep_lock);
     ArchEpoch *old = g_ep; any = (!only || old == only) && (atomic_load(&old->n) || atomic_load(&old->active));   // again: another flush may just have handed it over
     if (any) {
+        ne->directory = old->directory;
         g_ep = ne;
         // Every period from the first recaptured base on may hold some (see arch_compact_allowed); the first one handed over after the prewarm is the compaction's last
         if (g_compact_enabled && atomic_load(&g_compacted) && !atomic_load(&g_compact_closed)) {
@@ -9425,7 +9444,7 @@ static void arch_at_exit(void) { mtl_arch_save(ARCH_QUIT_WAIT_MS, 1); }
 static void arch_flush_wait(void) { arch_harvest_wait(DISPATCH_TIME_FOREVER); arch_flush(); if (g_arch_pending) dispatch_group_wait(g_arch_pending, DISPATCH_TIME_FOREVER); }
 static void arch_note_new(void) {   // a base was compiled: flush 10 s later (one flush for a burst of them)
     if (!g_arch_q || atomic_exchange(&g_arch_sched, 1)) return;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * (int64_t)NSEC_PER_SEC), g_arch_q, ^{ atomic_store(&g_arch_sched, 0); arch_flush(); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * (int64_t)NSEC_PER_SEC), g_arch_q, ^{ atomic_store(&g_arch_sched, 0); if (!atomic_load(&g_extended_preparing)) arch_flush(); });
 }
 static void arch_compact_finish(void) {   // after every period that may hold recaptured bases is written (arch_write): the old files go once their bases are in the new ones
     if (!g_compact_files || !g_compacted) return;

@@ -29,14 +29,14 @@ static NSDictionary *extended_identity(NSData *list) {
 }
 static NSDictionary *extended_file_state(NSString *path) {
     struct stat st;
-    if (stat(path.fileSystemRepresentation, &st) || !S_ISREG(st.st_mode)) return nil;
+    if (lstat(path.fileSystemRepresentation, &st) || !S_ISREG(st.st_mode)) return nil;
     return @{@"bytes": @(st.st_size), @"seconds": @(st.st_mtimespec.tv_sec), @"nanos": @(st.st_mtimespec.tv_nsec)};
 }
-static NSDictionary *extended_files(void) {
+static NSDictionary *extended_files_at(NSString *directory) {
     NSMutableDictionary *files = [NSMutableDictionary dictionary];
-    for (NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:g_arch_dir error:nil]) {
+    for (NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:directory error:nil]) {
         if (![name.pathExtension isEqualToString:@"mtl4a"]) continue;
-        NSString *path = [g_arch_dir stringByAppendingPathComponent:name];
+        NSString *path = [directory stringByAppendingPathComponent:name];
         NSDictionary *state = extended_file_state(path);
         if (state) files[name] = state;
         NSString *keys = arch_keys_path(path);
@@ -44,7 +44,8 @@ static NSDictionary *extended_files(void) {
     }
     return files;
 }
-static NSString *extended_record_mismatch(NSDictionary *record, NSDictionary *identity) {
+static NSDictionary *extended_files(void) { return arch_extended_exists() ? extended_files_at(arch_extended_dir()) : @{}; }
+static NSString *extended_record_mismatch_at(NSDictionary *record, NSDictionary *identity, NSString *directory) {
     if (!identity) return @"shader generation or list is unavailable";
     if (![record isKindOfClass:NSDictionary.class]) return @"completion record is missing or unreadable";
     if (![record[@"identity"] isEqual:identity]) {
@@ -59,7 +60,7 @@ static NSString *extended_record_mismatch(NSDictionary *record, NSDictionary *id
     int archives = 0;
     for (NSString *name in files) {
         if (![name isKindOfClass:NSString.class] || ![name isEqualToString:name.lastPathComponent]) return @"invalid completion file name";
-        NSString *path = [g_arch_dir stringByAppendingPathComponent:name];
+        NSString *path = [directory stringByAppendingPathComponent:name];
         NSDictionary *state = extended_file_state(path);
         if (!state) return [NSString stringWithFormat:@"recorded file is missing: %@", name];
         if (![files[name] isEqual:state]) return [NSString stringWithFormat:@"recorded file changed: %@", name];
@@ -71,7 +72,7 @@ static NSString *extended_record_mismatch(NSDictionary *record, NSDictionary *id
     return archives ? nil : @"completion inventory contains no archives";
 }
 static int extended_record_matches(NSDictionary *record, NSDictionary *identity) {
-    return extended_record_mismatch(record, identity) == nil;
+    return extended_record_mismatch_at(record, identity, arch_extended_dir()) == nil;
 }
 static void extended_protect(NSDictionary *files) {
     // Before normal warm workers start. Compaction recaptures only their lists,
@@ -81,6 +82,100 @@ static void extended_protect(NSDictionary *files) {
         if (g_compact_state[i] && files[[g_compact_files[i] lastPathComponent]]) { g_compact_state[i] = 0; kept++; }
     }
     if (kept) MLOG("extended pipelines: %d completion archives protected from partial compaction", kept);
+}
+// Linking is idempotent only for the very same regular file. Never replace a
+// different file at the destination, even when its length and timestamp match.
+static int extended_same_file(NSString *a, NSString *b) {
+    struct stat x, y;
+    return !lstat(a.fileSystemRepresentation, &x) && S_ISREG(x.st_mode) &&
+           !lstat(b.fileSystemRepresentation, &y) && S_ISREG(y.st_mode) && x.st_dev == y.st_dev && x.st_ino == y.st_ino;
+}
+static int extended_directory(void) {
+    NSString *dir = arch_extended_dir(); struct stat st;
+    if (!lstat(dir.fileSystemRepresentation, &st)) return S_ISDIR(st.st_mode);
+    return errno == ENOENT && [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+}
+static int extended_link_file(NSString *source, NSString *destination) {
+    struct stat st;
+    if (lstat(source.fileSystemRepresentation, &st) || !S_ISREG(st.st_mode)) return 0;
+    if (link(source.fileSystemRepresentation, destination.fileSystemRepresentation) && errno != EEXIST) return 0;
+    return extended_same_file(source, destination);
+}
+static void extended_cleanup_links(NSDictionary *files) {
+    // A published completion record already names the extended links. A crash
+    // partway through this cleanup leaves harmless aliases, removed next start.
+    for (NSString *name in files) {
+        NSString *from = [g_arch_dir stringByAppendingPathComponent:name], *to = [arch_extended_dir() stringByAppendingPathComponent:name];
+        if (extended_same_file(from, to)) {
+            // Usually migration precedes opening archives. Also support a
+            // compiler initialized before the shader map: retain its open objects.
+            for (id archive in g_arch_paths.keyEnumerator.allObjects)
+                if ([[g_arch_paths objectForKey:archive] isEqualToString:from]) [g_arch_paths setObject:to forKey:archive];
+            unlink(from.fileSystemRepresentation);
+        }
+    }
+}
+static NSDictionary *extended_read_record(NSString *directory, NSString *name, NSData **bytes) {
+    NSData *data = [directory isEqualToString:arch_extended_dir()] && !arch_extended_exists() ? nil :
+        [NSData dataWithContentsOfFile:[directory stringByAppendingPathComponent:name]];
+    if (bytes) *bytes = data;
+    return data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+}
+static void extended_migrate(void) {
+    if (!g_shmap_path || !extended_path()) return;
+    g_extended_migration_checked = 1;
+    NSDictionary *identity = extended_identity([NSData dataWithContentsOfFile:extended_path()]);
+    if (!identity) return;
+    NSDictionary *current = extended_read_record(arch_extended_dir(), @"extended.json", NULL);
+    if (extended_record_matches(current, identity)) { extended_cleanup_links(current[@"files"]); return; }
+    for (NSString *name in @[@"extended.json", @"baked.json"]) {
+        NSData *bytes; NSDictionary *old = extended_read_record(g_arch_dir, name, &bytes);
+        if (extended_record_mismatch_at(old, identity, g_arch_dir)) continue;
+        g_extended_legacy = 1;   // until every link and the new record is published
+        BOOL ok = extended_directory();
+        for (NSString *file in old[@"files"]) {
+            if (!ok) break;
+            ok = extended_link_file([g_arch_dir stringByAppendingPathComponent:file], [arch_extended_dir() stringByAppendingPathComponent:file]);
+        }
+        // Verify both views again before publication. The old record and files
+        // remain usable on every failure; partially created links are retryable.
+        ok = ok && !extended_record_mismatch_at(old, identity, g_arch_dir) && extended_record_matches(old, identity);
+        ok = ok && [bytes writeToFile:[arch_extended_dir() stringByAppendingPathComponent:@"extended.json"] options:NSDataWritingAtomic error:nil];
+        if (ok) {
+            g_extended_legacy = 0;
+            extended_protect(old[@"files"]);
+            extended_cleanup_links(old[@"files"]);
+            MLOG("extended pipelines: legacy completion migrated with hard links; no compilation or payload copy");
+        } else MLOG("extended pipelines: legacy migration deferred; original archives and completion record retained");
+        return;
+    }
+}
+static void extended_archive_used(id<MTL4Archive> archive) {
+    NSString *path = [g_arch_paths objectForKey:archive];
+    if (path) @synchronized (g_extended_used) { [g_extended_used addObject:path]; }
+}
+static NSDictionary *extended_dependencies(NSSet *before) {
+    NSMutableDictionary *files = [NSMutableDictionary dictionary];
+    // Newly captured files and only the existing local files actually used by
+    // this extended list. Never take a snapshot of the runtime directory.
+    NSMutableSet *names = [NSMutableSet setWithArray:extended_files().allKeys]; [names minusSet:before];
+    for (NSString *source in g_extended_used) {
+        NSString *name = source.lastPathComponent, *destination = [arch_extended_dir() stringByAppendingPathComponent:name];
+        if (![source isEqualToString:destination]) {
+            if (!extended_link_file(source, destination)) return nil;
+            NSString *index = arch_keys_path(source);
+            if (extended_file_state(index) && !extended_link_file(index, arch_keys_path(destination))) return nil;
+        }
+        [names addObject:name];
+    }
+    for (NSString *name in names) {
+        if (![name.pathExtension isEqualToString:@"mtl4a"]) continue;
+        NSString *path = [arch_extended_dir() stringByAppendingPathComponent:name];
+        NSDictionary *state = extended_file_state(path); if (!state || !arch_file_ok(path)) return nil;
+        files[name] = state;
+        if ((state = extended_file_state(arch_keys_path(path)))) files[arch_keys_path(name)] = state;
+    }
+    return files;
 }
 // Validate before warm_parse's deliberately permissive old-version handling:
 // skipped or malformed rows must not turn incomplete preparation into a success.
@@ -114,14 +209,13 @@ static void extended_clear_batch(void) {
     g_extended_fn_off = nil; g_extended_fn_dev = nil; g_extended_fn4 = nil;
 }
 static int extended_open_new(NSMutableSet<NSString *> *opened) {
-    NSMutableArray *run = [g_arch_run mutableCopy] ?: [NSMutableArray array];
     NSMutableArray *indexed = [g_arch_ixf mutableCopy] ?: [NSMutableArray array];
     NSMutableArray *plain = [g_arch4 mutableCopy] ?: [NSMutableArray array];
     int ok = 1;
     arch_open_begin();
     for (NSString *name in extended_files()) {
         if ([opened containsObject:name] || ![name.pathExtension isEqualToString:@"mtl4a"]) continue;
-        NSString *path = [g_arch_dir stringByAppendingPathComponent:name];
+        NSString *path = [arch_extended_dir() stringByAppendingPathComponent:name];
         id<MTL4Archive> archive = arch_file_ok(path) ? [g_dev newArchiveWithURL:[NSURL fileURLWithPath:path] error:nil] : nil;
         if (!archive) { MLOG("[RED] extended pipelines: cannot open %s; no completion record", name.UTF8String); ok = 0; continue; }
         int complete = 0; NSData *keys = arch_keys_read(arch_keys_path(path), &complete);
@@ -129,32 +223,33 @@ static int extended_open_new(NSMutableSet<NSString *> *opened) {
             const uint64_t *kv = keys.bytes;
             for (NSUInteger i = 0; i < keys.length / sizeof *kv; i++) nvn_hm_put(&g_arch_ix, &kv[i], (__bridge void *)archive);
         }
-        [run addObject:archive]; [opened addObject:name];
+        [g_arch_paths setObject:path forKey:archive]; [opened addObject:name];
         if (keys && complete) [indexed addObject:archive]; else [plain addObject:archive];
     }
     arch_open_end();
-    g_arch_run = run; g_arch_ixf = indexed; g_arch4 = plain;
+    g_arch_ixf = indexed; g_arch4 = plain;
     return ok;
 }
 static int extended_start(int prepare) {
     NSString *path = extended_path();
-    if (!path || (!prepare && !g_compact_enabled)) return 0;
+    if (path && g_arch_dir && !g_extended_migration_checked) extended_migrate();
+    if (!path || (!prepare && !g_extended_legacy)) return 0;
     if (!g_comp4 || !arch_capturing() || !g_arch_dir) {
         if (prepare) MLOG("[RED] extended pipelines: no Metal 4 compiler or writable archive; normal rendering continues"); return -1;
     }
     NSData *data = [NSData dataWithContentsOfFile:path];
     NSString *text = data ? [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] : nil;
     NSDictionary *identity = extended_identity(data);
-    NSString *stamp = [g_arch_dir stringByAppendingPathComponent:@"extended.json"];
+    NSString *stamp = [arch_extended_dir() stringByAppendingPathComponent:@"extended.json"];
     // Names are not part of the identity. Copy a valid legacy record without
     // touching archive/index bytes or mtimes; retain it for older app versions.
     for (NSString *name in @[@"extended.json", @"baked.json"]) {
-        NSData *old = [NSData dataWithContentsOfFile:[g_arch_dir stringByAppendingPathComponent:name]];
-        NSDictionary *record = old ? [NSJSONSerialization JSONObjectWithData:old options:0 error:nil] : nil;
-        NSString *reason = extended_record_mismatch(record, identity);
+        NSData *old;
+        NSDictionary *record = extended_read_record(g_extended_legacy ? g_arch_dir : arch_extended_dir(), name, &old);
+        NSString *reason = extended_record_mismatch_at(record, identity, g_extended_legacy ? g_arch_dir : arch_extended_dir());
         if (reason) { MLOG("extended pipelines: %s not reusable: %s", name.UTF8String, reason.UTF8String); continue; }
-        extended_protect(record[@"files"]);
-        if (![name isEqualToString:@"extended.json"] && ![old writeToFile:stamp options:NSDataWritingAtomic error:nil])
+        if (g_extended_legacy) extended_protect(record[@"files"]);
+        if (!g_extended_legacy && ![name isEqualToString:@"extended.json"] && ![old writeToFile:stamp options:NSDataWritingAtomic error:nil])
             MLOG("extended pipelines: legacy completion record reused; name migration deferred");
         MLOG("extended pipelines: completion record matches; nothing to build"); return 0;
     }
@@ -183,10 +278,15 @@ static int extended_start(int prepare) {
     }
     tasks = nil;
     if (!total) { extended_clear_batch(); MLOG("[RED] extended pipelines: no pipeline rows"); return -1; }
+    if (!extended_directory()) { extended_clear_batch(); MLOG("[RED] extended pipelines: extended directory is not writable; normal rendering continues"); return -1; }
+    arch_flush_wait();
+    os_unfair_lock_lock(&g_ep_lock); g_ep->directory = arch_extended_dir(); os_unfair_lock_unlock(&g_ep_lock);
+    atomic_store(&g_extended_preparing, 1); g_extended_used = [NSMutableSet set];
     long done0 = g_warm_done; uint64_t r0 = g_warm_rps, c0 = g_warm_cps, t0 = bp_now();
     int fail0 = atomic_load(&g_pre_warm_failed), write0 = atomic_load(&g_arch_write_errors), ok = 1;
     MLOG("extended pipelines: %ld pipeline descriptions before the first frame; temporary objects released in batches", total);
-    NSMutableSet *opened = [NSMutableSet setWithArray:extended_files().allKeys];
+    NSSet *before = [NSSet setWithArray:extended_files().allKeys];
+    NSMutableSet *opened = [before mutableCopy];
     NSUInteger next = 0;
     while (next < pending.count && ok && arch_capturing()) {
         @autoreleasepool {
@@ -214,13 +314,22 @@ static int extended_start(int prepare) {
         }
     }
     front_progress(NULL, total, total);
+    arch_flush_wait();   // failed batches must also finish writing in their own directory
     ok = ok && next == pending.count && arch_capturing();
-    NSDictionary *files = extended_files();
+    NSDictionary *files = ok ? extended_dependencies(before) : nil;
     if (ok && files.count) {
         NSData *json = [NSJSONSerialization dataWithJSONObject:@{@"identity": identity, @"files": files, @"pipelines": @(total)} options:NSJSONWritingPrettyPrinted error:nil];
         ok = json && [json writeToFile:stamp options:NSDataWritingAtomic error:nil];
     } else ok = 0;
-    if (ok) extended_protect(files);
+    if (ok) {
+        extended_protect(files);   // imported runtime objects still have their original run-array positions this process
+        extended_cleanup_links(files);
+        // Only after the replacement completion record is on disk may obsolete
+        // extended generations be removed. Open Metal archives stay mapped.
+        for (NSString *name in extended_files()) if (!files[name]) unlink([arch_extended_dir() stringByAppendingPathComponent:name].fileSystemRepresentation);
+    }
+    g_extended_used = nil; atomic_store(&g_extended_preparing, 0);
+    os_unfair_lock_lock(&g_ep_lock); g_ep->directory = nil; os_unfair_lock_unlock(&g_ep_lock);
     MLOG("%sextended pipelines: %llu render / %llu compute in %.1f s; completion record %s", ok ? "" : "[RED] ",
          (unsigned long long)(g_warm_rps - r0), (unsigned long long)(g_warm_cps - c0), (bp_now() - t0) / 1e9, ok ? "written" : "not written; retry next start");
     g_warm_done = done0; g_warm_rps = r0; g_warm_cps = c0;
