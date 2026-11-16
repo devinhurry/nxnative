@@ -637,3 +637,11 @@ The guest address space, heaps, pools, virtual address memory and the allocators
 - **Check:** `make -C dm/gfx/tests GAME=<id> check_t_upload_slots` checks pending-batch reuse, exact edge bytes, the heavy-to-light transition, a return to sustained heavy uploads, and recurring bursts. Stable heavy and light phases and bursts within the window make no new staging buffers after warm-up. Run with and without `DM_NVN_ENC_THREAD=1` under Metal validation.
 - **Trade-off:** a large workload returning after a full low-demand window must grow its cache again; the test verifies it then settles without repeated allocation. A burst can stay in the sampled peak until the next complete low-demand window, and no cache aging runs while there are no upload batches.
 - **Found on:** a synthetic upload-cache workload; game and iPhone frame-time comparisons remain open.
+
+### Medium-sized pools wire unused memory as a whole
+
+- **Symptom:** a GPU address from a 256-512 MiB pool can make the pool's entire buffer resident even when reads reach only a small part of it.
+- **Cause:** on-demand chunking began at 512 MiB; every smaller pool kept a whole-pool buffer.
+- **Fix:** keep the existing chunk mapping, alias visibility, unknown-extent and whole-pool raw-memory behavior, lowering the default starting threshold to 256 MiB. `DM_NVN_POOL_CHUNK_MIN_MB` overrides it in whole MiB, at least 16 and fitting the address space; invalid values keep 256. `DM_NVN_POOL_CHUNKS=0` still disables chunking.
+- **Check:** `t_pool_chunk_min` prepares real pools immediately below, at and above the default and overridden thresholds, checks invalid values and chunking disabled. `t_pool_chunks` covers actual GPU addressing, chunk extension, uploads and whole-pool raw-memory access.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game), generic pool fixtures. **Open:** the game's actual pool-size distribution and iPhone performance under memory pressure.

@@ -455,6 +455,23 @@ check_t_border: t_border
 t_view_levels: t_view_levels.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_view_levels.m $(MTL_T_SRC) $(FW)
 check_t_view_levels: RUN_ENV = MTL_DEBUG_LAYER=1
+t_res_warm: t_res_warm.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_res_warm.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_res_warm
+check_t_res_warm: t_res_warm
+	MTL_DEBUG_LAYER=1 ./t_res_warm
+	DM_RES_WARM=0 MTL_DEBUG_LAYER=1 ./t_res_warm
+	DM_RES_WARM=1 MTL_DEBUG_LAYER=1 ./t_res_warm
+t_pool_chunk_min: t_pool_chunk_min.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pool_chunk_min.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_pool_chunk_min
+check_t_pool_chunk_min: t_pool_chunk_min
+	MTL_DEBUG_LAYER=1 ./t_pool_chunk_min 256
+	DM_NVN_POOL_CHUNK_MIN_MB=512 MTL_DEBUG_LAYER=1 ./t_pool_chunk_min 512
+	DM_NVN_POOL_CHUNK_MIN_MB=128 MTL_DEBUG_LAYER=1 ./t_pool_chunk_min 128
+	DM_NVN_POOL_CHUNK_MIN_MB=0 MTL_DEBUG_LAYER=1 ./t_pool_chunk_min 256
+	DM_NVN_POOL_CHUNK_MIN_MB=256bad MTL_DEBUG_LAYER=1 ./t_pool_chunk_min 256
+	DM_NVN_POOL_CHUNKS=0 MTL_DEBUG_LAYER=1 ./t_pool_chunk_min 256 off
 t_res_commit: t_res_commit.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_res_commit.m $(MTL_T_SRC) $(FW)
 check_t_res_commit: RUN_ENV = MTL_DEBUG_LAYER=1

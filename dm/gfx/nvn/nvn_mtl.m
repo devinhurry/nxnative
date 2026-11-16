@@ -307,9 +307,11 @@ enum { RS_SITES = 16 }; static struct { int line; uint64_t n, bytes; } g_rs_site
 #define res_add(r) res_add_at((r), __LINE__)
 // Both run on guest threads too (pool_res from mtl_addr, uploads), whose implicit autorelease pools never drain; containsObject: / removeObject: on a weak NSHashTable leave the object
 // autoreleased in the calling thread's pool (measured in a standalone test: the object outlived its last strong reference until the thread ended), so each has a pool of its own
+#include "nvn_res_warm.inc"
 static void res_q_put(id<MTLAllocation> r, int add) {   // Caller holds g_res_mu
     if (g_res_qn == g_res_qcap) { g_res_qcap = g_res_qcap ? 2 * g_res_qcap : 256; g_res_q = realloc_or_die(g_res_q, g_res_qcap * sizeof *g_res_q, "the residency changes"); }
     g_res_q[g_res_qn++] = (res_op){CFBridgingRetain(r), add};
+    res_warm_put(r,add);
 }
 static void res_add_at(id<MTLAllocation> allocation, int line) { @autoreleasepool {
     if (!allocation) return;
@@ -471,6 +473,7 @@ static void res_check(id r, const char *what, int reg) {
 // Applies and commits every change made before the call. A change another thread's commit took is in the set when this returns too: that commit holds g_res_commit_mu until it is
 // done. Each change holds its allocation until it is committed, so a removed one stays alive until it has left the set
 static void res_commit(void) { @autoreleasepool {
+    res_warm_wait();   // no residency lock is held while the preparation thread finishes earlier changes
     pthread_mutex_lock(&g_res_commit_mu);
     pthread_mutex_lock(&g_res_mu);
     res_op *q = g_res_q; size_t n = g_res_qn; g_res_q = NULL; g_res_qn = g_res_qcap = 0;
@@ -519,6 +522,7 @@ static void res_top_once(NSError *err) {
 }
 // Since the last call: residency commits (count, time), additions by source line (count, MB; the four largest by bytes) and removals
 void mtl_res_stats(char *out, size_t n) {
+    res_warm_report();
     pthread_mutex_lock(&g_res_commit_mu);   // the set's counts, which a commit changes
     unsigned long set_n = g_res ? (unsigned long)g_res.allocationCount : 0ul; double set_mb = g_res ? g_res.allocatedSize / 1048576.0 : 0;
     pthread_mutex_unlock(&g_res_commit_mu);
@@ -886,7 +890,7 @@ static void pool_res(int i) {
 // stride holding its address and on up to the end of what it asked (rounded up to the stride, plus a stride), made when first asked for. Only what lookups reach is wired. The chunks overlap, as adjacent
 // pools' buffers do at shared pages; GPU addresses are not contiguous across them, so a lookup must say how far it reads. One that does not know (length 1: an indirect draw's index buffer, a raw storage
 // address) gets BIG_UNKNOWN past its address. Raw global memory, whose pool table the shader walks by itself, takes the whole pool: big_full
-enum { BIG_MIN = 512u << 20, BIG_S = 16u << 20, BIG_UNKNOWN = 64u << 20, BIG_MAX = 32 };
+enum { BIG_MIN = 256u << 20, BIG_S = 16u << 20, BIG_UNKNOWN = 64u << 20, BIG_MAX = 32 };
 typedef struct { uintptr_t lo, hi, a, b; const void *mem; int *chunk, full; NSMutableArray *old; } big_pool;   // chunk: stride → g_pools index + 1; full: the whole pool's entry + 1; old: buffers a longer chunk replaced, alive with the pool
 static big_pool g_big[BIG_MAX]; static int g_nbig;
 static id<MTLBuffer> pool_buf(uintptr_t a, uintptr_t b);   // a pool's zero-copy buffer over [a, b), made over writable pages (below)
@@ -895,6 +899,19 @@ static int big_of(uint64_t addr) { for (int i = 0; i < g_nbig; i++) if (addr >= 
 // of several pools can be one step for every lookup (mtl_pool_replace)
 typedef struct { const void *mem; uint64_t size; uintptr_t lo, hi, a, b; __strong id<MTLBuffer> buf; } pool_new;   // buf nil: in chunks (a large pool)
 static int pool_chunks(void) { static int c = -1; if (c < 0) { const char *e = getenv("DM_NVN_POOL_CHUNKS"); c = !e || atoi(e); } return c; }
+static uint64_t pool_chunk_min(void) {
+    static uint64_t bytes=BIG_MIN;static dispatch_once_t once;
+    dispatch_once(&once,^{
+        const char *e=getenv("DM_NVN_POOL_CHUNK_MIN_MB");
+        if(e) {
+            char *end;errno=0;unsigned long long mb=strtoull(e,&end,10);
+            if(!errno && *e && *e!='-' && !*end && mb>=16 && mb<=SIZE_MAX/(1u<<20))bytes=(uint64_t)mb<<20;
+            else MLOG("[RED] invalid DM_NVN_POOL_CHUNK_MIN_MB: expected 16..%llu; using 256 MB",(unsigned long long)(SIZE_MAX/(1u<<20)));
+        }
+        MLOG("large memory pools use chunks from %llu MB (DM_NVN_POOL_CHUNK_MIN_MB)",(unsigned long long)(bytes>>20));
+    });
+    return bytes;
+}
 static id<MTLBuffer> pool_buf_made(const void *mem, uint64_t size, uintptr_t a, uintptr_t b) {
     id<MTLBuffer> buf = pool_buf(a, b);
     // Pokémon Legends: Z-A: twice on the Mac a small pool's buffer was refused although its pages were one read-write VM region, both times while another heavy job (a shader compile,
@@ -918,7 +935,7 @@ static id<MTLBuffer> pool_buf_made(const void *mem, uint64_t size, uintptr_t a, 
 static void pool_new_prep(pool_new *n, const void *mem, uint64_t size) {
     uintptr_t pg = (uintptr_t)getpagesize(), lo = (uintptr_t)mem, hi = lo + size;
     *n = (pool_new){mem, size, lo, hi, lo & ~(pg - 1), (hi + pg - 1) & ~(pg - 1), nil};
-    if (size >= BIG_MIN && pool_chunks()) { pthread_mutex_lock(&g_mu); int room = g_nbig < BIG_MAX; pthread_mutex_unlock(&g_mu); if (room) return; }
+    if (size >= pool_chunk_min() && pool_chunks()) { pthread_mutex_lock(&g_mu); int room = g_nbig < BIG_MAX; pthread_mutex_unlock(&g_mu); if (room) return; }
     n->buf = pool_buf_made(mem, size, n->a, n->b);
 }
 static void pool_new_put(pool_new *n) {   // caller holds g_mu

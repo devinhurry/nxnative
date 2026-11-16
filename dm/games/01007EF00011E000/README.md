@@ -210,6 +210,8 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 
 ## Found on this game
 
+- [Resource residency prepared in the background](../../../docs/reference/frame-rate.md#first-gpu-use-waits-for-resource-residency-preparation) and [256 MiB on-demand pool threshold](../../../docs/reference/memory.md#medium-sized-pools-wire-unused-memory-as-a-whole): production-path synthetic checks; iPhone gameplay and performance remain unvalidated.
+
 - [Argument blocks reused by consumed contents](../../../docs/reference/frame-rate.md#unchanged-consumed-bindings-encoded-again-after-a-pass-or-unrelated-bind): generic vertex/fragment optimization, with native CBUF refresh and submission-lifetime/resource invalidation. Metal regression covers output and invalidation; iPhone gameplay and performance remain unvalidated.
 
 - [Frontend settings freeze time without suspending game rendering](../../../docs/reference/nvn-objects.md#frontend-settings-freeze-time-without-suspending-game-rendering): independent lifecycle/settings holds and blocking counter reads; CPU and iOS compilation checks, physical-device confirmation pending.
