@@ -122,6 +122,12 @@ int main(int argc, char **argv) { @autoreleasepool {
     setenv("DM_PSO_FUTURE", sync ? "0" : "1", 1); setenv("DM_PSO_ARCHIVE", "off", 1); setenv("DM_PSO_USER", "/dev/null", 1);
     char path[] = "/tmp/t_pso_future.XXXXXX"; int fd = mkstemp(path); if (fd < 0) abort(); close(fd); setenv("DM_PSO_RECORD", path, 1);
     pso4_init(); FixtureCompiler *compiler = [FixtureCompiler new]; g_comp4 = (id)compiler; g_rec = 1;
+    const char *standin=getenv("DM_PSO_STANDIN");int wants_standin=standin&&atoi(standin)>0;
+    CHECK(standin_on()==(wants_standin&&hybrid_on()),"stand-ins default off; explicit opt-in preserves hybrid support");
+    if(!standin_on()) {
+        CHECK(hybrid_get(NULL,nil,nil)==nil,"disabled stand-ins never inspect or build a pulling descriptor");
+        CHECK(pso_prebuild(1,0,QOS_CLASS_UTILITY)<0,"disabled stand-ins do not prebuild unused pulling bases");
+    }
     state_reset(); g_pass.cfmt[0] = MTLPixelFormatRGBA8Unorm; g_pass.samples = 1;
     NvProg *pr = program(); pso_key key; pso_key_fill(&key, pr->sh[0], pr->sh[1], g_pass.cfmt, 0, 0, 1, 0);
     MTLRenderPipelineDescriptor *d = pso_desc(&key, pr->sh[0], pr->sh[1], nil, 0);

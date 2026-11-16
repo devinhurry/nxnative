@@ -28,6 +28,11 @@ FW=-framework Metal -framework MetalFX -framework Foundation -framework QuartzCo
 # Tests that #include nvn_mtl.m link the rest of the NVN layer beside it (hle_nvn.c: memory pools, sparse pools, serials) and the host's large stack, with weak stubs of what they need of the host (t_host_stubs.c)
 MTL_T_DEP=../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(GFX_H)
 MTL_T_SRC=../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX))
+t_submit_cache: t_submit_cache.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_submit_cache.m $(MTL_T_SRC) $(FW)
+t_bf_async: t_bf_async.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_bf_async.m $(MTL_T_SRC) $(FW)
+check_t_submit_cache check_t_bf_async: RUN_ENV = MTL_DEBUG_LAYER=1
 t_args_key: t_args_key.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_args_key.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_args_key
@@ -358,7 +363,7 @@ check_t_geometry_mesh: t_geometry_mesh
 	@set -e; work=$$(mktemp -d); trap 'rm -rf "$$work"' EXIT; python3 test_dmsh_geometry.py --fixture "$$work"; MTL_DEBUG_LAYER=1 ./t_geometry_mesh "$$work"; DM_NVN_GEO_MESH_RUN=0 MTL_DEBUG_LAYER=1 ./t_geometry_mesh "$$work"; DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_geometry_mesh "$$work"
 .PHONY: check_t_feedback
 check_t_feedback: t_feedback
-	@set -e; work=$$(mktemp -d); trap 'rm -rf "$$work"' EXIT; python3 test_dmsh_fetch.py --fixture "$$work"; MTL_DEBUG_LAYER=1 ./t_feedback "$$work"
+	@set -e; work=$$(mktemp -d); trap 'rm -rf "$$work"' EXIT; python3 test_dmsh_fetch.py --fixture "$$work"; MTL_DEBUG_LAYER=1 ./t_feedback "$$work"; DM_NVN_BF_ASYNC=0 MTL_DEBUG_LAYER=1 ./t_feedback "$$work"
 t_mip_extent: t_mip_extent.m ../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(GFX_H)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_mip_extent.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
 .PHONY: check_t_mip_extent
@@ -393,6 +398,10 @@ t_pso_future: t_pso_future.m $(MTL_T_DEP)
 check_t_pso_future: t_pso_future
 	./t_pso_future --sync
 	./t_pso_future
+	DM_PSO_STANDIN=0 ./t_pso_future
+	DM_PSO_STANDIN=1 ./t_pso_future
+	./t_pso_future --no-workers
+	MTL_DEBUG_LAYER=1 ./t_pso_future --gpu
 t_shmap_warm: t_shmap_warm.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_shmap_warm.m $(MTL_T_SRC) $(FW)
 t_pso_depth_stencil: t_pso_depth_stencil.m $(MTL_T_DEP)
@@ -422,8 +431,8 @@ t_pso_bundle: t_pso_bundle.m ../tools/pso_offline.py $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_bundle.m $(MTL_T_SRC) $(FW)
 t_pso_stall: t_pso_stall.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_stall.m $(MTL_T_SRC) $(FW)
-check_t_pso_stall: RUN_ENV = MTL_DEBUG_LAYER=1
-check_t_pso_bundle: RUN_ENV = MTL_DEBUG_LAYER=1
+check_t_pso_stall: RUN_ENV = DM_PSO_STANDIN=1 MTL_DEBUG_LAYER=1
+check_t_pso_bundle: RUN_ENV = DM_PSO_STANDIN=1 MTL_DEBUG_LAYER=1
 t_pso_prewarm: t_pso_prewarm.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_prewarm.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_pso_prewarm

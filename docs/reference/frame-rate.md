@@ -588,8 +588,31 @@ Frame pacing: the host's frame step, engine frame limiters, present intervals an
 
 - **Symptom:** the submit thread's CPU samples dominated by `mtl_addr` / `mtl_gpu_addr` (vertex buffers in `draw`, uniform buffers in `encode_args`).
 - **Cause:** with many memory pools alive, the lookups scanned them all for every buffer binding of every draw.
-- **Fix:** they try the last hit, then a binary search over pools sorted by start address (`pool_find`, rebuilt when pools are added or removed).
+- **Fix:** they try the last hit, then a binary search over pools sorted by start address (`pool_find`). The first lookup sorts the index; subsequent insertions and removals update it with a binary search and an integer-array move. Removal also renumbers the pool array's swapped last entry, including a large chunk being lengthened. Pool generations and the per-thread last-hit invalidation remain unchanged, as do overlap fallback and buffer retirement.
 - **Found on:** [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md): about 1,760 memory pools alive; a CPU sample of the submit thread had about 1,000 of its samples under those scans. Host submit time in the shrine went from 21 ms to 7 ms per frame (p50), the median frame from 38 ms to 21 ms.
+
+- **Check:** `t_submit_cache` covers equal starts, overlaps, index growth and repeated swap-last mutations; `t_pool_chunks` and `t_sparse_pool_cache` cover chunk growth and remapping. These are synthetic production-path checks; the incremental update has not yet been measured in device gameplay.
+
+### Cached program hits still cross an ARC object-return boundary
+
+- **Symptom:** repeated draw and reflection queries reach a cached program but still execute Objective-C retain/autorelease return traffic.
+- **Cause:** an `__unsafe_unretained` qualifier on a C function's return type does not establish a borrowed-return convention under ARC. The caller's borrowed local alone cannot remove that convention.
+- **Fix:** borrowed hot callers use `PROG_BORROW`: a cache hit passes the pointer through a C `void *` bridge while the existing strong last-result cache owns the program. Descriptor identity, serial and serial-table generation must all match. A miss calls the original typed `prog_get`, and owning callers keep it too; cold construction and lifetime rules are unchanged. The compute lookahead also resolves its program once instead of twice.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game), by inspecting arm64 code generation. `t_submit_cache` checks cache hits, owner lifetime, serial replacement, descriptor changes and null programs. **Open:** on-device gameplay performance.
+
+### Readable-tile specialization stalls the submit thread on a cold key
+
+- **Symptom:** the first draw with new tile-reading constants stalls even though its pipeline build can run in the background; cached tile-function lookups can wait behind that compile too.
+- **Cause:** `bf_fn` loaded the library and synchronously specialized its function while holding the shared function-cache lock. Background PSO compilation did not move this earlier work off the submit thread.
+- **Fix:** keep the per-shader numeric-key memo and create one queued job per missing key. A serial background queue loads the library and specializes the function outside the cache lock, retaining the shader and publishing completion under the lock. Runtime misses return immediately and use the existing snapshot / unmerged path until both function and pipeline are ready. Prewarm and offline capture still wait for the completed function. Failures are remembered once. `DM_NVN_BF_ASYNC=0` restores synchronous runtime waiting, without changing the shader ABI or requiring rebuilt libraries.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game). `t_bf_async` blocks the build queue to verify nonblocking misses and cache hits, deduplication and owner lifetime; `t_feedback` checks fallback and eventual tile-rendered pixels with async enabled and disabled. **Open:** on-device hitch and image validation.
+
+### Temporary pulling stand-ins spend work on pipelines soon replaced
+
+- **Symptom:** cold pipelines trigger additional pulling-library loads, shader-pair base prebuilds and temporary pipeline specializations before the final vertex-layout pipeline becomes ready.
+- **Cause:** hybrid stand-ins can avoid missing draws, but require extra compilation and runtime vertex-format decoding. The existing cold-pipeline futures already allow an unready draw to be skipped while a worker builds its final pipeline.
+- **Fix:** temporary stand-ins default off. `standin_on` gates their lookup, pulling-library prefetch and shader-pair-only base prebuild; normal shader loading, recorded-pipeline prewarm, archive lookup and final pipeline futures remain active. `DM_PSO_STANDIN=1` restores the native stand-in path when hybrid support is available; `DM_PSO_HYBRID=0` still disables that support. With futures enabled, cold draws may be absent briefly; ready pipelines resume drawing. The existing no-worker and synchronous fallbacks continue rendering synchronously rather than skipping forever. This deliberately trades cold-draw completeness for less duplicate work; it does not improve the cost of an already-ready steady-state draw.
+- **Found on:** [Breath of the Wild](../../dm/games/01007EF00011E000/README.md#found-on-this-game). `t_pso_future` checks default / off / on policy, pending and failed draws, synchronous and unavailable-worker paths, plus a real GPU archive result; bundle and stall regressions opt into stand-ins to retain their original coverage. **Open:** on-device cold-scene appearance, frame rate and power.
 
 ### Argument blocks encoded again when only a uniform buffer moved
 

@@ -210,6 +210,8 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 
 ## Found on this game
 
+- [Incremental memory-pool index](../../../docs/reference/frame-rate.md#address-to-memory-pool-lookups-by-binary-search), [borrowed program cache hits](../../../docs/reference/frame-rate.md#cached-program-hits-still-cross-an-arc-object-return-boundary), [background tile-function specialization](../../../docs/reference/frame-rate.md#readable-tile-specialization-stalls-the-submit-thread-on-a-cold-key), and [temporary stand-ins default off](../../../docs/reference/frame-rate.md#temporary-pulling-stand-ins-spend-work-on-pipelines-soon-replaced): generic submit-path changes covered by synthetic production-path checks; on-device gameplay, cold-scene appearance and power validation remain open.
+
 - [Resource residency prepared in the background](../../../docs/reference/frame-rate.md#first-gpu-use-waits-for-resource-residency-preparation) and [256 MiB on-demand pool threshold](../../../docs/reference/memory.md#medium-sized-pools-wire-unused-memory-as-a-whole): production-path synthetic checks; iPhone gameplay and performance remain unvalidated.
 
 - [Argument blocks reused by consumed contents](../../../docs/reference/frame-rate.md#unchanged-consumed-bindings-encoded-again-after-a-pass-or-unrelated-bind): generic vertex/fragment optimization, with native CBUF refresh and submission-lifetime/resource invalidation. Metal regression covers output and invalidation; iPhone gameplay and performance remain unvalidated.

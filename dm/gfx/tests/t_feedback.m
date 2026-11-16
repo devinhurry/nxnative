@@ -31,6 +31,12 @@ static void clear(MTLClearColor color) {
     R.clear_c[0] = 1; R.cc[0] = color;
     CHECK(rp_begin() != nil, "production render pass opens");
 }
+// Function specialization and pipeline creation are independently asynchronous. Ask through the
+// production planner after the function queue settles, without taking an extra snapshot.
+static void start_tile_pipeline(NvProg *pr) {
+    dispatch_sync(bf_queue(), ^{});
+    clear(MTLClearColorMake(1,0,0,1));uint64_t tile[4];fb_tile_plan(pr,0,tile);rp_end();
+}
 static void sample(NvShader *fs, id<MTLRenderPipelineState> pipeline) {
     clear(MTLClearColorMake(0, 0, 0, 1));
     enc_r_pso(g_enc, pipeline);
@@ -268,6 +274,7 @@ static void tile_case(const char *dir) {
     clear(MTLClearColorMake(1, 0, 0, 1));
     fb_prepare(pr);
     CHECK(g_fb_n == 1 && !g_enc && g_fb_count == copies + 1 && g_fb_tile_wait == waits + 1 && g_fb_tseq != g_draw_seq, "while its pipeline builds, the draw takes a snapshot");
+    start_tile_pipeline(pr);
     for (int i = 0; i < 1000; i++) { os_unfair_lock_lock(&g_fb_tp_lock); int done = g_fb_tp_n && g_fb_tp[0].done; os_unfair_lock_unlock(&g_fb_tp_lock); if (done) break; usleep(10000); }
     CHECK(g_fb_tp_n == 1 && g_fb_tp[0].done && g_fb_tp[0].ps, "the tile-reading pipeline is built in the background");
     g_fb_bar++;   // a game barrier: a snapshot would have to be taken again
@@ -374,6 +381,7 @@ static void fpos_case(const char *dir) {
     float quarter[2] = {0.25f, 0.25f}; mtl_sub_update(quarter, (uint64_t)(mem + 24), 8);
     g_fb_bar++; clear(MTLClearColorMake(1, 0, 0, 1)); fb_prepare(pr);
     CHECK(g_fb_n == 1 && !g_enc && g_fb_count == copies + 2 && g_fb_tile_wait == waits + 1, "the inline update's 1/4 proves it; while the pipeline builds, a snapshot");
+    start_tile_pipeline(pr);
     for (int i = 0; i < 1000; i++) { os_unfair_lock_lock(&g_fb_tp_lock); int done = 1; for (int k = 0; k < g_fb_tp_n; k++) done &= g_fb_tp[k].done; os_unfair_lock_unlock(&g_fb_tp_lock); if (done) break; usleep(10000); }
     g_fb_bar++;
     clear(MTLClearColorMake(1, 0, 0, 1));
