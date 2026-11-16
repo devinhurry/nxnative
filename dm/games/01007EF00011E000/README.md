@@ -210,6 +210,7 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 
 ## Found on this game
 
+- [Frontend settings freeze time without suspending game rendering](../../../docs/reference/nvn-objects.md#frontend-settings-freeze-time-without-suspending-game-rendering): independent lifecycle/settings holds and blocking counter reads; CPU and iOS compilation checks, physical-device confirmation pending.
 - **Implemented, device validation open: foreground frame-step recovery**: [Foreground recovery retries the frame-step target](../../../docs/reference/frame-rate.md#foreground-recovery-retries-the-frame-step-target). CPU-only production lifecycle and controller regressions pass; no new iPhone gameplay measurement.
 
 - [Repeated extended preparation after archive compaction](../../../docs/reference/rendering.md#repeated-extended-preparation-after-archive-compaction): extended and runtime archives use separate directories; synthetic checks cover no-compile hard-link migration, interrupted migration recovery, and continued runtime compaction across consecutive starts. Physical iPhone confirmation remains pending.

@@ -111,8 +111,30 @@ static int reached(dispatch_semaphore_t semaphore, const char *name) {
     int ok = dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)) == 0;
     CHECK(name, ok); return ok;
 }
+static void *enter_graphics(void *signal) {
+    dm_gfx_enter(); dispatch_semaphore_signal((dispatch_semaphore_t)signal); dm_gfx_leave(); return NULL;
+}
+static void overlapping_holds(void) {
+    for (int settings_first = 0; settings_first < 2; settings_first++) {
+        uint64_t epoch = atomic_load(&g_fstep_resume_epoch);
+        dispatch_semaphore_t entered = dispatch_semaphore_create(0); pthread_t worker;
+        dm_gfx_suspend_for(3, 1); dm_gfx_suspend(1);
+        pthread_create(&worker, NULL, enter_graphics, (void *)entered);
+        CHECK("both holds stop graphics", dispatch_semaphore_wait(entered, dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_MSEC)) != 0);
+        if (settings_first) dm_gfx_suspend_for(3, 0); else dm_gfx_suspend(0);
+        CHECK("releasing one owner leaves graphics paused", dispatch_semaphore_wait(entered, dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_MSEC)) != 0);
+        CHECK("partial resume does not reset frame pacing", atomic_load(&g_fstep_resume_epoch) == epoch);
+        if (settings_first) dm_gfx_suspend(0); else dm_gfx_suspend_for(3, 0);
+        reached(entered, "graphics resumes after the last owner releases"); pthread_join(worker, NULL);
+        CHECK("last release resets frame pacing once", atomic_load(&g_fstep_resume_epoch) == epoch + 1);
+    }
+    dm_gfx_suspend_for(3, 1); dm_gfx_suspend_for(3, 1); dm_gfx_suspend_for(3, 0);
+    CHECK("repeated settings notifications do not leak a hold", g_susp == 0 && g_susp_reasons == 0);
+}
 
 int main(void) {
+    overlapping_holds();
+    atomic_store(&drains, 0);
     preparing = dispatch_semaphore_create(0); second_waiting = dispatch_semaphore_create(0);
     finish_prepare = dispatch_semaphore_create(0); prepared = dispatch_semaphore_create(0);
     suspended = dispatch_semaphore_create(0); returned = dispatch_semaphore_create(0);
