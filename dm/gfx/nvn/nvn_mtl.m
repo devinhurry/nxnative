@@ -4871,6 +4871,7 @@ enum { ED_SREF = 1, ED_VP = 2, ED_SC = 4, ED_CULL = 8, ED_WIND = 16, ED_FILL = 3
 static int g_enc_vis, g_enc_has_vis;   // This encoder's current visibility count mode (0 off / slot number + 1), and whether a visibility buffer is attached
 static int g_pso_dirty = 1, g_dss_dirty = 1;   // Pipeline / depth-stencil related state was changed during replay
 static uint64_t g_stat_args_enc, g_stat_args_reuse, g_stat_args_patch;   // Argument buffer: new-encode / reuse / patched (only CBUF slots written again) counts
+static uint64_t g_stat_args_key_reuse, g_stat_args_key_patch, g_stat_args_key_check;
 static uint64_t g_stat_draw, g_stat_pass, g_bw_load, g_bw_store, g_pass_full_rw, g_udc_saved_bytes;   // Bandwidth ledger: attachment load / store bytes, number of full load-store passes
 // DM_NVN_PASSDUMP: records pass attachments / samples / presents one by one (textures by serial) for offline data-flow analysis; the pass numbers of P / D / R / S lines agree (= g_stat_pass after the pass is opened)
 // DM_NVN_PASSDUMP=frame number, or start-end (inclusive at both ends)
@@ -5973,7 +5974,8 @@ static void shmap_read(void) {
     uint64_t cbs_seen; uint32_t cbs_runs;   // the command buffer that listed this shader last, and how many have (cbs_note)
     // The argument buffer encoded last time
     uint8_t ab_cbuf_only;   // 0 not decided, 1: its only bindings read through a uniform buffer are plain CBUF slots (args_cbuf_only), so a block can be patched when only those changed; 2 not
-    id<MTLBuffer> ab_buf; uint64_t ab_gpu; size_t ab_off; uint64_t ab_pass; uint32_t ab_binst; uint64_t ab_pgen;   // ab_pass: serial of the render pass that encoded this argument block - reused only within the same pass (the arena holding a block from another pass / another submission may already have been reclaimed and rewritten); ab_pgen: g_psnap_gen when it was encoded (pools, pool_gpu)
+    id<MTLBuffer> ab_buf; uint64_t ab_gpu; size_t ab_off; uint64_t ab_pass; uint32_t ab_binst; uint64_t ab_pgen;   // ab_pass: serial of the render pass that encoded this argument block (the dirty-flag fast path stays within this pass; content keys below also guard the arena lifetime); ab_pgen: g_psnap_gen when it was encoded (pools, pool_gpu)
+    uint64_t *ab_key; size_t ab_nkey, ab_key_cap; uint8_t ab_keyable; uint8_t *ab_cpu;   // the last block only; its key carries the arena lifetime and resource generations
     id<MTLLibrary> bflib; int bflib_state; NSMutableArray *bffn;   // bflib: the readable-tile version <key>_bf (state as afn_state), bffn: its functions specialized by their numbers (NvBfFn, bf_fn)
     uint64_t mis[4];   // mis: texture slots 0-255 already reported for a type mismatch (tex_mis_note)
     NSString *ventry; id<MTLFunction> vfn; int vfn_state;
@@ -5981,7 +5983,7 @@ static void shmap_read(void) {
     id<MTLLibrary> alib; id<MTLFunction> afn[2]; NSMutableDictionary *aufn; int afn_state, has_alpha, has_bz;   // has_bz: its entry points read the blend weight word (bz_bind)
     id<MTLLibrary> llib; NSMutableDictionary<NSNumber *, id<MTLFunction>> *lfn; int lfn_state, has_logic; } @end   // llib: the side library <key>_bx for logic operations, lfn: its fn / fn_u entry points specialized per set of targets (and fn_u's per integer targets; lo_fn; lfn_state as afn_state; has_logic: the reflection names its entry points, dmsh_logic.py)   // afn: the alpha test entry points of fn and fn_d in the side library <key>_bx (alib), aufn: fn_u's specialized per integer targets (at_fn; afn_state 0 untried, 1 loaded, 2 failed; has_alpha: the reflection names them, dmsh_alpha.py)   // pfn: the same entry of the pulling library <key>_bp (pull_fn; has_pull: the reflection names one, dmsh_pull.py)   // vertex: the entry point loaded (by the depth mode); vfn: the same entry of the shadow-input library <key>_bv (vin_fn; state 0 untried, 1 loaded, 2 failed)
 @implementation NvShader
-- (void)dealloc { free(rf.c1); free(geo_slot); }
+- (void)dealloc { free(rf.c1); free(geo_slot); free(ab_key); }
 @end
 // One specialization of a shader's readable-tile version: what each sample reads from the tile (fx, -1 none; only the shader's nfc entries), the attachments read (fbmask) and the
 // attachment each colour output goes to (lmap); fn nil when Metal refused it (not asked again)
@@ -7338,6 +7340,7 @@ static inline __attribute__((always_inline)) void *samp_fast(int sid) {
 @interface NvArena : NSObject { @public id<MTLBuffer> buf; uint8_t *cpu; uint64_t gpu, fence; size_t used, len; } @end   // len: buf.length and cpu: buf.contents, kept so an allocation and its writes send no message
 @implementation NvArena @end
 static NSMutableArray<NvArena *> *g_arenas; static NvArena *g_cur_arena; static NSMutableArray<NvArena *> *g_sub_arenas;
+static uint64_t g_arena_life=1;   // scratch keys expire before a submission's buffers can be recycled
 static NvArena *arena_new(size_t minimum) {
     // The for-in loop variable does not retain the object: take a strong reference first and then remove it from the array, otherwise what is returned after the array releases it is a dangling pointer
     NvArena *r = nil;   // the smallest one that fits, so the usual small requests do not keep a large scratch arena alive (ARENA_IDLE, arena_begin)
@@ -7353,13 +7356,14 @@ static NvArena *arena_new(size_t minimum) {
 // them again and took 300 ms. The usual 4 MB blocks are always kept
 enum { ARENA_KEEP = 32 << 20, ARENA_IDLE = 600 };
 void arena_begin(void) {
+    g_arena_life++;
     if (!g_arenas) { g_arenas = [NSMutableArray array]; g_sub_arenas = [NSMutableArray array]; }
     g_cur_arena = nil;
     uint64_t done = g_done;   // read as the submission start does (its allocator and visibility ring)
     for (NSUInteger i = g_arenas.count; i-- > 0;) { NvArena *a = g_arenas[i];
         if (a->fence && a->fence <= done && a->len > ARENA_KEEP && g_fence > a->fence + ARENA_IDLE) { res_remove(a->buf); [g_arenas removeObjectAtIndex:i]; } }
 }
-void arena_commit(uint64_t fence) { for (NvArena *a in g_sub_arenas) { a->fence = fence; [g_arenas addObject:a]; } [g_sub_arenas removeAllObjects]; g_cur_arena = nil; }
+void arena_commit(uint64_t fence) { g_arena_life++; for (NvArena *a in g_sub_arenas) { a->fence = fence; [g_arenas addObject:a]; } [g_sub_arenas removeAllObjects]; g_cur_arena = nil; }
 // An unqualified id * out-parameter is __autoreleasing under ARC; __strong avoids autoreleasing the arena buffer at every allocation.
 // Measurements: docs/reference/frame-rate.md, Arena buffer ownership on allocation.
 static size_t arena_alloc(size_t n, __strong id<MTLBuffer> *buf) {
@@ -11638,10 +11642,14 @@ static uint64_t cbuf_slot(NvShader *sh, int nvn_stage, const nvn_rbind *b, __str
 }
 // The uniform slots' bound sizes (DMSH_CBSIZE_BANK), which the translator's reads at computed offsets compare with: one past its slot's size, rounded up to 256 bytes (ub_bound), gives 0, as on Maxwell. 0 for an unbound slot,
 // whose reads go to the zero bank (cbuf_slot) and get 0 here too
+static uint32_t cbsize_value(int nvn_stage,int r) {
+    const p_bind_buf *u=&S.ubo[nvn_stage][r];
+    return !u->addr?0:u->size<65536?(uint32_t)ub_bound(u->size):65536;
+}
 static uint64_t cbsize_table(int nvn_stage, __strong id<MTLBuffer> *use) {
     size_t off = arena_alloc(16 * ((DMSH_CBSIZE_SLOTS + 3) / 4), use); uint32_t *d = (uint32_t *)(void *)(g_cur_arena->cpu + off);
     memset(d, 0, 16 * ((DMSH_CBSIZE_SLOTS + 3) / 4));
-    for (int r = 0; r < DMSH_CBSIZE_SLOTS; r++) { const p_bind_buf *u = &S.ubo[nvn_stage][r]; if (u->addr) d[r] = u->size < 65536 ? (uint32_t)ub_bound(u->size) : 65536; }   // rounded up to 256, as the driver gives it to the GPU (ub_bound)
+    for (int r = 0; r < DMSH_CBSIZE_SLOTS; r++) d[r]=cbsize_value(nvn_stage,r);   // rounded up to 256, as the driver gives it to the GPU (ub_bound)
     return g_cur_arena->gpu + off;
 }
 // Whether a block of sh can be patched when only what the uniform bindings point at changed: every binding that reads through a uniform buffer is a plain CBUF slot (no handles or
@@ -11691,6 +11699,7 @@ static void cbs_fly_report(uint64_t fence) {
     pthread_mutex_unlock(&g_cbs_mu);
 }
 static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex);
+#include "nvn_args_key.inc"
 static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex) { cbs_note(sh); AP_B; int r = encode_args_(en, sh, nvn_stage, metal_vertex); AP_E(3); return r; }
 static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex) {
     if (nvn_stage == 1 && !metal_vertex && sh->has_alpha && atest_on()) at_bind(en);   // also for a shader without bindings
@@ -11705,7 +11714,24 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
         return 1;
     }
     NSUInteger arg_len = sh->arg_len ? sh->arg_len : sh->ae.encodedLength;
-    if (reusable && args_cbuf_only(sh)) {   // only what the uniform bindings point at changed since this shader's block: copy it and write its uniform slots and their size table again
+    uint64_t key[ARGS_KEY_MAX], proposed[NVN_REFL_MAXARG];
+    os_unfair_lock_lock(&g_rmu);   // content keys and full encoding observe registrations under the same lock
+    unsigned nkey=args_key_make(sh,nvn_stage,metal_vertex,key);
+    int checking=0;
+    if(nkey && sh->ab_nkey==nkey && sh->ab_cpu && !memcmp(sh->ab_key,key,nkey*sizeof *key)) {
+        memcpy(proposed,sh->ab_cpu,arg_len);
+        // Keep cbuf_slot's deferred updates, padding and optional corrections.
+        for(int i=0;i<sh->rf.nb;i++)if(sh->rf.b[i].kind==NVN_RB_CBUF) {
+            id<MTLBuffer> use;proposed[sh->rf.b[i].aid]=cbuf_slot(sh,nvn_stage,&sh->rf.b[i],&use);
+        }
+        if(!args_key_check_on()) {
+            args_key_bind(en,sh,nvn_stage,metal_vertex,proposed,arg_len);
+            os_unfair_lock_unlock(&g_rmu);
+            return 1;
+        }
+        checking=1;   // rebuild static bindings below and compare before drawing
+    }
+    if (!checking && reusable && args_cbuf_only(sh)) {   // only what the uniform bindings point at changed since this shader's block: copy it and write its uniform slots and their size table again
         id<MTLBuffer> ab; size_t off = arena_alloc(arg_len, &ab);
         uint64_t *p = (uint64_t *)(void *)(g_cur_arena->cpu + off);
         memcpy(p, (const uint8_t *)sh->ab_buf.contents + sh->ab_off, arg_len);
@@ -11714,6 +11740,8 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             else if (b->kind == NVN_RB_CBSIZE) p[b->aid] = cbsize_table(nvn_stage, &use); }
         bind_args(en, nvn_stage, metal_vertex, ab, g_cur_arena->gpu + off, off, sh->rf.abi);
         sh->ab_buf = ab; sh->ab_gpu = g_cur_arena->gpu + off; sh->ab_off = off; g_args_ubo[nvn_stage] = 0;   // pass, base instance and pool generation are the ones the copied block was encoded for
+        args_key_save(sh,key,nkey,p);
+        os_unfair_lock_unlock(&g_rmu);
         g_stat_args_patch++;
         return 1;
     }
@@ -11729,14 +11757,13 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
     // 0 for an aligned texture, an unbound slot or a texture of another kind
     uint32_t *tbias = NULL; uint64_t tbias_gpu = 0; __strong id<MTLBuffer> tbias_buf = nil;
     if (sh->rf.tbias_n) { size_t doff = arena_alloc(sh->rf.tbias_n * 4u, &tbias_buf); tbias = (uint32_t *)(void *)(g_cur_arena->cpu + doff); tbias_gpu = g_cur_arena->gpu + doff; memset(tbias, 0, sh->rf.tbias_n * 4u); }
-    os_unfair_lock_lock(&g_rmu);   // The texture / sampler registration tables may be being grown or rewritten by the game thread
     for (int i = 0; i < sh->rf.nb; i++) {
         const nvn_rbind *b = &sh->rf.b[i];
         int reg = b->reg, aid = b->aid;
         if (b->kind == NVN_RB_GEOMETRY) { slots[aid] = g_geo_bind[reg]; continue; }
         if (b->kind == NVN_RB_CBUF) {
             const p_bind_buf *u = reg < 16 ? &S.ubo[nvn_stage][reg] : NULL;
-            id<MTLBuffer> use; slots[aid] = cbuf_slot(sh, nvn_stage, b, &use);
+            id<MTLBuffer> use=sh->ab_buf; slots[aid] = checking?proposed[aid]:cbuf_slot(sh, nvn_stage, b, &use);
             USE(use, MTLResourceUsageRead);
             void *mb; uint64_t mo, g_;
             if (bl && u && u->addr && mtl_gpu_addr(u->addr, u->size ? u->size : 1, &mb, &mo, &g_)) {
@@ -11942,7 +11969,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             slots[aid] = support_gpu();
             USE(support_buf(), MTLResourceUsageRead);
         } else if (b->kind == NVN_RB_CBSIZE) {   // the uniform slots' bound sizes (cbsize_table)
-            id<MTLBuffer> db; slots[aid] = cbsize_table(nvn_stage, &db); USE(db, MTLResourceUsageRead);
+            id<MTLBuffer> db=sh->ab_buf; slots[aid] = checking?proposed[aid]:cbsize_table(nvn_stage, &db); USE(db, MTLResourceUsageRead);
         } else if (b->kind == NVN_RB_TBIAS) {   // the buffer textures' element offsets (tbias above), filled as the bindings are encoded
             slots[aid] = tbias_gpu; USE(tbias_buf, MTLResourceUsageRead);
         } else if (b->kind == NVN_RB_PUSH) {   // NVN2 push constants (c[24]): the stage group's current block
@@ -12018,11 +12045,16 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
     }
     #undef USE
     os_unfair_lock_unlock(&g_rmu);
+    if(checking) {
+        if(memcmp(proposed,slots,arg_len))MDIE("argument-block key check differs for shader %s stage %d",sh->key,nvn_stage);
+        g_stat_args_key_check++;
+    }
     id<MTLBuffer> ab; size_t off = arena_alloc(arg_len, &ab);
     memcpy(g_cur_arena->cpu + off, slots, arg_len);
     if (gmem_aid >= 0) gmem_slot_note((uint64_t *)(void *)(g_cur_arena->cpu + off) + gmem_aid, gml_taken ? (__bridge void *)g_gml_last : NULL);   // the arena arena_alloc took it from (no contents message: see ubo_read)
     bind_args(en, nvn_stage, metal_vertex, ab, g_cur_arena->gpu + off, off, sh->rf.abi);
     sh->ab_buf = ab; sh->ab_gpu = g_cur_arena->gpu + off; sh->ab_off = off; sh->ab_pass = g_pass.serial; sh->ab_binst = g_draw_binst; sh->ab_pgen = g_psnap_gen; g_args_dirty[nvn_stage] = 0; g_args_ubo[nvn_stage] = 0;
+    args_key_save(sh,key,nkey,g_cur_arena->cpu+off);
     g_stat_args_enc++;
     return 1;
 }
@@ -17680,7 +17712,7 @@ void mtl_present_wait(uint64_t tk) {
 // Wait until all queued presents have been processed (used by mtl_finish = nvnQueueFinish etc.): goes through mtl_present_wait, so there is still a fallback when the display link stops (real device: the game called QueueFinish once while the display link was stopped,
 // and this used to wait here without a timeout; nobody took the 3 queued frames and the game stalled; those two runs on Mac did not hit this call)
 void mtl_present_flush(void) { pthread_mutex_lock(&g_pq_mu); uint64_t h = g_pq_in; pthread_mutex_unlock(&g_pq_mu); mtl_present_wait(h); }
-void mtl_stats(uint64_t *passes, uint64_t *draws) { *passes = g_stat_pass; *draws = g_stat_draw; cp_report(); }
+void mtl_stats(uint64_t *passes, uint64_t *draws) { *passes = g_stat_pass; *draws = g_stat_draw; cp_report(); args_key_report(); }
 void mtl_args_stats(uint64_t *enc, uint64_t *reuse, uint64_t *patch) { *enc = g_stat_args_enc; *reuse = g_stat_args_reuse; *patch = g_stat_args_patch; }
 void mtl_vbuf_stats(uint64_t *resolve, uint64_t *reuse, uint64_t *set, uint64_t *skip, uint64_t *copies, uint64_t *copy_bytes) {
     *resolve = g_vbuf_resolve; *reuse = g_vbuf_reuse; *set = g_vbuf_set; *skip = g_vbuf_skip; *copies = g_vbuf_copies; *copy_bytes = g_vbuf_copy_bytes;

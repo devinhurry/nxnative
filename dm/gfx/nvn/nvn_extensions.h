@@ -3,6 +3,14 @@
 #ifdef NX_GFX_EXTENSION
 #include NX_GFX_EXTENSION
 #endif
+// Custom argument transforms must opt in while their transformations are inactive.
+#ifndef NX_GFX_ARGS_KEY_ALLOWED
+#if defined(NX_GFX_UNIFORM_SLOT) || defined(NX_GFX_TRANSFORM_TEXTURE)
+#define NX_GFX_ARGS_KEY_ALLOWED(stage) 0
+#else
+#define NX_GFX_ARGS_KEY_ALLOWED(stage) 1
+#endif
+#endif
 #ifndef NX_GFX_PRESENT_FLOATS
 #define NX_GFX_PRESENT_FLOATS 8
 #endif

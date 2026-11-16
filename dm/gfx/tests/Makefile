@@ -28,6 +28,14 @@ FW=-framework Metal -framework MetalFX -framework Foundation -framework QuartzCo
 # Tests that #include nvn_mtl.m link the rest of the NVN layer beside it (hle_nvn.c: memory pools, sparse pools, serials) and the host's large stack, with weak stubs of what they need of the host (t_host_stubs.c)
 MTL_T_DEP=../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(GFX_H)
 MTL_T_SRC=../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX))
+t_args_key: t_args_key.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_args_key.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_args_key
+check_t_args_key: t_args_key
+	DM_NVN_ARGS_KEY=0 MTL_DEBUG_LAYER=1 ./t_args_key
+	MTL_DEBUG_LAYER=1 ./t_args_key
+	DM_NVN_ARGS_CHECK=1 MTL_DEBUG_LAYER=1 ./t_args_key
+	DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_args_key
 t_framegen: t_framegen.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_framegen.m $(MTL_T_SRC) $(FW)
 # The run list: every t_*.c and t_*.m but those in NOT_RUN. `make run` builds them all (in parallel with -j), then runs them one after another, each through its check_

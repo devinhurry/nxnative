@@ -210,6 +210,8 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 
 ## Found on this game
 
+- [Argument blocks reused by consumed contents](../../../docs/reference/frame-rate.md#unchanged-consumed-bindings-encoded-again-after-a-pass-or-unrelated-bind): generic vertex/fragment optimization, with native CBUF refresh and submission-lifetime/resource invalidation. Metal regression covers output and invalidation; iPhone gameplay and performance remain unvalidated.
+
 - [Frontend settings freeze time without suspending game rendering](../../../docs/reference/nvn-objects.md#frontend-settings-freeze-time-without-suspending-game-rendering): independent lifecycle/settings holds and blocking counter reads; CPU and iOS compilation checks, physical-device confirmation pending.
 - **Implemented, device validation open: foreground frame-step recovery**: [Foreground recovery retries the frame-step target](../../../docs/reference/frame-rate.md#foreground-recovery-retries-the-frame-step-target). CPU-only production lifecycle and controller regressions pass; no new iPhone gameplay measurement.
 
