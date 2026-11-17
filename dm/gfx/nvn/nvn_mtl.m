@@ -9078,12 +9078,39 @@ static void pso_bundle_open_prewarm(NSMutableArray<id<MTL4Archive>> *arch) {
 // at cold start, before this run captures anything; never infer ownership from a live directory delta or remove compiler state at flush/exit.
 static NSString *ga_dir(void) {
     static NSString *dir; static dispatch_once_t once;
-    dispatch_once(&once, ^{ char b[PATH_MAX]; if (confstr(_CS_DARWIN_USER_CACHE_DIR, b, sizeof b)) dir = [@(b) stringByAppendingPathComponent:@"com.apple.gpuarchiver"]; });
+    dispatch_once(&once, ^{
+#if TARGET_OS_IPHONE
+        // iOS confstr(_CS_DARWIN_USER_CACHE_DIR) can fail with EIO. Metal uses
+        // the app's Caches/<bundle ID>/ namespace, not the Mac's Darwin cache.
+        NSFileManager *fm = NSFileManager.defaultManager;
+        NSString *base = nil, *bundle = NSBundle.mainBundle.bundleIdentifier;
+        if ([fm respondsToSelector:@selector(URLsForDirectory:inDomains:)])
+            base = [fm URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask].firstObject.path;
+        if (!base.length) base = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
+        if (base.length && bundle.length)
+            dir = [[base stringByAppendingPathComponent:bundle] stringByAppendingPathComponent:@"com.apple.gpuarchiver"];
+        else MLOG("[RED] gpuarchiver cleanup: app cache path or bundle identifier unavailable; skipping cleanup");
+#elif defined(_CS_DARWIN_USER_CACHE_DIR)
+        char b[PATH_MAX]; errno = 0;
+        size_t n = confstr(_CS_DARWIN_USER_CACHE_DIR, b, sizeof b);
+        if (n && n <= sizeof b) dir = [@(b) stringByAppendingPathComponent:@"com.apple.gpuarchiver"];
+        else if (n > sizeof b) MLOG("[RED] gpuarchiver cleanup: cache path exceeds %zu bytes; skipping cleanup", sizeof b);
+        else MLOG("[RED] gpuarchiver cleanup: cache path unavailable (errno %d: %s)", errno, strerror(errno));
+#else
+        MLOG("gpuarchiver cleanup: Darwin cache path API unavailable; skipping cleanup");
+#endif
+        MLOG("gpuarchiver cleanup: target %s", dir ? dir.UTF8String : "unavailable");
+    });
     return dir;
 }
 static NSSet<NSString *> *ga_list(void) {
-    NSArray<NSString *> *a = ga_dir() ? [NSFileManager.defaultManager contentsOfDirectoryAtPath:ga_dir() error:nil] : nil;
-    return [NSSet setWithArray:[a filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"self BEGINSWITH 'gpuarchiver-'"]] ?: @[]];
+    NSString *dir = ga_dir(); NSError *error = nil;
+    NSArray<NSString *> *a = dir ? [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:&error] : nil;
+    if (error) MLOG("gpuarchiver cleanup: cannot list %s (%s, code %ld: %s)", dir.UTF8String, error.domain.UTF8String, (long)error.code, error.localizedDescription.UTF8String);
+    NSSet<NSString *> *matches = [NSSet setWithArray:[a filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"self BEGINSWITH 'gpuarchiver-'"]] ?: @[]];
+    MLOG("gpuarchiver cleanup: listed %lu direct entries, %lu match gpuarchiver-*", (unsigned long)a.count, (unsigned long)matches.count);
+    for (NSString *name in [a subarrayWithRange:NSMakeRange(0, MIN(a.count, 8))]) MLOG("gpuarchiver cleanup: direct entry %s", name.UTF8String);
+    return matches;
 }
 static ArchEpoch *ep_new(void) {   // a flush period: its compiler and serializer, nil when Metal makes none
     MTL4PipelineDataSetSerializerDescriptor *sd = [MTL4PipelineDataSetSerializerDescriptor new]; sd.configuration = MTL4PipelineDataSetSerializerConfigurationCaptureBinaries;
@@ -9245,8 +9272,15 @@ static void pso4_init(void) {
 #if TARGET_OS_IPHONE
             NSSet<NSString *> *old = ga_list();   // listed before any capture, so this run's own folder is never among them
             if (old.count) dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-                int n = 0; for (NSString *name in old) n += [NSFileManager.defaultManager removeItemAtPath:[ga_dir() stringByAppendingPathComponent:name] error:nil];
+                uint64_t t0 = bp_now(); int n = 0, failed = 0;
+                for (NSString *name in old) {
+                    NSString *path = [ga_dir() stringByAppendingPathComponent:name]; NSError *error = nil;
+                    if ([NSFileManager.defaultManager removeItemAtPath:path error:&error]) n++;
+                    else if (failed++ < 8) MLOG("[RED] gpuarchiver cleanup: cannot remove %s (%s, code %ld: %s)", path.UTF8String,
+                                              error.domain.UTF8String, (long)error.code, error.localizedDescription.UTF8String);
+                }
                 MLOG("pipeline archive: %d of Metal's build folders left by earlier runs removed", n);
+                MLOG("gpuarchiver cleanup: finished, %d removed, %d failed, %.1f ms", n, failed, (bp_now() - t0) / 1e6);
             });
 #endif
             uint64_t t0 = bp_now(); unsigned long long bytes = 0;
