@@ -35,6 +35,15 @@ t_submit_cache: t_submit_cache.m $(MTL_T_DEP)
 t_bf_async: t_bf_async.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_bf_async.m $(MTL_T_SRC) $(FW)
 check_t_submit_cache check_t_bf_async: RUN_ENV = MTL_DEBUG_LAYER=1
+t_args_dynamic: t_args_dynamic.m t_args_key.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_args_dynamic.m $(MTL_T_SRC) $(FW)
+.PHONY: check_t_args_dynamic
+check_t_args_dynamic: t_args_dynamic
+	DM_NVN_UB_PAD_CACHE=0 DM_NVN_ARGS_KEY=0 MTL_DEBUG_LAYER=1 ./t_args_dynamic
+	DM_NVN_ARGS_KEY=0 MTL_DEBUG_LAYER=1 ./t_args_dynamic
+	MTL_DEBUG_LAYER=1 ./t_args_dynamic
+	DM_NVN_ARGS_CHECK=1 MTL_DEBUG_LAYER=1 ./t_args_dynamic
+	DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_args_dynamic
 t_args_key: t_args_key.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_args_key.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_args_key

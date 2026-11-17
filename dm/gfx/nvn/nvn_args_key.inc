@@ -22,7 +22,7 @@ static int args_keyable(NvShader *sh) {
         case NVN_RB_CBUF: case NVN_RB_SAMP: case NVN_RB_SAMPT: case NVN_RB_SAMPI:
         case NVN_RB_SUPPORT: case NVN_RB_C1: case NVN_RB_BORDER: case NVN_RB_CBSIZE: break;
         case NVN_RB_TEX: ok=b->reg<NTEX && !b->f1d && b->dtt!=MTLTextureTypeTextureBuffer;break;
-        case NVN_RB_DRV0: case NVN_RB_DRV2: ok=!sh->rf.drv_read[b->kind==NVN_RB_DRV2?2:0];break;
+        case NVN_RB_DRV0: case NVN_RB_DRV2: break;   // refreshed by the shared native driver_slot
         // Writes, uniform-data handles, pool tables and new kinds keep full encoding.
         default: ok=0;break;
         }
@@ -81,10 +81,12 @@ static void args_key_bind(id<MTLCommandEncoder> en,NvShader *sh,int stage,int ve
     g_args_dirty[stage]=g_args_ubo[stage]=0;
 }
 static void args_key_report(void) {
-    static uint64_t frame,previous[3];uint64_t f=atomic_load(&g_cur_frame);
+    static uint64_t frame,previous[6];uint64_t f=atomic_load(&g_cur_frame);
     if(f<frame+300)return;frame=f;
-    uint64_t now[3]={g_stat_args_key_reuse,g_stat_args_key_patch,g_stat_args_key_check};
+    uint64_t now[6]={g_stat_args_key_reuse,g_stat_args_key_patch,g_stat_args_key_check,g_stat_args_key_driver,g_ub_pad_reused,g_ub_short};
     if(now[0] || now[1] || now[2])MLOG("argument-block content keys: reused %llu, patched %llu, checked %llu (since last report)",
         (unsigned long long)(now[0]-previous[0]),(unsigned long long)(now[1]-previous[1]),(unsigned long long)(now[2]-previous[2]));
+    if(now[3] || now[4] || now[5])MLOG("argument dynamic slots: drivers refreshed %llu, padded uniforms reused %llu / copied %llu (since last report)",
+        (unsigned long long)(now[3]-previous[3]),(unsigned long long)(now[4]-previous[4]),(unsigned long long)(now[5]-previous[5]));
     memcpy(previous,now,sizeof now);
 }
