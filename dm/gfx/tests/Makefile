@@ -28,6 +28,8 @@ FW=-framework Metal -framework MetalFX -framework Foundation -framework QuartzCo
 # Tests that #include nvn_mtl.m link the rest of the NVN layer beside it (hle_nvn.c: memory pools, sparse pools, serials) and the host's large stack, with weak stubs of what they need of the host (t_host_stubs.c)
 MTL_T_DEP=../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(GFX) $(GFX_H)
 MTL_T_SRC=../nvn/hle_nvn.c ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX))
+t_rt_budget: t_rt_budget.c ../nvn/nvn_rt_budget.h
+	clang -O2 -Wall -Wextra -o $@ t_rt_budget.c
 t_submit_cache: t_submit_cache.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_submit_cache.m $(MTL_T_SRC) $(FW)
 t_bf_async: t_bf_async.m $(MTL_T_DEP)
@@ -250,6 +252,8 @@ check_t_present_snap: t_present_snap
 	DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_present_snap queued
 	DM_NVN_ENC_THREAD=0 MTL_DEBUG_LAYER=1 ./t_present_snap ticket
 	DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_present_snap ticket
+	MTL_DEBUG_LAYER=1 ./t_present_snap budget
+	DM_RT=0 MTL_DEBUG_LAYER=1 ./t_present_snap budget
 t_reorder_chain: t_reorder_chain.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_reorder_chain.m $(MTL_T_SRC) $(FW)
 check_t_reorder_chain: RUN_ENV = MTL_DEBUG_LAYER=1

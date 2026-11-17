@@ -615,6 +615,7 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 - an embedding frontend restores extra frame-rate choices, but the loader accepts only 30/60 and the graphics layer rounds every positive target to one of those rates. → [Opt-in real-time source rates for an embedded frontend](../reference/frame-rate.md#opt-in-real-time-source-rates-for-an-embedded-frontend)
 - registering new textures and buffers leaves preparation work at their first GPU submission, delaying its completion even after shaders are ready. → [First GPU use waits for resource residency preparation](../reference/frame-rate.md#first-gpu-use-waits-for-resource-residency-preparation)
 - few physical segment submissions in a draw-heavy frame even though many safe pass boundaries are available; the GPU can finish its queued work while the CPU is still preparing later passes. → [Completed passes held on the CPU while the GPU is busy](../reference/frame-rate.md#completed-passes-held-on-the-cpu-while-the-gpu-is-busy)
+- the acquire thread declares a small real-time CPU budget while a dedicated replay worker performs the expensive command encoding and GPU submission under QoS alone. → [Replay CPU demand declared on the acquire thread](../reference/frame-rate.md#replay-cpu-demand-declared-on-the-acquire-thread)
 
 ## NVN objects
 

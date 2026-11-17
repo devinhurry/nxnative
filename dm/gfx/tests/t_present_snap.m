@@ -243,10 +243,33 @@ static void queued_case(void) {
     h_nvnWindowFinalize((NVNwindow *)&win); h_nvnQueueFinish(&fixture_queue);
     h_nvnCommandBufferFinalize(&command); h_nvnEventFinalize(&event); h_nvnMemoryPoolFinalize(&pool); free(memory);
 }
+static void replay_budget_case(void) {
+    tex_t t=source(0);win_t win={.ntex=1};win.tex[0]=(NVNtexture *)&t;
+    int idx;h_nvnWindowAcquireTexture((NVNwindow *)&win,NULL,&idx);
+    double main_comp=g_rt_comp_ms,main_period=g_rt_period_ms;
+    uint64_t period=present_period(&win),deadline=rt_period_ns(&win,period);
+    h_nvnQueuePresentTexture(&fixture_queue,(NVNwindow *)&win,idx);queue_encoded();
+    uint64_t declared=atomic_load(&g_replay_rt_comp);
+    if(rt_on()) {
+        CHECK("replay worker declares its own nonzero CPU budget",declared>=1000000 && declared<=deadline*9/10);
+        CHECK("replay worker preserves the cap's scheduling deadline",atomic_load(&g_replay_rt_period)==deadline && deadline>0);
+        CHECK("worker declaration leaves acquire-thread accounting alone",g_rt_comp_ms==main_comp && g_rt_period_ms==main_period);
+    } else CHECK("DM_RT=0 leaves replay on QoS only",!declared && !atomic_load(&g_replay_rt_period));
+    // A frame-step hold presents at 30 while the requested cap remains 60.
+    // Queue both periods and ensure replay declares the faster deadline.
+    uint8_t state[0x100]={0};float target=60;memcpy(state,&target,sizeof target);
+    dm_fps_state=state;atomic_store(&g_fs_k,2);
+    period=present_period(&win);deadline=rt_period_ns(&win,period);
+    CHECK("fixture holds 30 fps under a 60 fps cap",period==33333333 && deadline==16666666);
+    uint64_t ticket=nvn_queue_present((queue_t *)&fixture_queue,&t,period/1e9,deadline,NULL);queue_encoded();
+    if(rt_on())CHECK("held replay still declares the faster target deadline",atomic_load(&g_replay_rt_period)==deadline);
+    nvn_queue_present_release(ticket);dm_fps_state=NULL;
+    h_nvnWindowFinalize((NVNwindow *)&win);h_nvnQueueFinish(&fixture_queue);
+}
 int main(int argc, char **argv) { @autoreleasepool {
     alarm(15); setbuf(stdout, NULL);
     if (argc != 2) return 2;
-    setenv("DM_PRESENT_SNAP", "1", 1); setenv("DM_PRESENT_HZ", "0", 1);
+    setenv("DM_PRESENT_SNAP", "1", 1); setenv("DM_PRESENT_HZ", !strcmp(argv[1],"budget") ? "60" : "0", 1);
     mtl_init();
     NVNdeviceBuilder db = {0}; h_nvnDeviceBuilderSetDefaults(&db); CHECK("fixture device initialized", h_nvnDeviceInitialize(&fixture_device, &db));
     NVNqueueBuilder qb = {0}; h_nvnQueueBuilderSetDefaults(&qb); h_nvnQueueBuilderSetDevice(&qb, &fixture_device);
@@ -257,6 +280,7 @@ int main(int argc, char **argv) { @autoreleasepool {
     else if (!strcmp(argv[1], "resize")) resize_case();
     else if (!strcmp(argv[1], "queued")) queued_case();
     else if (!strcmp(argv[1], "ticket")) ticket_case();
+    else if (!strcmp(argv[1], "budget")) replay_budget_case();
     else return 2;
     printf("present snapshots: %d checks, %d failed\n", checks, failed); return failed != 0;
 } }

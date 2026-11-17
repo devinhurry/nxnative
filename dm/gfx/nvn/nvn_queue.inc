@@ -14,7 +14,7 @@ typedef struct nq_node {
     unsigned kind, mode, closed, waiting; volatile uint32_t *event; uint32_t value;
     uint64_t wait_fence, event_predecessor, wait_since; unsigned wait_kind, wait_said; const sync_t *sync_source; nq_receipt *receipt;
     nq_signal *signals; unsigned signal_count;   // NQ_COMMANDS: every event signal it records, in order (nq_event_issued at its commit)
-    tex_t texture; double period; int crop[4];
+    tex_t texture; double period; uint64_t rt_period; int crop[4];
 } nq_node;
 typedef struct nq_owned { struct nq_owned *next; unsigned kind; uint64_t data[]; } nq_owned;
 typedef struct nq_job { struct nq_job *next; nq_node *first, *last; nq_receipt *receipt; nq_owned *owned; nvn_hmap objects; uint64_t frame; } nq_job;
@@ -178,6 +178,7 @@ static void *nq_worker(void *unused) {
                 nvn_cap_present(&n->texture,n->crop);
                 present=mtl_present(&n->texture,n->period,n->crop,&copy); mtl_tex_unpin(n->texture.serial);
             }
+            if(n->kind==NQ_PRESENT)replay_rt_tick(n->rt_period);
             nq_cost_end(cost); gfx_leave(); objc_autoreleasePoolPop(pool); pthread_mutex_unlock(&g_sub_mu);
         }
         pthread_mutex_lock(&nq_mu); if(n->kind==NQ_PRESENT) { q->present=present; q->copy=copy; j->receipt->present=present; j->receipt->copy=copy; } if(fence) { q->physical=fence; for(unsigned i=0;i<n->signal_count;i++) nq_event_issued(n->signals[i].event,fence,n->signals[i].mode,n->signals[i].value); } if(n->receipt) nq_put(n->receipt); free(n->signals); free(n->bytes); free(n); pthread_cond_broadcast(&nq_cv); pthread_mutex_unlock(&nq_mu);
@@ -261,11 +262,11 @@ void nvn_queue_submit(queue_t *q,int count,const uint64_t *handles) {
 }
 // The window retains this logical receipt until it reacquires or finalizes that image.
 // Only replay turns it into a physical display ticket; present never waits on the guest thread.
-uint64_t nvn_queue_present(queue_t *q,const tex_t *t,double period,const int crop[4]) {
+uint64_t nvn_queue_present(queue_t *q,const tex_t *t,double period,uint64_t rt_period,const int crop[4]) {
     nvn_cap_queue(q->serial,0);
     pthread_once(&nq_once,nq_start); nq_job *j=calloc(1,sizeof *j); if(!j) die("queue present allocation failed");
     j->receipt=nq_new(); j->frame=dm_nvn_frame_count(); nq_node *n=nq_append(j,NQ_PRESENT);
-    n->texture=*t; mtl_tex_pin(t->serial); n->period=period; if(crop) memcpy(n->crop,crop,sizeof n->crop);
+    n->texture=*t; mtl_tex_pin(t->serial); n->period=period; n->rt_period=rt_period; if(crop) memcpy(n->crop,crop,sizeof n->crop);
     pthread_mutex_lock(&nq_mu); j->receipt->refs++; uint64_t ticket=(uintptr_t)j->receipt;
     nq_enqueue(nq_get(q),j); pthread_mutex_unlock(&nq_mu); return ticket;
 }

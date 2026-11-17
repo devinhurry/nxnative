@@ -1768,6 +1768,9 @@ void dm_gfx_quit(int wait_ms) { mtl_arch_save(wait_ms, 1); }
 // The first submission's prepare step (mtl_prepare: the prewarm and the pipeline prebuild) loads shaders and builds pipelines and submits no GPU work, so it runs under the lock but outside the
 // graphics gate: inside it, going to the background meanwhile (dm_gfx_suspend, on the main thread) waited for it, minutes on a first start. It stays host work for the guest scheduler. The lock
 // comes before the gate: a second submission waiting for it must not count as in flight, or the suspend waits for it while the first waits to enter the closed gate holding the lock
+#include "nvn_rt_budget.h"
+static void replay_rt_tick(uint64_t ns);
+static _Atomic uint64_t g_replay_rt_comp,g_replay_rt_period;
 #include "nvn_queue.inc"
 NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h) {
     ((queue_t *)q)->submits++;
@@ -2096,7 +2099,8 @@ static void tsummary(uint64_t frame) {
               cyc / 1e6 / nf, cyc / (double)(ci - pi), cpu / 1e6 / nf, (double)(ck - pk) / 1e6 / nf, (double)(cw - pw) / 1e6 / nf, cpu > 0 ? cyc / cpu : 0, (unsigned)qc, an, (unsigned long long)aw, g_rt_comp_ms, (double)(yn - pyn) / nf, (double)(yns - pyns) / 1e6 / nf); pyn = yn; pyns = yns; }
         if (frame % 300 == 0) { unsigned wn = 0; uint32_t wq = dm_guest_work_qos(&wn); thread_extended_info_data_t xi; mach_msg_type_number_t xc = THREAD_EXTENDED_INFO_COUNT; int okx = thread_info(pthread_mach_thread_np(pthread_self()), THREAD_EXTENDED_INFO, (thread_info_t)&xi, &xc) == KERN_SUCCESS;
             thread_time_constraint_policy_data_t tp; mach_msg_type_number_t tc = THREAD_TIME_CONSTRAINT_POLICY_COUNT; boolean_t def = 0; int rt_live = thread_policy_get(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&tp, &tc, &def) == KERN_SUCCESS && !def;   // def = 1: the real-time policy is not in effect (never set / revoked)
-            LOG("[nvn] thread policy: main thread real-time computation %.2f ms / period %.2f ms, real-time policy %s, current priority %d (base %d, policy %d); %u worker threads QoS %#x; present QoS %#x", g_rt_comp_ms, g_rt_period_ms, rt_live ? "in effect" : "not in effect", okx ? xi.pth_curpri : -1, okx ? xi.pth_priority : -1, okx ? xi.pth_policy : -1, wn, wq, mtl_present_qos()); }
+            LOG("[nvn] thread policy: main thread real-time computation %.2f ms / period %.2f ms, real-time policy %s, current priority %d (base %d, policy %d); %u worker threads QoS %#x; present QoS %#x", g_rt_comp_ms, g_rt_period_ms, rt_live ? "in effect" : "not in effect", okx ? xi.pth_curpri : -1, okx ? xi.pth_priority : -1, okx ? xi.pth_policy : -1, wn, wq, mtl_present_qos());
+            LOG("[nvn] queue replay budget: computation %.3f ms / period %.3f ms (worker CPU demand)",atomic_load(&g_replay_rt_comp)/1e6,atomic_load(&g_replay_rt_period)/1e6); }
         py = cy; pk = ck; pw = cw; }
       pi = ci; pc = cc; pd = dr_; pf = frame; }
     uint64_t up, re, es = mtl_pkg_edge_skips(), fa, pr, op, oc; mtl_pkg_stats(&up, &re); nvn_dirty_stats(&fa, &pr); nvn_dirty_open_stats(&op, &oc);
@@ -2136,38 +2140,61 @@ static void slow_emit(uint64_t f) {
     }
     if (f % 300 == 0) fprintf(stderr, "[slowframe]\t#\tup to frame %llu\tjudged=%llu\tslow=%llu\tcriterion=%s\n", f, judged, slow, has ? "on-screen interval" : "present call interval (no window)");
 }
-// Declaration for the time-constraint (real-time) thread: period = present period, constraint = period, computation = the CPU time this thread actually needs per frame.
-// The computation used to be hard-coded at 2 ms, while the game main thread (game logic + recording + submit replay) takes about 10 ms per frame when hot - a 5× gap between declared and actual:
-// a real-time thread that exceeds its declared computation gets demoted by the system, and the performance controller also sets frequency from the declaration (this declaration is how the system learns the frame deadline and the workload).
-// DM_RT_COMP=<ms> fixes the declaration; default auto = every 120 frames take the larger of 1.25 × the p90 and 1.1 × the peak of this thread's per-frame CPU time and re-declare if it differs from the declared value by > 15% (capped at 0.9 × period).
-// DM_RT=0 leaves the acquire thread on the standard policy (its QoS only), for power A/B: the real-time declaration is how the performance controller learns the frame deadline, and it may hold the clock up for it
-static int rt_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_RT"); v = !(e && !strcmp(e, "0")); if (!v) LOG("[nvn] DM_RT=0: the present thread gets no time-constraint policy (QoS only)"); } return v; }
-static void set_time_constraint_comp(uint64_t period_ns, uint64_t comp_ns) {
-    if (!rt_on()) return;
-    static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
-    if (comp_ns < 1000000ull) comp_ns = 1000000ull; if (comp_ns > period_ns * 9 / 10) comp_ns = period_ns * 9 / 10;
-    thread_time_constraint_policy_data_t p = {
-        .period = (uint32_t)(period_ns * tb.denom / tb.numer), .computation = (uint32_t)(comp_ns * tb.denom / tb.numer),
-        .constraint = (uint32_t)(period_ns * tb.denom / tb.numer), .preemptible = 1};
-    kern_return_t kr = thread_policy_set(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&p, THREAD_TIME_CONSTRAINT_POLICY_COUNT);
-    if (kr == KERN_SUCCESS) { g_rt_comp_ms = comp_ns / 1e6; g_rt_period_ms = period_ns / 1e6; }
-    LOG("[nvn] present thread time-constraint policy (period %.3f ms, computation %.3f ms) %s", period_ns / 1e6, comp_ns / 1e6, kr == KERN_SUCCESS ? "set" : "failed to set");
+// Each frame-critical thread declares its own CPU demand and present deadline.
+// Raise after the first over-budget frame; every 120 frames use the larger of
+// 1.25 * p90 and 1.1 * peak, with a 15% deadband and a 90%-of-period cap.
+// DM_RT_COMP=<ms> fixes both declarations; DM_RT=0 leaves both on their QoS.
+static int rt_on(void) {
+    static _Atomic int v=-1;int value=atomic_load(&v);
+    if(value<0) {
+        const char *e=getenv("DM_RT");value=!(e && !strcmp(e,"0"));
+        int unset=-1;if(atomic_compare_exchange_strong(&v,&unset,value) && !value)LOG("[nvn] DM_RT=0: present and queue replay threads stay on QoS only");
+    }
+    return value;
 }
-static int rt_comp_fixed_ms(void) { static int v = -2; if (v == -2) { const char *e = getenv("DM_RT_COMP"); v = e && *e && strcmp(e, "auto") ? atoi(e) : -1; } return v; }   // −1 = auto
+static int rt_apply(uint64_t period_ns,uint64_t comp_ns,const char *owner) {
+    if (!rt_on()) return 0;
+    mach_timebase_info_data_t tb;mach_timebase_info(&tb);
+    comp_ns=nvn_rt_clamp(comp_ns,period_ns);
+    thread_time_constraint_policy_data_t p={
+        .period=(uint32_t)(period_ns*tb.denom/tb.numer),.computation=(uint32_t)(comp_ns*tb.denom/tb.numer),
+        .constraint=(uint32_t)(period_ns*tb.denom/tb.numer),.preemptible=1};
+    kern_return_t kr=thread_policy_set(pthread_mach_thread_np(pthread_self()),THREAD_TIME_CONSTRAINT_POLICY,(thread_policy_t)&p,THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+    LOG("[nvn] %s thread time-constraint policy (period %.3f ms, computation %.3f ms) %s",owner,period_ns/1e6,comp_ns/1e6,kr==KERN_SUCCESS?"set":"failed to set");
+    return kr==KERN_SUCCESS;
+}
+static void set_time_constraint_comp(uint64_t period_ns,uint64_t comp_ns) {
+    if(rt_apply(period_ns,comp_ns,"present")){g_rt_comp_ms=nvn_rt_clamp(comp_ns,period_ns)/1e6;g_rt_period_ms=period_ns/1e6;}
+}
+static int rt_comp_fixed_ms(void) { static _Atomic int v = -2; int value=atomic_load(&v); if (value == -2) { const char *e = getenv("DM_RT_COMP"); value = e && *e && strcmp(e, "auto") ? atoi(e) : -1; atomic_store(&v,value); } return value; }   // −1 = auto
 // The fixed value, or in auto mode the computation declared so far (auto's starting value of 2 ms only the first time): a reset to 2 ms at each period change under-declared the thread until the next p90
 static void set_time_constraint(uint64_t period_ns) { int f = rt_comp_fixed_ms(); set_time_constraint_comp(period_ns, f > 0 ? (uint64_t)f * 1000000ull : g_rt_comp_ms > 0 ? (uint64_t)(g_rt_comp_ms * 1e6) : 2000000ull); }
 // Called every frame at acquire: records this thread's CPU time since the last call; in auto mode re-declares based on p90
 static void rt_comp_tick(uint64_t period_ns) {
-    if (rt_comp_fixed_ms() > 0 || !period_ns || !g_rt_comp_ms) return;
-    static uint64_t last; static double win[120]; static int n;
-    uint64_t c = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID); if (!last) { last = c; return; }
-    win[n++] = (double)(c - last) / 1e6; last = c;
-    if (n < 120) return;
-    double v[120]; memcpy(v, win, sizeof v); qsort(v, 120, sizeof *v, dcmp); n = 0;
-    // Also the window's peak: every frame that ran past the declaration stalled the thread for 30–60 ms. Dark Souls Remastered's render thread needs 1.9–2.0 ms a frame with one or
-    // two frames in 120 near 4.4 ms; declared at 2.5 ms (p90 × 1.25) it stalled about once a second, at 30 fps and at 60; declared above the peak it held 60 fps at the same CPU energy
-    double p90 = v[107], comp = fmax(p90 * 1.25, v[119] * 1.1), cap = period_ns * 0.9 / 1e6; if (comp > cap) comp = cap; if (comp < 1) comp = 1;
-    if (comp > g_rt_comp_ms * 1.15 || comp < g_rt_comp_ms * 0.85) set_time_constraint_comp(period_ns, (uint64_t)(comp * 1e6));
+    if(rt_comp_fixed_ms()>0 || !period_ns || !g_rt_comp_ms)return;
+    static nvn_rt_budget budget;
+    uint64_t next=nvn_rt_next(&budget,clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID),period_ns,atomic_load(&g_fstep_resume_epoch),(uint64_t)(g_rt_comp_ms*1e6));
+    if(next)set_time_constraint_comp(period_ns,next);
+}
+// Runs on the replay worker, after each queued present; its CPU clock includes its
+// replay work, unlike the guest acquire thread's command-copy-only measurement.
+static void replay_rt_tick(uint64_t ns) {
+    if(!rt_on() || dm_detclock_enabled() || !ns)return;
+    static nvn_rt_budget budget;static uint64_t declared,declared_period,declared_epoch,failed_period,failed_epoch;
+    uint64_t epoch=atomic_load(&g_fstep_resume_epoch);
+    if(failed_period==ns && failed_epoch==epoch)return;
+    int fixed=rt_comp_fixed_ms();uint64_t next=0;
+    if(!declared || declared_period!=ns || declared_epoch!=epoch)next=nvn_rt_clamp(fixed>0?(uint64_t)fixed*1000000:declared?declared:2000000,ns);
+    if(fixed<=0) {
+        uint64_t demand=nvn_rt_next(&budget,clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID),ns,epoch,next?next:declared);
+        if(demand)next=demand;
+    }
+    if(next) {
+        if(rt_apply(ns,next,"queue replay")) {declared=next;declared_period=ns;declared_epoch=epoch;failed_period=0;atomic_store(&g_replay_rt_comp,next);atomic_store(&g_replay_rt_period,ns);}
+        // An unavailable policy must not add a syscall and log every frame.
+        // A new rate or foreground epoch allows another attempt.
+        else {failed_period=ns;failed_epoch=epoch;}
+    }
 }
 static void sleep_until_ns(uint64_t dl) {   // absolute time on the monotonic clock
     static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
@@ -2536,7 +2563,8 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     if (idx >= 0 && idx < o->ntex && idx < 4) {   // enqueue only, return immediately
         const tex_t *t = CTX(o->tex[idx]); int lc[4]; const int *crop = present_crop(o->crop, (int)t->d.width, (int)t->d.height, lc);
         nvn_queue_present_release(o->ticket[idx]);
-        o->ticket[idx] = nvn_queue_present((queue_t *)q,t,present_period(o) / 1e9,crop);
+        uint64_t period=present_period(o);
+        o->ticket[idx] = nvn_queue_present((queue_t *)q,t,period / 1e9,rt_period_ns(o,period),crop);
     }
     gfx_leave();
     // Diagnostic DM_NVN_PRESENT_FINISH=1 (off by default): a present returns once the GPU has run the frame, so the game never runs ahead of the GPU
