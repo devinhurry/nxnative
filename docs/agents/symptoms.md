@@ -614,6 +614,7 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 - frames of 30–150 ms as an area loads, with `new pipelines 0` and a long-frame line such as `texture uploads 31 first + 6 re-uploads, 235.0 MB / 23.7 ms`. With `DM_NVN_REUPLOADS=1` the same large texture is re-uploaded many times within a few frames, several times with the same `submission` number, each for a few written pages (`pages written since its upload: 7 of 2466`). → [A texture written while it is drawn read whole at every use](../reference/frame-rate.md#a-texture-written-while-it-is-drawn-read-whole-at-every-use)
 - an embedding frontend restores extra frame-rate choices, but the loader accepts only 30/60 and the graphics layer rounds every positive target to one of those rates. → [Opt-in real-time source rates for an embedded frontend](../reference/frame-rate.md#opt-in-real-time-source-rates-for-an-embedded-frontend)
 - registering new textures and buffers leaves preparation work at their first GPU submission, delaying its completion even after shaders are ready. → [First GPU use waits for resource residency preparation](../reference/frame-rate.md#first-gpu-use-waits-for-resource-residency-preparation)
+- few physical segment submissions in a draw-heavy frame even though many safe pass boundaries are available; the GPU can finish its queued work while the CPU is still preparing later passes. → [Completed passes held on the CPU while the GPU is busy](../reference/frame-rate.md#completed-passes-held-on-the-cpu-while-the-gpu-is-busy)
 
 ## NVN objects
 

@@ -475,7 +475,7 @@ static void reuse_tables_case(void) {
     pool_table_give(b); pool_table_give(c); pool_table_give(d);
     g_done = done0; g_fence = fence0;
 }
-// A cut with earlier work still running stays a boundary for the game's timestamps, and commits only when the GPU has run out; a report after it takes that boundary's time
+// Safe boundaries commit by default; opt-in coalescing keeps the timestamp boundary without a commit.
 static void cut_boundary_case(void) {
     tex_t colour; target(&colour, 99810);
     id<MTLBuffer> rep = [g_dev newBufferWithLength:64 options:MTLResourceStorageModeShared]; res_add(rep);
@@ -487,7 +487,8 @@ static void cut_boundary_case(void) {
     mtl_sub_counter((uint64_t)rep.contents, 0x10);
     atomic_fetch_add(&g_seg_inflight, 1);
     g_stat_draw += (uint64_t)cut_draws(); sub_cut();
-    CHECK(g_cb == cb0 && g_seg == 1, "with work running: a boundary, no commit");
+    const char *busy=getenv("DM_NVN_CUT_BUSY");int coalesce=busy && atoi(busy)!=0;
+    CHECK((g_cb == cb0)==coalesce && g_seg == 1, "busy GPU: default submits the next segment; opt-in keeps only its timestamp boundary");
     CHECK(g_sclk && g_sclk->nb == 2, "and its timestamp slot");
     clear(MTLClearColorMake(0, 1, 0, 1)); rp_end();
     mtl_sub_counter((uint64_t)rep.contents + 16, 0x10);
@@ -497,7 +498,7 @@ static void cut_boundary_case(void) {
     clear(MTLClearColorMake(0, 0, 1, 1)); rp_end();
     CHECK(mtl_wait(mtl_sub_commit(), 5000000000ull), "the segments completed");
     uint64_t r0[2], r1[2]; memcpy(r0, rep.contents, 16); memcpy(r1, (uint8_t *)rep.contents + 16, 16);
-    CHECK(r0[1] && r1[1] > r0[1], "two reports in one command buffer read two times");
+    CHECK(r0[1] && r1[1] > r0[1], "reports on both sides of the boundary preserve ordered GPU times");
 }
 
 // Output-mapping-only fixture (no rewritable sample): main0 writes magenta to color(0); main0_f remaps

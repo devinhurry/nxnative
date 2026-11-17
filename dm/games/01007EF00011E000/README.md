@@ -210,7 +210,7 @@ Before publishing, the fixes were integrated with main's pipeline archive and GP
 
 ## Found on this game
 
-- [Complementary particle-address analysis](../../../docs/reference/shaders.md#complementary-address-assignments-falsely-need-the-global-pool-table): generic fixes with translator and production-path checks; rebuilt graphics are required for the address correction. Phone gameplay, frame-time and power validation remain open.
+- [Complementary particle-address analysis](../../../docs/reference/shaders.md#complementary-address-assignments-falsely-need-the-global-pool-table) and [eager safe-boundary submissions](../../../docs/reference/frame-rate.md#completed-passes-held-on-the-cpu-while-the-gpu-is-busy): generic fixes with translator and production-path checks; rebuilt graphics are required for the address correction. Phone gameplay, frame-time and power validation remain open.
 
 - [Incremental memory-pool index](../../../docs/reference/frame-rate.md#address-to-memory-pool-lookups-by-binary-search), [borrowed program cache hits](../../../docs/reference/frame-rate.md#cached-program-hits-still-cross-an-arc-object-return-boundary), [background tile-function specialization](../../../docs/reference/frame-rate.md#readable-tile-specialization-stalls-the-submit-thread-on-a-cold-key), and [temporary stand-ins default off](../../../docs/reference/frame-rate.md#temporary-pulling-stand-ins-spend-work-on-pipelines-soon-replaced): generic submit-path changes covered by synthetic production-path checks; on-device gameplay, cold-scene appearance and power validation remain open.
 
