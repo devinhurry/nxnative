@@ -305,7 +305,7 @@ namespace Ryujinx.Graphics.Shader.Translation
             // then use the definition from that Phi.
             Operand local = Local();
 
-            PhiNode phi = new(local);
+            PhiNode phi = new(local, block);
 
             AddPhi(block, phi);
 
@@ -315,7 +315,7 @@ namespace Ryujinx.Graphics.Shader.Translation
             {
                 Definition def = FindDefinition(globalDefs, predecessor, reg);
 
-                phi.AddSource(def.Block, def.Local);
+                phi.AddSource(def.Block, def.Local, predecessor);
             }
 
             return local;

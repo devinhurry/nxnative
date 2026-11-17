@@ -23,7 +23,7 @@ FILES += ['../third_party/ryujinx/src/Ryujinx.Graphics.Shader/' + f for f in (
     'Translation/TranslationFlags.cs', 'Translation/HostCapabilities.cs',
     'Translation/Transforms/GeometryToCompute.cs', 'Translation/TranslatorContext.cs', 'Translation/Translator.cs', 'Translation/EmitterContext.cs', 'Translation/ShaderDefinitions.cs', 'CodeGen/Spirv/Instructions.cs',
     'StructuredIr/ShaderProperties.cs', 'Translation/Optimizations/BindlessElimination.cs', 'Translation/Optimizations/Optimizer.cs',
-    'Translation/Optimizations/GlobalToStorage.cs', 'CodeGen/Spirv/SpirvGenerator.cs')]
+    'IntermediateRepresentation/PhiNode.cs', 'Translation/Ssa.cs', 'Translation/Optimizations/GlobalToStorage.cs', 'Translation/Optimizations/Utils.cs', 'CodeGen/Spirv/SpirvGenerator.cs')]
 FILES += ['../mac/min_os.mk']   # MAC_MIN below
 # The Mac libraries are compiled for the Mac host's minimum macOS (dm/mac/min_os.mk), as the host's own Metal libraries are (dm/host/Makefile MSL_MIN_macosx). The deployment target
 # sets the Metal language version: with none the compiler takes the build Mac's system, so one source compiled on macOS 27 and failed on macOS 26 (a reference parameter with no address

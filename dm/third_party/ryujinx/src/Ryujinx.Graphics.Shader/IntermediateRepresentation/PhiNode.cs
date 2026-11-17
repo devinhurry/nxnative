@@ -15,12 +15,15 @@ namespace Ryujinx.Graphics.Shader.IntermediateRepresentation
 
         public int DestsCount => _dest != null ? 1 : 0;
 
+        public BasicBlock Block { get; }
+
         private readonly HashSet<BasicBlock> _blocks;
 
         private class PhiSource
         {
             public BasicBlock Block { get; }
             public Operand Operand { get; set; }
+            public List<BasicBlock> Incoming { get; } = [];
 
             public PhiSource(BasicBlock block, Operand operand)
             {
@@ -33,8 +36,9 @@ namespace Ryujinx.Graphics.Shader.IntermediateRepresentation
 
         public int SourcesCount => _sources.Count;
 
-        public PhiNode(Operand dest)
+        public PhiNode(Operand dest, BasicBlock block = null)
         {
+            Block = block;
             _blocks = [];
 
             _sources = [];
@@ -54,7 +58,7 @@ namespace Ryujinx.Graphics.Shader.IntermediateRepresentation
             return dest;
         }
 
-        public void AddSource(BasicBlock block, Operand operand)
+        public void AddSource(BasicBlock block, Operand operand, BasicBlock predecessor = null)
         {
             if (_blocks.Add(block))
             {
@@ -65,7 +69,18 @@ namespace Ryujinx.Graphics.Shader.IntermediateRepresentation
 
                 _sources.Add(new PhiSource(block, operand));
             }
+            // Definition blocks can precede the join by several edges. Keep the
+            // actual incoming edges as well, without changing existing users.
+            if (predecessor != null)
+            {
+                foreach (PhiSource source in _sources)
+                {
+                    if (source.Block == block && !source.Incoming.Contains(predecessor)) source.Incoming.Add(predecessor);
+                }
+            }
         }
+
+        public IReadOnlyList<BasicBlock> GetSourcePredecessors(int index) => _sources[index].Incoming;
 
         public Operand GetDest(int index)
         {

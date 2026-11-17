@@ -695,6 +695,76 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
             return true;
         }
 
+        // A phi source is read on one incoming edge, not on every path that ever
+        // reached an earlier phi. Resolve only complete, forward diamonds whose
+        // same SSA predicate proves one alternative impossible on that edge.
+        private static bool EdgeCondition(BasicBlock from, BasicBlock to, out Operand condition, out bool value)
+        {
+            condition = null;
+            value = false;
+            for (int depth = 0; from != null && to != null && depth < 8; depth++)
+            {
+                if (from.Index >= to.Index) return false; // do not carry facts across a loop backedge
+                if (from.GetLastOp() is Operation branch &&
+                    branch.Inst is Instruction.BranchIfTrue or Instruction.BranchIfFalse)
+                {
+                    if (from.Next == from.Branch || (from.Next != to && from.Branch != to)) return false;
+                    condition = branch.GetSource(0);
+                    value = (from.Branch == to) == (branch.Inst == Instruction.BranchIfTrue);
+                    return true;
+                }
+                if (from.Predecessors.Count != 1) return false;
+                to = from;
+                from = from.Predecessors[0];
+            }
+            return false;
+        }
+
+        private static Operand AddressPhiOnEdge(Operand source, BasicBlock from, BasicBlock to)
+        {
+            if (!EdgeCondition(from, to, out Operand condition, out bool value)) return source;
+            for (int depth = 0; source.AsgOp is PhiNode phi && depth < 8; depth++)
+            {
+                BasicBlock owner = phi.Block;
+                Operand selected = null;
+                for (int i = 0; i < phi.SourcesCount; i++)
+                {
+                    IReadOnlyList<BasicBlock> edges = phi.GetSourcePredecessors(i);
+                    if (edges.Count == 0) return source;
+                    bool possible = false;
+                    foreach (BasicBlock predecessor in edges)
+                    {
+                        if (!EdgeCondition(predecessor, owner, out Operand other, out bool otherValue) ||
+                            !Utils.IsSameCondition(condition, other)) return source;
+                        possible |= otherValue == value;
+                    }
+                    if (!possible) continue;
+                    Operand candidate = phi.GetSource(i);
+                    if (selected != null && selected != candidate &&
+                        !(selected.Type == candidate.Type && selected.Value == candidate.Value &&
+                          candidate.Type is OperandType.Constant or OperandType.ConstantBuffer)) return source;
+                    selected = candidate;
+                }
+                if (selected == null || selected == source) return source;
+                source = selected;
+            }
+            return source;
+        }
+
+        private static Operand AddressPhiOnEdges(PhiNode phi, int index)
+        {
+            Operand original = phi.GetSource(index), result = null;
+            foreach (BasicBlock predecessor in phi.GetSourcePredecessors(index))
+            {
+                Operand selected = AddressPhiOnEdge(original, predecessor, phi.Block);
+                if (result != null && result != selected &&
+                    !(result.Type == selected.Type && result.Value == selected.Value &&
+                      selected.Type is OperandType.Constant or OperandType.ConstantBuffer)) return original;
+                result = selected;
+            }
+            return result ?? original;
+        }
+
         private static bool TryGenerateMultiTargetStorageOp(
             GtsContext gtsContext,
             ResourceManager resourceManager,
@@ -747,7 +817,7 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
                 for (int srcIndex = 0; srcIndex < phi.SourcesCount; srcIndex++)
                 {
                     BasicBlock phiBlock = phi.GetBlock(srcIndex);
-                    Operand phiSource = phi.GetSource(srcIndex);
+                    Operand phiSource = AddressPhiOnEdges(phi, srcIndex);
 
                     SearchResult result = FindUniqueBaseAddressCb(gtsContext, phiBlock, phiSource, needsOffset: false);
 
