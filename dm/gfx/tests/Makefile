@@ -770,6 +770,9 @@ t_sparse_pool_cache: t_sparse_pool_cache.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_sparse_pool_cache.m $(filter-out ../nvn/hle_nvn.c,$(MTL_T_SRC)) $(FW)
 check_t_sparse_pool_cache: RUN_ENV = MTL_DEBUG_LAYER=1
 
+t_pso_warm_drop: t_pso_warm_drop.m t_pso_prewarm.m $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_warm_drop.m $(MTL_T_SRC) $(FW)
+check_t_pso_warm_drop: RUN_ENV = MTL_DEBUG_LAYER=1
 t_pso_extended: t_pso_extended.m t_pso_prewarm.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_pso_extended.m $(MTL_T_SRC) $(FW)
 

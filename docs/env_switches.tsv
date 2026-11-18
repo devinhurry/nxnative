@@ -1,4 +1,3 @@
-DM_LOW_MEMORY	player	`1` selects optional BC-to-ASTC/EAC transcoding on GPUs without native BC; `0` (default) keeps decoding; no file-backed heap or archive relocation; takes effect next launch
 name	class	meaning
 DM_AB	diagnostic	`=<frames>` splits the run into phases of that many frames and alternates every switch set to `ab` (on in the odd phases); logs an `[ab]` line per phase with GPU and frame time and attachment traffic
 DM_ALIAS_SIZE	diagnostic	`=<bytes>` gives the guest an alias region of that size instead of the platform's, which is at least the Switch's 64 GB on the Mac and the profile's `mem_alias` on an iPhone (at least 256 MB, whole host pages; the heap and stacks stay as they are): the profile's value reproduces an iPhone's address space on the Mac, as the NSP script's heap check does; its address region check sets 64 GB (Mac only: an iPhone has no room)
@@ -45,6 +44,7 @@ DM_FORCE_STRICT	diagnostic	`=1` makes the loader fail on forced-hook entries no 
 DM_FPS	switch	`30` or `60` pins the frame rate the display link and frame pacing aim for; otherwise it follows the game's present interval (60, or 30 when the game asks for 30)
 DM_FPS_HOLD	player	`on` / `off` overrides the profile's `fps_hold`: whether late frames may raise the hold above the frame cap's vsyncs (on by default)
 DM_FPS_TARGET	player	Frame-rate cap: `30` or `60`, `120` for a game whose profile has `fps_max 120` (60 otherwise), or `0` for the game's own limit; overrides the profile's `fps_target`
+DM_FRAMEGEN	player	`1` requests frame interpolation; `0` disables it. The renderer chooses the supported interpolation quality automatically
 DM_FS	diagnostic	When set, logs file opens, paths not found or not mounted, and a read summary every 64 MiB or 1000 reads
 DM_FSLOG	diagnostic	`=<file>` writes one TSV line per ReadFile: seconds since boot, guest path, offset, length and guest buffer address
 DM_FSLOG_HASH	diagnostic	With `DM_FSLOG`, adds a column with the FNV-1a 64 hash of the bytes read
@@ -104,6 +104,7 @@ DM_LAUNCH_PARAM	path	File whose bytes `oe::TryPopLaunchParameter` returns once; 
 DM_LINK_VTICK	switch	`0` keeps the system's display-link rate on 144 or 165 Hz Mac screens; by default the link counts only the refreshes nearest a steady 1/60 s clock
 DM_LOADHASH	diagnostic	`=1` logs an address-independent SHA-256 per module after loading
 DM_LONGFRAME	diagnostic	`0` turns off the long-frame log (on by default), a line for a frame over 20 ms or with GPU time over 16.7 ms that is clearly above recent frames
+DM_LOW_MEMORY	player	`1` selects optional BC-to-ASTC/EAC transcoding on GPUs without native BC; `0` (default) keeps decoding; no file-backed heap or archive relocation; takes effect next launch
 DM_MEASURE_LOCK	path	`=<file>`: `scripts/regress.py`'s default `--lock`, the measuring lock `scripts/bench.py --lock` shares: held only while a game runs, and the harness's shader builds pause while another process holds it
 DM_MEMSTAT	diagnostic	`=<tsv>` writes one line per second of memory accounting: footprint, Metal allocation and resident and charged memory by region class (guest, code, malloc, gpu, …)
 DM_MEMSTAT_DUMP	diagnostic	`=<seconds>`: with `DM_MEMSTAT`, at that second writes every VM region of 1 MiB or more to `<tsv>.regions`
@@ -125,6 +126,8 @@ DM_NRO_CAPTURE	diagnostic	folder: a `nn::ro::LoadModule` with no rewritten copy 
 DM_NRO_DIR	path	folder of NROs the shader split reads like `main`, and in which it finds a CRA archive's file table (the NSP script sets it for a captured NRO)
 DM_NVN_ALLOCPROF	diagnostic	`=1` charges Metal allocation growth to each replayed op type and function, and logs command allocator sizes and each new texture (serial, size, format, storage); `=2` also gives each main submission a fresh command allocator and reports command memory by operation, by encoder, by submission size and the indirect-count multi-draws encoded
 DM_NVN_API	switch	`=<major>.<minor>` overrides the NVN API version `nvnDeviceGetInteger` reports (by default decided by the SDK version or the profile's `device_api`: 55.15 for SDK 11 and later, 53.313 before)
+DM_NVN_ARGS_CHECK	diagnostic	`1` checks proposed argument-content hits against full static/resource encoding before drawing; dynamic CBUF addresses and size slots are shared; mismatch aborts
+DM_NVN_ARGS_KEY	switch	`0` disables last-block reuse by consumed argument contents (default on); no shader ABI or graphics-library change
 DM_NVN_BARRIER	switch	How draw passes are ordered: `full` (default) waits for all earlier GPU work, `game` only for the previous pass's fragment stage unless the game set a barrier, `ab` alternates with the `DM_AB` phases
 DM_NVN_BC_ALIAS	diagnostic	Set 0 to send copies to an uncompressed alias instead of its block-compressed storage, for an A/B check; default 1
 DM_NVN_BC_TRANSCODE	switch	`0` disables ASTC/EAC transcoding in low-memory mode on GPUs without native BC support; ordinary mode always keeps decoding; re-compression may be lossy; native BC, signed BC, BC6H, 3D and image-write textures retain their existing paths
@@ -132,8 +135,6 @@ DM_NVN_BF_ASYNC	switch	`0` makes runtime readable-tile function lookups wait for
 DM_NVN_BF_WANT	path	`=<file>`: appends the key of each fragment shader whose passes could not be merged for lack of a readable-tile version to that file, once per key
 DM_NVN_BLEND_ZERO	switch	`0` leaves a NaN or Inf colour under a zero blend weight to Apple's blender, which stores NaN; by default a pixel shader returns it as 0 where the draw's blend state gives its source colour a zero weight on a floating-point target, as NVIDIA's blender does with the option NVN's driver sets
 DM_NVN_BLIT_ORDER	diagnostic	`0` drops the barriers between dependent operations in the copy encoder, which reproduces the fountain's vertical stripes in Mario Wonder
-DM_NVN_ARGS_CHECK	diagnostic	`1` checks proposed argument-content hits against full static/resource encoding before drawing; dynamic CBUF addresses and size slots are shared; mismatch aborts
-DM_NVN_ARGS_KEY	switch	`0` disables last-block reuse by consumed argument contents (default on); no shader ABI or graphics-library change
 DM_NVN_BORDER_KEEP	diagnostic	1 keeps the border corrections in every pipeline, as before the DMSH_BORDER_FC specialization: a wrong border colour with the specialization, or its cost (ab with DM_AB)
 DM_NVN_CAPTURE	diagnostic	`=<frame>:1:<path>` writes that frame (from its first submit to its present) to one file: pool bytes, registries, program keys, the textures whose content lives only in Metal, each submission's records with pointers relocatable, and the presented frame's SHA-256 and pixels; `dm/gfx/tests/nvn_replay` replays it ([development.md](development.md#frame-capture-and-replay))
 DM_NVN_CBDUMP	diagnostic	`=<dir>`: saves each draw's whole uniform blocks as `F<frame>_p<pass>_st<stage>_cb<slot>_<address>.bin`, and the source bytes of buffer-to-3D-texture copies, with `DM_NVN_PASSDUMP`
@@ -195,8 +196,8 @@ DM_NVN_PASSDUMP	diagnostic	`=<f>`, `<f1>-<f2>` or `every:<n>`: logs every render
 DM_NVN_PASSDUMP_ALL	diagnostic	`=1` makes `DM_NVN_PASSDUMP` record every draw and binding change, not only the first per pass and stage, including copies and inline uniform updates
 DM_NVN_PASSGPU	diagnostic	`=<file>` writes the GPU time of each render and compute pass from stage-boundary timestamp counters (off under Metal 4); also gives each dispatch its own encoder
 DM_NVN_PASSGPU_SERIAL	diagnostic	`=1` makes each encoder on the main command buffer wait until all earlier work has finished, so `DM_NVN_PASSGPU` times read each pass's exclusive time (totals read high)
-DM_NVN_POOL_CHUNK_MIN_MB	switch	Starting pool size for existing on-demand chunks, in MiB (default 256, minimum 16); 512 restores the former threshold; invalid values keep default
 DM_NVN_POOL_CHUNKS	switch	`0` wraps a memory pool of 512 MB or more whole in one buffer, as before; by default it is wrapped in overlapping 16 MB chunks made as draws reach them, so only the parts in use are wired
+DM_NVN_POOL_CHUNK_MIN_MB	switch	Starting pool size for existing on-demand chunks, in MiB (default 256, minimum 16); 512 restores the former threshold; invalid values keep default
 DM_NVN_POOL_FIRST	diagnostic	`1` logs every first read through the pool table of a texture ID whose texture was not made yet (up to 32 a frame): what the read found (the ID's stand-in, or the dummy, which reads 0), the texture, its view and how many frames before it was registered; it also checks at each such read whether the storage the stand-in was made from has been written since. The totals go to the log every 300 frames without it (`pool stand-ins up to frame`)
 DM_NVN_POOL_STANDIN	switch	`0` leaves the dummy (reads 0) in the pool tables for a texture the walk does not make, as before; by default, once the walk's budget is full, such a texture holds a stand-in until a shader reads its ID: its own smallest levels, or its last level cut down to every n-th block, so the first read draws the texture's colours coarse for one frame instead of black (Ocarina of Time's cliff beside the castle town wall dark for one frame when the game streams a sharper texture into it, issue #1969)
 DM_NVN_PREDICT	switch	`0` turns off the parallel precompile look-ahead: a pipeline miss compiles only the pipeline it needs
@@ -240,7 +241,6 @@ DM_NVN_TREG_ID	diagnostic	`=<n>` logs every registration of texture ID n: what i
 DM_NVN_TSV	diagnostic	`=<path>` writes the per-frame NVN call table and timing rows (frame, metric, value) to a TSV, read by `scripts/bench.py`
 DM_NVN_TSV_CALLS	diagnostic	`0` makes `DM_NVN_TSV` write only the timing rows, without the call counts (about two thirds of the file)
 DM_NVN_UB	diagnostic	`="name=item,…;…"`: alternating measurement in one run; odd phases of `DM_NVN_UB_N` frames (default 180) take one category in turn (`@set:<global>=<value>` or dropped shader keys) and log present times
-DM_NVN_UB_PAD_CACHE	switch	`0` disables reuse of identical padded graphics uniform snapshots; default on, bounded to 64 entries in the current arena lifetime, native copying for pending/GPU writes
 DM_NVN_UBD_MEMO	diagnostic	`0` scans the deferred uniform update list for every lookup instead of remembering answers per range until the list changes (for timing)
 DM_NVN_UBP_CHECK	diagnostic	`=1` checks every uniform shadow made from memory: the pass ends, the updates land, the replay waits for the GPU and compares (a difference is a red line; slow)
 DM_NVN_UBP_RUNNING	switch	`0` refuses a uniform shadow partly covered by inline updates of a running submission, as before; by default those updates are remembered by byte, each with its fence, and laid over memory in the shadow
@@ -248,6 +248,7 @@ DM_NVN_UB_COPY_THREAD	switch	`0` copies uniform shadows of 512 bytes or more on 
 DM_NVN_UB_DEFER	switch	`0` ends the render pass at every inline uniform update, as before; by default an update inside an open pass is deferred to the pass end and later draws read a shadow (off in TBDR mode)
 DM_NVN_UB_LAZY	switch	`=<n>`: the most deferred inline uniform updates kept across a render pass end (default 160); they land before the next copy, a conflicting draw or dispatch, or the submission end; `0` lands them at every pass end
 DM_NVN_UB_N	diagnostic	`=<frames>`: the length of each phase of the same-process alternating measurement `DM_NVN_UB` (default 180, minimum 60)
+DM_NVN_UB_PAD_CACHE	switch	`0` disables reuse of identical padded graphics uniform snapshots; default on, bounded to 64 entries in the current arena lifetime, native copying for pending/GPU writes
 DM_NVN_UB_PARTIAL	switch	`0`: a uniform block the deferred updates cover only in part ends the pass, as before; by default its shadow starts from memory and takes the submission's queued updates (on by default)
 DM_NVN_UDC_AB	diagnostic	`=1` starts with the DontCare store for unwritten attachments off and turns it on after the second screenshot, for an on/off picture comparison in one run
 DM_NVN_UNWRITTEN_DC	switch	`0` disables optional stores elided for loaded, unchanged attachments (on by default, independent of TBDR lookahead), for equivalence comparisons; mandatory image-write preservation stays active
@@ -307,12 +308,14 @@ DM_PROGRAM	switch	`=<index>`: the program of a game of several programs that a h
 DM_PROGRAMS	path	Table of a game's programs on the Mac (`programs.tsv`: index, host, modules, run folder, environment): `oe::ExecuteProgram` starts the named one in this process's place; the NSP script's run command and the Mac app set it
 DM_PROGRAM_ID	switch	`=<hex>`: the program ID the host reports from `svcGetInfo(ProgramId)` (default: the profile's `program_id`)
 DM_PSO_ARCHIVE	path	The folder of the per-game Metal 4 pipeline archive of pipeline bases (default `pso_archive/` beside `pso_user.tsv`); `off` keeps no archive
+DM_PSO_BAKE	path	Legacy fallback for `DM_PSO_EXTENDED`: the extended pipeline list; `off` or `0` disables it
+DM_PSO_BAKE_LIST	path	Legacy `build_ipa.sh` fallback for `DM_PSO_EXTENDED_LIST`, the extended list packaged with the app
 DM_PSO_BUNDLE	path	The pipeline archive made offline (`<GPU architecture>.mtl4a`, `prebuilt.tsv`), read only; the iOS app and Mac launcher set it to their `pso/` folder; `off` ignores it
-DM_PSO_GPUS	switch	`build_ipa.sh`: the GPU architectures, comma-separated, to build the offline pipeline archive for (`none` builds none); unset, a profile with `pso_mtl4 on` gets its `pso_gpu` list or `g18p` when absent; profiles with `pso_mtl4 off` get none
 DM_PSO_EXTENDED	path	The extended pipeline list prepared into the device archive before normal prewarm (default: `pso_extended.tsv` beside the shader map); `off` or `0` disables it. Legacy `DM_PSO_BAKE` and `pso_bake.tsv` remain fallbacks
 DM_PSO_EXTENDED_LIST	path	`build_ipa.sh`: package this extended pipeline list as `dm/pso_extended.tsv`; otherwise use the profile list. Legacy `DM_PSO_BAKE_LIST` remains a fallback
+DM_PSO_FUTURE	switch	`0` disables asynchronous pipeline futures; otherwise enabled with queued recording, fetching archived bases and handling cold compiles in the background
+DM_PSO_GPUS	switch	`build_ipa.sh`: the GPU architectures, comma-separated, to build the offline pipeline archive for (`none` builds none); unset, a profile with `pso_mtl4 on` gets its `pso_gpu` list or `g18p` when absent; profiles with `pso_mtl4 off` get none
 DM_PSO_HYBRID	switch	`0` disables native pulling-pipeline support; support is on with Metal 4, but temporary stand-ins additionally require `DM_PSO_STANDIN=1`. Final cold pipelines use the configured futures or synchronous path
-DM_PSO_STANDIN	switch	`1` opts into temporary pulling stand-ins and their shader-pair base prebuild / library prefetch; off by default. Unready final pipelines use existing futures and may skip cold draws until ready; `DM_PSO_HYBRID=0` prevents stand-ins even when opted in
 DM_PSO_IOS_MIN	switch	`build_ipa.sh`: the minimum iOS version of the offline pipeline archives (default the SDK's major version); a device of another major version cannot open them and builds the bases itself
 DM_PSO_MANIFEST	path	The prewarm manifest to use instead of the profile's `pso_manifest.tsv` and the device's `pso_user.tsv` (also the list the prebuild tool, `DM_PSO_PREBUILD=tool`, builds); `off` turns the prewarm off
 DM_PSO_MTL4	player	`0` builds render pipelines through the `MTLDevice` with no bases and no archive; `1` uses MTL4Compiler with the archive, hybrid pipelines and prebuild (default on on the Mac, the profile's `pso_mtl4` on iOS)
@@ -326,10 +329,14 @@ DM_PSO_PREPARE	switch	`0` runs the prewarm in the background while the game star
 DM_PSO_PREPARE_THREADS	switch	`=<n>`: the workers of the prepare step that builds the prewarm lists before the first frame (default: the device's active cores)
 DM_PSO_PULL_ALL	diagnostic	`=1`: every draw that has a pulling pipeline draws with it, never with the pipeline for its vertex layout
 DM_PSO_RECORD	path	`=<file>`: appends the shaders and pipelines used in the run to that file, for re-recording the prewarm manifest
+DM_PSO_STANDIN	switch	`1` opts into temporary pulling stand-ins and their shader-pair base prebuild / library prefetch; off by default. Unready final pipelines use existing futures and may skip cold draws until ready; `DM_PSO_HYBRID=0` prevents stand-ins even when opted in
 DM_PSO_USER	path	The per-device list of shaders and pipelines built on the spot (default: `pso_user.tsv` in the parent of `DM_SAVE`)
 DM_PSO_WAITLOG	diagnostic	`=1` logs each draw that waited more than 20 ms for its pipeline, with its shader pair and why no stand-in served it
+DM_PSO_WARM_DROP	switch	`1`: synchronous startup preparation discards its temporary shaders, functions and pipelines after preserving archive captures; draws create their objects on demand. Off by default; ignored with `DM_PSO_PREPARE=0`. Does not evict live runtime caches
+DM_PSO_WORKERS	switch	Positive pipeline-future worker override, capped at 8; otherwise sized from active CPUs
 DM_QOS_EDGES	switch	`=e1,e2`: the Switch priority edges of `DM_QOS_MAP` (default `44,59`)
 DM_QOS_MAP	switch	`=1` maps guest thread priority to QoS class: ≤ 44 user-interactive, 45–59 user-initiated, the rest utility (off by default: every guest thread runs user-interactive)
+DM_RAM_DONOR	switch	`0` disables the native optional RAM-donor mechanism; otherwise its normal eligibility checks apply
 DM_REC	diagnostic	`=<file>`: writes player 1's physical input (keyboard, mouse touches, controllers; never `DM_KEYS` / `DM_CTL`) to the file as `DM_KEYS` steps in presented frames, for replaying a run (`DM_KEYS=@<file>`)
 DM_REGIONS	diagnostic	`=<file>` writes the table of the SDK's address regions every 2 s (alias offset, size, where the request returns to in the game, bytes mapped, the part opened, the SDK offset the request came through; `hle_svc.c` "Address regions"); the NSP script's address region check sets it
 DM_RELAUNCH	switch	Set by `oe::RequestToRelaunchApplication` for the host it starts again: `DM_CTL` resumes at the end of its file instead of replaying it
@@ -345,8 +352,8 @@ DM_RESOURCE_ROMFS	path	RomFS folder, written to `Gen/resources.env` by `build_ip
 DM_RESOURCE_SHADERS	path	iOS shader library folder or one file, written to `Gen/resources.env` by `build_ipa.sh`; the Xcode copy phase (`stage_resources.sh`) copies it into the app's `msl/b-<chain>` or `msl/b-<chain>.img`
 DM_RESOURCE_TITLE	switch	Game profile title ID, written to `Gen/resources.env` by `gen_resources.py`; with `DM_COPY_ROMFS=NO` the copy phase puts it in the `title=` field of the app's `romfs.id`
 DM_RESOURCE_VERSION	switch	Display version, written to `Gen/resources.env` by `gen_resources.py`; with `DM_COPY_ROMFS=NO` the copy phase puts it in the `version=` field of the app's `romfs.id`
-DM_RES_WARM	switch	`0` disables background residency preparation (default on); native commits still apply their queues and synchronize resources; restart required
 DM_RES_CHECK	diagnostic	`=1` prints the first 40 textures or buffers a shader reaches through its argument block that are not in the residency set (textures attributed to their parent allocation)
+DM_RES_WARM	switch	`0` disables background residency preparation (default on); native commits still apply their queues and synchronize resources; restart required
 DM_REWRITE_J	switch	`=<positive integer>`: worker processes per module for `patch_nso.py`'s x18 scan and spin wait search; `=1` runs serially. Default: one per core directly, an automatic per-module budget in the NSP script. An explicit value overrides that budget
 DM_ROMFS	path	The game's RomFS folder, mounted read-only as `rom` (default `$DM_ROOT/romfs`); the Mac launcher, the iOS app and the NSP script set it
 DM_ROMFS_OVERLAY	path	`=<dir>[:<dir>…]`: RomFS reads look in these folders first, in order, and fall back to `DM_ROMFS` (for a modified copy of some files)
@@ -393,6 +400,7 @@ DM_TEAM_ID	switch	Apple team ID for the per-game Xcode project, used when `--tea
 DM_TEMP	path	Temporary storage folder (default `$DM_ROOT/run/platform/temp`); stand-in system data goes in `<DM_TEMP>_sysdata`; the Mac launcher, the iOS app and the NSP script set it
 DM_TEST_ARCHIVE_CONSTANTS	test	Use optional function constants in the synthetic pipeline archive restart fixture
 DM_TEST_ARCHIVE_MIXED	test	Mix a newly compiled shader function with compacted bases in the archive restart fixture
+DM_TEST_ARGS_BENCH	test	Run the argument-cache microbenchmark in the argument-key and dynamic-argument tests
 DM_TEST_BORDER	test	Path to the native t_border executable that test_dmsh_border.py runs a rewritten shader through on the GPU (`make check_t_border` sets it)
 DM_TEST_BUILD	test	Build folder of `dm/host/tests` whose `t_svc_memory` `test_memory_profile.py` runs (default `build`; `make asan` sets `build/asan`)
 DM_TEST_FS_FAIL	diagnostic	`=write:<n>[:<errno>]` makes the nth save write fail with that errno (default ENOSPC), which refuses the save transaction's commit
@@ -407,6 +415,7 @@ DM_TEST_LINK_STALL	diagnostic	`=<start s>,<duration s>`: counting from the first
 DM_TEST_NO_BC	diagnostic	`=1` forces capability-selected GPU BC1-7 decoding on a device with native BC support; test uploads, raw copies, views and block render targets without changing shader libraries
 DM_TEST_NO_METAL4	diagnostic	`=1` treats the GPU as one without Metal 4, as on a virtual Mac: the NVN layer starts only its classic part and drops every present
 DM_TEST_PRESENT_LAG	diagnostic	`=<every n>,<ms>[,<in a row>][;…]` sleeps that long before every nth present (and the ones after it in the run): a slow frame on demand
+DM_TEST_RES_WARM_BENCH	test	Run the residency-preparation microbenchmark in the residency-warm test
 DM_TEST_SWKBD_HOLD_MS	diagnostic	`=<ms>` (with `DM_KBD`) keeps the system keyboard up that long before `DM_KBD`'s text is returned, as a player typing would
 DM_TEST_SWKBD_LAG_MS	diagnostic	`=<ms>` sleeps that long between the keyboard handing back its text and the game's thread getting the result, to check that auto-accept does not act early
 DM_TEST_TESS	test	Path to the native t_tess executable that test_dmsh_tess.py runs the tessellation layout and expansion kernel through on the GPU (`make check_t_tess` sets it)

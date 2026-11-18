@@ -204,9 +204,7 @@ static int extended_valid(NSString *text) {
 static void extended_clear_batch(void) {
     // Workers have joined and captures have been flushed before releasing any
     // descriptors. Normal renderer/prefetch caches are separate and untouched.
-    nvn_hm_clear(&g_extended_pbase, hm_rel); nvn_hm_clear(&g_extended_miss, hm_rel); nvn_hm_clear(&g_extended_pending, hm_rel);
-    g_warm_dict = nil; g_warm_loads = nil;
-    g_extended_fn_off = nil; g_extended_fn_dev = nil; g_extended_fn4 = nil;
+    warm_drop_built();
 }
 static int extended_open_new(NSMutableSet<NSString *> *opened) {
     NSMutableArray *indexed = [g_arch_ixf mutableCopy] ?: [NSMutableArray array];
@@ -300,9 +298,9 @@ static int extended_start(int prepare) {
             __block _Atomic NSUInteger cursor = 0; dispatch_group_t group = dispatch_group_create();
             int workers = MIN(prepare_workers(), (int)batch.count);
             for (int w = 0; w < workers; w++) dispatch_group_async(group, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-                g_extended_thread = 1;
+                g_prepare_mode = PREPARE_EXTENDED;
                 for (;;) { NSUInteger i = atomic_fetch_add(&cursor, 1); if (i >= batch.count) break; warm_task(batch[i]); }
-                g_extended_thread = 0;
+                g_prepare_mode = PREPARE_LIVE;
             });
             while (dispatch_group_wait(group, dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC)))
                 front_progress("Preparing pipeline cache", g_warm_done - done0, total);
