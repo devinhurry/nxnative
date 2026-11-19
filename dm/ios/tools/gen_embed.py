@@ -14,7 +14,8 @@
 # programs of a multi-program application, build_ipa.sh PROGRAMS_TSV): the program's sections are __dm<tag><name>x0 / __DM<tag><name>W / __dm<tag><name>x1 and __dm<tag>_nro_*, which the
 # loader takes from DM_EMBED_TAG (main.m). --jit <jit.img> (a game whose code comes through nn::jit: dm/tools/jit_capture.py's image, beside the RomFS) puts that image in
 # __TEXT,__dm<tag>_jit, which the host remaps as the code memory's start (hle_jit.c jit_map_image)
-import os, sys
+import os, sys, json, shutil
+from pathlib import Path
 a = sys.argv[1:]; tag = ''; jit = None
 while a[:1] in (['--tag'], ['--jit']):
     if a[0] == '--tag': tag = a[1]
@@ -34,6 +35,9 @@ def pieces(n):   # the module's (x0, W, x1[, x2]) as (file start, end)
         assert fl % PG == 0 and a <= fl and ko % PG == 0 and ks == PG and ko >= fl and bl % PG == 0 and (not bl or sz % PG == 0)
         return bin_, sz, ((0, a), (a, fl), (fl, end - bl)) + (((end - bl, end),) if bl else ())
     assert po % PG == 0 and a <= ko and ko + ks <= po and ko % PG == 0 and ks == PG
+    if 'EXT_STATE_SIZE' in hdr:
+        off, size = int(hdr['EXT_STATE_OFF'], 16), int(hdr['EXT_STATE_SIZE'], 16)
+        assert off % PG == 0 and size % PG == 0 and ko + ks <= off < off + size <= po, 'extension state must be embedded writable'
     return bin_, sz, ((0, a), (a, po), (po, end))
 def place(asm, bin_, sz, lo, hi):   # one piece, 16K aligned at both ends (vm_remap takes whole pages)
     fill = min(hi, sz) - lo
@@ -48,6 +52,16 @@ for n in names:
         assert all(len(x) <= 16 for x in sect.split(','))
         asm.append(f'    .section {sect}'); place(asm, bin_, sz, lo, hi)
     flags.append(f'-Wl,-segprot,__DM{tag}{n}W,rw,rw')
+    contribution = Path(out) / (n + '.extension.json')
+    if contribution.is_file():
+        for target, source in json.loads(contribution.read_text()).get('assets', {}).items():
+            t, p = Path(target), Path(source)
+            assert not t.is_absolute() and '..' not in t.parts and not p.is_absolute() and '..' not in p.parts, 'extension asset escapes its root'
+            src, dst_asset = Path(out) / p, Path(dst).parent / 'dm' / t
+            assert src.is_file() and not src.is_symlink(), 'extension asset is missing or linked'
+            dst_asset.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dst_asset)
+
 tab = os.path.join(out, 'nro.tsv')
 nros = [ln.split('\t')[0] for ln in open(tab) if ln.strip() and not ln.startswith('#') and not ln.startswith('refused\t')] if os.path.exists(tab) else []
 if nros:

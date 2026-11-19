@@ -70,6 +70,14 @@
 #include <stdatomic.h>
 #include <ctype.h>
 
+// A host may provide pre-signed alternatives; it never makes code pages writable.
+__attribute__((weak)) void dm_cheats_code_init(const char *build, uint8_t *base, uint8_t *state, size_t size) { (void)build; (void)base; (void)state; (void)size; }
+__attribute__((weak)) void dm_cheats_code_begin(void) {}
+__attribute__((weak)) void dm_cheats_code_entry(int begin, int valid) { (void)begin; (void)valid; }
+__attribute__((weak)) void dm_cheats_code_end(void) {}
+__attribute__((weak)) void dm_cheats_code_reset(void) {}
+__attribute__((weak)) int dm_cheats_code_write(uint64_t address, uint64_t size, uint64_t value, int preview) { (void)address; (void)size; (void)value; (void)preview; return 0; }
+
 // Limits of Atmosphère's own order (0x2000 dwords of program, 256 cheats per file): no shared cheat-site file and no
 // hand-made one can exhaust the arrays
 #define CHEAT_MAX 256          // cheats in one file
@@ -662,6 +670,14 @@ static void cheat_write(cheat_t *c, uint64_t addr, uint64_t len, uint64_t val) {
             return;
         }
     }
+    if (w.kind == WH_MAIN && g_main_mod->ext_state_size && addr - (uint64_t)(uintptr_t)g_main_mod->base < main_rx_end()) {
+        int handled = dm_cheats_code_write(addr, len, val, g_dry);
+        if (handled) {
+            if (handled < 0) cheat_kill(c, "code write does not match this signed build; rebuild with this cheat file");
+            else if (g_dry) { dry_line("precompiled code at main+0x%llx -> 0x%llx", (unsigned long long)(addr - (uint64_t)(uintptr_t)g_main_mod->base), (unsigned long long)val); g_dry_writes++; }
+            return;
+        }
+    }
     if (w.kind == WH_MAIN && main_write_check(c, addr, len)) return;
     if (g_dry) {
         char where[48], now[48], new_[48]; uint64_t cur = 0;
@@ -1025,20 +1041,24 @@ static void note_settle(cheat_t *c) {
 // operation or another pass runs is simply skipped (the next frame / tick applies again). The master switch stops
 // everything; safe mode holds the masters back too; a "set" cheat turns itself off after its pass
 static void cheats_pass(void) {
-    if (!atomic_load(&g_active) || !atomic_load(&g_master)) return;
+    if (!g_main_mod || !atomic_load(&g_active) || !atomic_load(&g_master)) return;
     if (pthread_mutex_trylock(&g_lock)) return;
     if (!atomic_load(&g_master)) { pthread_mutex_unlock(&g_lock); return; }   // switched off while this pass waited for the lock
     int fired = 0, ran = 0;
+    if (g_main_mod && g_main_mod->ext_state_size) dm_cheats_code_begin();
     g_held = dm_cheats_keys();
     memset(g_reg, 0, sizeof g_reg); memset(g_saved, 0, sizeof g_saved);   // the reference's once-per-pass ResetState (the loop tops: per cheat, in vm_run)
     for (int half = 0; half < 2; half++) for (int i = 0; i < g_ncheat; i++) {
         cheat_t *c = &g_cheat[i];
         if (!pass_runs(c, half)) continue;
         c->pass_fail = 0;
+        if (g_main_mod && g_main_mod->ext_state_size) dm_cheats_code_entry(1, 1);
         if (c->nd) nd_step(c); else { vm_run(c); ran = 1; }
+        if (g_main_mod && g_main_mod->ext_state_size) dm_cheats_code_entry(0, !c->dead);
         note_settle(c);
         if ((c->once || c->restore_once) && half) { c->on = 0; c->restore_once = 0; fired = 1; }
     }
+    if (g_main_mod && g_main_mod->ext_state_size) dm_cheats_code_end();
     if (ran) g_keyold = g_held;
     if (fired) states_save();   // the file writes themselves leave on the files queue: the presenting thread never waits for the disk
     pthread_mutex_unlock(&g_lock);
@@ -1109,7 +1129,7 @@ static void running_update(void) {
 #if TARGET_OS_IPHONE
     return;
 #endif
-    if (!g_dir[0] || atomic_load(&g_exiting)) return;
+    if (!g_main_mod || !g_dir[0] || atomic_load(&g_exiting)) return;
     int any = 0;
     for (int i = 0; i < g_ncheat && !any; i++) {
         const cheat_t *c = &g_cheat[i];
@@ -1754,6 +1774,7 @@ static void sources_scan(void) {
 // (Re)load: choose the file, note the other builds, parse, read the meta file and the values, link pairs, restore the
 // states, build the report. Called at init and from "Reload cheats" (safe mode and the master switch stay as they are)
 static void load_all(void) {
+    if (g_main_mod && g_main_mod->ext_state_size) dm_cheats_code_reset();
     g_ncheat = 0; g_ncand = 0; g_nothers = 0; g_path[0] = 0; g_nskip = 0; g_have_meta = 0;
     g_junk = g_junk_line = g_glued = 0; g_carried[0] = 0; g_version[0] = 0; g_meta_src[0] = 0;
     memset(g_static, 0, sizeof g_static);   // the reference clears its static registers when it loads cheats
@@ -1827,7 +1848,7 @@ static void load_all(void) {
         g_have_meta ? ", with its meta file" : "");
     report_build();
     atomic_store(&g_active, g_ncheat > labels);
-    if (atomic_load(&g_active)) tick_start();
+    if (g_main_mod && atomic_load(&g_active)) tick_start();
     running_update();
 }
 
@@ -1845,9 +1866,26 @@ static void folder_flags(void) {
     if (g_safe) LOG("[RED] cheats: the last run ended without a clean exit while cheats were on: every cheat starts off (the Cheats panel restores them)");
 }
 
+int dm_cheats_configure(const char *build, const char *directory) {
+    if (!build || strlen(build) != 16 || !directory || !*directory || strlen(directory) >= sizeof g_dir) return -1;
+    for (int k = 0; k < 16; k++) if (!isxdigit((unsigned char)build[k])) return -1;
+    pthread_mutex_lock(&g_lock);
+    if (!g_main_mod) {
+        snprintf(g_dir, sizeof g_dir, "%s", directory);
+        for (int k = 0; k < 16; k++) g_build[k] = (char)toupper((unsigned char)build[k]);
+        g_build[16] = 0;
+        snprintf(g_tid, sizeof g_tid, "%016llX", (unsigned long long)DM_GAME_PROGRAM_ID);
+        folder_flags(); load_all();
+    }
+    pthread_mutex_unlock(&g_lock);
+    return 0;
+}
+
 // Read the switches, find the game's file and load it (load_all starts the idle apply thread when it has cheats). Called after load_modules
 // (main.c host_preload): the build ID to pick the file by comes from the modules them
 void dm_cheats_init(void) {
+    pthread_mutex_lock(&g_lock);
+    int prepared = g_build[0] && !g_main_mod;
     atomic_store(&g_dbg, !!getenv("DM_CHEATS_DEBUG"));
     const char *e = getenv("DM_CHEATS_ANY_BUILD"); g_any = e && *e && atoi(e) != 0;
     e = getenv("DM_CHEATS");
@@ -1875,10 +1913,13 @@ void dm_cheats_init(void) {
     if (!g_dir[0]) { LOG("cheats: off (neither DM_CHEATS nor DM_ROOT is set)"); }
     else {   // for the main module the pass needs its base: the loader's g_mod tables them by name
         for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main") && !g_mod[i].nro) { g_main_mod = &g_mod[i]; break; }
-        folder_flags();
-        if (g_main_mod) { pthread_mutex_lock(&g_lock); load_all(); pthread_mutex_unlock(&g_lock); }   // load_all maps the writable alias once a file is picked
+        if (g_main_mod && g_main_mod->ext_state_size) dm_cheats_code_init(g_main_mod->build_id, g_main_mod->base,
+            g_main_mod->base + g_main_mod->ext_state_off, g_main_mod->ext_state_size);
+        if (!prepared) folder_flags();
+        if (g_main_mod) load_all();   // maps the writable alias once a file is picked
         atexit(dm_cheats_exit);   // exit() paths (⌘Q, closing the window); dm_host_exit's _exit calls it itself
     }
+    pthread_mutex_unlock(&g_lock);
 }
 
 // A clean exit: no cheat runs any more, so the safe-mode flag goes (atexit, and dm_host_exit before its _exit)
@@ -2065,6 +2106,7 @@ int dm_cheats_master(void) { return atomic_load(&g_master); }
 void dm_cheats_master_set(int on) {
     pthread_mutex_lock(&g_lock);
     atomic_store(&g_master, !!on);
+    if (!on && g_main_mod && g_main_mod->ext_state_size) dm_cheats_code_reset();
     if (g_dir[0]) {
         char p[1100]; flag_file(p, sizeof p, "off");
         if (on) unlink(p);

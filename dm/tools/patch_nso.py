@@ -37,6 +37,15 @@ src, outdir, NAME = sys.argv[1], sys.argv[2], sys.argv[3]
 # against its header before anything is allocated (a damaged module stops here with a [RED] line)
 MOD = nso.cli_read(src)
 bss = MOD.bss
+# Optional application-owned offline code extension; absent means the native rewrite.
+EXTENSION = None
+EXT_STATE_SIZE = EXT_STATE_OFF = 0
+extension_path = os.environ.get('DM_REWRITE_EXTENSION')
+if extension_path:
+    spec = importlib.util.spec_from_file_location('dm_rewrite_extension', extension_path)
+    EXTENSION = importlib.util.module_from_spec(spec); spec.loader.exec_module(EXTENSION)
+    EXT_STATE_SIZE = EXTENSION.reserve(NAME, MOD)
+    assert isinstance(EXT_STATE_SIZE, int) and 0 <= EXT_STATE_SIZE <= 0x100000 and EXT_STATE_SIZE % 0x4000 == 0, 'invalid extension state size'
 # Every jump between the patch area and the code is a B (±128 MB). A patch area appended after the image (with bss) cannot reach the code when it would start beyond 112 MB (leaving 16 MB for the patch area): Metroid Dread's main has about 1.8 GB of bss (the engine's static heap); Engage's main starts its patch area at about 103 MB and keeps it after the image.
 # The patch area then sits FRONT bytes before the module base (PATCH_OFF is negative), and the output file holds only text + ro + data (FILE_IMAGE_LEN) followed by the patch area; the loader supplies zero pages for bss and the key page (IMAGE_SIZE is the whole image).
 # The key page stays after bss (the patch area reaches it through ADRP, ±4 GB). Modules below the limit produce output byte-identical to before
@@ -64,6 +73,7 @@ if TWO:
 elif BIG_TEXT: FRONT = int(os.environ.get('DM_PATCH_FRONT', '0'), 0) or (0x8000000 - 0x10000 - MOD.text_end) & ~0xFFFF
 SPLIT = (0x8000000 - FRONT - 0x100000 if GAP else max(0x8000000 - FRONT - 0x100000, BACK_MIN)) if TWO else None
 IMG = MOD.image
+ORIG_IMAGE = bytes(IMG) if EXT_STATE_SIZE else None
 ORIG_TEXT = bytes(IMG[:MOD.text_end])   # the text as the file has it, before any cut or site: <name>.changed.tsv compares against it
 if not FAR: IMG.extend(bytes(bss))
 TEXT_END = MOD.text_end
@@ -79,6 +89,10 @@ else:
     IMG.extend(bytes(0x4000))
     PATCH_OFF = (len(IMG) + 0xFFFF) & ~0xFFFF
     IMAGE_SIZE = BACK_OFF = 0   # only the layout with the patch area before the base has them
+if EXT_STATE_SIZE:
+    assert not FAR, 'external code extension currently requires the near module layout'
+    EXT_STATE_OFF = max(PATCH_OFF, KEY_PAGE_OFF + 0x8000)
+    PATCH_OFF = (EXT_STATE_OFF + EXT_STATE_SIZE + 0xffff) & ~0xffff
 
 # ---- Registered patches of particular builds, keyed by NSO build ID: dm/tools/sdk_patches.py (Nintendo SDK module builds, which several games can ship) and dm/games/<id>/patches.py
 # (a game's own modules: its profile's builds). Every file is loaded, whatever the game, so a module gets the patches of its build wherever it comes from; a build ID claimed twice stops the rewrite.
@@ -2054,6 +2068,32 @@ for g in spin_regions: spin_emit(g)
 if os.environ.get('DM_SPIN_LIST'):
     for T, bes, n in spin_sites: print(f'{NAME} spin wait {T:#x} ({n} instructions), back-edges ' + ' '.join(f'{b:#x}' for b in bes))
 
+def changed_runs():
+    words = set()
+    for o in range(0, TEXT_END, 0x1000):   # whole blocks first: almost all of the text is unchanged
+        if IMG[o:o + 0x1000] != ORIG_TEXT[o:o + 0x1000]:
+            words.update(w for w in range(o, min(o + 0x1000, TEXT_END), 4) if IMG[w:w + 4] != ORIG_TEXT[w:w + 4]
+                         and not (w in ORDERED and struct.unpack_from('<I', IMG, w)[0] == struct.unpack_from('<I', ORIG_TEXT, w)[0] | 0x8000))   # ordering alone
+    for wseg in windows: words.update(range(wseg[0].address, wseg[-1].address + 4, 4))
+    for g in spin_regions:
+        for a in g['R']:
+            n = g['nodes'][a]; pre = n.get('pre', 0)
+            words.update(a + 4 * (i - pre) for i in range(len(n['ins'])))
+    runs = []
+    for w in sorted(words):
+        if runs and runs[-1][0] + runs[-1][1] == w: runs[-1][1] += 4
+        else: runs.append([w, 4])
+    return runs
+
+if EXT_STATE_SIZE:
+    use_area(0)
+    def extension_fix(offset, word):
+        assert PATCH_OFF <= offset < PATCH_OFF + len(patch_front) and offset % 4 == 0
+        struct.pack_into('<I', patch_front, offset - PATCH_OFF, word)
+    EXTENSION.apply(types.SimpleNamespace(image=IMG, original=ORIG_IMAGE, module=NAME, build_id=BUILD_ID,
+        text_end=TEXT_END, ro_off=RO_OFF, data_off=DATA_OFF, state=EXT_STATE_OFF, state_size=EXT_STATE_SIZE,
+        here=here, emit=emit, fix=extension_fix, changed=changed_runs(), output=outdir))
+
 os.makedirs(outdir, exist_ok=True)
 P = lambda ext: os.path.join(outdir, f'{NAME}.{ext}')
 patch = patch_front
@@ -2074,11 +2114,14 @@ else:
 import hashlib
 with open(os.path.join(outdir, 'build_src.sha256'), 'w') as f:   # the same for every module: the rewriter and every patch file, by path from dm/tools
     for src_ in (os.path.abspath(__file__), nso.__file__, nso_code.__file__, nso_asm.__file__, ue_cvar.__file__, ue_malloc.__file__, fps_target.__file__, ue_fixed_rate.__file__, unity_fps.__file__, unity_bucket.__file__, ue_region.__file__, ue_ring.__file__, snowdrop_pools.__file__, os.path.join(os.path.dirname(ue_malloc.__file__), 'loader_census.py'), *PATCH_FILES): f.write(hashlib.sha256(open(src_, 'rb').read()).hexdigest() + f'  {os.path.relpath(os.path.abspath(src_), os.path.dirname(os.path.abspath(__file__)))}\n')
+    for src_ in dict.fromkeys(p for p in (extension_path, *os.environ.get('DM_REWRITE_INPUTS', '').split(os.pathsep)) if p):
+        f.write(hashlib.sha256(open(src_, 'rb').read()).hexdigest() + f'  {os.path.abspath(src_)}\n')
 with open(P('fixups.tsv'), 'w') as f:
     f.write(f'# PATCH_OFF\t{PATCH_OFF:#x}\n# KEY_PAGE_OFF\t{KEY_PAGE_OFF:#x}\n# KEY_PAGE_SIZE\t0x4000\n# TEXT_END\t{TEXT_END:#x}\n# RO_OFF\t{RO_OFF:#x}\n# DATA_OFF\t{DATA_OFF:#x}\n')
     if FAR: f.write(f'# IMAGE_SIZE\t{IMAGE_SIZE:#x}\n# FILE_IMAGE_LEN\t{FILE_IMAGE_LEN:#x}\n')   # patch area before the base (negative PATCH_OFF): whole image size, length of the image part of the file
     if TWO: f.write(f'# BACK_OFF\t{BACK_OFF:#x}\n# BACK_LEN\t{BACK_LEN:#x}\n')   # the back patch area (TWO): its offset in the image, and its length, the last bytes of the file
     for k in KEY_INDEX: f.write(f'# KEY_{k}_IDX\t{KEY_INDEX[k]}\n')
+    if EXT_STATE_SIZE: f.write(f'# EXT_STATE_OFF\t{EXT_STATE_OFF:#x}\n# EXT_STATE_SIZE\t{EXT_STATE_SIZE:#x}\n')
     if FS_STATE_OFF: f.write(f'# FPS_STATE_OFF\t{FS_STATE_OFF:#x}\n')   # frame step state page (FRAME_STEP): the loader writes the target fps there
     if UE_CALLS: f.write(f'# UE_MALLOC_VT\t{UE_VT:#x}\n# UE_MALLOC_SLOT\t{UE_SLOT:#x}\n')   # Unreal's FMallocBinned3 (ue_malloc.py): its vtable and the slot of its name getter, which names the slot layout
     if FPS_TARGET_PTR is not None: f.write(f'# FPS_TARGET_PTR\t{FPS_TARGET_PTR:#x}\n# FPS_TARGET_FIELD\t{FPS_TARGET_FIELD:#x}\n')   # a target frame rate the game steps by (fps_target.py)
@@ -2113,22 +2156,6 @@ with open(P('cuts.tsv'), 'w') as f:
 # jump tables; not an exclusive access that only gained ordering), the windows whose copies in the patch area run instead, and the spin waits' instructions, which run
 # from their copies after the first pass. Runs of offset and length; the host's cheat engine refuses a write into any of them
 # (hle_cheats.c main_write_pages: a cheat's instruction there would undo a site or never run)
-def changed_runs():
-    words = set()
-    for o in range(0, TEXT_END, 0x1000):   # whole blocks first: almost all of the text is unchanged
-        if IMG[o:o + 0x1000] != ORIG_TEXT[o:o + 0x1000]:
-            words.update(w for w in range(o, min(o + 0x1000, TEXT_END), 4) if IMG[w:w + 4] != ORIG_TEXT[w:w + 4]
-                         and not (w in ORDERED and struct.unpack_from('<I', IMG, w)[0] == struct.unpack_from('<I', ORIG_TEXT, w)[0] | 0x8000))   # ordering alone
-    for wseg in windows: words.update(range(wseg[0].address, wseg[-1].address + 4, 4))
-    for g in spin_regions:
-        for a in g['R']:
-            n = g['nodes'][a]; pre = n.get('pre', 0)
-            words.update(a + 4 * (i - pre) for i in range(len(n['ins'])))
-    runs = []
-    for w in sorted(words):
-        if runs and runs[-1][0] + runs[-1][1] == w: runs[-1][1] += 4
-        else: runs.append([w, 4])
-    return runs
 with open(P('changed.tsv'), 'w') as f:
     f.write(f'# BUILD_ID\t{BUILD_ID}\n')
     for off, n in changed_runs(): f.write(f'{off:#x}\t{n:#x}\n')   # Columns: offset, length in bytes

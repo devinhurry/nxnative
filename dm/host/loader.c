@@ -265,6 +265,8 @@ static void read_layout(module_t *m, const char *dir) {
         else if (!strcmp(key, "TEXT_END")) m->text_end = v;
         else if (!strcmp(key, "RO_OFF")) m->ro_off = v;
         else if (!strcmp(key, "DATA_OFF")) m->data_off = v;
+        else if (!strcmp(key, "EXT_STATE_OFF")) m->ext_state_off = v;
+        else if (!strcmp(key, "EXT_STATE_SIZE")) m->ext_state_size = v;
         else if (!strcmp(key, "FPS_STATE_OFF")) m->fps_state_off = v;
         else if (!strcmp(key, "REALTIME_FRAME_STEP")) m->fps_realtime = v != 0;
         else if (!strcmp(key, "RENDER_SCALE")) m->render_scale_max = (uint32_t)v;
@@ -389,6 +391,14 @@ static void install_key_page(module_t *m) {
     for (unsigned i = 0; i < KEY_N; i++) page[m->key_idx[i]] = (uint64_t)key_value(i) * 8;
     for (int k = 0; k < KEY_N; k++) if (!page[m->key_idx[k]]) die("%s: key page entry %d is 0 (host key not created) -- the game would read TSD slot 0", m->name, k);
     if (mprotect(m->base + m->key_page_off, m->key_page_size, PROT_READ)) die("%s key page mprotect", m->name);
+    if (m->ext_state_size) {
+        uint64_t end = m->ext_state_off + m->ext_state_size;
+        if (!m->ext_state_off || m->ext_state_off % 0x4000 || m->ext_state_size % 0x4000 ||
+            end < m->ext_state_off || end > m->size || m->ext_state_off < m->key_page_off + m->key_page_size ||
+            (m->fps_state_off && m->ext_state_off < m->fps_state_off + 0x4000 && end > m->fps_state_off) ||
+            (m->patch_off >= 0 && end > (uint64_t)m->patch_off)) die("%s: extension state is not in an independent writable range", m->name);
+        memset(m->base + m->ext_state_off, 0, m->ext_state_size);
+    }
     if (m->fps_state_off) install_fps_state(m);
 }
 

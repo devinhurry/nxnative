@@ -74,6 +74,7 @@ typedef struct {
     uint64_t unity_qs_ptr;     // Unity's QualitySettings (main's offset of the global pointer); the current level's vSyncCount, an int32, is at
     uint32_t unity_qs_idx, unity_qs_arr, unity_qs_size, unity_qs_vsync;   // [obj + arr] + (int32)[obj + idx] * size + vsync; 0 = none
     int fps_realtime;          // verified real-time game step (REALTIME_FRAME_STEP)
+    uint64_t ext_state_off, ext_state_size; // independent writable state for optional signed code
     uint64_t fps_state_off;    // frame step state page (patch_nso.py FRAME_STEP: Tears of the Kingdom 1.4.3 and Breath of the Wild 1.9.0 main); 0 = none
     uint32_t step_max;         // the largest step the frame step stubs give the game (the fixups table's STEP_MAX, patch_nso.py ctx.step_max); 0 = FSTEP_MAX
     uint32_t render_scale_max; // a render-scale stub's largest scale (the fixups table's RENDER_SCALE, patch_nso.py): DM_RENDER_SCALE is held to it; 0 = no such stub
@@ -230,3 +231,13 @@ void dm_gfx_shot_at(long k, const char *path);
 void dm_shot_written(const char *path, int ok);   // The graphics side finished writing a screenshot to disk (diag.c: DM_TICK_HOLD=E:SHOT unfreezes on this)
 void dm_host_shutdown_then(const char *why, void (*then)(void *), void *arg);   // The same, then(arg) in place of the last _exit(0) (oe::ExecuteProgram: execve of the next program)
 void dm_host_shutdown(const char *why);   // Graceful exit (crash.c): stop background threads and audio, drain graphics, then _exit(0); used by SIGTERM and the iOS App termination callback   // graphics side: screenshot of the k-th frame after the current presented frame (nvn_mtl.m)
+
+// Optional signed-code provider. Defaults perform no work and refuse code writes.
+// Prepare the existing file parser and toggles before modules load; no execution starts.
+int dm_cheats_configure(const char *build, const char *directory);
+void dm_cheats_code_init(const char *build, uint8_t *base, uint8_t *state, size_t size);
+void dm_cheats_code_begin(void);
+void dm_cheats_code_entry(int begin, int valid);
+void dm_cheats_code_end(void);
+void dm_cheats_code_reset(void);
+int dm_cheats_code_write(uint64_t address, uint64_t size, uint64_t value, int preview);
