@@ -7668,7 +7668,7 @@ static void swrite_note(NvProg *pr) {
     if (g_pass_swrite) { g_vbuf_write_epoch++; return; }   // further shader writes also invalidate aligned vertex snapshots
     if (prog_swrites(pr)) { g_pass_swrite = 1; g_vbuf_write_epoch++; }
 }
-static void udc_note_draw(NvProg *pr, uint32_t raster_mask) {
+static void udc_note_draw(NvProg *pr, uint32_t raster_mask, int ordinary_outputs) {
     int td = tbdr_on();
     if (td && R.has_rt) for (int i = 0; i < R.rt.n && i < 8; i++) if (R.rt.color[i]) { zskip_del(R.rt.color[i]->serial); g_zskip_cand_ok[i] = 0; }   // Zero-source set: once really drawn it is no longer all zeros
     if (td && pr) for (int st = 0; st < 6; st++) { __unsafe_unretained NvShader *sh = pr->sh[st]; if (!sh) continue; for (int i = 0; i < sh->rf.nb; i++) if (sh->rf.b[i].kind == NVN_RB_IMG || sh->rf.b[i].kind == NVN_RB_IMGU) { zskip_clear(); break; } }   // Image slots are writable: conservatively clear
@@ -7690,7 +7690,13 @@ static void udc_note_draw(NvProg *pr, uint32_t raster_mask) {
         if (image_write) t->img = 1;
         if (t->depth == 0 && t->idx >= 0 && (raster_mask >> t->idx & 1)) t->rast = 1;
         if (image_write) { t->wrote = 1; t->wwhy = 1; }
-        else if (t->depth == 0 && t->idx >= 0 && (((S.chmask.mask >> (4 * t->idx)) & 0xf) || (shader_color_mask >> t->idx & 1))) { t->wrote = 1; t->wwhy = (S.chmask.mask >> (4 * t->idx)) & 0xf ? 2 : 3; }
+        else if (t->depth == 0 && t->idx >= 0) {
+            int channels = (S.chmask.mask >> (4 * t->idx)) & 0xf;
+            int output = (shader_color_mask >> t->idx) & 1;
+            // Ordinary pipelines write only where both their output and write mask allow it.
+            // Specialized outputs keep the conservative rule, as do writable aliases above.
+            if (ordinary_outputs ? (raster_mask >> t->idx) & 1 : channels || output) { t->wrote = 1; t->wwhy = channels ? 2 : 3; }
+        }
         else if (t->depth == 1 && S.ds.dw) { t->wrote = 1; t->wwhy = 4; }
         else if (t->depth == 2 && S.ds.st && (S.st_wmask[0] || S.st_wmask[1])
                 && (S.ds.fail_f != NVN_STENCIL_OP_KEEP || S.ds.zfail_f != NVN_STENCIL_OP_KEEP || S.ds.zpass_f != NVN_STENCIL_OP_KEEP
@@ -13937,27 +13943,51 @@ static int fb_mode(void) {
 static inline void fb_pass_sync(void) { uint64_t p = g_stat_pass + !g_enc; if (p != g_fb_pass) { g_fb_pass = p; g_fb_wmask = g_fb_rmask = g_fb_dread = g_fb_dwrote = 0; g_fb_dread_pool = 0; } }
 static inline int fb_shape(const fb_cache_t *e, MTLPixelFormat pf, NSUInteger w, NSUInteger h) { return e->snap && e->snap.pixelFormat == pf && e->snap.width == w && e->snap.height == h; }
 static inline int fb_live(const fb_cache_t *e) { return e->ser && e->bar == g_fb_bar && e->sub == g_sub_serial; }   // a later draw may still reuse it
+static id<MTLTexture> fb_texture(MTLPixelFormat pf, NSUInteger w, NSUInteger h, int need_pfv) {
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:w height:h mipmapped:NO];
+    // Ordinary reads, swizzles and linear/sRGB views can keep lossless compression eligibility.
+    d.usage = MTLTextureUsageShaderRead | (need_pfv ? MTLTextureUsagePixelFormatView : 0);
+    d.storageMode = MTLStorageModePrivate;
+    id<MTLTexture> snap = rh_place(d);
+    if (!snap) snap = [g_dev newTextureWithDescriptor:d];
+    if (snap) res_add(snap);
+    return snap;
+}
 // The snapshot of an attachment's level and layer: the cached one (valid: *fresh = 0) or a texture to copy into (*fresh = 1; the entry is then valid from this barrier and submission on).
 // A new key takes an entry whose texture already has its format and size, one no later draw can reuse first, else the least recently used. Taking the entries in turn made a texture for
 // nearly every snapshot when a frame snapshots several sizes: Tears of the Kingdom's 4-5 a frame (1600x896 down to 400x224) each made one, 4-6 GB of textures every 300 frames on the Mac
 // and a residency commit for each texture added and each removed (GitHub #931). The callers copy after rp_flush, not only after the open pass ends: a clear with no draw after it waits
 // to be the load action of the pass this draw opens (R.clear_c / clear_d), so a copy taken before it held what the attachment had before the clear, which a game sees only up to its clear
 // (a clear, a barrier, then a draw that samples and writes the target; from issue #1932's patch)
-static fb_cache_t *fb_snap(uint64_t ser, int lv, int sl, MTLPixelFormat pf, NSUInteger w, NSUInteger h, int force, int *fresh) {
+static fb_cache_t *fb_snap(uint64_t ser, int lv, int sl, MTLPixelFormat pf, NSUInteger w, NSUInteger h, int need_pfv, int force, int *fresh) {
     fb_cache_t *e = NULL;
     for (int i = 0; i < 8 && !e; i++) if (g_fbc[i].snap && g_fbc[i].ser == ser && g_fbc[i].lv == lv && g_fbc[i].sl == sl) e = &g_fbc[i];
     if (e && !fb_shape(e, pf, w, h)) { e->ser = 0; e = NULL; }   // the attachment was made again in another format or size: its snapshot is no longer this key's
-    if (e && !force && fb_live(e)) { e->use = ++g_fbc_use; *fresh = 0; return e; }
+    if (e && !force && fb_live(e)) {
+        if (need_pfv && !(e->snap.usage & MTLTextureUsagePixelFormatView)) {
+            id<MTLTexture> old = e->snap, snap = fb_texture(pf, w, h, 1);
+            if (!snap) MDIE("feedback snapshot format-view upgrade allocation failed");
+            // Retain the saved version even if a later draw has changed the attachment.
+            if (g_enc) rp_end();
+            enc_b_copy_texture(blit(), old, 0, 0, MTLOriginMake(0, 0, 0), MTLSizeMake(w, h, 1), snap, 0, 0, MTLOriginMake(0, 0, 0));
+            e->snap = snap; defer_obj_release(old); g_fb_count++;
+            PD("F feedback format-view upgrade ser=%llu preserves the cached snapshot", (unsigned long long)ser);
+        }
+        e->use = ++g_fbc_use; *fresh = 0; return e;
+    }
     if (!e) {   // by rank: same shape and not live, not live, same shape (every entry live), least recently used within a rank
         int best = 1 << 30;
         for (int i = 0; i < 8; i++) { fb_cache_t *c = &g_fbc[i]; int r = fb_live(c) ? (fb_shape(c, pf, w, h) ? 2 : 3) : fb_shape(c, pf, w, h) ? 0 : 1;
             if (r < best || (r == best && c->use < e->use)) { best = r; e = c; } }
         if (e->snap && !fb_shape(e, pf, w, h)) { defer_obj_release(e->snap); e->snap = nil; }
     }
-    if (!e->snap) { MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:w height:h mipmapped:NO];
-        d.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView; d.storageMode = MTLStorageModePrivate;
-        e->snap = rh_place(d); if (!e->snap) e->snap = [g_dev newTextureWithDescriptor:d];   // recycled memory: a resized attachment's snapshot takes the heap of an earlier size's
-        if (!e->snap) { e->ser = 0; return NULL; } res_add(e->snap); }   // full queue barriers separate a copy from the draws that read the earlier content
+    if (e->snap && need_pfv && !(e->snap.usage & MTLTextureUsagePixelFormatView)) {
+        defer_obj_release(e->snap); e->snap = nil;
+    }
+    if (!e->snap) {
+        e->snap = fb_texture(pf, w, h, need_pfv);
+        if (!e->snap) { e->ser = 0; return NULL; }
+    }
     e->ser = ser; e->lv = lv; e->sl = sl; e->bar = g_fb_bar; e->sub = g_sub_serial; e->use = ++g_fbc_use; *fresh = 1; return e;
 }
 // ---- Same-pass feedback read from the tile ----
@@ -14079,7 +14109,7 @@ static int fb_depth_snap(NvShader *fs, const nvn_rbind *b, int tid, uint64_t ser
     id<MTLTexture> base = t.parentTexture ? t.parentTexture : t; NSUInteger tl = t.parentTexture ? t.parentRelativeLevel : 0, ts = t.parentTexture ? t.parentRelativeSlice : 0;
     if (base.parentTexture || tl != (NSUInteger)lv || ts != (NSUInteger)sl) return 0;
     NSUInteger w = MAX(base.width >> lv, 1ul), h = MAX(base.height >> lv, 1ul); int fresh;
-    fb_cache_t *e = fb_snap(ser, lv, sl, base.pixelFormat, w, h, g_fb_mode == 2, &fresh); if (!e) return 0;
+    fb_cache_t *e = fb_snap(ser, lv, sl, base.pixelFormat, w, h, 1, g_fb_mode == 2, &fresh); if (!e) return 0;
     MTLTextureSwizzleChannels sw = t.swizzle;
     int same = t.pixelFormat == e->snap.pixelFormat && sw.red == MTLTextureSwizzleRed && sw.green == MTLTextureSwizzleGreen && sw.blue == MTLTextureSwizzleBlue && sw.alpha == MTLTextureSwizzleAlpha;
     id<MTLTexture> use = same ? e->snap : [e->snap newTextureViewWithPixelFormat:t.pixelFormat textureType:MTLTextureType2D levels:NSMakeRange(0, 1) slices:NSMakeRange(0, 1) swizzle:sw];
@@ -14203,7 +14233,8 @@ static void fb_prepare(NvProg *pr) {
                 RED_ONCE(80, "same-pass feedback sampling: the sampled view is not a single-level 2D view of the attachment's level and layer (type %lu levels %lu+%lu layer %lu, attachment level %d layer %d, shader %s); left as is", (unsigned long)t.textureType, (unsigned long)tl, (unsigned long)t.mipmapLevelCount, (unsigned long)ts, lv, sl, fs->key);
                 continue; }
             NSUInteger w = MAX(base.width >> lv, 1ul), h = MAX(base.height >> lv, 1ul); int fresh;
-            fb_cache_t *e = fb_snap(ser, lv, sl, base.pixelFormat, w, h, g_fb_mode == 2, &fresh); if (!e) continue;
+            int need_pfv = tex_need_pfv(base.pixelFormat, t.pixelFormat);
+            fb_cache_t *e = fb_snap(ser, lv, sl, base.pixelFormat, w, h, need_pfv, g_fb_mode == 2, &fresh); if (!e) continue;
             id<MTLTexture> snap = e->snap;
             if (fresh) {
                 rp_flush();   // ends the pass, or lands a clear still waiting to be its load action: the snapshot holds the cleared content (fb_snap)
@@ -14974,6 +15005,8 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
         rp_end(); en = rp_begin_ex(mode); if (!en) return;
         cur_ps = pso_get(pr, nil); cur_pull = g_pso_pull; cur_pr = pr; cur_ps_pass = g_pass.serial; cur_border = border; g_pso_dirty = !cur_ps || cur_pull; }
     uint32_t raster_mask = draw_color_writes(pr);   // Capture the physical mapping before resetting the merged pipeline state.
+    int ordinary_outputs = !g_fz.active && !g_defer_replaying && !g_sm_pass && !g_geo_program && !g_geo_mesh.on &&
+                           !g_mtk.on && !g_wl.on && !g_pso_lmap && !g_pso_fsfn && !(pr->sh[1] && ms_fs_override(pr->sh[1]));
     if (g_pso_lmap) { g_pso_lmap = NULL; g_pso_fsfn = nil; memset(&g_pso_fz, 0, sizeof g_pso_fz); g_pso_dirty = 1; }   // The next draw fetches again according to its own situation
     __unsafe_unretained id<MTLRenderPipelineState> ps = cur_ps;
     if (!ps) { PD("Z %llu draw skipped: no render pipeline (vertex %s fragment %s)", g_stat_pass, pr->sh[0] ? pr->sh[0]->key : "-", pr->sh[1] ? pr->sh[1]->key : "-"); return; }
@@ -15122,7 +15155,7 @@ static void draw_(const p_draw *dw, const p_draw_idx *di) {
 #ifdef NVN_RT_RANGE_TEST
     rr_snap(dw,di);
 #endif
-    udc_note_draw(pr, raster_mask);
+    udc_note_draw(pr, raster_mask, ordinary_outputs);
     swrite_note(pr); order_note(pr);
     if (g_mtk.on) { mtk_encode(en); return; }
     if (g_geo_mesh.on) { geo_mesh_encode(en); return; }

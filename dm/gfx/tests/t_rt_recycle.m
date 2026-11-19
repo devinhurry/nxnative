@@ -99,7 +99,7 @@ int main(void) { @autoreleasepool {
     CHECK(waiting() == 0 && g_rh_trimmed == before && g_rh_bytes == 0, "heaps that waited too long are freed when a submission begins");
     CHECK(!first_heap || !resident(first_heap), "and leave the residency set");
     {   // a same-pass feedback snapshot is placed in recycled memory, and its heap waits once the snapshot goes
-        int fresh = 0; uint64_t made = g_rh_made; fb_cache_t *e = fb_snap(95007, 0, 0, MTLPixelFormatRGBA16Float, 640, 360, 1, &fresh);
+        int fresh = 0; uint64_t made = g_rh_made; fb_cache_t *e = fb_snap(95007, 0, 0, MTLPixelFormatRGBA16Float, 640, 360, 0, 1, &fresh);
         CHECK(e && fresh && e->snap.heap && g_rh_made == made + 1 && resident(e->snap.heap), "a snapshot is placed in a recycled heap, resident");
         if (e) { defer_obj_release(e->snap); e->snap = nil; e->ser = 0; }
         settle();
