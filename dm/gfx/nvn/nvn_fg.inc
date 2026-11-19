@@ -2,6 +2,8 @@
 // Capture and final drawing use the backend's Metal 4 presentation hooks.
 // Quality follows the valid picture size automatically.
 enum { FG_SLOTS = 3, FG_JOBS = 4, FG_NATIVE = 0, FG_ACTIVE = 1, FG_LEAVING = 2 };
+enum { FG_CAPTURE_PENDING = 0, FG_CAPTURE_OK = 1, FG_CAPTURE_FAILED = -1 };
+enum { FG_JOB_READY, FG_JOB_WAIT_CAPTURE, FG_JOB_INTERPOLATING };
 static _Atomic int g_fg_requested = -1, g_fg_reset, g_fg_phase;
 static _Atomic uint64_t g_fg_displayed, g_fg_gen, g_fg_source_seq;
 static dispatch_queue_t g_fg_wq;
@@ -12,24 +14,35 @@ static void fg_pump(void);
 static void fg_leave_check(void);
 static void fg_leave(const char *reason, int failed);
 
+@class FgJob;
 @interface FgSlot : NSObject { @public
     id<MTLTexture> texture;
     id<MTL4CommandAllocator> allocator;
     id<MTL4CommandBuffer> buffer;
     id<MTL4ArgumentTable> arguments;
     id<MTLBuffer> uv;
-    _Atomic int busy, failed;
+    _Atomic int busy, capture_status;
+    uint64_t capture_sequence; // protected by g_pq_mu together with capture_waiter
+    __weak FgJob *capture_waiter;
 }
 @end
 @implementation FgSlot
 - (void)dealloc { res_remove(texture); res_remove(uv); res_commit(); }
 @end
+typedef struct {
+    id<MTL4CommandAllocator> allocator;
+    id<MTL4CommandBuffer> buffer;
+    id<MTL4ArgumentTable> arguments;
+    id<MTLBuffer> uv;
+    int busy; // owned by g_fg_wq until Metal reports GPU completion
+} FgPresentSlot;
 @interface FgSession : NSObject { @public
     NSUInteger w, h;
     int hi;
     id<MTLFXFrameInterpolator> fi;
     id<MTLTexture> hist[2], gen[FG_SLOTS], depth, motion;
     FgSlot *slots[FG_SLOTS];
+    FgPresentSlot present_slots[FG_SLOTS];
     id<MTLCommandQueue> queue;
     id<MTL4CommandQueue> present_queue;
     id<MTLSharedEvent> capture_event;
@@ -41,7 +54,10 @@ static void fg_leave(const char *reason, int failed);
 @implementation FgSession
 - (void)dealloc {
     for (int i = 0; i < 2; i++) res_remove(hist[i]);
-    for (int i = 0; i < FG_SLOTS; i++) res_remove(gen[i]);
+    for (int i = 0; i < FG_SLOTS; i++) {
+        res_remove(gen[i]);
+        res_remove(present_slots[i].uv);
+    }
     res_remove(depth); res_remove(motion); res_commit();
 }
 @end
@@ -49,7 +65,7 @@ static void fg_leave(const char *reason, int failed);
     FgSession *session;
     FgSlot *slot;
     uint64_t sequence, ticket;
-    int ready, discarded, generated, paired;
+    int state, discarded, generated, paired;
     double period;
     const char *reason;
 }
@@ -160,8 +176,12 @@ static void fg_slot_release(FgJob *job) {
 static void fg_jobs_clear(void) {
     while (F.count) {
         FgJob *job = g_fg_jobs[F.head]; g_fg_jobs[F.head] = nil; F.head = (F.head + 1) % FG_JOBS; F.count--;
+        job->discarded = 1;
+        g_pres[job->ticket % PRING] = (pres_ent){job->ticket, -1}; F.dropped++;
+        // The interpolation callback still owns the capture and its output.
+        if (job->state == FG_JOB_INTERPOLATING) continue;
         if (job->generated) job->session->output_busy[job->generated - 1] = 0;
-        g_pres[job->ticket % PRING] = (pres_ent){job->ticket, -1}; fg_slot_release(job); F.dropped++;
+        fg_slot_release(job);
     }
     F.generated_jobs = 0;
 }
@@ -211,6 +231,15 @@ static void fg_session_start(NSUInteger w, NSUInteger h, MTLPixelFormat format, 
         slot->allocator = [g_dev newCommandAllocator]; slot->buffer = [g_dev newCommandBuffer]; slot->arguments = fg_arguments();
         slot->uv = [g_dev newBufferWithLength:NX_GFX_PRESENT_FLOATS * sizeof(float) options:MTLResourceStorageModeShared]; if (slot->uv) res_add(slot->uv);
         ok &= s->gen[i] && slot->texture && slot->allocator && slot->buffer && slot->arguments && slot->uv;
+
+        // Keep the present buffers resident for the session, like the capture buffers.
+        FgPresentSlot *present = &s->present_slots[i];
+        present->allocator = [g_dev newCommandAllocator];
+        present->buffer = [g_dev newCommandBuffer];
+        present->arguments = fg_arguments();
+        present->uv = [g_dev newBufferWithLength:NX_GFX_PRESENT_FLOATS * sizeof(float) options:MTLResourceStorageModeShared];
+        res_add(present->uv);
+        ok &= present->allocator && present->buffer && present->arguments && present->uv;
     }
     s->depth = fg_mfx_tex(d.depthTextureFormat, w, h, s->fi.depthTextureUsage | MTLTextureUsageRenderTarget, @"framegen constant depth");
     s->motion = fg_mfx_tex(d.motionTextureFormat, w, h, s->fi.motionTextureUsage | MTLTextureUsageRenderTarget, @"framegen zero motion");
@@ -270,7 +299,14 @@ static void fg_on_present_completed(FgSession *s, NSError *error, void (^complet
     }
     fg_leave_check();
 }
-static int fg_present(FgSession *s, id<MTLTexture> texture, int original, uint64_t ticket, double duration, void (^completed)(void)) {
+static FgPresentSlot *fg_available_present_slot(FgSession *s, const FgPresentSlot *reserved) {
+    for (int i = 0; i < FG_SLOTS; i++) {
+        FgPresentSlot *slot = &s->present_slots[i];
+        if (slot != reserved && !slot->busy) return slot;
+    }
+    return NULL;
+}
+static int fg_present(FgSession *s, FgPresentSlot *slot, id<MTLTexture> texture, int original, uint64_t ticket, double duration, void (^completed)(void)) {
     if (atomic_load(&g_gpu_lost)) return 0;
     CAMetalLayer *layer = (__bridge CAMetalLayer *)front_metal_layer(); if (!layer) return 0;
     uint64_t begin = now_ns(); id<CAMetalDrawable> drawable = [layer nextDrawable];
@@ -278,27 +314,31 @@ static int fg_present(FgSession *s, id<MTLTexture> texture, int original, uint64
     if (waited > 100000000ull) MLOG("[fg] nextDrawable waited %.0f ms (%d pending, maximum %lu)%s", waited / 1e6, s->pending, (unsigned long)layer.maximumDrawableCount, drawable ? "" : ": none came");
     if (!drawable) return 0;
     if (s->layer != layer) { [s->present_queue addResidencySet:layer.residencySet]; s->layer = layer; }
-    id<MTL4CommandAllocator> allocator = [g_dev newCommandAllocator]; id<MTL4CommandBuffer> cb = [g_dev newCommandBuffer];
-    id<MTL4ArgumentTable> args = fg_arguments(); id<MTLBuffer> uv = [g_dev newBufferWithLength:NX_GFX_PRESENT_FLOATS * sizeof(float) options:MTLResourceStorageModeShared];
-    if (!allocator || !cb || !args || !uv) return 0;
-    res_add(uv); res_commit(); [s->present_queue waitForDrawable:drawable];
-    [cb beginCommandBufferWithAllocator:allocator];
-    int kind = present_encode_m4_args(cb, texture, drawable.texture, NULL, uv, &g_fx_present, args, 2);
+    id<MTL4CommandBuffer> cb = slot->buffer;
+    [slot->allocator reset];
+    [s->present_queue waitForDrawable:drawable];
+    [cb beginCommandBufferWithAllocator:slot->allocator];
+    int kind = present_encode_m4_args(cb, texture, drawable.texture, NULL, slot->uv, &g_fx_present, slot->arguments, 2);
     [cb endCommandBuffer];
-    if (!kind) { [s->present_queue signalDrawable:drawable]; res_remove(uv); res_commit(); return 0; }
+    if (!kind) { [s->present_queue signalDrawable:drawable]; return 0; }
     FgPresent *p = [FgPresent new]; p->original = original; p->ticket = ticket; p->session = s;
     p->hgen = s->presentation_epoch; p->submitted = CACurrentMediaTime(); p->buffer = cb;
+    slot->busy = 1;
     s->pending++; s->in_flight++;
     pthread_mutex_lock(&g_pq_mu); g_pq_inflight++; pthread_mutex_unlock(&g_pq_mu);
     [drawable addPresentedHandler:^(id<MTLDrawable> d) { double t = d.presentedTime; dispatch_async(g_fg_wq, ^{ fg_on_presented(p, t); }); }];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), g_fg_wq, ^{ fg_on_presented(p, NAN); });
-    NSArray *keep = @[s, texture, allocator, cb, args, uv];
     MTL4CommitOptions *options = [MTL4CommitOptions new];
     [options addFeedbackHandler:^(id<MTL4CommitFeedback> feedback) {
-        (void)keep; atomic_store(&p->gpu_done, 1);
+        (void)texture; // Metal 4 does not retain the source texture.
+        atomic_store(&p->gpu_done, 1);
         pthread_mutex_lock(&g_pq_mu); g_pq_inflight--; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu);
-        res_remove(uv); res_commit();
-        dispatch_async(g_fg_wq, ^{ fg_on_present_completed(s, feedback.error, completed); });
+        NSError *error = feedback.error;
+        dispatch_async(g_fg_wq, ^{
+            slot->busy = 0;
+            fg_on_present_completed(s, error, completed);
+            if (s->epoch == atomic_load(&g_fg_gen) && atomic_load(&g_fg_phase) == FG_ACTIVE) fg_pump();
+        });
     }];
     [s->present_queue commit:&cb count:1 options:options]; [s->present_queue signalDrawable:drawable];
     if (duration > 0) [drawable presentAfterMinimumDuration:duration]; else [drawable present];
@@ -308,27 +348,32 @@ static int fg_present(FgSession *s, id<MTLTexture> texture, int original, uint64
 static void fg_pump(void) {
     while (F.count) {
         FgJob *job = g_fg_jobs[F.head]; FgSession *s = job->session;
-        if (!job->ready) return;
+        if (job->state != FG_JOB_READY) return;
         if (job->discarded) {
             g_fg_jobs[F.head] = nil; F.head = (F.head + 1) % FG_JOBS; F.count--;
             if (job->generated) { s->output_busy[job->generated - 1] = 0; F.generated_jobs--; }
             g_pres[job->ticket % PRING] = (pres_ent){job->ticket, -1}; F.dropped++; fg_slot_release(job); continue;
         }
+        FgPresentSlot *original_slot = fg_available_present_slot(s, NULL);
+        if (!original_slot) return;
         if (job->generated) {
             int one = fg_free_for(s, 1), two = fg_free_for(s, 2);
             int action = F.count >= 2 ? (two ? 0 : 2) : (one ? 0 : 1);
             if (action == 1) return;
             int output = job->generated - 1; job->generated = 0; F.generated_jobs--;
-            if (action == 2) {
-                s->output_busy[output] = 0; F.no_drawable++;
+            // A generated frame must leave a present slot available for its original.
+            FgPresentSlot *generated_slot = fg_available_present_slot(s, original_slot);
+            if (action == 2 || !generated_slot) {
+                s->output_busy[output] = 0;
+                F.no_drawable += action == 2;
             } else {
-                job->paired = fg_present(s, s->gen[output], 0, 0, 0, ^{ s->output_busy[output] = 0; });
+                job->paired = fg_present(s, generated_slot, s->gen[output], 0, 0, 0, ^{ s->output_busy[output] = 0; });
                 if (!job->paired) s->output_busy[output] = 0;
             }
         }
         if (!fg_free_for(s, 1)) return;
         g_fg_jobs[F.head] = nil; F.head = (F.head + 1) % FG_JOBS; F.count--;
-        if (!fg_present(s, job->slot->texture, 1, job->ticket, job->paired ? job->period : 0, ^{ fg_slot_release(job); })) {
+        if (!fg_present(s, original_slot, job->slot->texture, 1, job->ticket, job->paired ? job->period : 0, ^{ fg_slot_release(job); })) {
             g_pres[job->ticket % PRING] = (pres_ent){job->ticket, -1}; F.dropped++; fg_slot_release(job);
         }
     }
@@ -338,8 +383,14 @@ static double fg_ms_p(double *values, int n, double fraction) {
     for (int i = 1; i < n; i++) { double v = sorted[i]; int j = i; while (j && sorted[j - 1] > v) { sorted[j] = sorted[j - 1]; j--; } sorted[j] = v; }
     return sorted[MIN(n - 1, (int)(n * fraction))];
 }
+static void fg_original_capture_done(FgJob *job, int status) {
+    if (job->discarded) return;
+    job->state = FG_JOB_READY;
+    job->discarded = status == FG_CAPTURE_FAILED;
+    fg_pump();
+}
 static void fg_on_capture(FgSession *s, FgSlot *slot, uint64_t sequence, uint64_t ticket, double time, int screen_hz) {
-    FgJob *job = [FgJob new]; job->session = s; job->slot = slot; job->sequence = sequence; job->ticket = ticket; job->ready = 1;
+    FgJob *job = [FgJob new]; job->session = s; job->slot = slot; job->sequence = sequence; job->ticket = ticket; job->state = FG_JOB_READY;
     if (s->epoch != atomic_load(&g_fg_gen) || atomic_load(&g_fg_phase) != FG_ACTIVE) { g_pres[ticket % PRING] = (pres_ent){ticket, -1}; fg_slot_release(job); return; }
     if (!mtl_framegen_enabled()) { fg_slot_release(job); fg_leave("setting_off", 0); return; }
     fg_observe(time, screen_hz); fg_rate(F.mode == 3 ? (int)F.target : 0); F.sources++;
@@ -350,7 +401,7 @@ static void fg_on_capture(FgSession *s, FgSlot *slot, uint64_t sequence, uint64_
     }
     if (F.count == FG_JOBS) { fg_slot_release(job); F.shed++; return; }
     g_fg_jobs[(F.head + F.count++) % FG_JOBS] = job;
-    if (atomic_load(&slot->failed)) { job->discarded = 1; job->reason = "capture_command_buffer_failed"; F.primed = 0; fg_pump(); return; }
+    if (atomic_load(&slot->capture_status) == FG_CAPTURE_FAILED) { job->discarded = 1; job->reason = "capture_command_buffer_failed"; F.primed = 0; fg_pump(); return; }
     const char *reason = NULL;
     if (!F.primed) { reason = "fixed_pair_seed"; F.unprimed++; }
     else if (sequence != F.previous_sequence + 1) reason = "input_pair_not_adjacent";
@@ -358,7 +409,20 @@ static void fg_on_capture(FgSession *s, FgSlot *slot, uint64_t sequence, uint64_
     else if (time - F.previous_time > 1. / 15) { reason = "fixed_pair_discontinuity"; F.gaps++; }
     else if (F.mode != 3) reason = "source_rate_or_screen";
     else if (!F.onscreen) reason = "pair_reservation_original_fallback";
-    if (F.mode != 3) { F.primed = 0; fg_pump(); return; }
+    if (F.mode != 3) {
+        F.primed = 0;
+        // The present queue can read this texture once capture feedback confirms it.
+        pthread_mutex_lock(&g_pq_mu);
+        int status = atomic_load(&slot->capture_status);
+        if (status == FG_CAPTURE_PENDING) {
+            job->state = FG_JOB_WAIT_CAPTURE;
+            slot->capture_waiter = job;
+        }
+        pthread_mutex_unlock(&g_pq_mu);
+        if (status != FG_CAPTURE_PENDING) fg_original_capture_done(job, status);
+        else fg_pump();
+        return;
+    }
     int output = reason ? -1 : (int)(sequence % FG_SLOTS);
     if (output >= 0 && s->output_busy[output]) { output = -1; reason = "metalfx_output_busy"; }
     int reset = F.encoded_sequence != F.previous_sequence;
@@ -381,18 +445,24 @@ static void fg_on_capture(FgSession *s, FgSlot *slot, uint64_t sequence, uint64_
     id<MTLBlitCommandEncoder> copy = [cb blitCommandEncoder];
     [copy copyFromTexture:slot->texture toTexture:s->hist[s->hi ^ 1]]; [copy endEncoding]; s->hi ^= 1;
     F.primed = 1; F.previous_sequence = sequence; F.previous_time = time;
-    job->ready = 0;
+    job->state = FG_JOB_INTERPOLATING;
     if (show) { job->generated = output + 1; job->period = 1. / F.target; F.generated_jobs++; }
     s->in_flight++;
     [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
         NSError *error = done.error; double gpu = (done.GPUEndTime - done.GPUStartTime) * 1000;
         dispatch_async(g_fg_wq, ^{
             s->in_flight--;
-            if (!show && output >= 0) s->output_busy[output] = 0;
-            if (s->epoch != atomic_load(&g_fg_gen)) { if (show) s->output_busy[output] = 0; fg_leave_check(); return; }
-            if (gpu > 0 && gpu < 1000) F.gpu_ms[F.gpu_n++ % 300] = gpu;
-            if (error) { MLOG("[RED] [fg] MetalFX frame interpolation command buffer failed: %s", error.description.UTF8String); fg_leave("metalfx_failed", 1); return; }
-            job->ready = 1; fg_pump(); fg_leave_check();
+            job->state = FG_JOB_READY;
+            int active = s->epoch == atomic_load(&g_fg_gen);
+            int discarded = job->discarded || !active;
+            if (output >= 0 && (!show || discarded)) s->output_busy[output] = 0;
+            if (discarded) fg_slot_release(job);
+            if (active) {
+                if (gpu > 0 && gpu < 1000) F.gpu_ms[F.gpu_n++ % 300] = gpu;
+                if (error) { MLOG("[RED] [fg] MetalFX frame interpolation command buffer failed: %s", error.description.UTF8String); fg_leave("metalfx_failed", 1); return; }
+                if (!discarded) fg_pump();
+            }
+            fg_leave_check();
         });
     }];
     [cb commit]; fg_pump();
@@ -416,10 +486,15 @@ static int fg_route(id<MTLTexture> source, const int crop[4], uint64_t ticket, d
     if (s->w != w || s->h != h) { pthread_mutex_unlock(&g_pq_mu); dispatch_async(g_fg_wq, ^{ fg_leave("picture_size_changed", 0); }); return -1; }
     FgSlot *slot = nil;
     for (int i = 0; i < FG_SLOTS; i++) { int zero = 0; if (atomic_compare_exchange_strong(&s->slots[i]->busy, &zero, 1)) { slot = s->slots[i]; break; } }
-    pthread_mutex_unlock(&g_pq_mu);
     uint64_t sequence = atomic_fetch_add(&g_fg_source_seq, 1) + 1;
+    if (slot) {
+        slot->capture_sequence = sequence;
+        slot->capture_waiter = nil;
+        atomic_store(&slot->capture_status, FG_CAPTURE_PENDING);
+    }
+    pthread_mutex_unlock(&g_pq_mu);
     if (!slot) { g_pres[ticket % PRING] = (pres_ent){ticket, -1}; dispatch_async(g_fg_wq, ^{ F.shed++; }); return 0; }
-    atomic_store(&slot->failed, 0); [slot->allocator reset];
+    [slot->allocator reset];
     id<MTL4CommandBuffer> cb = slot->buffer; [cb beginCommandBufferWithAllocator:slot->allocator];
     NX_GFX_CAPTURE_BEGIN();
     int kind = present_encode_m4_args(cb, source, slot->texture, crop, slot->uv, NULL, slot->arguments, 1);
@@ -428,8 +503,23 @@ static int fg_route(id<MTLTexture> source, const int crop[4], uint64_t ticket, d
     MTL4CommitOptions *options = [MTL4CommitOptions new]; FgSlot *captured = slot;
     [options addFeedbackHandler:^(id<MTL4CommitFeedback> feedback) {
         (void)source;
-        if (feedback.error) { atomic_store(&captured->failed, 1); if (s->capture_event.signaledValue < sequence) s->capture_event.signaledValue = sequence; MLOG("[RED] [fg] capture command buffer: %s", feedback.error.description.UTF8String); }
-        pthread_mutex_lock(&g_pq_mu); if (ticket > g_pq_done) g_pq_done = ticket; g_pq_inflight--; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu);
+        NSError *error = feedback.error;
+        int status = error ? FG_CAPTURE_FAILED : FG_CAPTURE_OK;
+        FgJob *waiter = nil;
+        pthread_mutex_lock(&g_pq_mu);
+        // A delayed callback may arrive after another capture has taken the slot.
+        if (captured->capture_sequence == sequence) {
+            atomic_store(&captured->capture_status, status);
+            waiter = captured->capture_waiter;
+            captured->capture_waiter = nil;
+        }
+        if (ticket > g_pq_done) g_pq_done = ticket;
+        g_pq_inflight--; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu);
+        if (error) {
+            if (s->capture_event.signaledValue < sequence) s->capture_event.signaledValue = sequence;
+            MLOG("[RED] [fg] capture command buffer: %s", error.description.UTF8String);
+        }
+        if (waiter) dispatch_async(g_fg_wq, ^{ fg_original_capture_done(waiter, status); });
     }];
     pthread_mutex_lock(&g_pq_mu); g_pq_inflight++; pthread_mutex_unlock(&g_pq_mu);
     pthread_mutex_lock(&g_res_commit_mu); [g_q4 commit:&cb count:1 options:options]; [g_q4 signalEvent:s->capture_event value:sequence]; pthread_mutex_unlock(&g_res_commit_mu);
