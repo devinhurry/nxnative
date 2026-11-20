@@ -17406,7 +17406,7 @@ static int present_now_image(const tex_t *t, double period, uint64_t frame, uint
     if (!generated && g_grab_cb) grab_present(src, crop, layer.drawableSize);   // Screenshots keep the actual game frame
     if (!supplied) {
         double source_time = g_link_it_tin > 0 ? g_link_it_tin : CACurrentMediaTime();
-        int routed = fg_route(src, crop, ticket, source_time, period, layer);
+        int routed = fg_route(src, crop, ticket, source_time, period, layer, capture_only);
         if (routed >= 0) return routed;
         if (capture_only) { g_pres[ticket % PRING] = (pres_ent){ticket, -1}; return 0; } // The link owns the drawable during frame generation.
     }
@@ -17496,9 +17496,9 @@ static void snap_commit_wait(uint64_t v);
 static pq_item g_pq[PQ];
 static uint64_t g_pq_in;
 static double g_link_vperiod, g_link_vhalf;   // virtual ticks (link_range): seconds per counted tick (0 = every callback is a tick) and half a refresh of the screen
-enum { LINK_FG_60 = 4, LINK_FG_120 = 5 };
-static _Atomic int g_link_mode = 1;   // 1/2: native; 3: native power saving; 4/5: frame generation
-static int link_mode_framegen(int mode) { return mode == LINK_FG_60 || mode == LINK_FG_120; }
+enum { LINK_FG_120 = 5 };
+static _Atomic int g_link_mode = 1;   // 1/2: native; 3: native power saving; 5: frame generation at 120 Hz
+static int link_mode_framegen(int mode) { return mode == LINK_FG_120; }
 static int g_link_owns_layer, g_classic_busy;   // Under g_pq_mu: the link owns drawables; the present thread can still capture source textures during frame generation.
 
 @interface NvMetalDisplayLinkDelegate : NSObject <CAMetalDisplayLinkDelegate>
@@ -17529,7 +17529,7 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
     if (link_mode_framegen(mode)) {
         g_link_hold_until = 0;
         __atomic_store_n(&g_link_tick_ns, now_ns(), __ATOMIC_RELAXED);
-        fg_display_update(update.drawable, update.targetPresentationTimestamp, update.targetTimestamp, mode == LINK_FG_120 ? 120 : 60);
+        fg_display_update(update.drawable, update.targetPresentationTimestamp, update.targetTimestamp, 120);
         return;
     }
     pthread_mutex_lock(&g_pq_mu);
@@ -17596,8 +17596,7 @@ __attribute__((weak)) void front_screen_match(int fps) { (void)fps; }   // front
 __attribute__((weak)) void front_picture_shape(int w, int h) { (void)w; (void)h; }   // front_mac.m, front_ios.m; graphics unit tests have none
 static CAFrameRateRange link_range(int mode, int hz, int realtime) {
     if (link_mode_framegen(mode)) {
-        int rate = mode == LINK_FG_120 ? 120 : 60;
-        g_link_vperiod = 0; return CAFrameRateRangeMake(rate, rate, rate);
+        g_link_vperiod = 0; return CAFrameRateRangeMake(120, 120, 120);
     }
     static int on = -1; if (on < 0) { const char *e = getenv("DM_LINK_VTICK"); on = !(e && !strcmp(e, "0")); }
     int rate = mode == 3 ? 30 : mode == 2 ? 120 : 60;
@@ -17660,8 +17659,9 @@ static void link_sync(void) {   // Called every frame by the game's present thre
     int want = g_dm_present_link;
     if (want < 0 || want > 2) { g_dm_present_link = applied > 2 ? 1 : applied; pthread_mutex_unlock(&g_pq_mu); return; }
     int fg_phase = atomic_load(&g_fg_phase);
-    if (fg_phase == FG_ACTIVE) want = atomic_load(&g_fg_refresh_rate) >= 120 ? LINK_FG_120 : LINK_FG_60;
-    else if (mtl_framegen_enabled() || fg_phase == FG_LEAVING) want = 0;
+    // The timed presenter keeps the layer until its already submitted drawables drain.
+    if (fg_phase != FG_NATIVE) want = g_fg_session->rate == 120 ? LINK_FG_120 : 0;
+    else if (mtl_framegen_enabled()) want = 0;
     if (g_rescue_mode && (want != g_rescue_mode || now_ns() >= g_rescue_back_at)) {
         g_rescue_mode = 0; g_stall_t0 = 0; __atomic_store_n(&g_link_tick_ns, now_ns(), __ATOMIC_RELAXED);
         MLOG("display link: rescue ended, trying pacing mode %d (frame %llu)", want, (unsigned long long)atomic_load(&g_cur_frame));

@@ -2,15 +2,20 @@
 // Capture and final drawing use the backend's Metal 4 presentation hooks.
 // Quality follows the valid picture size automatically.
 enum { FG_SLOTS = 3, FG_JOBS = 4, FG_NATIVE = 0, FG_ACTIVE = 1, FG_LEAVING = 2 };
-enum { FG_CAPTURE_PENDING = 0, FG_CAPTURE_OK = 1, FG_CAPTURE_FAILED = -1 };
+enum { FG_CAPTURE_PENDING = 0, FG_CAPTURE_OK = 1, FG_CAPTURE_WAITING = 2, FG_CAPTURE_FAILED = -1 };
 enum { FG_TICK_EMPTY, FG_TICK_ORIGINAL, FG_TICK_GENERATED };
 static _Atomic int g_fg_requested = -1, g_fg_reset, g_fg_phase;
-static _Atomic int g_fg_refresh_rate, g_fg_update_pending;
+static _Atomic int g_fg_update_pending;
 static _Atomic uint64_t g_fg_displayed, g_fg_gen, g_fg_source_seq, g_fg_display_update;
 static dispatch_queue_t g_fg_wq;
 static MTLSharedEventListener *g_fg_listener;
+extern uint8_t *dm_fps_state __attribute__((weak_import));
+__attribute__((weak)) void front_framegen_rate(int fps) { (void)fps; }
+__attribute__((weak)) uint64_t front_framegen_rate_ticks(void) { return 0; }
+@class FgSession;
 static void fg_leave_check(void);
 static void fg_leave(const char *reason, int failed);
+static void fg_present_ready(FgSession *s);
 
 @class FgJob;
 @interface FgSlot : NSObject { @public
@@ -35,7 +40,8 @@ typedef struct {
 } FgPresentSlot;
 @interface FgSession : NSObject { @public
     NSUInteger w, h;
-    int hi;
+    int hi, rate, screen_rate;
+    float source_limit;
     id<MTLFXFrameInterpolator> fi;
     id<MTLTexture> hist[2], gen[FG_SLOTS], depth, motion;
     FgSlot *slots[FG_SLOTS];
@@ -46,7 +52,7 @@ typedef struct {
     CAMetalLayer *layer;
     id<CAMetalDrawable> midpoint_drawable;
     _Atomic int midpoint_waiting;
-    int output_busy[FG_SLOTS], in_flight;
+    int output_busy[FG_SLOTS], in_flight, pending, presenting;
     double first_original_at, last_original_at, last_original_interval;
     double midpoint_target, midpoint_deadline, midpoint_refresh;
     uint64_t epoch, presentation_epoch, last_original_ticket, midpoint_update;
@@ -66,7 +72,7 @@ typedef struct {
     FgSession *session;
     FgSlot *slot;
     uint64_t sequence, ticket;
-    int interpolating, original_done, generated;
+    int interpolating, original_done, generated, paired;
     double enqueued, interval;
 }
 @end
@@ -88,7 +94,7 @@ static struct {
     int samples, have_last, tier, tier_samples, maximum, mode, stable, primed, warm;
     int head, count, failed, recoveries, skipped, onscreen, seed_skipped;
     uint64_t previous_sequence, encoded_sequence, sources, generated, originals, shed, dropped,
-        gaps, unprimed, warm_hidden, resets, late_generated, shown, never_shown, refresh_ticks, last_ticks;
+        gaps, unprimed, warm_hidden, resets, late_generated, no_drawable, shown, never_shown, refresh_ticks, last_ticks;
     double gpu_ms[300]; int gpu_n;
 } F;
 static void fg_queue_init(void) {
@@ -130,7 +136,19 @@ static void fg_extent(NSUInteger w, NSUInteger h, NSUInteger *ow, NSUInteger *oh
     *ow = MAX(2u, (NSUInteger)(w * scale) & ~(NSUInteger)1);
     *oh = MAX(2u, (NSUInteger)(h * scale) & ~(NSUInteger)1);
 }
-static void fg_observe(double now, int screen_hz) {
+static int fg_screen_rate(int hz) { return hz >= 114 ? 120 : hz >= 57 ? 60 : 0; }
+static float fg_source_limit(void) {
+    float limit = 0;
+    if (&dm_fps_state && dm_fps_state) {
+        uint32_t bits = __atomic_load_n((uint32_t *)dm_fps_state, __ATOMIC_RELAXED);
+        memcpy(&limit, &bits, sizeof limit);
+    } else {
+        const char *value = getenv("DM_FPS_TARGET");
+        if (value) limit = strtof(value, NULL);
+    }
+    return isfinite(limit) && limit > 0 ? limit : 0;
+}
+static void fg_observe(double now, int screen_rate, float source_limit) {
     if (isfinite(now)) {
         if (F.have_last) {
             double dt = now - F.last; F.last = now;
@@ -146,15 +164,21 @@ static void fg_observe(double now, int screen_hz) {
             } else F.samples = 0;
         } else { F.have_last = 1; F.last = now; }
     }
-    F.maximum = screen_hz + 6 >= 120 ? 2 : screen_hz + 3 >= 60 ? 1 : 0;
-    if (F.tier > F.maximum) F.tier = F.maximum;
-    int next = F.tier;
-    if (next < F.maximum && F.fps >= (next + 1) * 35.) next++;
-    else if (next && F.fps < next * 35.) next--;
-    if (next == F.tier) F.tier_samples = 0;
-    else if (++F.tier_samples >= (next > F.tier ? 3 : 8)) { F.tier = next; F.tier_samples = 0; }
-    F.target = F.maximum ? MIN(F.tier + 1, F.maximum) * 60. : 60.;
-    F.mode = F.samples < 8 || !(F.fps > 0) ? 0 : F.fps >= F.target - fmax(1., F.target * .05) ? 1 : F.tier >= F.maximum ? 2 : 3;
+    F.maximum = screen_rate / 60;
+    if (source_limit > 0) {
+        // Explicit targets keep the display cadence through short bursts in the source.
+        F.target = source_limit > 30 && screen_rate == 120 ? 120 : 60;
+    } else {
+        if (F.tier > F.maximum) F.tier = F.maximum;
+        int next = F.tier;
+        if (next < F.maximum && F.fps >= (next + 1) * 35.) next++;
+        else if (next && F.fps < next * 35.) next--;
+        if (next == F.tier) F.tier_samples = 0;
+        else if (++F.tier_samples >= (next > F.tier ? 3 : 8)) { F.tier = next; F.tier_samples = 0; }
+        F.target = F.maximum ? MIN(F.tier + 1, F.maximum) * 60. : 60.;
+    }
+    int can_interpolate = F.maximum && (source_limit > 0 || F.tier < F.maximum);
+    F.mode = F.samples < 8 || !(F.fps > 0) ? 0 : F.fps >= F.target - fmax(1., F.target * .05) ? 1 : can_interpolate ? 3 : 2;
 }
 static id<MTLTexture> fg_mfx_tex(MTLPixelFormat format, NSUInteger w, NSUInteger h, MTLTextureUsage usage, NSString *label) {
     MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:w height:h mipmapped:NO];
@@ -201,8 +225,10 @@ static void fg_leave_check(void) {
     if (atomic_load(&g_fg_phase) != FG_LEAVING) return;
     FgSession *s = g_fg_session; int busy = 0;
     if (s) for (int i = 0; i < FG_SLOTS; i++) busy += atomic_load(&s->slots[i]->busy);
-    if (s && (busy || s->in_flight) && CACurrentMediaTime() - F.leave_time <= 2.) return;
-    if (s && (busy || s->in_flight)) MLOG("[fg] leaving: %d command buffers and %d slots still busy after 2 s; native present takes over", s->in_flight, busy);
+    if (s && (busy || s->in_flight || s->presenting) && CACurrentMediaTime() - F.leave_time <= 2.) return;
+    if (s && (busy || s->in_flight || s->presenting))
+        MLOG("[fg] leaving: %d command buffers, %d capture slots and %d drawables still busy after 2 s; native present takes over", s->in_flight, busy, s->presenting);
+    if (s && s->rate == 60) front_framegen_rate(0);
     pthread_mutex_lock(&g_pq_mu); g_fg_session = nil; atomic_store(&g_fg_phase, FG_NATIVE); pthread_mutex_unlock(&g_pq_mu);
     MLOG("[fg] native present again");
 }
@@ -214,13 +240,14 @@ static void fg_leave(const char *reason, int failed) {
     fg_jobs_clear(); MLOG("[fg] leaving frame generation: %s", reason); fg_leave_check();
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), g_fg_wq, ^{ fg_leave_check(); });
 }
-static void fg_session_start(NSUInteger w, NSUInteger h, MTLPixelFormat format, double now, int screen_hz) {
+static void fg_session_start(NSUInteger w, NSUInteger h, MTLPixelFormat format, double now, int screen_rate, float source_limit) {
     if (!mtl_framegen_enabled() || F.failed || atomic_load(&g_fg_phase) != FG_NATIVE) return;
-    fg_observe(now, screen_hz);
+    fg_observe(now, screen_rate, source_limit);
     if (!isfinite(now) || F.mode != 3) { F.stable = 0; return; }
     if (!F.stable) { F.stable = 1; F.stable_since = now; return; }
     if (++F.stable < 8 || now - F.stable_since < .5) return;
     FgSession *s = [FgSession new]; s->w = w; s->h = h;
+    s->rate = (int)F.target; s->screen_rate = screen_rate; s->source_limit = source_limit;
     s->queue = [g_dev newCommandQueue];
     // A second descriptor sharing g_feedback_q over-releases that dispatch
     // queue on descriptor destruction (SIGTRAP in dispatch_release). Let Metal
@@ -261,16 +288,20 @@ static void fg_session_start(NSUInteger w, NSUInteger h, MTLPixelFormat format, 
     rp.colorAttachments[1].texture = s->motion; rp.colorAttachments[1].loadAction = MTLLoadActionClear; rp.colorAttachments[1].storeAction = MTLStoreActionStore; rp.colorAttachments[1].clearColor = MTLClearColorMake(0, 0, 0, 0);
     [[cb renderCommandEncoderWithDescriptor:rp] endEncoding]; [cb commit]; res_commit();
     F.primed = F.warm = F.recoveries = F.skipped = 0; F.previous_sequence = F.encoded_sequence = 0;
-    s->epoch = atomic_fetch_add(&g_fg_gen, 1) + 1; F.report_time = CACurrentMediaTime(); F.last_ticks = F.refresh_ticks;
-    atomic_store(&g_fg_refresh_rate, (int)F.target);
+    s->epoch = atomic_fetch_add(&g_fg_gen, 1) + 1; F.report_time = CACurrentMediaTime();
+    F.last_ticks = s->rate == 60 ? front_framegen_rate_ticks() : F.refresh_ticks;
+    if (s->rate == 60) front_framegen_rate(60);
     pthread_mutex_lock(&g_pq_mu); g_fg_session = s; atomic_store(&g_fg_phase, FG_ACTIVE); pthread_mutex_unlock(&g_pq_mu);
-    MLOG("[fg] session %lux%lu started: constant depth 1, zero motion; 3 capture slots, 2 previous frames, 3 outputs; reference 8 samples / 0.5 s startup", (unsigned long)w, (unsigned long)h);
+    MLOG("[fg] session %lux%lu started: %d Hz (%s); constant depth 1, zero motion; 3 capture slots, 2 previous frames, 3 outputs", (unsigned long)w, (unsigned long)h, s->rate, s->rate == 60 ? "paired presents" : "Metal display link");
 }
 static void fg_on_presented(FgPresent *p, double time) {
     if (atomic_exchange(&p->called, 1)) return;
     FgSession *s = p->session;
+    s->presenting--;
+    if (s->rate == 60 && p->hgen == s->presentation_epoch) s->pending--;
     if (p->original && p->ticket) g_pres[p->ticket % PRING] = (pres_ent){p->ticket, time > 0 ? time : -1};
-    if (s->epoch != atomic_load(&g_fg_gen)) return;
+    if (s->epoch != atomic_load(&g_fg_gen)) { fg_leave_check(); return; }
+    if (s->rate == 60 && F.count) dispatch_async(g_fg_wq, ^{ fg_present_ready(s); });
     if (isfinite(time) && time > 0) {
         F.shown++;
         if (!p->original) {
@@ -295,9 +326,9 @@ static void fg_on_presented(FgPresent *p, double time) {
     F.recoveries++; s->presentation_epoch++; F.onscreen = 0;
     MLOG("[fg] presentation stall recovery %d (%s): queued frames dropped, pairs start again", F.recoveries, reason);
     fg_jobs_clear(); F.primed = F.warm = 0;
+    s->pending = 0;
     s->first_original_at = s->last_original_at = 0; s->last_original_ticket = 0;
 }
-static void fg_try_midpoint(FgSession *s);
 static void fg_on_present_completed(FgSession *s, NSError *error, void (^completed)(void)) {
     s->in_flight--;
     if (completed) completed();
@@ -306,7 +337,7 @@ static void fg_on_present_completed(FgSession *s, NSError *error, void (^complet
     if (error && s->epoch == atomic_load(&g_fg_gen)) {
         MLOG("[RED] [fg] present command buffer: %s", error.description.UTF8String);
         fg_leave("present_command_buffer_failed", 1);
-    } else if (!error) fg_try_midpoint(s);
+    } else if (!error) fg_present_ready(s);
     fg_leave_check();
 }
 static FgPresentSlot *fg_available_present_slot(FgSession *s, const FgPresentSlot *reserved) {
@@ -317,11 +348,21 @@ static FgPresentSlot *fg_available_present_slot(FgSession *s, const FgPresentSlo
     return NULL;
 }
 // A negative result leaves an original queued for the next display update.
-static int fg_present(FgSession *s, FgPresentSlot *slot, id<MTLTexture> texture, id<CAMetalDrawable> drawable,
-                      double deadline, int original, uint64_t ticket, void (^completed)(void)) {
+static int fg_present(FgSession *s, FgPresentSlot *slot, id<MTLTexture> texture, id<CAMetalDrawable> supplied,
+                      double deadline, double duration, int original, uint64_t ticket, void (^completed)(void)) {
     if (atomic_load(&g_gpu_lost)) return 0;
     if (atomic_load(&g_present_discard)) return -1;
-    CAMetalLayer *layer = drawable.layer; if (!layer || layer != (__bridge CAMetalLayer *)front_metal_layer()) return 0;
+    CAMetalLayer *layer = (__bridge CAMetalLayer *)front_metal_layer();
+    if (!layer) return 0;
+    id<CAMetalDrawable> drawable = supplied;
+    if (s->rate == 60) {
+        uint64_t start = now_ns();
+        drawable = [layer nextDrawable];
+        uint64_t waited = now_ns() - start; atomic_fetch_add(&g_drawable_ns, waited);
+        if (waited > 100000000ull)
+            MLOG("[fg] nextDrawable waited %.0f ms (%d pending, maximum %lu)%s", waited / 1e6, s->pending, (unsigned long)layer.maximumDrawableCount, drawable ? "" : ": none came");
+    }
+    if (drawable.layer != layer) return 0;
     if (s->layer != layer) { [s->present_queue addResidencySet:layer.residencySet]; s->layer = layer; }
     id<MTL4CommandBuffer> cb = slot->buffer;
     [slot->allocator reset];
@@ -337,7 +378,8 @@ static int fg_present(FgSession *s, FgPresentSlot *slot, id<MTLTexture> texture,
     FgPresent *p = [FgPresent new]; p->original = original; p->ticket = ticket; p->session = s;
     p->hgen = s->presentation_epoch;
     slot->busy = 1;
-    s->in_flight++;
+    s->in_flight++; s->presenting++;
+    if (s->rate == 60) s->pending++;
     [drawable addPresentedHandler:^(id<MTLDrawable> d) { double t = d.presentedTime; dispatch_async(g_fg_wq, ^{ fg_on_presented(p, t); }); }];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), g_fg_wq, ^{ fg_on_presented(p, NAN); });
     MTL4CommitOptions *options = [MTL4CommitOptions new];
@@ -352,9 +394,48 @@ static int fg_present(FgSession *s, FgPresentSlot *slot, id<MTLTexture> texture,
         });
     }];
     [s->present_queue commit:&cb count:1 options:options]; [s->present_queue signalDrawable:drawable];
-    [drawable present];
+    if (duration > 0) [drawable presentAfterMinimumDuration:duration]; else [drawable present];
     if (original) F.originals++; else F.generated++;
     return 1;
+}
+static void fg_pump_pairs(FgSession *s) {
+    while (F.count && !atomic_load(&g_present_discard)) {
+        FgJob *job = g_fg_jobs[F.head];
+        if (job->interpolating) return;
+        int status = FG_CAPTURE_PENDING;
+        if (atomic_compare_exchange_strong(&job->slot->capture_status, &status, FG_CAPTURE_WAITING) ||
+            status == FG_CAPTURE_WAITING) return;
+        if (status == FG_CAPTURE_FAILED) {
+            fg_pop_job(); fg_skip_generated(job); fg_original_done(job);
+            g_pres[job->ticket % PRING] = (pres_ent){job->ticket, -1}; F.dropped++;
+            continue;
+        }
+        FgPresentSlot *original = fg_available_present_slot(s, NULL);
+        if (!original) return;
+        CAMetalLayer *layer = (__bridge CAMetalLayer *)front_metal_layer();
+        int available = layer ? (int)layer.maximumDrawableCount - s->pending - F.onscreen : 2;
+        if (available <= 0) return;
+        if (job->generated) {
+            FgPresentSlot *generated = fg_available_present_slot(s, original);
+            int output = job->generated - 1; job->generated = 0;
+            // With another original waiting, reserve a drawable for this original too.
+            if (F.count >= 2 && available < 2) F.no_drawable++;
+            else if (generated) {
+                job->paired = fg_present(s, generated, s->gen[output], nil, INFINITY, 0, 0, 0,
+                                         ^{ s->output_busy[output] = 0; }) > 0;
+            }
+            if (!job->paired) s->output_busy[output] = 0;
+            else if (--available == 0) return;
+        }
+        // As in the original 30-to-60 presenter, let the generated image occupy one refresh.
+        int submitted = fg_present(s, original, job->slot->texture, nil, INFINITY, job->paired ? 1. / 60 : 0,
+                                   1, job->ticket, ^{ fg_original_done(job); });
+        if (submitted < 0) return;
+        fg_pop_job();
+        if (!submitted) {
+            g_pres[job->ticket % PRING] = (pres_ent){job->ticket, -1}; F.dropped++; fg_original_done(job);
+        }
+    }
 }
 static int fg_frame_for_update(double target, double refresh, double original_at, double midpoint,
                                int original_ready, int generated_ready) {
@@ -376,7 +457,7 @@ static int fg_submit_midpoint(FgSession *s, FgJob *job, id<CAMetalDrawable> draw
     FgPresentSlot *generated = fg_available_present_slot(s, original);
     if (!generated) return 0;
     int output = job->generated - 1; job->generated = 0;
-    if (fg_present(s, generated, s->gen[output], drawable, deadline, 0, 0, ^{ s->output_busy[output] = 0; }) <= 0) {
+    if (fg_present(s, generated, s->gen[output], drawable, deadline, 0, 0, 0, ^{ s->output_busy[output] = 0; }) <= 0) {
         s->output_busy[output] = 0;
         F.late_generated++;
     }
@@ -398,6 +479,11 @@ static void fg_try_midpoint(FgSession *s) {
     if (fg_frame_for_update(s->midpoint_target, s->midpoint_refresh, original_at, midpoint, 1, 1) == FG_TICK_GENERATED &&
         fg_submit_midpoint(s, job, s->midpoint_drawable, s->midpoint_deadline)) fg_clear_midpoint(s);
 }
+static void fg_present_ready(FgSession *s) {
+    if (s->epoch != atomic_load(&g_fg_gen) || atomic_load(&g_fg_phase) != FG_ACTIVE) return;
+    if (s->rate == 60) fg_pump_pairs(s);
+    else fg_try_midpoint(s);
+}
 static void fg_hold_midpoint(FgSession *s, id<CAMetalDrawable> drawable, double target, double deadline, double refresh, uint64_t update) {
     double delay = deadline - CACurrentMediaTime();
     if (!(delay > 0) || update != atomic_load(&g_fg_display_update)) return;
@@ -413,9 +499,9 @@ static void fg_hold_midpoint(FgSession *s, id<CAMetalDrawable> drawable, double 
     fg_try_midpoint(s);   // Capture feedback can have arrived while arming the update.
 }
 static void fg_display_tick(id<CAMetalDrawable> drawable, double target, double deadline, double refresh, uint64_t update) {
-    F.refresh_ticks++;
     FgSession *s = g_fg_session;
-    if (!s) return;
+    if (!s || s->rate != 120) return;
+    F.refresh_ticks++;
     fg_clear_midpoint(s);   // Any newer display update supersedes the optional one still waiting.
     if (!drawable || !isfinite(target) || !isfinite(deadline) || !(CACurrentMediaTime() < deadline)) return;
     while (F.count) {
@@ -457,7 +543,7 @@ static void fg_display_tick(id<CAMetalDrawable> drawable, double target, double 
         if (!original_slot) return;
         if (job->generated) F.late_generated++;
         fg_skip_generated(job);
-        int submitted = fg_present(s, original_slot, job->slot->texture, drawable, deadline, 1, job->ticket, ^{ fg_original_done(job); });
+        int submitted = fg_present(s, original_slot, job->slot->texture, drawable, deadline, 0, 1, job->ticket, ^{ fg_original_done(job); });
         if (submitted < 0) return;
         fg_pop_job();
         if (!submitted) {
@@ -488,22 +574,31 @@ static double fg_ms_p(double *values, int n, double fraction) {
     for (int i = 1; i < n; i++) { double v = sorted[i]; int j = i; while (j && sorted[j - 1] > v) { sorted[j] = sorted[j - 1]; j--; } sorted[j] = v; }
     return sorted[MIN(n - 1, (int)(n * fraction))];
 }
-static void fg_on_capture(FgSession *s, FgSlot *slot, uint64_t sequence, uint64_t ticket, double time, double period, int screen_hz) {
+static void fg_on_capture(FgSession *s, FgSlot *slot, uint64_t sequence, uint64_t ticket, double time, double period) {
     FgJob *job = [FgJob new]; job->session = s; job->slot = slot; job->sequence = sequence; job->ticket = ticket;
     if (s->epoch != atomic_load(&g_fg_gen) || atomic_load(&g_fg_phase) != FG_ACTIVE) { g_pres[ticket % PRING] = (pres_ent){ticket, -1}; fg_slot_release(job); return; }
     if (!mtl_framegen_enabled()) { fg_slot_release(job); fg_leave("setting_off", 0); return; }
-    fg_observe(time, screen_hz);
-    atomic_store_explicit(&g_fg_refresh_rate, (int)F.target, memory_order_relaxed);
+    fg_observe(time, s->screen_rate, s->source_limit);
+    if (F.target != s->rate) {
+        g_pres[ticket % PRING] = (pres_ent){ticket, -1}; fg_slot_release(job);
+        fg_leave("source_cadence_changed", 0);
+        return;
+    }
     job->enqueued = time; job->interval = period > 0 && isfinite(period) ? period : F.fps > 0 ? 1. / F.fps : 2. / F.target;
     F.sources++;
     if (F.sources % 300 == 0) {
         double now = CACurrentMediaTime(), span = now - F.report_time;
-        MLOG("[fg] %llu source frames: generated %llu, originals %llu, warmup %llu, after gap %llu, unprimed %llu, shed %llu, dropped %llu, late generated %llu; history resets %llu; game %.1f fps, target %.0f; interpolation GPU p50 %.2f / p95 %.2f ms; shown %llu, never shown %llu; Metal display callback %.1f Hz", F.sources, F.generated, F.originals, F.warm_hidden, F.gaps, F.unprimed, F.shed, F.dropped, F.late_generated, F.resets, F.fps, F.target, fg_ms_p(F.gpu_ms, F.gpu_n, .5), fg_ms_p(F.gpu_ms, F.gpu_n, .95), F.shown, F.never_shown, span > 0 ? (F.refresh_ticks - F.last_ticks) / span : 0.);
-        F.report_time = now; F.last_ticks = F.refresh_ticks;
+        uint64_t ticks = s->rate == 60 ? front_framegen_rate_ticks() : F.refresh_ticks;
+        MLOG("[fg] %llu source frames: generated %llu, originals %llu, warmup %llu, after gap %llu, unprimed %llu, shed %llu, dropped %llu, late generated %llu, no drawable %llu; history resets %llu; game %.1f fps, target %.0f; interpolation GPU p50 %.2f / p95 %.2f ms; shown %llu, never shown %llu; refresh callback %.1f Hz", F.sources, F.generated, F.originals, F.warm_hidden, F.gaps, F.unprimed, F.shed, F.dropped, F.late_generated, F.no_drawable, F.resets, F.fps, F.target, fg_ms_p(F.gpu_ms, F.gpu_n, .5), fg_ms_p(F.gpu_ms, F.gpu_n, .95), F.shown, F.never_shown, span > 0 ? (ticks - F.last_ticks) / span : 0.);
+        F.report_time = now; F.last_ticks = ticks;
     }
     if (F.count == FG_JOBS) { g_pres[ticket % PRING] = (pres_ent){ticket, -1}; fg_slot_release(job); F.shed++; return; }
     g_fg_jobs[(F.head + F.count++) % FG_JOBS] = job;
-    if (atomic_load(&slot->capture_status) == FG_CAPTURE_FAILED || F.mode != 3) { F.primed = 0; return; }
+    if (atomic_load(&slot->capture_status) == FG_CAPTURE_FAILED || F.mode != 3) {
+        F.primed = 0;
+        if (s->rate == 60) fg_pump_pairs(s);
+        return;
+    }
     const char *reason = NULL;
     if (!F.primed) { reason = "fixed_pair_seed"; F.unprimed++; }
     else if (sequence != F.previous_sequence + 1) reason = "input_pair_not_adjacent";
@@ -547,7 +642,7 @@ static void fg_on_capture(FgSession *s, FgSlot *slot, uint64_t sequence, uint64_
             if (active) {
                 if (gpu > 0 && gpu < 1000) F.gpu_ms[F.gpu_n++ % 300] = gpu;
                 if (error) { MLOG("[RED] [fg] MetalFX frame interpolation command buffer failed: %s", error.description.UTF8String); fg_leave("metalfx_failed", 1); return; }
-                fg_try_midpoint(s);
+                fg_present_ready(s);
             }
             fg_leave_check();
         });
@@ -556,7 +651,8 @@ static void fg_on_capture(FgSession *s, FgSlot *slot, uint64_t sequence, uint64_
 }
 // -1 uses the ordinary native presenter; 0 is a shed/drop; 1 means
 // the capture was submitted and the worker now owns both images of the pair.
-static int fg_route(id<MTLTexture> source, const int crop[4], uint64_t ticket, double time, double period, CAMetalLayer *layer) {
+static int fg_route(id<MTLTexture> source, const int crop[4], uint64_t ticket, double time, double period, CAMetalLayer *layer,
+                    int capture_only) {
     fg_queue_init(); int phase = atomic_load(&g_fg_phase);
     if (!mtl_framegen_enabled()) {
         if (phase) { dispatch_async(g_fg_wq, ^{ fg_leave("setting_off", 0); }); return 0; }
@@ -566,12 +662,26 @@ static int fg_route(id<MTLTexture> source, const int crop[4], uint64_t ticket, d
     NSUInteger valid[4]; if (!present_crop_rect(source, crop, valid)) return -1;
     NSUInteger w, h; fg_extent(valid[2], valid[3], &w, &h);
     int hz = front_screen_max_fps(); if (hz <= 0) hz = mtl_display_hz();
+    int screen_rate = fg_screen_rate(hz);
+    float limit = fg_source_limit();
     if (atomic_exchange(&g_fg_reset, 0) && phase) { dispatch_async(g_fg_wq, ^{ F.primed = F.warm = 0; F.encoded_sequence = 0; }); }
     if (phase == FG_LEAVING) return 0;
-    if (phase == FG_NATIVE) { MTLPixelFormat format = layer.pixelFormat; dispatch_async(g_fg_wq, ^{ fg_session_start(w, h, format, time, hz); }); return -1; }
+    if (phase == FG_NATIVE) {
+        if (!capture_only) {
+            MTLPixelFormat format = layer.pixelFormat;
+            dispatch_async(g_fg_wq, ^{ fg_session_start(w, h, format, time, screen_rate, limit); });
+        }
+        return -1;
+    }
     pthread_mutex_lock(&g_pq_mu); FgSession *s = g_fg_session;
     if (!s || atomic_load(&g_fg_phase) != FG_ACTIVE) { pthread_mutex_unlock(&g_pq_mu); return 0; }
-    if (s->w != w || s->h != h) { pthread_mutex_unlock(&g_pq_mu); dispatch_async(g_fg_wq, ^{ fg_leave("picture_size_changed", 0); }); return -1; }
+    const char *change = s->source_limit != limit || s->screen_rate != screen_rate ? "frame_rate_changed"
+                        : s->w != w || s->h != h ? "picture_size_changed" : NULL;
+    if (change) {
+        pthread_mutex_unlock(&g_pq_mu);
+        dispatch_async(g_fg_wq, ^{ if (s->epoch == atomic_load(&g_fg_gen)) fg_leave(change, 0); });
+        return 0;
+    }
     FgSlot *slot = nil;
     for (int i = 0; i < FG_SLOTS; i++) { int zero = 0; if (atomic_compare_exchange_strong(&s->slots[i]->busy, &zero, 1)) { slot = s->slots[i]; break; } }
     uint64_t sequence = atomic_fetch_add(&g_fg_source_seq, 1) + 1;
@@ -592,21 +702,23 @@ static int fg_route(id<MTLTexture> source, const int crop[4], uint64_t ticket, d
         (void)source;
         NSError *error = feedback.error;
         int status = error ? FG_CAPTURE_FAILED : FG_CAPTURE_OK;
+        int waiting = 0;
         pthread_mutex_lock(&g_pq_mu);
         // A delayed callback may arrive after another capture has taken the slot.
-        if (captured->capture_sequence == sequence) atomic_store(&captured->capture_status, status);
+        if (captured->capture_sequence == sequence)
+            waiting = atomic_exchange(&captured->capture_status, status) == FG_CAPTURE_WAITING;
         if (ticket > g_pq_done) g_pq_done = ticket;
         g_pq_inflight--; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu);
         if (error) {
             if (s->capture_event.signaledValue < sequence) s->capture_event.signaledValue = sequence;
             MLOG("[RED] [fg] capture command buffer: %s", error.description.UTF8String);
         }
-        if (atomic_load_explicit(&s->midpoint_waiting, memory_order_relaxed))
-            dispatch_async(g_fg_wq, ^{ fg_try_midpoint(s); });
+        if (waiting || atomic_load_explicit(&s->midpoint_waiting, memory_order_relaxed))
+            dispatch_async(g_fg_wq, ^{ fg_present_ready(s); });
     }];
     pthread_mutex_lock(&g_pq_mu); g_pq_inflight++; pthread_mutex_unlock(&g_pq_mu);
     pthread_mutex_lock(&g_res_commit_mu); [g_q4 commit:&cb count:1 options:options]; [g_q4 signalEvent:s->capture_event value:sequence]; pthread_mutex_unlock(&g_res_commit_mu);
-    dispatch_async(g_fg_wq, ^{ fg_on_capture(s, captured, sequence, ticket, time, period, hz); });
+    dispatch_async(g_fg_wq, ^{ fg_on_capture(s, captured, sequence, ticket, time, period); });
     return 1;
 }
 static void fg_suspend(void) {

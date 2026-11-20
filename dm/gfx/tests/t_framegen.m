@@ -21,7 +21,7 @@ static void idle(void) {
 }
 static void session(NSUInteger w, NSUInteger h) {
     fg_queue_init(); dispatch_sync(g_fg_wq, ^{ fg_leave("fixture", 0); }); idle();
-    dispatch_sync(g_fg_wq, ^{ F = (typeof(F)){0}; for (int i = 0; i < 40; i++) fg_session_start(w, h, MTLPixelFormatBGRA8Unorm, 10 + i / 30., 120); });
+    dispatch_sync(g_fg_wq, ^{ F = (typeof(F)){0}; for (int i = 0; i < 40; i++) fg_session_start(w, h, MTLPixelFormatBGRA8Unorm, 10 + i / 30., 120, 30); });
 }
 static id<MTLTexture> fixture(id<MTLTexture> source, const int crop[4], double time) {
     idle(); FgSession *s = g_fg_session; if (!s) return nil;
@@ -33,7 +33,7 @@ static id<MTLTexture> fixture(id<MTLTexture> source, const int crop[4], double t
     // Emulate the presenter having confirmed an original; no window or actual
     // presentation is invented, and the public displayed counter must stay zero.
     atomic_store(&slot->capture_status, FG_CAPTURE_OK);
-    dispatch_sync(g_fg_wq, ^{ F.onscreen = 1; fg_on_capture(s, slot, seq, seq, time, 1. / 30, 120); }); idle();
+    dispatch_sync(g_fg_wq, ^{ F.onscreen = 1; fg_on_capture(s, slot, seq, seq, time, 1. / 30); }); idle();
     return s->gen[seq % FG_SLOTS];
 }
 static void fill(id<MTLTexture> t) {
@@ -117,7 +117,8 @@ static void lifecycle(void) {
         __block int released = 0; fg_on_present_completed(old, error, ^{ released++; });
         CHECK(old->in_flight == 0 && released == 1, "retired feedback still releases its resources");
         CHECK(!F.failed && g_fg_session == current && atomic_load(&g_fg_phase) == FG_ACTIVE, "retired feedback cannot fail the resumed session");
-        FgPresent *midpoint = [FgPresent new]; midpoint->session = current; atomic_store(&midpoint->gpu_done, 1);
+        FgPresent *midpoint = [FgPresent new]; midpoint->session = current; current->presenting = 1;
+        atomic_store(&midpoint->gpu_done, 1);
         fg_on_presented(midpoint, NAN);
         CHECK(!F.recoveries && atomic_load(&g_fg_phase) == FG_ACTIVE, "an unshown midpoint with completed GPU work leaves originals scheduled");
         fg_on_present_completed(current, error, nil);
@@ -151,7 +152,10 @@ static void presentation_timing(void) {
     CHECK(originals == 50, "fractional source periods preserve 50 originals on 120 refreshes");
 }
 static void presentation_handoff(void) {
-    dispatch_sync(g_fg_wq, ^{ F.refresh_ticks = 0; atomic_store(&g_fg_phase, FG_ACTIVE); });
+    dispatch_sync(g_fg_wq, ^{
+        FgSession *s = [FgSession new]; s->rate = 120; s->epoch = atomic_load(&g_fg_gen);
+        g_fg_session = s; F.refresh_ticks = 0; atomic_store(&g_fg_phase, FG_ACTIVE);
+    });
     dispatch_suspend(g_fg_wq);
     dispatch_group_t caller = dispatch_group_create();
     dispatch_group_async(caller, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
@@ -165,7 +169,33 @@ static void presentation_handoff(void) {
     CHECK(returned, "the display callback returns while the frame-generation worker is busy");
     dispatch_sync(g_fg_wq, ^{
         CHECK(F.refresh_ticks == 1 && !atomic_load(&g_fg_update_pending), "the worker consumes at most one pending display update");
-        atomic_store(&g_fg_phase, FG_NATIVE);
+        g_fg_session = nil; atomic_store(&g_fg_phase, FG_NATIVE);
+    });
+}
+static void paired_present_handoff(void) {
+    dispatch_sync(g_fg_wq, ^{
+        F = (typeof(F)){0};
+        FgSession *s = [FgSession new]; s->rate = 60;
+        for (int i = 0; i < FG_SLOTS; i++) s->slots[i] = [FgSlot new];
+        s->epoch = atomic_load(&g_fg_gen); g_fg_session = s; atomic_store(&g_fg_phase, FG_ACTIVE);
+        double deadline = CACurrentMediaTime() + 1.;
+        fg_display_tick(nil, deadline, deadline, 1. / 120, 1);
+        CHECK(F.refresh_ticks == 0, "display updates do not drive the 60 Hz pair presenter");
+
+        FgJob *job = [FgJob new]; job->session = s; job->slot = s->slots[0]; job->ticket = 1;
+        g_fg_jobs[0] = job; F.count = 1;
+        fg_present_ready(s);
+        CHECK(F.count == 1 && atomic_load(&job->slot->capture_status) == FG_CAPTURE_WAITING,
+              "the pair presenter waits for capture feedback before reading the source");
+        atomic_store(&job->slot->capture_status, FG_CAPTURE_OK);
+        fg_present_ready(s);
+        CHECK(!F.count, "capture feedback wakes the pair presenter without a display update");
+
+        FgPresent *last = [FgPresent new]; last->session = s; s->pending = s->presenting = 1;
+        fg_leave("frame_rate_changed", 0);
+        CHECK(atomic_load(&g_fg_phase) == FG_LEAVING, "changing rates drains the already submitted drawable after GPU completion");
+        fg_on_presented(last, CACurrentMediaTime());
+        CHECK(atomic_load(&g_fg_phase) == FG_NATIVE && !g_fg_session, "the next presenter can start after the old drawable is reported");
     });
 }
 @interface FgHeadlessDrawable : NSObject
@@ -177,9 +207,9 @@ static void presentation_handoff(void) {
 static void midpoint_deadlines(void) {
     dispatch_sync(g_fg_wq, ^{
         F = (typeof(F)){0}; F.mode = 3;
-        FgSession *s = [FgSession new]; g_fg_session = s;
+        FgSession *s = [FgSession new]; s->rate = 120; g_fg_session = s;
         s->epoch = atomic_load(&g_fg_gen); atomic_store(&g_fg_phase, FG_ACTIVE);
-        double refresh = 1. / 60, original = 60., midpoint = original + refresh;
+        double refresh = 1. / 120, original = 60., midpoint = original + refresh;
         s->last_original_at = original; s->last_original_interval = 2 * refresh; s->last_original_ticket = 7;
         id<CAMetalDrawable> drawable = (id<CAMetalDrawable>)[FgHeadlessDrawable new];
         fg_display_tick(drawable, midpoint, CACurrentMediaTime() + 1, refresh, atomic_fetch_add(&g_fg_display_update, 1) + 1);
@@ -226,17 +256,21 @@ int main(int argc, char **argv) { @autoreleasepool {
     fg_extent(1920, 1080, &w, &h); CHECK(w == 1920 && h == 1080, "1080p selects the automatic 1080p budget");
     fg_extent(960, 540, &w, &h); CHECK(w == 960 && h == 540, "smaller input is not upscaled");
     fg_queue_init(); dispatch_sync(g_fg_wq, ^{
-        for (int i = 0; i < 40; i++) fg_observe(1 + i / 30., 120);
+        for (int i = 0; i < 40; i++) fg_observe(1 + i / 30., 120, 30);
         CHECK(F.mode == 3 && fabs(F.fps - 30) < .01 && F.target == 60, "reference source estimator selects 30 to 60");
         double now = F.last;
-        for (int i = 0; i < 60; i++) { now += i % 2 ? .021 : .045; fg_observe(now, 120); }
+        for (int i = 0; i < 60; i++) { now += i % 2 ? .021 : .045; fg_observe(now, 120, 30); }
         CHECK(F.mode == 3 && F.target == 60 && F.fps > 29 && F.fps < 32, "45/21 ms source jitter does not stop interpolation");
-        F = (typeof(F)){0}; for (int i = 0; i < 40; i++) fg_observe(1 + i / 60., 120);
+        for (int i = 0; i < 12; i++) { now += 1. / 40; fg_observe(now, 120, 30); }
+        CHECK(F.fps > 35 && F.mode == 3 && F.target == 60, "the 30 fps setting keeps pairing at 60 Hz through a source burst");
+        F = (typeof(F)){0}; for (int i = 0; i < 40; i++) fg_observe(1 + i / 60., 120, 60);
         CHECK(F.mode == 3 && F.target == 120, "60 fps selects the 120 Hz tier");
-        F = (typeof(F)){0}; for (int i = 0; i < 40; i++) fg_observe(1 + i / 60., 60);
+        F = (typeof(F)){0}; for (int i = 0; i < 40; i++) fg_observe(1 + i / 60., 60, 60);
         CHECK(F.mode != 3, "60 fps on a 60 Hz screen keeps original images");
+        F = (typeof(F)){0}; for (int i = 0; i < 40; i++) fg_observe(1 + i / 60., 120, 0);
+        CHECK(F.mode == 3 && F.target == 120, "automatic pacing still follows the measured source rate");
     });
-    presentation_timing(); presentation_handoff(); midpoint_deadlines(); lifecycle();
+    presentation_timing(); presentation_handoff(); paired_present_handoff(); midpoint_deadlines(); lifecycle();
     if (argc > 1 && !strcmp(argv[1], "--cpu")) goto done;
     mtl_init(); if (!mtl_framegen_supported()) { fprintf(stderr, "SKIP: MetalFX frame interpolation unavailable\n"); goto done; }
     CHECK(mtl_framegen_set(1), "supported GPU accepts frame generation");
