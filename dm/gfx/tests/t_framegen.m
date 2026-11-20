@@ -168,6 +168,58 @@ static void presentation_handoff(void) {
         atomic_store(&g_fg_phase, FG_NATIVE);
     });
 }
+@interface FgHeadlessDrawable : NSObject
+- (CAMetalLayer *)layer;
+@end
+@implementation FgHeadlessDrawable
+- (CAMetalLayer *)layer { return nil; }
+@end
+static void midpoint_deadlines(void) {
+    dispatch_sync(g_fg_wq, ^{
+        F = (typeof(F)){0}; F.mode = 3;
+        FgSession *s = [FgSession new]; g_fg_session = s;
+        s->epoch = atomic_load(&g_fg_gen); atomic_store(&g_fg_phase, FG_ACTIVE);
+        double refresh = 1. / 60, original = 60., midpoint = original + refresh;
+        s->last_original_at = original; s->last_original_interval = 2 * refresh; s->last_original_ticket = 7;
+        id<CAMetalDrawable> drawable = (id<CAMetalDrawable>)[FgHeadlessDrawable new];
+        fg_display_tick(drawable, midpoint, CACurrentMediaTime() + 1, refresh, atomic_fetch_add(&g_fg_display_update, 1) + 1);
+        CHECK(s->midpoint_drawable == drawable && !F.count, "the midpoint update can arrive before its captured source");
+
+        FgJob *job = [FgJob new]; job->session = s; job->slot = [FgSlot new];
+        job->ticket = 8; job->interval = 2 * refresh; job->generated = 1; job->interpolating = 1;
+        job->enqueued = CACurrentMediaTime();
+        atomic_store(&job->slot->capture_status, FG_CAPTURE_OK);
+        g_fg_jobs[F.head] = job; F.count = 1;
+        fg_try_midpoint(s);
+        CHECK(s->midpoint_drawable == drawable && job->generated, "unfinished interpolation keeps the current update available");
+        job->interpolating = 0;
+        fg_try_midpoint(s);
+        CHECK(!s->midpoint_drawable && !job->generated && F.late_generated == 1, "completed interpolation attempts submission on the same update");
+        CHECK(F.count == 1 && s->last_original_at == original, "midpoint completion does not advance the original schedule");
+
+        job->generated = 1; job->interpolating = 1;
+        fg_display_tick(drawable, midpoint, CACurrentMediaTime() + 1, refresh, atomic_fetch_add(&g_fg_display_update, 1) + 1);
+        s->midpoint_deadline = CACurrentMediaTime() - 1;
+        job->interpolating = 0;
+        fg_try_midpoint(s);
+        CHECK(!s->midpoint_drawable && job->generated && F.count == 1, "expired midpoint leaves the original queued");
+        job->interpolating = 1;
+        fg_display_tick(drawable, midpoint, CACurrentMediaTime() + 1, refresh, atomic_fetch_add(&g_fg_display_update, 1) + 1);
+        CHECK(s->midpoint_drawable == drawable, "a new midpoint can be held after expiry");
+        atomic_fetch_add(&g_fg_display_update, 1);
+        job->interpolating = 0;
+        fg_try_midpoint(s);
+        CHECK(!s->midpoint_drawable && job->generated, "a newer callback wins even while its worker update is still pending");
+        job->interpolating = 1;
+        fg_display_tick(drawable, midpoint, CACurrentMediaTime() + 1, refresh, atomic_fetch_add(&g_fg_display_update, 1) + 1);
+        fg_display_tick(nil, original + 2 * refresh, CACurrentMediaTime() + 1, refresh, atomic_fetch_add(&g_fg_display_update, 1) + 1);
+        CHECK(!s->midpoint_drawable && F.count == 1, "the next update releases the old midpoint before processing originals");
+
+        job->interpolating = 0;
+        fg_jobs_clear(); g_fg_session = nil; atomic_store(&g_fg_phase, FG_NATIVE);
+        F = (typeof(F)){0};
+    });
+}
 int main(int argc, char **argv) { @autoreleasepool {
     NSUInteger w, h; id<MTLTexture> src = nil, generated = nil;
     fg_extent(1600, 900, &w, &h); CHECK(w == 1280 && h == 720, "900p selects the automatic 720p budget");
@@ -184,7 +236,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         F = (typeof(F)){0}; for (int i = 0; i < 40; i++) fg_observe(1 + i / 60., 60);
         CHECK(F.mode != 3, "60 fps on a 60 Hz screen keeps original images");
     });
-    presentation_timing(); presentation_handoff(); lifecycle();
+    presentation_timing(); presentation_handoff(); midpoint_deadlines(); lifecycle();
     if (argc > 1 && !strcmp(argv[1], "--cpu")) goto done;
     mtl_init(); if (!mtl_framegen_supported()) { fprintf(stderr, "SKIP: MetalFX frame interpolation unavailable\n"); goto done; }
     CHECK(mtl_framegen_set(1), "supported GPU accepts frame generation");

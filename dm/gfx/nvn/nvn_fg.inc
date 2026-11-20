@@ -6,7 +6,7 @@ enum { FG_CAPTURE_PENDING = 0, FG_CAPTURE_OK = 1, FG_CAPTURE_FAILED = -1 };
 enum { FG_TICK_EMPTY, FG_TICK_ORIGINAL, FG_TICK_GENERATED };
 static _Atomic int g_fg_requested = -1, g_fg_reset, g_fg_phase;
 static _Atomic int g_fg_refresh_rate, g_fg_update_pending;
-static _Atomic uint64_t g_fg_displayed, g_fg_gen, g_fg_source_seq;
+static _Atomic uint64_t g_fg_displayed, g_fg_gen, g_fg_source_seq, g_fg_display_update;
 static dispatch_queue_t g_fg_wq;
 static MTLSharedEventListener *g_fg_listener;
 static void fg_leave_check(void);
@@ -44,9 +44,12 @@ typedef struct {
     id<MTL4CommandQueue> present_queue;
     id<MTLSharedEvent> capture_event;
     CAMetalLayer *layer;
+    id<CAMetalDrawable> midpoint_drawable;
+    _Atomic int midpoint_waiting;
     int output_busy[FG_SLOTS], in_flight;
-    double first_original_at, last_original_at;
-    uint64_t epoch, presentation_epoch, last_original_ticket;
+    double first_original_at, last_original_at, last_original_interval;
+    double midpoint_target, midpoint_deadline, midpoint_refresh;
+    uint64_t epoch, presentation_epoch, last_original_ticket, midpoint_update;
 }
 @end
 @implementation FgSession
@@ -180,7 +183,13 @@ static FgJob *fg_pop_job(void) {
     g_fg_jobs[F.head] = nil; F.head = (F.head + 1) % FG_JOBS; F.count--;
     return job;
 }
+static void fg_clear_midpoint(FgSession *s) {
+    if (!s->midpoint_drawable) return;
+    s->midpoint_drawable = nil;
+    atomic_store_explicit(&s->midpoint_waiting, 0, memory_order_relaxed);
+}
 static void fg_jobs_clear(void) {
+    if (g_fg_session) fg_clear_midpoint(g_fg_session);
     while (F.count) {
         FgJob *job = fg_pop_job();
         g_pres[job->ticket % PRING] = (pres_ent){job->ticket, -1}; F.dropped++;
@@ -288,6 +297,7 @@ static void fg_on_presented(FgPresent *p, double time) {
     fg_jobs_clear(); F.primed = F.warm = 0;
     s->first_original_at = s->last_original_at = 0; s->last_original_ticket = 0;
 }
+static void fg_try_midpoint(FgSession *s);
 static void fg_on_present_completed(FgSession *s, NSError *error, void (^completed)(void)) {
     s->in_flight--;
     if (completed) completed();
@@ -296,7 +306,7 @@ static void fg_on_present_completed(FgSession *s, NSError *error, void (^complet
     if (error && s->epoch == atomic_load(&g_fg_gen)) {
         MLOG("[RED] [fg] present command buffer: %s", error.description.UTF8String);
         fg_leave("present_command_buffer_failed", 1);
-    }
+    } else if (!error) fg_try_midpoint(s);
     fg_leave_check();
 }
 static FgPresentSlot *fg_available_present_slot(FgSession *s, const FgPresentSlot *reserved) {
@@ -355,17 +365,74 @@ static int fg_frame_for_update(double target, double refresh, double original_at
         return FG_TICK_GENERATED;
     return FG_TICK_EMPTY;
 }
-static void fg_display_tick(id<CAMetalDrawable> drawable, double target, double deadline, double refresh) {
+static int fg_can_pair(FgSession *s, uint64_t ticket) {
+    if (F.mode != 3 || !s->last_original_ticket || ticket != s->last_original_ticket + 1) return 0;
+    pres_ent previous = g_pres[s->last_original_ticket % PRING];
+    return previous.n != s->last_original_ticket || previous.t > 0;
+}
+static int fg_submit_midpoint(FgSession *s, FgJob *job, id<CAMetalDrawable> drawable, double deadline) {
+    FgPresentSlot *original = fg_available_present_slot(s, NULL);
+    if (!original) return 0;
+    FgPresentSlot *generated = fg_available_present_slot(s, original);
+    if (!generated) return 0;
+    int output = job->generated - 1; job->generated = 0;
+    if (fg_present(s, generated, s->gen[output], drawable, deadline, 0, 0, ^{ s->output_busy[output] = 0; }) <= 0) {
+        s->output_busy[output] = 0;
+        F.late_generated++;
+    }
+    return 1;
+}
+static void fg_try_midpoint(FgSession *s) {
+    if (!s->midpoint_drawable) return;
+    if (CACurrentMediaTime() >= s->midpoint_deadline || s->midpoint_update != atomic_load(&g_fg_display_update) ||
+        s->epoch != atomic_load(&g_fg_gen) ||
+        atomic_load(&g_fg_phase) != FG_ACTIVE || atomic_load(&g_present_discard)) {
+        fg_clear_midpoint(s);
+        return;
+    }
+    if (!F.count) return;
+    FgJob *job = g_fg_jobs[F.head];
+    if (job->session != s || !fg_can_pair(s, job->ticket) || !job->generated || job->interpolating ||
+        atomic_load(&job->slot->capture_status) != FG_CAPTURE_OK) return;
+    double original_at = s->last_original_at + job->interval, midpoint = s->last_original_at + job->interval / 2;
+    if (fg_frame_for_update(s->midpoint_target, s->midpoint_refresh, original_at, midpoint, 1, 1) == FG_TICK_GENERATED &&
+        fg_submit_midpoint(s, job, s->midpoint_drawable, s->midpoint_deadline)) fg_clear_midpoint(s);
+}
+static void fg_hold_midpoint(FgSession *s, id<CAMetalDrawable> drawable, double target, double deadline, double refresh, uint64_t update) {
+    double delay = deadline - CACurrentMediaTime();
+    if (!(delay > 0) || update != atomic_load(&g_fg_display_update)) return;
+    s->midpoint_drawable = drawable;
+    s->midpoint_target = target; s->midpoint_deadline = deadline; s->midpoint_refresh = refresh;
+    s->midpoint_update = update;
+    atomic_store_explicit(&s->midpoint_waiting, 1, memory_order_relaxed);
+    __weak FgSession *weak = s;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), g_fg_wq, ^{
+        FgSession *waiting = weak;
+        if (waiting && waiting->midpoint_update == update) fg_clear_midpoint(waiting);
+    });
+    fg_try_midpoint(s);   // Capture feedback can have arrived while arming the update.
+}
+static void fg_display_tick(id<CAMetalDrawable> drawable, double target, double deadline, double refresh, uint64_t update) {
     F.refresh_ticks++;
-    if (!drawable || !isfinite(target) || !(CACurrentMediaTime() < deadline)) return;
+    FgSession *s = g_fg_session;
+    if (!s) return;
+    fg_clear_midpoint(s);   // Any newer display update supersedes the optional one still waiting.
+    if (!drawable || !isfinite(target) || !isfinite(deadline) || !(CACurrentMediaTime() < deadline)) return;
     while (F.count) {
         FgJob *job = g_fg_jobs[F.head];
         if (atomic_load(&job->slot->capture_status) != FG_CAPTURE_FAILED) break;
         fg_pop_job(); fg_skip_generated(job); fg_original_done(job);
         g_pres[job->ticket % PRING] = (pres_ent){job->ticket, -1}; F.dropped++;
     }
-    if (!F.count) return;
-    FgJob *job = g_fg_jobs[F.head]; FgSession *s = job->session;
+    if (!F.count) {
+        double interval = s->last_original_interval;
+        double original_at = s->last_original_at + interval, midpoint = s->last_original_at + interval / 2;
+        if (interval > 0 && fg_can_pair(s, s->last_original_ticket + 1) &&
+            fg_frame_for_update(target, refresh, original_at, midpoint, 1, 1) == FG_TICK_GENERATED)
+            fg_hold_midpoint(s, drawable, target, deadline, refresh, update);
+        return;
+    }
+    FgJob *job = g_fg_jobs[F.head];
     int original_ready = atomic_load(&job->slot->capture_status) == FG_CAPTURE_OK;
     int overdue = s->last_original_at && CACurrentMediaTime() - job->enqueued >= job->interval;
     double original_at = target, midpoint = INFINITY;
@@ -379,21 +446,15 @@ static void fg_display_tick(id<CAMetalDrawable> drawable, double target, double 
             midpoint = s->last_original_at + job->interval / 2;
         } else original_at = s->first_original_at;
     }
-    pres_ent previous = g_pres[s->last_original_ticket % PRING];
-    int previous_missed = previous.n == s->last_original_ticket && previous.t <= 0;
-    int generated_ready = job->generated && !job->interpolating && s->last_original_ticket &&
-                          job->ticket == s->last_original_ticket + 1 && !previous_missed;
+    int can_pair = job->generated && fg_can_pair(s, job->ticket);
+    int generated_ready = can_pair && !job->interpolating;
     int frame = fg_frame_for_update(target, refresh, original_at, midpoint, original_ready, generated_ready);
-    if (frame == FG_TICK_EMPTY) return;
-    FgPresentSlot *original_slot = fg_available_present_slot(s, NULL);
-    if (!original_slot) return;
     if (frame == FG_TICK_GENERATED) {
-        FgPresentSlot *generated_slot = fg_available_present_slot(s, original_slot);
-        if (!generated_slot) return;
-        int output = job->generated - 1; job->generated = 0;
-        if (fg_present(s, generated_slot, s->gen[output], drawable, deadline, 0, 0, ^{ s->output_busy[output] = 0; }) <= 0)
-            s->output_busy[output] = 0, F.late_generated++;
+        if (update == atomic_load(&g_fg_display_update) && !fg_submit_midpoint(s, job, drawable, deadline))
+            fg_hold_midpoint(s, drawable, target, deadline, refresh, update);
     } else if (frame == FG_TICK_ORIGINAL) {
+        FgPresentSlot *original_slot = fg_available_present_slot(s, NULL);
+        if (!original_slot) return;
         if (job->generated) F.late_generated++;
         fg_skip_generated(job);
         int submitted = fg_present(s, original_slot, job->slot->texture, drawable, deadline, 1, job->ticket, ^{ fg_original_done(job); });
@@ -404,18 +465,21 @@ static void fg_display_tick(id<CAMetalDrawable> drawable, double target, double 
         } else {
             // Keep the fractional phase of the source interval across rounded refreshes.
             s->last_original_at = fabs(target - original_at) <= refresh / 2 ? original_at : target;
+            s->last_original_interval = job->interval;
             s->last_original_ticket = job->ticket;
         }
-    }
+    } else if (can_pair && fg_frame_for_update(target, refresh, original_at, midpoint, 1, 1) == FG_TICK_GENERATED)
+        fg_hold_midpoint(s, drawable, target, deadline, refresh, update);
 }
 static void fg_display_update(id<CAMetalDrawable> drawable, double target, double deadline, int hz) {
     uint64_t epoch = atomic_load(&g_fg_gen);
     if (atomic_load(&g_fg_phase) != FG_ACTIVE || atomic_load(&g_present_discard) || !(CACurrentMediaTime() < deadline)) return;
+    uint64_t update = atomic_fetch_add(&g_fg_display_update, 1) + 1;
     // Hold at most one drawable from the display link. GPU work stays on the existing queues.
     if (atomic_exchange_explicit(&g_fg_update_pending, 1, memory_order_acq_rel)) return;
     dispatch_async(g_fg_wq, ^{
         if (epoch == atomic_load(&g_fg_gen) && atomic_load(&g_fg_phase) == FG_ACTIVE && !atomic_load(&g_present_discard))
-            fg_display_tick(drawable, target, deadline, 1. / hz);
+            fg_display_tick(drawable, target, deadline, 1. / hz, update);
         atomic_store_explicit(&g_fg_update_pending, 0, memory_order_release);
     });
 }
@@ -483,6 +547,7 @@ static void fg_on_capture(FgSession *s, FgSlot *slot, uint64_t sequence, uint64_
             if (active) {
                 if (gpu > 0 && gpu < 1000) F.gpu_ms[F.gpu_n++ % 300] = gpu;
                 if (error) { MLOG("[RED] [fg] MetalFX frame interpolation command buffer failed: %s", error.description.UTF8String); fg_leave("metalfx_failed", 1); return; }
+                fg_try_midpoint(s);
             }
             fg_leave_check();
         });
@@ -536,6 +601,8 @@ static int fg_route(id<MTLTexture> source, const int crop[4], uint64_t ticket, d
             if (s->capture_event.signaledValue < sequence) s->capture_event.signaledValue = sequence;
             MLOG("[RED] [fg] capture command buffer: %s", error.description.UTF8String);
         }
+        if (atomic_load_explicit(&s->midpoint_waiting, memory_order_relaxed))
+            dispatch_async(g_fg_wq, ^{ fg_try_midpoint(s); });
     }];
     pthread_mutex_lock(&g_pq_mu); g_pq_inflight++; pthread_mutex_unlock(&g_pq_mu);
     pthread_mutex_lock(&g_res_commit_mu); [g_q4 commit:&cb count:1 options:options]; [g_q4 signalEvent:s->capture_event value:sequence]; pthread_mutex_unlock(&g_res_commit_mu);
