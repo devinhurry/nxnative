@@ -9,7 +9,15 @@ static int checks, failed;
 #define CHECK(c, s) do { checks++; if (!(c)) { failed++; fprintf(stderr, "FAIL: %s\n", s); } } while (0)
 static void idle(void) {
     if (!g_fg_wq) return;
-    for (;;) { __block int busy; dispatch_sync(g_fg_wq, ^{ busy = F.count || (g_fg_session && g_fg_session->in_flight); }); if (!busy) return; usleep(1000); }
+    for (;;) {
+        __block int busy;
+        dispatch_sync(g_fg_wq, ^{
+            busy = g_fg_session && g_fg_session->in_flight;
+            if (!busy) fg_jobs_clear();   // No display link in the headless fixture.
+        });
+        if (!busy) return;
+        usleep(1000);
+    }
 }
 static void session(NSUInteger w, NSUInteger h) {
     fg_queue_init(); dispatch_sync(g_fg_wq, ^{ fg_leave("fixture", 0); }); idle();
@@ -24,7 +32,8 @@ static id<MTLTexture> fixture(id<MTLTexture> source, const int crop[4], double t
     [copy endEncoding]; [cb commit]; [cb waitUntilCompleted]; s->capture_event.signaledValue = seq;
     // Emulate the presenter having confirmed an original; no window or actual
     // presentation is invented, and the public displayed counter must stay zero.
-    dispatch_sync(g_fg_wq, ^{ F.onscreen = 1; fg_on_capture(s, slot, seq, seq, time, 120); }); idle();
+    atomic_store(&slot->capture_status, FG_CAPTURE_OK);
+    dispatch_sync(g_fg_wq, ^{ F.onscreen = 1; fg_on_capture(s, slot, seq, seq, time, 1. / 30, 120); }); idle();
     return s->gen[seq % FG_SLOTS];
 }
 static void fill(id<MTLTexture> t) {
@@ -108,6 +117,9 @@ static void lifecycle(void) {
         __block int released = 0; fg_on_present_completed(old, error, ^{ released++; });
         CHECK(old->in_flight == 0 && released == 1, "retired feedback still releases its resources");
         CHECK(!F.failed && g_fg_session == current && atomic_load(&g_fg_phase) == FG_ACTIVE, "retired feedback cannot fail the resumed session");
+        FgPresent *midpoint = [FgPresent new]; midpoint->session = current; atomic_store(&midpoint->gpu_done, 1);
+        fg_on_presented(midpoint, NAN);
+        CHECK(!F.recoveries && atomic_load(&g_fg_phase) == FG_ACTIVE, "an unshown midpoint with completed GPU work leaves originals scheduled");
         fg_on_present_completed(current, error, nil);
         CHECK(F.failed && atomic_load(&g_fg_phase) == FG_NATIVE, "a current-session GPU error still stops interpolation");
         atomic_store(&g_fg_requested, 0);
@@ -116,6 +128,44 @@ static void lifecycle(void) {
     dispatch_sync(g_fg_wq, ^{
         CHECK(!F.failed && atomic_load(&g_fg_requested) == 0 && atomic_load(&g_fg_phase) == FG_NATIVE, "foreground preserves the disabled setting");
         F = (typeof(F)){0}; atomic_store(&g_fg_requested, -1);
+    });
+}
+static void presentation_timing(void) {
+    double refresh = 1. / 120, mid = 60., original = mid + refresh;
+    CHECK(fg_frame_for_update(mid, refresh, original, mid, 1, 1) == FG_TICK_GENERATED, "interpolation has the middle 120 Hz update");
+    CHECK(fg_frame_for_update(mid, refresh, original, mid, 1, 0) == FG_TICK_EMPTY, "a late interpolation leaves its update empty");
+    CHECK(fg_frame_for_update(original, refresh, original, mid, 1, 0) == FG_TICK_ORIGINAL, "capture-ready original presents while interpolation is outstanding");
+    CHECK(fg_frame_for_update(original, refresh, original, mid, 1, 1) == FG_TICK_ORIGINAL, "a completed but late interpolation cannot take the original update");
+    CHECK(fg_frame_for_update(original, refresh, original, mid, 0, 1) == FG_TICK_EMPTY, "an unavailable original prevents display of its midpoint");
+    CHECK(fg_frame_for_update(original + refresh, refresh, original, mid, 1, 1) == FG_TICK_ORIGINAL, "a missing display update does not replay an expired midpoint");
+    CHECK(fg_frame_for_update(mid + refresh, refresh, mid + 3 * refresh, mid, 1, 1) == FG_TICK_EMPTY, "an expired midpoint cannot use an unrelated refresh");
+
+    double original_at = 0;
+    int originals = 0, generated = 0;
+    for (int tick = 1; tick <= 120; tick++) {
+        double target = tick * refresh;
+        int choice = fg_frame_for_update(target, refresh, original_at + 1. / 50, original_at + .5 / 50, 1, !generated);
+        if (choice == FG_TICK_GENERATED) generated = 1;
+        if (choice == FG_TICK_ORIGINAL) { originals++; original_at += 1. / 50; generated = 0; }
+    }
+    CHECK(originals == 50, "fractional source periods preserve 50 originals on 120 refreshes");
+}
+static void presentation_handoff(void) {
+    dispatch_sync(g_fg_wq, ^{ F.refresh_ticks = 0; atomic_store(&g_fg_phase, FG_ACTIVE); });
+    dispatch_suspend(g_fg_wq);
+    dispatch_group_t caller = dispatch_group_create();
+    dispatch_group_async(caller, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        double deadline = CACurrentMediaTime() + 1.;
+        fg_display_update(nil, deadline, deadline, 120);
+        fg_display_update(nil, deadline, deadline, 120);
+    });
+    int returned = dispatch_group_wait(caller, dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC)) == 0;
+    dispatch_resume(g_fg_wq);
+    dispatch_group_wait(caller, DISPATCH_TIME_FOREVER);
+    CHECK(returned, "the display callback returns while the frame-generation worker is busy");
+    dispatch_sync(g_fg_wq, ^{
+        CHECK(F.refresh_ticks == 1 && !atomic_load(&g_fg_update_pending), "the worker consumes at most one pending display update");
+        atomic_store(&g_fg_phase, FG_NATIVE);
     });
 }
 int main(int argc, char **argv) { @autoreleasepool {
@@ -134,7 +184,7 @@ int main(int argc, char **argv) { @autoreleasepool {
         F = (typeof(F)){0}; for (int i = 0; i < 40; i++) fg_observe(1 + i / 60., 60);
         CHECK(F.mode != 3, "60 fps on a 60 Hz screen keeps original images");
     });
-    lifecycle();
+    presentation_timing(); presentation_handoff(); lifecycle();
     if (argc > 1 && !strcmp(argv[1], "--cpu")) goto done;
     mtl_init(); if (!mtl_framegen_supported()) { fprintf(stderr, "SKIP: MetalFX frame interpolation unavailable\n"); goto done; }
     CHECK(mtl_framegen_set(1), "supported GPU accepts frame generation");

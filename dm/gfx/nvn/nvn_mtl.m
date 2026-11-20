@@ -17063,15 +17063,21 @@ static int fx_wanted(MTLViewport vp, NSUInteger cw, NSUInteger ch) {
     return cw && ch && w >= cw && h >= ch && (w > cw || h > ch);
 }
 // Encodes the upscale of the rectangle r of raw into cb (see above); returns the scaled picture, which the present pass draws 1:1 into vp, or nil (the bilinear pass).
-// remake_wait: fx is the present thread's, whose textures presents still on the GPU may read: a new scaler waits for them and for FX_REMAKE_PRESENTS presents since the last
-static id<MTLTexture> fx_encode(fx_state *fx, id<MTL4CommandBuffer> cb, id<MTLTexture> raw, const NSUInteger r[4], MTLViewport vp, MTLPixelFormat out_pf, int remake_wait) {
+enum { FX_REMAKE_UNSHARED, FX_REMAKE_WAIT, FX_REMAKE_IF_IDLE };
+// A shared scaler can be replaced when its textures are idle. A frame-generation update can use the ordinary pass while they are busy.
+static id<MTLTexture> fx_encode(fx_state *fx, id<MTL4CommandBuffer> cb, id<MTLTexture> raw, const NSUInteger r[4], MTLViewport vp, MTLPixelFormat out_pf, int remake) {
     NSUInteger cw = r[2], ch = r[3], ow = (NSUInteger)vp.width, oh = (NSUInteger)vp.height;
     if (fx_mode() != 1 || !fx_wanted(vp, cw, ch)) return nil;
     if (!fx->sc || fx->in.width != cw || fx->in.height != ch || fx->in.pixelFormat != raw.pixelFormat || fx->out.width != ow || fx->out.height != oh || fx->out.pixelFormat != out_pf) {
         NSUInteger key[6] = {cw, ch, raw.pixelFormat, ow, oh, out_pf};
         if (!memcmp(key, fx->refused, sizeof key)) return nil;
-        if (remake_wait && fx->made && g_present_n < fx->made_at + FX_REMAKE_PRESENTS) return nil;
-        if (remake_wait) { pthread_mutex_lock(&g_pq_mu); while (g_pq_inflight) pthread_cond_wait(&g_pq_cv, &g_pq_mu); pthread_mutex_unlock(&g_pq_mu); }
+        if (remake != FX_REMAKE_UNSHARED) {
+            if (fx->made && g_present_n < fx->made_at + FX_REMAKE_PRESENTS) return nil;
+            pthread_mutex_lock(&g_pq_mu);
+            if (remake == FX_REMAKE_IF_IDLE && g_pq_inflight) { pthread_mutex_unlock(&g_pq_mu); return nil; }
+            while (g_pq_inflight) pthread_cond_wait(&g_pq_cv, &g_pq_mu);
+            pthread_mutex_unlock(&g_pq_mu);
+        }
         res_remove(fx->in); res_remove(fx->out); fx->sc = nil; fx->in = fx->out = nil;
         uint64_t t0 = now_ns(); NSError *e = nil;
         if (!g_fx_comp) g_fx_comp = [g_dev newCompilerWithDescriptor:[MTL4CompilerDescriptor new] error:&e];
@@ -17265,7 +17271,8 @@ static int present_encode_m4_args(id<MTL4CommandBuffer> cb, id<MTLTexture> src, 
     double dw = dst.width, dh = dst.height;
     MTLViewport vp = framegen_stage == 1 ? (MTLViewport){0, 0, dw, dh, 0, 1} : present_fit(src, dw, dh);
     int full = vp.originX == 0 && vp.originY == 0 && vp.width == dw && vp.height == dh;
-    id<MTLTexture> tex = present_raw_src(src), up = fx ? fx_encode(fx, cb, tex, r, vp, dst.pixelFormat, fx == &g_fx_present) : nil;
+    int remake = fx != &g_fx_present ? FX_REMAKE_UNSHARED : framegen_stage == 2 ? FX_REMAKE_IF_IDLE : FX_REMAKE_WAIT;
+    id<MTLTexture> tex = present_raw_src(src), up = fx ? fx_encode(fx, cb, tex, r, vp, dst.pixelFormat, remake) : nil;
     if (up) { tex = up; r[0] = r[1] = 0; r[2] = up.width; r[3] = up.height; }   // the scaled picture, the viewport's size: drawn 1:1
     MTL4RenderPassDescriptor *rp = [MTL4RenderPassDescriptor new];
     rp.colorAttachments[0].texture = dst;
@@ -17332,9 +17339,11 @@ static void present_gpu_note(double s, int fx) {
     n[fx] = 0;
 }
 static double g_link_it_tin;   // Enqueue time of this source frame, owned by the active present thread / display-link callback
+static _Atomic int g_present_discard;
+int front_screen_max_fps(void);
 #include "nvn_fg.inc"
 static uint64_t g_present_serial;   // allocator fences count every image; game tickets count only real frames
-static int present_now_image(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts, id<MTLTexture> generated) {
+static int present_now_image(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts, id<MTLTexture> generated, int capture_only) {
     if (g_present_stall_ns) { struct timespec ts = {0, (long)g_present_stall_ns}; nanosleep(&ts, NULL); }
     if (!generated) g_present_n++;
     if (!generated && bootprof() && (g_present_n == 1 || g_present_n % 120 == 0)) {
@@ -17397,8 +17406,9 @@ static int present_now_image(const tex_t *t, double period, uint64_t frame, uint
     if (!generated && g_grab_cb) grab_present(src, crop, layer.drawableSize);   // Screenshots keep the actual game frame
     if (!supplied) {
         double source_time = g_link_it_tin > 0 ? g_link_it_tin : CACurrentMediaTime();
-        int routed = fg_route(src, crop, ticket, source_time, layer);
+        int routed = fg_route(src, crop, ticket, source_time, period, layer);
         if (routed >= 0) return routed;
+        if (capture_only) { g_pres[ticket % PRING] = (pres_ent){ticket, -1}; return 0; } // The link owns the drawable during frame generation.
     }
     if (g_present_layer_resident != layer) { [g_q4 addResidencySet:layer.residencySet]; g_present_layer_resident = layer; }
 #if TARGET_OS_OSX
@@ -17468,8 +17478,8 @@ static int present_now_image(const tex_t *t, double period, uint64_t frame, uint
     (void)frame;
     return 1;
 }
-static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts) {
-    return present_now_image(t, period, frame, ticket, crop, supplied, target_ts, nil);
+static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts, int capture_only) {
+    return present_now_image(t, period, frame, ticket, crop, supplied, target_ts, nil, capture_only);
 }
 // ---------- Present thread ----------
 // NVN semantics: QueuePresentTexture only queues the present and returns immediately (the game often calls it while holding a lock; iOS real device: synchronously waiting for nextDrawable inside it
@@ -17485,8 +17495,11 @@ static void ext_wait(uint64_t v) { if (v && g_ext_ev) [g_q4 waitForEvent:g_ext_e
 static void snap_commit_wait(uint64_t v);
 static pq_item g_pq[PQ];
 static uint64_t g_pq_in;
-static int present_now(const tex_t *, double, uint64_t, uint64_t, const int[4], id<CAMetalDrawable>, double);
 static double g_link_vperiod, g_link_vhalf;   // virtual ticks (link_range): seconds per counted tick (0 = every callback is a tick) and half a refresh of the screen
+enum { LINK_FG_60 = 4, LINK_FG_120 = 5 };
+static _Atomic int g_link_mode = 1;   // 1/2: native; 3: native power saving; 4/5: frame generation
+static int link_mode_framegen(int mode) { return mode == LINK_FG_60 || mode == LINK_FG_120; }
+static int g_link_owns_layer, g_classic_busy;   // Under g_pq_mu: the link owns drawables; the present thread can still capture source textures during frame generation.
 
 @interface NvMetalDisplayLinkDelegate : NSObject <CAMetalDisplayLinkDelegate>
 @end
@@ -17512,6 +17525,13 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
 - (void)metalDisplayLink:(CAMetalDisplayLink *)link needsUpdate:(CAMetalDisplayLinkUpdate *)update {
     (void)link;
     double cb = CACurrentMediaTime();
+    int mode = atomic_load_explicit(&g_link_mode, memory_order_relaxed);
+    if (link_mode_framegen(mode)) {
+        g_link_hold_until = 0;
+        __atomic_store_n(&g_link_tick_ns, now_ns(), __ATOMIC_RELAXED);
+        fg_display_update(update.drawable, update.targetPresentationTimestamp, update.targetTimestamp, mode == LINK_FG_120 ? 120 : 60);
+        return;
+    }
     pthread_mutex_lock(&g_pq_mu);
     if (g_stall_t0) { uint64_t since = dm_focus_in_since(), t = now_ns();
         MLOG("display link recovered: stalled %.0f ms (%.0f ms of it active), fallback dropped %llu frames (stall #%llu)", (t - g_stall_t0) / 1e6, (t - (g_stall_t0 > since ? g_stall_t0 : since)) / 1e6, (unsigned long long)g_stall_drop, (unsigned long long)g_stall_n); g_stall_t0 = 0; }
@@ -17532,7 +17552,10 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
     pthread_cond_broadcast(&g_link_cv);
     pthread_mutex_unlock(&g_link_mu);
     pthread_mutex_lock(&g_pq_mu);
-    if (!g_dm_present_link || g_rescue_mode || g_pq_read == g_pq_in) { if (g_dm_present_link && !g_rescue_mode) g_link_empty++; pthread_mutex_unlock(&g_pq_mu); return; }
+    if (!g_link_mode || link_mode_framegen(g_link_mode) || g_classic_busy || !g_dm_present_link || g_rescue_mode || g_pq_read == g_pq_in) {
+        if (g_dm_present_link && !g_rescue_mode && g_pq_read == g_pq_in) g_link_empty++;
+        pthread_mutex_unlock(&g_pq_mu); return;
+    }
     // The previous frame's present interval was >= 2 (period > 25 ms): keep it on screen for its whole period before taking the next one, as the Switch flips only every N vertical syncs. This also holds while the link runs at 60 Hz (Mario 1.2.1 sets 2 for single frames, see nvn_game_fps in hle_nvn.c);
     //   before, every tick took the newest frame, so that frame, carrying the extra time step the game advanced for it, was shown for only 16.7 ms and the game looked like it jumped ahead
     if (g_link_hold_until > 0 && update.targetPresentationTimestamp < g_link_hold_until - tol) { g_link_held++; pthread_mutex_unlock(&g_pq_mu); return; }
@@ -17551,7 +17574,7 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
     pthread_mutex_unlock(&g_pq_mu);
     int submitted;
     ext_wait(it.ev_val); snap_commit_wait(it.snap_v);
-    @autoreleasepool { submitted = present_now(&it.t, it.period, it.frame, ticket, it.crop, update.drawable, update.targetPresentationTimestamp); mtl_tex_unpin(it.t.serial); }
+    @autoreleasepool { submitted = present_now(&it.t, it.period, it.frame, ticket, it.crop, update.drawable, update.targetPresentationTimestamp, 0); mtl_tex_unpin(it.t.serial); }
     g_link_hold_until = submitted && it.period > 0.025 ? update.targetPresentationTimestamp + it.period : 0;
     if (!submitted) {
         pthread_mutex_lock(&g_pq_mu);
@@ -17562,24 +17585,27 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
 }
 @end
 
-static CAMetalDisplayLink *g_link; static CFRunLoopRef g_link_rl; static int g_link_started;
-static int g_link_owns_layer, g_classic_busy;   // Under g_pq_mu: nextDrawable throws while the layer has the display link object attached, so the present thread that takes its own drawable and the display link object are mutually exclusive
-static int link_on(void) { return g_dm_present_link && !atomic_load(&g_rescue_mode) && g_link != nil; }
+static CAMetalDisplayLink *g_link; static CFRunLoopRef g_link_rl; static _Atomic int g_link_started;
+static int link_on(void) { int mode = g_link_mode; return g_dm_present_link && mode > 0 && !link_mode_framegen(mode) && !atomic_load(&g_rescue_mode) && g_link != nil; }
 // Screens whose refresh rate is not a multiple of the link's (144 or 165 Hz against 60 or 30): asked for 60 Hz, the system fires the link on every third refresh of a 165 Hz screen,
 // 55 Hz, and a game paced by the link runs at 55 fps (27.5 at 30). There the link runs at the screen's rate and only the refreshes nearest a steady clock of the wanted rate count as
 // ticks (g_link_vperiod, NvMetalDisplayLinkDelegate): 60 a second on average, each frame shown on the refreshes nearest its 1/60 s slot. DM_LINK_VTICK=0 keeps the system's choice.
 // In fullscreen the Mac front end switches such a screen to a rate that is a multiple where it has one (front_screen_match), and the range is set again for it (link_sync)
-__attribute__((weak)) int front_screen_max_fps(void) { return 0; }   // front_mac.m; graphics unit tests and iOS have none
+__attribute__((weak)) int front_screen_max_fps(void) { return 0; }   // fallback for hosts without a screen query
 __attribute__((weak)) void front_screen_match(int fps) { (void)fps; }   // front_mac.m; graphics unit tests and iOS have none
 __attribute__((weak)) void front_picture_shape(int w, int h) { (void)w; (void)h; }   // front_mac.m, front_ios.m; graphics unit tests have none
-static CAFrameRateRange link_range(int mode) {
+static CAFrameRateRange link_range(int mode, int hz, int realtime) {
+    if (link_mode_framegen(mode)) {
+        int rate = mode == LINK_FG_120 ? 120 : 60;
+        g_link_vperiod = 0; return CAFrameRateRangeMake(rate, rate, rate);
+    }
     static int on = -1; if (on < 0) { const char *e = getenv("DM_LINK_VTICK"); on = !(e && !strcmp(e, "0")); }
-    int rate = mode == 3 ? 30 : mode == 2 ? 120 : 60, hz = on ? front_screen_max_fps() : 0;
-    if (mtl_realtime_clock() && mode == 1) {
-        int native = front_screen_max_fps(); if (native <= 0) native = 60;
+    int rate = mode == 3 ? 30 : mode == 2 ? 120 : 60;
+    if (realtime && mode == 1) {
+        int native = hz > 0 ? hz : 60;
         g_link_vperiod = 0; return CAFrameRateRangeMake(native, native, native);
     }
-    if (hz > rate && hz % rate) {   // at 120 fps too: a game stepping by its target must not get 144 ticks a second
+    if (on && hz > rate && hz % rate) {   // at 120 fps too: a game stepping by its target must not get 144 ticks a second
         if (g_link_vperiod != 1.0 / rate) MLOG("display link at the screen's %d Hz, counting a tick every 1/%d s (the screen's rate is not a multiple of it)", hz, rate);
         g_link_vhalf = 0.5 / hz; g_link_vperiod = 1.0 / rate;
         return CAFrameRateRangeMake(rate, hz, hz);
@@ -17611,16 +17637,15 @@ static int link_30hz(void) { return !front_fullscreen() || front_screen_variable
 // no such mode or with DM_SCREEN_MATCH=0: the 120 Hz link held 59.2 fps, about 2% of frames up 25 ms. A window keeps the 60 Hz link, where every present lands on its
 // target (docs/reference/frame-rate.md)
 static int link_vrr_120(void) { int hz = front_screen_max_fps(); return !g_present_link_env && front_fullscreen() && front_screen_variable_refresh() && hz >= 120 && hz % 120 == 0; }
-static int g_link_mode = 1;   // Current mode of the display link object: 1 / 2 same as g_dm_present_link, 3 = power-saving mode 30 Hz
 static void *link_main(void *arg) {   // Display link thread: started when switching to display-link mode, exits when switching back to 0
     (void)arg;
     pthread_setname_np("nvn-present-link");
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
     CAMetalLayer *layer = (__bridge CAMetalLayer *)front_metal_layer();
     pthread_mutex_lock(&g_pq_mu); g_link_owns_layer = 1; while (g_classic_busy) pthread_cond_wait(&g_pq_cv, &g_pq_mu); pthread_mutex_unlock(&g_pq_mu);   // Wait for the present thread to finish handing over the frame it holds
-    NvMetalDisplayLinkDelegate *delegate = [NvMetalDisplayLinkDelegate new];
+    __attribute__((objc_precise_lifetime)) NvMetalDisplayLinkDelegate *delegate = [NvMetalDisplayLinkDelegate new];
     CAMetalDisplayLink *link = [[CAMetalDisplayLink alloc] initWithMetalLayer:layer];
-    link.preferredFrameRateRange = link_range(g_link_mode);
+    link.preferredFrameRateRange = link_range(g_link_mode, front_screen_max_fps(), mtl_realtime_clock());
     link.preferredFrameLatency = link_latency(); MLOG("display link: frame latency %d (%s)", link_latency(), link_latency_why());
     link.delegate = delegate;
     [link addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSDefaultRunLoopMode];
@@ -17630,30 +17655,54 @@ static void *link_main(void *arg) {   // Display link thread: started when switc
     return NULL;
 }
 static void link_sync(void) {   // Called every frame by the game's present thread: aligns the display link object's state to g_dm_present_link and the power-saving mode (can change at run time)
-    static int applied;
+    static int applied, hz_was, realtime_was;
     pthread_mutex_lock(&g_pq_mu);
     int want = g_dm_present_link;
-    if (mtl_framegen_enabled() || atomic_load(&g_fg_phase) != FG_NATIVE) want = 0;   // the present thread inserts a midpoint before each real image
-    if (want < 0 || want > 2) { g_dm_present_link = applied == 3 ? 1 : applied; pthread_mutex_unlock(&g_pq_mu); return; }
+    if (want < 0 || want > 2) { g_dm_present_link = applied > 2 ? 1 : applied; pthread_mutex_unlock(&g_pq_mu); return; }
+    int fg_phase = atomic_load(&g_fg_phase);
+    if (fg_phase == FG_ACTIVE) want = atomic_load(&g_fg_refresh_rate) >= 120 ? LINK_FG_120 : LINK_FG_60;
+    else if (mtl_framegen_enabled() || fg_phase == FG_LEAVING) want = 0;
     if (g_rescue_mode && (want != g_rescue_mode || now_ns() >= g_rescue_back_at)) {
         g_rescue_mode = 0; g_stall_t0 = 0; __atomic_store_n(&g_link_tick_ns, now_ns(), __ATOMIC_RELAXED);
         MLOG("display link: rescue ended, trying pacing mode %d (frame %llu)", want, (unsigned long long)atomic_load(&g_cur_frame));
     }
     if (g_rescue_mode) want = 0;
     pthread_mutex_unlock(&g_pq_mu);
-    if (want && mtl_fps_target() == 30 && link_30hz() && !mtl_realtime_clock()) want = 3;   // Power-saving mode: display link at 30 Hz
-    if (want && !mtl_realtime_clock()) front_screen_match(want == 3 ? 30 : want == 2 ? 120 : 60);   // the game's rate: a variable-refresh screen goes to a fixed-rate mode at a multiple where it has one
-    static int vrr_was; int vrr = want == 1 && !mtl_realtime_clock() && link_vrr_120();   // variable-refresh fullscreen that kept its mode: the 120 Hz link paces the 60 (link_vrr_120)
+    int realtime = mtl_realtime_clock();
+    int framegen = link_mode_framegen(want);
+    if (framegen && link_mode_framegen(g_link_mode) && dm_focus_now() == 1) {
+        uint64_t now = now_ns(), tick = __atomic_load_n(&g_link_tick_ns, __ATOMIC_RELAXED), focus = dm_focus_in_since();
+        uint64_t last = MAX(tick, focus);
+        if (now > last && now - last >= LINK_RESCUE_NS) {
+            uint64_t epoch = atomic_load(&g_fg_gen);
+            dispatch_async(g_fg_wq, ^{
+                if (epoch == atomic_load(&g_fg_gen) && atomic_load(&g_fg_phase) == FG_ACTIVE &&
+                    now > __atomic_load_n(&g_link_tick_ns, __ATOMIC_RELAXED) && dm_focus_now() == 1)
+                    fg_leave("display_link_silent", 1);
+            });
+        }
+    }
+    if (want && !framegen && mtl_fps_target() == 30 && link_30hz() && !realtime) want = 3;   // Power-saving mode: display link at 30 Hz
+    if (want && !framegen && !realtime) front_screen_match(want == 3 ? 30 : want == 2 ? 120 : 60);   // the game's rate: a variable-refresh screen goes to a fixed-rate mode at a multiple where it has one
+    static int vrr_was; int vrr = want == 1 && !realtime && link_vrr_120();   // variable-refresh fullscreen that kept its mode: the 120 Hz link paces the 60 (link_vrr_120)
     if (vrr != vrr_was) { vrr_was = vrr; MLOG("display link: %s (frame %llu)", vrr ? "120 Hz in fullscreen on a variable-refresh screen, a frame every other tick (DM_PRESENT_LINK=1 keeps 60 Hz)" : "60 Hz again (window, fixed-rate screen or another frame rate)", (unsigned long long)atomic_load(&g_cur_frame)); }
     if (vrr) want = 2;
-    // The screen's rate changed (switched by front_screen_match, or another screen): the range again, virtual ticks or none. Taken only once the link object exists, so a change
-    // while its thread starts (after link_main read the rate) is not lost
-    static int hz_was; int hz = front_screen_max_fps(); CAMetalDisplayLink *lk = g_link;
-    if (lk && hz != hz_was) { hz_was = hz; if (want && want == applied) { lk.preferredFrameRateRange = link_range(want); MLOG("display link: the screen runs at %d Hz now, range set again (frame %llu)", hz, (unsigned long long)atomic_load(&g_cur_frame)); } }
+    // An existing link also needs a new range when the screen or the game's timing changes.
+    int hz = front_screen_max_fps(); CAMetalDisplayLink *lk = g_link;
+    if (lk && want && want == applied && (hz != hz_was || realtime != realtime_was)) {
+        lk.preferredFrameRateRange = link_range(want, hz, realtime);
+        hz_was = hz; realtime_was = realtime;
+        MLOG("display link: range set again (%d Hz screen, %s timing; frame %llu)", hz, realtime ? "real-time" : "vsync", (unsigned long long)atomic_load(&g_cur_frame));
+    }
     int lat = link_latency();   // fullscreen, screen or refresh mode changed: a link created since took the current policy
     if (lk && lk.preferredFrameLatency != lat) { lk.preferredFrameLatency = lat; MLOG("display link: frame latency %d (%s; frame %llu)", lat, link_latency_why(), (unsigned long long)atomic_load(&g_cur_frame)); }
-    if (want == applied) return;
+    // OFF must also cancel an asynchronous start that has not been marked applied yet.
+    if (want == applied && (want || !g_link_started)) return;
+    pthread_mutex_lock(&g_pq_mu);
+    if (framegen && !link_mode_framegen(g_link_mode)) __atomic_store_n(&g_link_tick_ns, now_ns(), __ATOMIC_RELAXED);
     g_link_mode = want;
+    pthread_cond_broadcast(&g_pq_cv);
+    pthread_mutex_unlock(&g_pq_mu);
     if (!g_link_started) {
         if (!want) { applied = 0; return; }
         if (!front_metal_layer()) return;
@@ -17661,7 +17710,10 @@ static void link_sync(void) {   // Called every frame by the game's present thre
         return;   // The display link object is created on a new thread; align again next frame
     }
     CAMetalDisplayLink *link = g_link; if (!link) return;
-    if (want) link.preferredFrameRateRange = link_range(want);
+    if (want) {
+        link.preferredFrameRateRange = link_range(want, hz, realtime);
+        hz_was = hz; realtime_was = realtime;
+    }
     else { CFRunLoopRef rl = g_link_rl; g_link = nil; CFRunLoopPerformBlock(rl, kCFRunLoopDefaultMode, ^{ [link invalidate]; pthread_mutex_lock(&g_pq_mu); g_link_owns_layer = 0; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu); CFRunLoopStop(rl); }); CFRunLoopWakeUp(rl); }
     MLOG("present pacing mode %d → %d (frame %llu)", applied, want, (unsigned long long)atomic_load(&g_cur_frame));
     applied = want;
@@ -17691,13 +17743,14 @@ static void *present_main(void *arg) {
     qos_class_t qc = QOS_CLASS_UNSPECIFIED; int rp = 0; pthread_get_qos_class_np(pthread_self(), &qc, &rp); atomic_store(&g_present_qos, (uint32_t)qc);
     for (;;) {
         pthread_mutex_lock(&g_pq_mu);
-        while (g_pq_read == g_pq_in || g_link_owns_layer) pthread_cond_wait(&g_pq_cv, &g_pq_mu);   // In display-link mode the display-link callback takes them; an empty queue is judged by "taken"; "done" has to wait for the feedback of the present submit and lags behind taken
+        while (g_pq_read == g_pq_in || (g_link_owns_layer && !link_mode_framegen(g_link_mode))) pthread_cond_wait(&g_pq_cv, &g_pq_mu);
+        int capture_only = g_link_owns_layer;   // During frame generation this thread captures the game ahead of the Metal display callback.
         pq_item it = g_pq[g_pq_read % PQ]; g_link_it_tin = it.t_in;
         uint64_t ticket = ++g_pq_read; g_classic_busy = 1;
         pthread_mutex_unlock(&g_pq_mu);
         int submitted;
         ext_wait(it.ev_val); snap_commit_wait(it.snap_v);
-        @autoreleasepool { submitted = present_now(&it.t, it.period, it.frame, ticket, it.crop, nil, 0); mtl_tex_unpin(it.t.serial); }
+        @autoreleasepool { submitted = present_now(&it.t, it.period, it.frame, ticket, it.crop, nil, 0, capture_only); mtl_tex_unpin(it.t.serial); }
         pthread_mutex_lock(&g_pq_mu); g_classic_busy = 0; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu);
         if (!submitted) {
             pthread_mutex_lock(&g_pq_mu);
@@ -17710,7 +17763,6 @@ static void *present_main(void *arg) {
 }
 uint32_t mtl_present_qos(void) { return atomic_load(&g_present_qos); }
 static void present_start(void) { pthread_t th; if (pthread_create(&th, NULL, present_main, NULL)) MDIE("cannot start the present thread"); pthread_detach(th); }
-static _Atomic int g_present_discard;
 void mtl_link_pause(int on);
 // The short period when the front end goes to the background and waits for the game to save: presents are dropped directly (the display link does not call back in the background, enqueueing would block the game thread; nobody sees the picture anyway).
 // When turned on, also clear the frames already queued: the system first stops the display-link callback and only afterwards notifies about going to the background, and in that gap the game has already filled the swapchain and is stuck at "before acquiring the next texture, wait for its previous present to be processed"
@@ -17915,7 +17967,7 @@ void mtl_present_wait_texture(uint64_t tk, uint64_t ev) {
 void mtl_present_wait(uint64_t tk) {
     pthread_mutex_lock(&g_pq_mu);
     while (g_pq_done < tk && !atomic_load(&g_present_discard)) {
-        if (!g_link_owns_layer) { pthread_cond_wait(&g_pq_cv, &g_pq_mu); continue; }
+        if (!g_link_owns_layer || link_mode_framegen(g_link_mode)) { pthread_cond_wait(&g_pq_cv, &g_pq_mu); continue; }
         if (g_pq_read >= tk) { pthread_cond_wait(&g_pq_cv, &g_pq_mu); continue; }   // This one has already been taken by the display link and is being presented: wait for it to be handed to the GPU (the GPU completion callback will wake us)
         struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_nsec += (long)STALL_NS; if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
         // Already determined to be in a stall (when the display link comes back the callback first clears g_stall_t0, then records the display-link tick time): no longer wait 100 ms in vain every frame, drop directly, and the game proceeds by its own display-link wait timeout (about two ticks)
