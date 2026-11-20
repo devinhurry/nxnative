@@ -827,9 +827,15 @@ def finish(key, w, j, c1):
     if j['stage'] == 'ds' and tess and 'unsupported' not in tess:   # the domain is the last stage before the rasterizer: the two depth-convention entry points (see vs_depth)
         capture = dmsh_geometry.capture(src)   # and its capture entry, for a geometry shader after it (nvn_tess.inc, as a vertex shader's for nvn_geometry.inc)
         src, full = dmsh_entry.vs_depth(src); open(msl, 'w').write(full + capture)
-    fu = dmsh_entry.fs_uint(src) if j['stage'] == 'ps' else None   # the integer-output entry point (see fs_uint); the analysis below uses the source with only main0
+    # A measured integer target can require main0_u even when the source's writes look like floats.
+    force_uint_entry = j['stage'] == 'ps' and j.get('uint_entry') is True
+    fu = None
+    if j['stage'] == 'ps':
+        fu = dmsh_entry.uint_entry(src) if force_uint_entry else dmsh_entry.fs_uint(src)
     fd = dmsh_entry.fs_dual(src) if j['stage'] == 'ps' and key in DUAL_WANT else None   # the dual-source entry point (see fs_dual), from the source with only main0
     shared = dmsh_side.shared_body(src) if fu or fd else None   # they call main0's body; fs_uint and fs_dual give none for a main0 whose shape it does not know
+    if force_uint_entry and not (fu and shared):
+        return 'reflection failed', 'required integer-output entry point could not be generated', None
     if shared: plain = src; open(msl, 'w').write(shared + (fu or '') + (fd or ''))
     else: fu = fd = None
     try: binds = dmsh_reflect.reflect(key, mesh['kind'] if mesh else j['stage'], src, res)   # before the compile: a pixel shader's readable-tile version needs its texture slots (ps_libraries)
@@ -841,7 +847,7 @@ def finish(key, w, j, c1):
         if 'ios' in TARGETS and IOSOUT: MTL.compile('ios', msl, os.path.join(IOSOUT, key + '_b.metallib'))
     try: compile_targets()
     except subprocess.CalledProcessError as e:
-        if not lay and not fu and not fd: return 'metal failed', str(e)[:160], None
+        if force_uint_entry or not (lay or fu or fd): return 'metal failed', str(e)[:160], None
         lost = [name for name, extra in (('layer', lay), ('integer output', fu), ('dual source', fd)) if extra]   # kept in the reflection, as a cache hit compiles nothing: every build reports it (shader_regressions.report_losses)
         open(msl, 'w').write(plain); lay = fu = fd = None   # the layer, integer-output and dual-source entry points are extras: a library that does not build with them is built without
         try: compile_targets()

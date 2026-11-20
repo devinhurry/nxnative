@@ -3,5 +3,6 @@
 # (the host's red line then prints the row to add here). Both rows were found by the PR #11 port (digitalhivehub).
 # 0544282c162305db (agl_common BAHS@0x6f840, pixel): the BC4 block encoder. It writes 8-byte blocks through an RGBA16UI view into a 32x32x32 BC4 3D texture (nvn_mtl.m bcrt_attach)
 0544282c162305db	{"fout":{"0":"uint"}}
-# e3fb0bb58a691e10 (material bfsha BNSH@0xd64000 variation 28, pixel): the Ultrahand mask, an R8Uint target; without it the mask draws were dropped
-e3fb0bb58a691e10	{"fout":{"0":"uint"}}
+# e3fb0bb58a691e10 writes an R8Uint mask in Ultrahand and an RG11B10Float target in Autobuild.
+# A fixed uint output aborts Metal 4 specialization on the float target. Keep both output types.
+e3fb0bb58a691e10	{"uint_entry":true}
