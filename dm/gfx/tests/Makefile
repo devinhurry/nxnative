@@ -334,16 +334,18 @@ check_t_bc: t_bc
 	DM_TEST_NO_BC=1 DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_bc
 	DM_TEST_NO_BC=1 MTL_DEBUG_LAYER=1 ./t_bc --transcode
 	DM_TEST_NO_BC=1 DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_bc --transcode
-	DM_LOW_MEMORY=1 DM_TEST_NO_BC=1 MTL_DEBUG_LAYER=1 ./t_bc --sampled-mips
-	DM_LOW_MEMORY=1 DM_TEST_NO_BC=1 MTL_DEBUG_LAYER=1 ./t_bc --sampled-mips-image
-	DM_LOW_MEMORY=1 DM_TEST_NO_BC=1 MTL_DEBUG_LAYER=1 ./t_bc --sampled-mips-late
-	DM_LOW_MEMORY=1 DM_TEST_NO_BC=1 DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_bc --sampled-mips-image-late
+	DM_LOW_MEMORY=0 DM_TEXTURE_OPTIMIZATION=1 DM_TEST_NO_BC=1 MTL_DEBUG_LAYER=1 ./t_bc --sampled-mips
+	DM_LOW_MEMORY=0 DM_TEXTURE_OPTIMIZATION=1 DM_TEST_NO_BC=1 MTL_DEBUG_LAYER=1 ./t_bc --sampled-mips-image
+	DM_LOW_MEMORY=1 DM_TEXTURE_OPTIMIZATION=1 DM_TEST_NO_BC=1 MTL_DEBUG_LAYER=1 ./t_bc --sampled-mips-late
+	DM_LOW_MEMORY=0 DM_TEXTURE_OPTIMIZATION=1 DM_TEST_NO_BC=1 DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_bc --sampled-mips-image-late
 t_upload_slots: t_upload_slots.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_upload_slots.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_upload_slots
 check_t_upload_slots: t_upload_slots
 	MTL_DEBUG_LAYER=1 ./t_upload_slots
 	DM_NVN_UPLOAD_REUSE=0 MTL_DEBUG_LAYER=1 ./t_upload_slots
+	DM_LOW_MEMORY=1 MTL_DEBUG_LAYER=1 ./t_upload_slots
+	DM_LOW_MEMORY=1 DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_upload_slots
 t_sbw: t_sbw.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_sbw.m $(MTL_T_SRC) $(FW)
 .PHONY: check_t_sbw
@@ -591,8 +593,11 @@ t_partial_upload: t_partial_upload.m $(MTL_T_DEP)
 .PHONY: check_t_partial_upload
 check_t_partial_upload: t_partial_upload
 	DM_LOW_MEMORY=0 MTL_DEBUG_LAYER=1 ./t_partial_upload
-	DM_LOW_MEMORY=1 MTL_DEBUG_LAYER=1 ./t_partial_upload
-	DM_LOW_MEMORY=1 DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_partial_upload
+	DM_LOW_MEMORY=0 DM_TEXTURE_OPTIMIZATION=0 MTL_DEBUG_LAYER=1 ./t_partial_upload
+	DM_LOW_MEMORY=1 DM_TEXTURE_OPTIMIZATION=0 MTL_DEBUG_LAYER=1 ./t_partial_upload
+	DM_LOW_MEMORY=1 DM_TEXTURE_OPTIMIZATION=1 MTL_DEBUG_LAYER=1 ./t_partial_upload
+	DM_LOW_MEMORY=1 DM_TEXTURE_OPTIMIZATION=1 DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_partial_upload
+	DM_LOW_MEMORY=0 DM_TEXTURE_OPTIMIZATION=0 DM_NVN_ENC_THREAD=1 MTL_DEBUG_LAYER=1 ./t_partial_upload
 t_srgb_alias: t_srgb_alias.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_srgb_alias.m $(MTL_T_SRC) $(FW)
 check_t_srgb_alias: RUN_ENV = MTL_DEBUG_LAYER=1

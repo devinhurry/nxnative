@@ -214,7 +214,7 @@ static void first_sampled_mip(int no_cpu, unsigned format) {
     mtl_tex_init(&f->t); mtl_reg_tex(23, &f->t, NULL);
     uint64_t bytes = mtl_upload_bytes();
     mtl_sub_begin(); id<MTLTexture> reduced = sampled_id(23); finish();
-    int enabled = low_memory_on() && !no_cpu;
+    int enabled = texture_optimization_on() && !no_cpu;
     CHECK(reduced.width == (enabled ? 512 : 1024), "first mip-0 normalized sample uses the selected size");
     CHECK(reduced.mipmapLevelCount == (unsigned)(11 - enabled), "descriptor levels match the uploaded mip range");
     CHECK(content_ok_from(f, reduced, enabled), "all layers and mips match guest data");
@@ -249,7 +249,7 @@ static void first_sampled_mip(int no_cpu, unsigned format) {
     mtl_reg_tex(23, NULL, NULL); drop(f);
 }
 static void copy_reduced_asset(void) {
-    if (!low_memory_on()) return;
+    if (!texture_optimization_on()) return;
     g_case = "GPU copy restores a reduced array";
     fix_t *f = make(NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_RGBA_DXT1, 512, 512, 3, 4, 0);
     for (unsigned l = 0; l < f->levels; l++) for (unsigned a = 0; a < f->layers; a++) write_image(f, l, a);
@@ -268,7 +268,12 @@ static void copy_reduced_asset(void) {
     mtl_reg_tex(24, NULL, NULL); drop(f);
 }
 static void low_memory_assets(void) {
-    g_case = "low-memory packaged texture";
+    g_case = "pressure reclamation independent of low-memory mode";
+    uint64_t evicted = atomic_load(&g_pkg_cache_stats.evicted), evicted_bytes = atomic_load(&g_pkg_cache_stats.evicted_bytes);
+    uint64_t rebuilt = atomic_load(&g_pkg_cache_stats.rebuilt), rebuilt_bytes = atomic_load(&g_pkg_cache_stats.rebuilt_bytes);
+    uint64_t marked = atomic_load(&g_pkg_cache_stats.purge_marked), kept = atomic_load(&g_pkg_cache_stats.purge_kept);
+    uint64_t lost = atomic_load(&g_pkg_cache_stats.purge_lost), purged_rebuilt = atomic_load(&g_pkg_cache_stats.purge_rebuilt);
+    uint64_t purged_bytes = atomic_load(&g_pkg_cache_stats.purge_rebuilt_bytes);
     fix_t *f = make(NVN_TEXTURE_TARGET_2D, NVN_FORMAT_BPTC_UNORM, 512, 512, 1, 4, 0);
     for (unsigned l = 0; l < f->levels; l++) write_image(f, l, 0);
     mtl_tex_init(&f->t);
@@ -277,28 +282,34 @@ static void low_memory_assets(void) {
     uint64_t bytes = mtl_upload_bytes();
     mtl_sub_begin(); id<MTLTexture> view = by_id(21); finish();
     NvPkg *pk = tex_get(f->t.serial);
-    int enabled = low_memory_on();
+    int enabled = texture_optimization_on();
     CHECK(view.width == 256 && view.mipmapLevelCount == 3, "view keeps its NVN dimensions and mip count");
-    CHECK(pk->mip_base == (unsigned)enabled, "only low-memory uploads may omit mip 0");
+    CHECK(pk->mip_base == (unsigned)enabled, "only texture optimization may omit mip 0");
     CHECK(mtl_upload_bytes() - bytes == f->bytes - (enabled ? f->len[0] : 0), "reads precisely the uploaded mips");
     CHECK(content_ok_from(f, view, 1), "view reads the original guest levels 1 to 3");
-    if (!enabled) {
-        pkg_pressure_event(DISPATCH_MEMORYPRESSURE_CRITICAL);
-        CHECK(!pkg_trim_ready(), "system pressure respects the low-memory switch");
-        pkg_pressure_event(DISPATCH_MEMORYPRESSURE_NORMAL);
-        mtl_reg_tex(21, NULL, NULL); drop(f); return;
-    }
+    CHECK(pk->reclaimable, "guest-backed assets can be reclaimed in every memory mode");
+    CHECK(!enabled || pk->mip_base, "texture optimization controls quality independently of cache budgets");
 
     // A copy or full-mip view must resolve the original texture on demand.
     mtl_sub_begin(); id<MTLTexture> full = tex_mtl_full(&f->t); finish();
     CHECK(full.width == 512 && full.mipmapLevelCount == 4 && !pk->mip_base, "a full-size lookup restores mip 0");
     CHECK(content_ok(f, full), "restored full texture matches guest bytes");
     CHECK(content_ok_from(f, by_id(21), 1), "old descriptor resolves on the replacement");
+    CHECK(atomic_load(&g_pkg_cache_stats.rebuilt) == rebuilt && atomic_load(&g_pkg_cache_stats.purge_rebuilt) == purged_rebuilt,
+          "a full-size upgrade is not a reclamation rebuild");
     tex_t alias = f->t; alias.serial += 1000000; mtl_tex_init(&alias);
     mtl_reg_tex(22, &alias, &coarse);
     CHECK(content_ok_from(f, by_id(22), 1), "a second serial can share the same guest storage");
     CHECK(tex_get(alias.serial) == pk, "aliases share one package");
 
+    if (!low_memory_on()) {
+        uint64_t serial = g_sub_serial;
+        g_sub_serial = (g_sub_serial + PKG_PURGE_IDLE + 15) & ~15ull;
+        up_wait_zero(&g_up_pending, WS_OLDQ);
+        pkg_trim_cache_for(2ull << 30);
+        CHECK(pk->tex == full && !pk->purgeable, "ordinary mode with ample headroom keeps idle copies cached");
+        g_sub_serial = serial;
+    }
     g_sub_serial += PKG_PURGE_IDLE - 1;
     pkg_trim_current(0, PKG_PURGE_IDLE, g_done, 1);
     CHECK(!pk->purgeable, "a recently used texture stays nonvolatile");
@@ -308,10 +319,27 @@ static void low_memory_assets(void) {
     pkg_trim_current(0, PKG_PURGE_IDLE, g_done, 1);
     CHECK(pk->purgeable && !g_treg[21].view && !g_treg[22].view, "idle copy goes volatile and both descriptor caches clear");
 
+    CHECK(atomic_load(&g_pkg_cache_stats.purge_marked) == marked + 1 && atomic_load(&g_pkg_cache_stats.purge_lost) == lost,
+          "marking volatile does not count as system discard");
+    mtl_sub_begin(); view = by_id(22); finish();
+    CHECK(pk->tex == full && !pk->purgeable && atomic_load(&g_pkg_cache_stats.purge_kept) == kept + 1,
+          "a still-intact volatile copy is counted as reuse, not rebuilt");
+    CHECK(content_ok_from(f, by_id(21), 1) && atomic_load(&g_pkg_cache_stats.purge_kept) == kept + 1,
+          "another alias does not double-count restoration");
+    g_sub_serial += PKG_PURGE_IDLE;
+    up_wait_zero(&g_up_pending, WS_OLDQ);
+    pkg_trim_current(0, PKG_PURGE_IDLE, g_done, 1);
+    CHECK(pk->purgeable && atomic_load(&g_pkg_cache_stats.purge_marked) == marked + 2, "a later purge cycle is counted once");
     [pk->tex setPurgeableState:MTLPurgeableStateEmpty];
     mtl_sub_begin(); view = by_id(22); finish();
     CHECK(!pk->purgeable && pk->tex != full, "a purged texture is uploaded again");
     CHECK(content_ok_from(f, view, 1), "alias rebuild preserves its original guest levels");
+    CHECK(atomic_load(&g_pkg_cache_stats.purge_lost) == lost + 1 && atomic_load(&g_pkg_cache_stats.purge_rebuilt) == purged_rebuilt + 1,
+          "observed system discard and its successful rebuild are separate counters");
+    CHECK(atomic_load(&g_pkg_cache_stats.purge_rebuilt_bytes) == purged_bytes + pk->tex.allocatedSize
+          && atomic_load(&g_pkg_cache_stats.rebuilt) == rebuilt, "purge rebuild bytes do not enter active-eviction totals");
+    CHECK(content_ok_from(f, by_id(21), 1) && atomic_load(&g_pkg_cache_stats.purge_rebuilt) == purged_rebuilt + 1,
+          "aliases share one counted rebuild");
     g_treg[22].table_view = 1;
     g_sub_serial += PKG_PURGE_IDLE;
     pkg_trim_current(1, PKG_EVICT_IDLE_CRITICAL, g_done, 0);
@@ -334,8 +362,16 @@ static void low_memory_assets(void) {
     CHECK(pkg_trim_ready(), "pending critical pressure survives waiting for uploads");
     pkg_trim_cache_for(ample_headroom);
     CHECK(!pk->tex && !g_treg[22].view, "critical system pressure evicts even with ample app headroom");
+    CHECK(atomic_load(&g_pkg_cache_stats.evicted) == evicted + 1
+          && atomic_load(&g_pkg_cache_stats.evicted_bytes) == evicted_bytes + old.allocatedSize
+          && atomic_load(&g_pkg_cache_stats.rebuilt) == rebuilt, "eviction counts retirement before any rebuild");
     mtl_sub_begin(); full = tex_mtl_full(&f->t); finish();
     CHECK(full && full != old && !pk->mip_base && content_ok(f, full), "full resolution is restored after eviction");
+    CHECK(atomic_load(&g_pkg_cache_stats.rebuilt) == rebuilt + 1
+          && atomic_load(&g_pkg_cache_stats.rebuilt_bytes) == rebuilt_bytes + full.allocatedSize,
+          "a successful eviction rebuild records its actual allocation size");
+    CHECK(content_ok_from(f, by_id(21), 1) && content_ok_from(f, by_id(22), 1)
+          && atomic_load(&g_pkg_cache_stats.rebuilt) == rebuilt + 1, "repeated alias sampling does not add rebuilds");
 
     g_sub_serial += PKG_PURGE_IDLE;
     pkg_pressure_event(DISPATCH_MEMORYPRESSURE_WARN);
@@ -353,6 +389,8 @@ static void low_memory_assets(void) {
     tex_gpu_wrote(&f->t);
     pkg_trim_current(1, PKG_EVICT_IDLE_CRITICAL, g_done, 0);
     CHECK(pk->tex == full && !pk->purgeable, "a package used for GPU writes is excluded");
+    CHECK(atomic_load(&g_pkg_cache_stats.evicted) == evicted + 3 && atomic_load(&g_pkg_cache_stats.rebuilt) == rebuilt + 3,
+          "critical, warning and headroom evictions each have one successful rebuild");
     mtl_reg_tex(22, NULL, NULL); mtl_tex_release(&alias);
     mtl_reg_tex(21, NULL, NULL); drop(f);
 }
@@ -386,7 +424,10 @@ int main(void) { @autoreleasepool {
         run("RGBA8 1D array with levels", NVN_TEXTURE_TARGET_1D_ARRAY, NVN_FORMAT_RGBA8, 256, 8, 1, 4, 4096, direct);
     }
     first_sampled_mip(0, NVN_FORMAT_RGBA_DXT1); first_sampled_mip(0, NVN_FORMAT_RGBA8); first_sampled_mip(1, NVN_FORMAT_RGBA_DXT1); copy_reduced_asset();
+    CHECK(!atomic_load(&g_pkg_cache_stats.rebuilt) && !atomic_load(&g_pkg_cache_stats.purge_rebuilt),
+          "ordinary CPU updates and mip changes do not count as reclamation rebuilds");
     low_memory_assets();
     cost();
+    mtl_mem_stat(300, 0);
     printf("t_partial_upload: %d checks, %d failed\n", checks, failed); return failed != 0;
 } }

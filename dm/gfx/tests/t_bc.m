@@ -159,12 +159,17 @@ static void linear_blocks(void) {
 static void transcodes(void) {
     CHECK("transcoding test uses the fallback", g_no_bc);
     tex_t probe=texture(NVN_TEXTURE_TARGET_2D,1,10999);probe.d.format=0x41;uint32_t probe_pf=0;
-    unsetenv("DM_LOW_MEMORY");setenv("DM_NVN_BC_TRANSCODE","1",1);g_bc_transcode_on=-1;
-    CHECK("component flag cannot bypass the low-memory preset",!bc_sampled_format(&probe,&probe_pf));
-    setenv("DM_LOW_MEMORY","1",1);setenv("DM_NVN_BC_TRANSCODE","0",1);g_bc_transcode_on=-1;
-    CHECK("explicit disable preserves decoding in low-memory mode",!bc_sampled_format(&probe,&probe_pf));
-    unsetenv("DM_NVN_BC_TRANSCODE");g_bc_transcode_on=-1;
-    CHECK("low-memory mode selects transcoding on the no-BC path",bc_sampled_format(&probe,&probe_pf)&&probe_pf==MTLPixelFormatASTC_4x4_LDR);
+    const char *modes[] = {NULL, "0", "1"};
+    for (unsigned i=0;i<3;i++) {
+        if(modes[i])setenv("DM_LOW_MEMORY",modes[i],1);else unsetenv("DM_LOW_MEMORY");
+        unsetenv("DM_NVN_BC_TRANSCODE");g_bc_transcode_on=-1;
+        CHECK("no-BC transcoding defaults on independently of low-memory mode",bc_sampled_format(&probe,&probe_pf)&&probe_pf==MTLPixelFormatASTC_4x4_LDR);
+        setenv("DM_NVN_BC_TRANSCODE","0",1);g_bc_transcode_on=-1;
+        CHECK("explicit disable preserves decoded fallback in every memory mode",!bc_sampled_format(&probe,&probe_pf));
+    }
+    setenv("DM_LOW_MEMORY","0",1);unsetenv("DM_NVN_BC_TRANSCODE");g_bc_transcode_on=-1;
+    int fallback=g_no_bc;g_no_bc=0;
+    CHECK("native BC bypasses fallback transcoding",!bc_sampled_format(&probe,&probe_pf));g_no_bc=fallback;
     const unsigned formats[] = {0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48,0x49,0x4b,0x4d,0x4e};
     for (unsigned fi=0;fi<sizeof formats/sizeof *formats;fi++) {@autoreleasepool {
         unsigned f=formats[fi]; int bw,bh,bb=nvn_fmt_bpb(f,&bw,&bh); uint8_t block[16]={0};
@@ -247,7 +252,7 @@ static void gpu_initial_fill(void) {
     mtl_tex_release(&t);mtl_alias_drop_pool(&pool);mtl_pool_del(mem);mtl_drain();free(mem);
 }
 static void sampled_mips(int image_hint, int late) {
-    CHECK("sampled mip regression uses low-memory BC fallback", low_memory_on() && g_no_bc);
+    CHECK("sampled mip regression uses independent texture optimization with BC fallback", texture_optimization_on() && g_no_bc);
     tex_t t={.magic=MAGIC('T','E','X',0),.serial=12500,.has_layout=1};
     t.d=(nvn_texdesc){.target=NVN_TEXTURE_TARGET_2D_ARRAY,.format=0x46,.width=1024,.height=1024,.depth=83,.levels=11,.samples=1};
     if(image_hint)t.d.flags|=NVN_TEXTURE_FLAGS_IMAGE;
@@ -297,6 +302,26 @@ static void sampled_mips(int image_hint, int late) {
         const float *values=out.contents;int good=1;
         for(NSUInteger i=0;i<out.length/sizeof(float);i++)good&=isfinite(values[i])&&fabsf(values[i]-(i%4==0||i%4==3))<.006f;
         CHECK("every layer and mip retains the expected sampled colour",good);
+    }
+    if(late) {
+        NvPkg *pkg=tex_get(t.serial);
+        uint64_t evicted=atomic_load(&g_pkg_cache_stats.evicted), rebuilt_count=atomic_load(&g_pkg_cache_stats.rebuilt);
+        uint64_t rebuilt_bytes=atomic_load(&g_pkg_cache_stats.rebuilt_bytes);
+        up_wait_zero(&g_up_pending,WS_OLDQ);g_sub_serial+=PKG_PURGE_IDLE;
+        pkg_trim_current(reduced.allocatedSize,PKG_PURGE_IDLE,g_done,0);
+        CHECK("idle compressed copy is retired and its descriptor invalidated",!pkg->tex&&!g_treg[701].view);
+        mtl_sub_begin();os_unfair_lock_lock(&g_rmu);tex_fast_rid(701,&view);os_unfair_lock_unlock(&g_rmu);finish();
+        id<MTLTexture> rebuilt=(__bridge id<MTLTexture>)view;
+        CHECK("pressure rebuild retains reduced dimensions and compressed format",rebuilt!=reduced&&rebuilt.width==512&&rebuilt.mipmapLevelCount==10&&rebuilt.pixelFormat==MTLPixelFormatASTC_4x4_sRGB&&pkg->mip_base==1);
+        CHECK("compressed cache counts one eviction and one successful rebuild",atomic_load(&g_pkg_cache_stats.evicted)==evicted+1&&atomic_load(&g_pkg_cache_stats.rebuilt)==rebuilt_count+1);
+        CHECK("compressed rebuild bytes use the smaller ASTC allocation",atomic_load(&g_pkg_cache_stats.rebuilt_bytes)==rebuilt_bytes+rebuilt.allocatedSize);
+        id<MTLBuffer> color=[g_dev newBufferWithLength:16 options:MTLResourceStorageModeShared];
+        id<MTLBuffer> dims=[g_dev newBufferWithLength:16 options:MTLResourceStorageModeShared];
+        id<MTLCommandBuffer> cb=q_cb();id<MTLComputeCommandEncoder> e=[cb computeCommandEncoder];
+        [e setComputePipelineState:ps];[e setTexture:rebuilt atIndex:0];[e setBuffer:color offset:0 atIndex:0];[e setBuffer:dims offset:0 atIndex:1];
+        [e dispatchThreads:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(1,1,1)];[e endEncoding];[cb commit];[cb waitUntilCompleted];
+        const float *c=color.contents;
+        CHECK("rebuilt ASTC copy samples original guest content",cb.status==MTLCommandBufferStatusCompleted&&fabsf(c[0]-1)<.006f&&fabsf(c[1])<.006f&&fabsf(c[2])<.006f&&fabsf(c[3]-1)<.006f);
     }
     uint8_t raw[8];NVNcopyRegion r={0,0,0,4,4,1};mtl_read_texels(&t,0,0,&r,raw,8,8);
     CHECK("CPU readback still returns original mip-0 BC data",!memcmp(raw,block,8));
