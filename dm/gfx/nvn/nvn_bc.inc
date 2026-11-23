@@ -29,12 +29,15 @@ static int bc_transcoded_format(MTLPixelFormat f) {
 static int bc_sampled_format(const tex_t *t, uint32_t *pf) {
     if (!g_no_bc) return 0;   // Native BC needs neither conversion nor extra storage.
     if (g_bc_transcode_on < 0) {
-        // Re-compression is lossy: use it only under the low-memory preset.
-        const char *e = getenv("DM_NVN_BC_TRANSCODE"); const char *low = getenv("DM_LOW_MEMORY");
-        g_bc_transcode_on = low && !strcmp(low, "1") && (!e || strcmp(e, "0"));
-        MLOG("BC fallback transcoding: %s (low-memory preset; DM_NVN_BC_TRANSCODE=0 disables; ASTC/EAC may be lossy)", g_bc_transcode_on ? "on" : "off");
+        // Keep eligible assets compressed even when full-resolution textures are selected.
+        const char *e = getenv("DM_NVN_BC_TRANSCODE");
+        g_bc_transcode_on = !e || strcmp(e, "0");
+        MLOG("BC fallback transcoding: %s (no native BC; DM_NVN_BC_TRANSCODE=0 disables; ASTC/EAC may be lossy)", g_bc_transcode_on ? "on" : "off");
     }
-    if (!g_bc_transcode_on || t->d.samples > 1 || (t->d.flags & (NVN_TEXTURE_FLAGS_IMAGE | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET))) return 0;
+    // IMAGE grants a capability; it does not mean that this binding writes.
+    // Sampled copies stay read-only. Actual image writes take tex_upgrade,
+    // which restores the decoded format from the retained original BC blocks.
+    if (!g_bc_transcode_on || t->d.samples > 1 || (t->d.flags & NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET)) return 0;
     unsigned target = t->d.target;
     if (target != 1 && target != 4 && target != 8 && target != 9) return 0;
     MTLPixelFormat f = bc_transcode_format(t->d.format);

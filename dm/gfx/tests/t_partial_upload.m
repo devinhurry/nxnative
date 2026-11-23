@@ -76,28 +76,30 @@ static size_t expect_read(fix_t *f, unsigned *count) {
     memset(f->written, 0, ni); *count = c;
     return n;
 }
-static int content_ok(fix_t *f, id<MTLTexture> image) {
+static int content_ok_from(fix_t *f, id<MTLTexture> image, unsigned base) {
     if (!image) return 0;
     id<MTLBuffer> rb = [g_dev newBufferWithLength:f->bytes + 512 options:MTLResourceStorageModeShared]; if (!rb) return 0;
     memset(rb.contents, 0xcd, rb.length);
     id<MTLCommandBuffer> cb = q_cb(); id<MTLBlitCommandEncoder> ce = [cb blitCommandEncoder];
-    for (unsigned l = 0; l < f->levels; l++) for (unsigned a = 0; a < f->layers; a++) {
+    for (unsigned l = base; l < f->levels; l++) for (unsigned a = 0; a < f->layers; a++) {
         unsigned w, h, z; size_t pitch, rows; geom(f, l, &w, &h, &z, &pitch, &rows);
-        [ce copyFromTexture:image sourceSlice:a sourceLevel:l sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(w, h, z) toBuffer:rb destinationOffset:256 + f->at[img(f, l, a)] destinationBytesPerRow:pitch destinationBytesPerImage:pitch * rows];
+        [ce copyFromTexture:image sourceSlice:a sourceLevel:l - base sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(w, h, z) toBuffer:rb destinationOffset:256 + f->at[img(f, l, a)] destinationBytesPerRow:pitch destinationBytesPerImage:pitch * rows];
     }
     [ce endEncoding]; [cb commit]; [cb waitUntilCompleted];
     if (cb.status != MTLCommandBufferStatusCompleted) return 0;
     int sh = rb_packed_shift(f->t.d.format);   // Metal's order of a packed 16-bit format, back to the guest's
-    if (sh) for (unsigned l = 0; l < f->levels; l++) for (unsigned a = 0; a < f->layers; a++) { unsigned w, h, z; size_t pitch, rows; geom(f, l, &w, &h, &z, &pitch, &rows);
+    if (sh) for (unsigned l = base; l < f->levels; l++) for (unsigned a = 0; a < f->layers; a++) { unsigned w, h, z; size_t pitch, rows; geom(f, l, &w, &h, &z, &pitch, &rows);
         rb_swap_rows((uint8_t *)rb.contents + 256 + f->at[img(f, l, a)], pitch, rows, z, pitch, pitch * rows, sh); }
-    int ok = !memcmp((uint8_t *)rb.contents + 256, f->expected, f->bytes);
-    if (!ok) for (unsigned i = 0; i < f->levels * f->layers; i++) if (memcmp((uint8_t *)rb.contents + 256 + f->at[i], f->expected + f->at[i], f->len[i])) fprintf(stderr, "  %s: level %u layer %u differs\n", g_case, i / f->layers, i % f->layers);
+    size_t first = f->at[img(f, base, 0)];
+    int ok = !memcmp((uint8_t *)rb.contents + 256 + first, f->expected + first, f->bytes - first);
+    if (!ok) for (unsigned i = img(f, base, 0); i < f->levels * f->layers; i++) if (memcmp((uint8_t *)rb.contents + 256 + f->at[i], f->expected + f->at[i], f->len[i])) fprintf(stderr, "  %s: level %u layer %u differs\n", g_case, i / f->layers, i % f->layers);
     return ok;
 }
+static int content_ok(fix_t *f, id<MTLTexture> image) { return content_ok_from(f, image, 0); }
 // One look in a submission of its own. whole: every image is expected read from guest memory
 static id<MTLTexture> look(fix_t *f, int whole, const char *what) {
     unsigned n; size_t want = expect_read(f, &n); uint64_t b0 = mtl_upload_bytes(), r0 = g_pkg_reuploads;
-    mtl_sub_begin(); id<MTLTexture> image = tex_mtl(&f->t); finish();
+    mtl_sub_begin(); id<MTLTexture> image = tex_mtl_full(&f->t); finish();
     char label[160];
     snprintf(label, sizeof label, "%s: resolves", what); CHECK(image != nil, label);
     snprintf(label, sizeof label, "%s: read %llu bytes from guest memory, expected %zu of %zu", what, (unsigned long long)(mtl_upload_bytes() - b0), whole ? f->bytes : want, f->bytes);
@@ -116,7 +118,7 @@ static void run(const char *name, int target, NVNformat format, unsigned w, unsi
     write_image(f, 0, mid);
     id<MTLTexture> second = look(f, 0, "one image written");
     CHECK(second != first, "the texture in-flight draws read is not written");
-    CHECK(tex_mtl(&f->t) == second, "unchanged storage keeps its texture");
+    CHECK(tex_mtl_full(&f->t) == second, "unchanged storage keeps its texture");
     // The spare is the first texture: it lacks the image written before this one
     write_image(f, top, last);
     id<MTLTexture> third = look(f, 0, "another image written");
@@ -124,32 +126,32 @@ static void run(const char *name, int target, NVNformat format, unsigned w, unsi
     if (f->layers > 1) { write_image(f, 0, 0); write_image(f, top, mid); look(f, 0, "two images written"); }
     // Two looks in one submission: the second texture's copies read the first's, which the same batch uploads
     mtl_sub_begin();
-    write_image(f, 0, last); unsigned n; expect_read(f, &n); id<MTLTexture> a = tex_mtl(&f->t);
-    write_image(f, top, 0); expect_read(f, &n); id<MTLTexture> b = tex_mtl(&f->t);
+    write_image(f, 0, last); unsigned n; expect_read(f, &n); id<MTLTexture> a = tex_mtl_full(&f->t);
+    write_image(f, top, 0); expect_read(f, &n); id<MTLTexture> b = tex_mtl_full(&f->t);
     finish();
     CHECK(a && b && a != b, "a look after another write in the same submission takes another texture");
     CHECK(content_ok(f, b), "two re-uploads in one submission: every image holds the reference");
     // A write by another thread while the submit thread replays a submission races it: the submission keeps the texture of its first look, and the next one reads the pages
     for (unsigned l = 0; l < levels; l++) for (unsigned y = 0; y < f->layers; y++) write_image(f, l, y);
     look(f, 1, "before the racing write");
-    mtl_sub_begin(); id<MTLTexture> kept = tex_mtl(&f->t); uint64_t r0 = g_pkg_reuploads;
+    mtl_sub_begin(); id<MTLTexture> kept = tex_mtl_full(&f->t); uint64_t r0 = g_pkg_reuploads;
     elsewhere(f, 0, mid);
-    CHECK(tex_mtl(&f->t) == kept && g_pkg_reuploads == r0, "a write by another thread during a submission leaves the submission its texture");
+    CHECK(tex_mtl_full(&f->t) == kept && g_pkg_reuploads == r0, "a write by another thread during a submission leaves the submission its texture");
     write_image(f, top, last);
-    expect_read(f, &n); id<MTLTexture> own = tex_mtl(&f->t);
+    expect_read(f, &n); id<MTLTexture> own = tex_mtl_full(&f->t);
     CHECK(own != kept && g_pkg_reuploads == r0 + 1, "a write by the submit thread is looked for at the next use");
     finish();
     CHECK(content_ok(f, own), "and that look reads the other thread's write too");
-    mtl_sub_begin(); kept = tex_mtl(&f->t); elsewhere(f, 0, 0); CHECK(tex_mtl(&f->t) == kept, "the submission keeps its texture again"); finish();
+    mtl_sub_begin(); kept = tex_mtl_full(&f->t); elsewhere(f, 0, 0); CHECK(tex_mtl_full(&f->t) == kept, "the submission keeps its texture again"); finish();
     look(f, 0, "the next submission after a racing write");
     elsewhere(f, top, mid); r0 = g_pkg_reuploads; expect_read(f, &n);
-    id<MTLTexture> out = tex_mtl(&f->t);
+    id<MTLTexture> out = tex_mtl_full(&f->t);
     CHECK(g_pkg_reuploads == r0 + 1 && content_ok(f, out), "outside a submission every look reads the pages");
     // A racing write to the data beside it, in a host page they share, is no write to it: the texture stays, and the next submission starts no write generation for it
     if ((uint8_t *)f->t.mem != (uint8_t *)f->mem) {
-        mtl_sub_begin(); kept = tex_mtl(&f->t); r0 = g_pkg_reuploads; uint64_t skips = g_pkg_edge_skips;
+        mtl_sub_begin(); kept = tex_mtl_full(&f->t); r0 = g_pkg_reuploads; uint64_t skips = g_pkg_edge_skips;
         pthread_t th; pthread_create(&th, NULL, beside_main, f); pthread_join(th, NULL);
-        CHECK(tex_mtl(&f->t) == kept && g_pkg_reuploads == r0 && g_pkg_edge_skips == skips + 1 && !g_pkg_kept, "a racing write beside the texture leaves it clean");
+        CHECK(tex_mtl_full(&f->t) == kept && g_pkg_reuploads == r0 && g_pkg_edge_skips == skips + 1 && !g_pkg_kept, "a racing write beside the texture leaves it clean");
         finish();
     }
     // The same through a texture ID, whose view is remembered by write generation: no page anywhere is written after the racing write, and the next submission reads it all the same
@@ -186,19 +188,225 @@ static void cost(void) {
         for (int k = 0; k < looks; k++) {
             if (part) write_image(f, 0, (unsigned)(r + k) % 8); else for (unsigned a = 0; a < 8; a++) write_image(f, 0, a);
             expect_read(f, &n);
-            uint64_t c0 = bp_now(); CHECK(tex_mtl(&f->t) != nil, "resolves"); cpu += bp_now() - c0;
+            uint64_t c0 = bp_now(); CHECK(tex_mtl_full(&f->t) != nil, "resolves"); cpu += bp_now() - c0;
         }
         finish(); uint64_t t2 = bp_now();
         if (r >= 2) { ms[looks / 2][part][0] += cpu / (4e6 * looks); ms[looks / 2][part][1] += (t2 - t0) / 4e6; }
     }
-    CHECK(content_ok(f, tex_mtl(&f->t)), "every image holds the reference");
+    CHECK(content_ok(f, tex_mtl_full(&f->t)), "every image holds the reference");
     for (int i = 0; i < 2; i++)
         printf("t_partial_upload: 1800x1380x8 R16 (%.1f MB), %d re-upload%s a submission: read whole %.2f ms each on the submit thread, %.1f ms a submission to completion; one layer written %.2f ms, %.1f ms\n",
                f->t.L.size / 1048576.0, 2 * i + 1, i ? "s" : "", ms[i][0][0], ms[i][0][1], ms[i][1][0], ms[i][1][1]);
     drop(f);
 }
+// Direct descriptor lookup needs no shader whitelist.
+
+static id<MTLTexture> sampled_id(int tid) {
+    os_unfair_lock_lock(&g_rmu); void *view = NULL; tex_fast_rid(tid, &view);
+    id<MTLTexture> result = (__bridge id<MTLTexture>)view;
+    os_unfair_lock_unlock(&g_rmu); return result;
+}
+static void first_sampled_mip(int no_cpu, unsigned format) {
+    g_case = no_cpu ? "first sampled CPU_NO_ACCESS texture" : "first sampled mip-0 view";
+    fix_t *f = make(NVN_TEXTURE_TARGET_2D_ARRAY, format, 1024, 1024, 3, 11, 0);
+    for (unsigned l = 0; l < f->levels; l++) for (unsigned a = 0; a < f->layers; a++) write_image(f, l, a);
+    if (no_cpu) { f->t.has_layout = 0; f->pool.flags = NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS | NVN_MEMORY_POOL_FLAGS_GPU_CACHED; }
+    mtl_tex_init(&f->t); mtl_reg_tex(23, &f->t, NULL);
+    uint64_t bytes = mtl_upload_bytes();
+    mtl_sub_begin(); id<MTLTexture> reduced = sampled_id(23); finish();
+    int enabled = texture_optimization_on() && !no_cpu;
+    CHECK(reduced.width == (enabled ? 512 : 1024), "first mip-0 normalized sample uses the selected size");
+    CHECK(reduced.mipmapLevelCount == (unsigned)(11 - enabled), "descriptor levels match the uploaded mip range");
+    CHECK(content_ok_from(f, reduced, enabled), "all layers and mips match guest data");
+    if (enabled) {
+        size_t skipped = f->len[0] * f->layers;
+        CHECK(mtl_upload_bytes() - bytes == f->bytes - skipped, "mip 0 is omitted from the first upload");
+        NvPkg *pk = tex_get(f->t.serial);
+        CHECK(pk->mip_base == 1, "package records its reduced mip base");
+        CHECK(g_treg[23].view_mip_base == 1, "cached descriptor records reduced base");
+        mtl_sub_begin(); id<MTLTexture> full = by_id(23); finish();
+        CHECK(full == reduced && full.width == 512 && full.mipmapLevelCount == 10, "unknown binding keeps the reduced allocation");
+        CHECK(content_ok_from(f, full, 1), "unknown binding retains the uploaded guest mips");
+        mtl_sub_begin(); CHECK(sampled_id(23) == reduced, "repeated sampling does not rebuild the texture");
+        finish();
+        write_image(f, 1, 0);
+        mtl_sub_begin(); id<MTLTexture> refreshed = by_id(23); finish();
+        CHECK(refreshed.width == 512 && content_ok_from(f, refreshed, 1), "CPU changes refresh lower mips without restoring the full copy");
+        if (format == NVN_FORMAT_RGBA8) {
+            mtl_sub_begin();
+            p_clear_tex clear = {.tex = &f->t, .r = {0, 0, 0, 1024, 1024, 1}, .mask = 15, .c.f = {1, 0, 0, 1}};
+            clear_tex(&clear); finish();
+            for (size_t i = f->at[0]; i < f->at[0] + f->len[0]; i += 4) {
+                f->expected[i] = f->expected[i + 3] = 255;
+                f->expected[i + 1] = f->expected[i + 2] = 0;
+            }
+            mtl_sub_begin(); id<MTLTexture> rendered = by_id(23); finish();
+            CHECK(rendered.width == 1024 && pk->mip_base == 0 && pk->gpu_written, "render-target clear restores the full uncompressed array");
+            CHECK(content_ok(f, rendered), "render clear changes mip 0 and preserves every other layer and mip");
+            mtl_sub_begin(); CHECK(sampled_id(23) == rendered, "rendered asset stays full sized on later ordinary sampling"); finish();
+        }
+    }
+    mtl_reg_tex(23, NULL, NULL); drop(f);
+}
+static void copy_reduced_asset(void) {
+    if (!texture_optimization_on()) return;
+    g_case = "GPU copy restores a reduced array";
+    fix_t *f = make(NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_RGBA_DXT1, 512, 512, 3, 4, 0);
+    for (unsigned l = 0; l < f->levels; l++) for (unsigned a = 0; a < f->layers; a++) write_image(f, l, a);
+    const size_t source = f->poolsize - getpagesize();
+    CHECK(source >= f->t.L.size, "copy source lies outside the texture storage");
+    uint8_t block[8] = {0, 0xf8, 0, 0, 0, 0, 0, 0};
+    dm_guest_write_prepare((uint8_t *)f->mem + source, sizeof block); memcpy((uint8_t *)f->mem + source, block, sizeof block);
+    mtl_tex_init(&f->t); mtl_reg_tex(24, &f->t, NULL);
+    mtl_sub_begin(); CHECK(sampled_id(24).width == 256, "copy destination starts with a reduced sampled copy"); finish();
+    mtl_sub_begin(); p_copy_b2t copy = {.tex = &f->t, .src = (uint64_t)f->mem + source, .r = {0, 0, 0, 4, 4, 1}};
+    copy_b2t(&copy, sizeof copy); finish();
+    NvPkg *pk = tex_get(f->t.serial);
+    CHECK(pk->tex.width == 512 && pk->mip_base == 0 && pk->gpu_written, "GPU copy uses full dimensions and excludes later eviction");
+    memcpy(f->expected, block, sizeof block);
+    CHECK(content_ok(f, pk->tex), "the write reaches mip 0 and preserves neighboring data in every layer");
+    mtl_reg_tex(24, NULL, NULL); drop(f);
+}
+static void low_memory_assets(void) {
+    g_case = "pressure reclamation independent of low-memory mode";
+    uint64_t evicted = atomic_load(&g_pkg_cache_stats.evicted), evicted_bytes = atomic_load(&g_pkg_cache_stats.evicted_bytes);
+    uint64_t rebuilt = atomic_load(&g_pkg_cache_stats.rebuilt), rebuilt_bytes = atomic_load(&g_pkg_cache_stats.rebuilt_bytes);
+    uint64_t marked = atomic_load(&g_pkg_cache_stats.purge_marked), kept = atomic_load(&g_pkg_cache_stats.purge_kept);
+    uint64_t lost = atomic_load(&g_pkg_cache_stats.purge_lost), purged_rebuilt = atomic_load(&g_pkg_cache_stats.purge_rebuilt);
+    uint64_t purged_bytes = atomic_load(&g_pkg_cache_stats.purge_rebuilt_bytes);
+    fix_t *f = make(NVN_TEXTURE_TARGET_2D, NVN_FORMAT_BPTC_UNORM, 512, 512, 1, 4, 0);
+    for (unsigned l = 0; l < f->levels; l++) write_image(f, l, 0);
+    mtl_tex_init(&f->t);
+    view_t coarse = {.set_levels = 1, .base_level = 1, .nlevels = f->levels - 1};
+    mtl_reg_tex(21, &f->t, &coarse);
+    uint64_t bytes = mtl_upload_bytes();
+    mtl_sub_begin(); id<MTLTexture> view = by_id(21); finish();
+    NvPkg *pk = tex_get(f->t.serial);
+    int enabled = texture_optimization_on();
+    CHECK(view.width == 256 && view.mipmapLevelCount == 3, "view keeps its NVN dimensions and mip count");
+    CHECK(pk->mip_base == (unsigned)enabled, "only texture optimization may omit mip 0");
+    CHECK(mtl_upload_bytes() - bytes == f->bytes - (enabled ? f->len[0] : 0), "reads precisely the uploaded mips");
+    CHECK(content_ok_from(f, view, 1), "view reads the original guest levels 1 to 3");
+    CHECK(pk->reclaimable, "guest-backed assets can be reclaimed in every memory mode");
+    CHECK(!enabled || pk->mip_base, "texture optimization controls quality independently of cache budgets");
+
+    // A copy or full-mip view must resolve the original texture on demand.
+    mtl_sub_begin(); id<MTLTexture> full = tex_mtl_full(&f->t); finish();
+    CHECK(full.width == 512 && full.mipmapLevelCount == 4 && !pk->mip_base, "a full-size lookup restores mip 0");
+    CHECK(content_ok(f, full), "restored full texture matches guest bytes");
+    CHECK(content_ok_from(f, by_id(21), 1), "old descriptor resolves on the replacement");
+    CHECK(atomic_load(&g_pkg_cache_stats.rebuilt) == rebuilt && atomic_load(&g_pkg_cache_stats.purge_rebuilt) == purged_rebuilt,
+          "a full-size upgrade is not a reclamation rebuild");
+    tex_t alias = f->t; alias.serial += 1000000; mtl_tex_init(&alias);
+    mtl_reg_tex(22, &alias, &coarse);
+    CHECK(content_ok_from(f, by_id(22), 1), "a second serial can share the same guest storage");
+    CHECK(tex_get(alias.serial) == pk, "aliases share one package");
+
+    if (!low_memory_on()) {
+        uint64_t serial = g_sub_serial;
+        g_sub_serial = (g_sub_serial + PKG_PURGE_IDLE + 15) & ~15ull;
+        up_wait_zero(&g_up_pending, WS_OLDQ);
+        pkg_trim_cache_for(2ull << 30);
+        CHECK(pk->tex == full && !pk->purgeable, "ordinary mode with ample headroom keeps idle copies cached");
+        g_sub_serial = serial;
+    }
+    g_sub_serial += PKG_PURGE_IDLE - 1;
+    pkg_trim_current(0, PKG_PURGE_IDLE, g_done, 1);
+    CHECK(!pk->purgeable, "a recently used texture stays nonvolatile");
+    g_sub_serial++;
+    pkg_trim_current(0, PKG_PURGE_IDLE, g_fence - 1, 1);
+    CHECK(!pk->purgeable, "in-flight render work prevents marking a texture volatile");
+    pkg_trim_current(0, PKG_PURGE_IDLE, g_done, 1);
+    CHECK(pk->purgeable && !g_treg[21].view && !g_treg[22].view, "idle copy goes volatile and both descriptor caches clear");
+
+    CHECK(atomic_load(&g_pkg_cache_stats.purge_marked) == marked + 1 && atomic_load(&g_pkg_cache_stats.purge_lost) == lost,
+          "marking volatile does not count as system discard");
+    mtl_sub_begin(); view = by_id(22); finish();
+    CHECK(pk->tex == full && !pk->purgeable && atomic_load(&g_pkg_cache_stats.purge_kept) == kept + 1,
+          "a still-intact volatile copy is counted as reuse, not rebuilt");
+    CHECK(content_ok_from(f, by_id(21), 1) && atomic_load(&g_pkg_cache_stats.purge_kept) == kept + 1,
+          "another alias does not double-count restoration");
+    g_sub_serial += PKG_PURGE_IDLE;
+    up_wait_zero(&g_up_pending, WS_OLDQ);
+    pkg_trim_current(0, PKG_PURGE_IDLE, g_done, 1);
+    CHECK(pk->purgeable && atomic_load(&g_pkg_cache_stats.purge_marked) == marked + 2, "a later purge cycle is counted once");
+    [pk->tex setPurgeableState:MTLPurgeableStateEmpty];
+    mtl_sub_begin(); view = by_id(22); finish();
+    CHECK(!pk->purgeable && pk->tex != full, "a purged texture is uploaded again");
+    CHECK(content_ok_from(f, view, 1), "alias rebuild preserves its original guest levels");
+    CHECK(atomic_load(&g_pkg_cache_stats.purge_lost) == lost + 1 && atomic_load(&g_pkg_cache_stats.purge_rebuilt) == purged_rebuilt + 1,
+          "observed system discard and its successful rebuild are separate counters");
+    CHECK(atomic_load(&g_pkg_cache_stats.purge_rebuilt_bytes) == purged_bytes + pk->tex.allocatedSize
+          && atomic_load(&g_pkg_cache_stats.rebuilt) == rebuilt, "purge rebuild bytes do not enter active-eviction totals");
+    CHECK(content_ok_from(f, by_id(21), 1) && atomic_load(&g_pkg_cache_stats.purge_rebuilt) == purged_rebuilt + 1,
+          "aliases share one counted rebuild");
+    g_treg[22].table_view = 1;
+    g_sub_serial += PKG_PURGE_IDLE;
+    pkg_trim_current(1, PKG_EVICT_IDLE_CRITICAL, g_done, 0);
+    CHECK(pk->tex && !pk->purgeable, "a package in a cached bindless table is excluded");
+    g_treg[22].table_view = 0;
+    id<MTLTexture> old = pk->tex;
+    const uint64_t ample_headroom = 2ull << 30;
+    g_sub_serial = (g_sub_serial + PKG_EVICT_IDLE_CRITICAL) | 1;
+    pkg_pressure_event(DISPATCH_MEMORYPRESSURE_CRITICAL);
+    pkg_pressure_event(DISPATCH_MEMORYPRESSURE_NORMAL);
+    CHECK(!pkg_trim_ready(), "normal system pressure clears an unserved request");
+    pkg_pressure_event(DISPATCH_MEMORYPRESSURE_WARN);
+    CHECK(pkg_trim_ready(), "warning can trigger a sweep between periodic checks");
+    pkg_trim_cache_for(ample_headroom);
+    CHECK(pk->tex == old && !pkg_trim_ready(), "one warning preserves recently used textures");
+    pkg_pressure_event(DISPATCH_MEMORYPRESSURE_CRITICAL);
+    mtl_sub_begin(); up_begin();
+    CHECK(g_up_cb && !pkg_trim_ready(), "pressure sweep waits for the open upload batch");
+    finish(); up_wait_zero(&g_up_pending, WS_OLDQ);
+    CHECK(pkg_trim_ready(), "pending critical pressure survives waiting for uploads");
+    pkg_trim_cache_for(ample_headroom);
+    CHECK(!pk->tex && !g_treg[22].view, "critical system pressure evicts even with ample app headroom");
+    CHECK(atomic_load(&g_pkg_cache_stats.evicted) == evicted + 1
+          && atomic_load(&g_pkg_cache_stats.evicted_bytes) == evicted_bytes + old.allocatedSize
+          && atomic_load(&g_pkg_cache_stats.rebuilt) == rebuilt, "eviction counts retirement before any rebuild");
+    mtl_sub_begin(); full = tex_mtl_full(&f->t); finish();
+    CHECK(full && full != old && !pk->mip_base && content_ok(f, full), "full resolution is restored after eviction");
+    CHECK(atomic_load(&g_pkg_cache_stats.rebuilt) == rebuilt + 1
+          && atomic_load(&g_pkg_cache_stats.rebuilt_bytes) == rebuilt_bytes + full.allocatedSize,
+          "a successful eviction rebuild records its actual allocation size");
+    CHECK(content_ok_from(f, by_id(21), 1) && content_ok_from(f, by_id(22), 1)
+          && atomic_load(&g_pkg_cache_stats.rebuilt) == rebuilt + 1, "repeated alias sampling does not add rebuilds");
+
+    g_sub_serial += PKG_PURGE_IDLE;
+    pkg_pressure_event(DISPATCH_MEMORYPRESSURE_WARN);
+    pkg_trim_cache_for(ample_headroom);
+    CHECK(!pk->tex, "system warning evicts older textures even with ample app headroom");
+    mtl_sub_begin(); full = tex_mtl_full(&f->t); finish();
+    g_sub_serial += PKG_PURGE_IDLE;
+    pkg_pressure_event(DISPATCH_MEMORYPRESSURE_NORMAL);
+    up_wait_zero(&g_up_pending, WS_OLDQ); // pressure reclamation waits for the upload completion callbacks
+    pkg_trim_cache_for(480ull << 20);
+    CHECK(!pk->tex, "idle copies are reclaimed with 480 MiB headroom before the old 250 MiB threshold");
+    mtl_sub_begin(); full = tex_mtl_full(&f->t); finish();
+    CHECK(full && content_ok(f, full), "early reclamation rebuilds unchanged guest pixels");
+    g_sub_serial += PKG_PURGE_IDLE;
+    tex_gpu_wrote(&f->t);
+    pkg_trim_current(1, PKG_EVICT_IDLE_CRITICAL, g_done, 0);
+    CHECK(pk->tex == full && !pk->purgeable, "a package used for GPU writes is excluded");
+    CHECK(atomic_load(&g_pkg_cache_stats.evicted) == evicted + 3 && atomic_load(&g_pkg_cache_stats.rebuilt) == rebuilt + 3,
+          "critical, warning and headroom evictions each have one successful rebuild");
+    mtl_reg_tex(22, NULL, NULL); mtl_tex_release(&alias);
+    mtl_reg_tex(21, NULL, NULL); drop(f);
+}
+
+static void shader_metadata_probe(const char *key) {
+    g_case = "matching shader metadata reaches native reflection";
+    shmap_read_once();
+    CHECK(g_c1_full_valid && g_cb_ext.count, "matching optimization tables are accepted");
+    NvShader *shader = shader_load(@(key), 1, 0);
+    CHECK(shader && shader->fn, "matching shader loads without a sampled-mip whitelist");
+    if (!shader) return;
+}
 int main(void) { @autoreleasepool {
     mtl_init();
+    const char *metadata = getenv("DM_TEST_METADATA_SHADER");
+    if (metadata) { shader_metadata_probe(metadata); printf("t_partial_upload metadata: %d checks, %d failed\n", checks, failed); return failed != 0; }
     for (int direct = 0; direct < 2; direct++) {
         run("R16 array", NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_R16, 256, 192, 8, 1, 0, direct);
         run("R16 array beside other data", NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_R16, 256, 192, 8, 1, 4096, direct);
@@ -215,6 +423,11 @@ int main(void) { @autoreleasepool {
         run("R16F 1D array", NVN_TEXTURE_TARGET_1D_ARRAY, NVN_FORMAT_R16F, 512, 64, 1, 1, 0, direct);
         run("RGBA8 1D array with levels", NVN_TEXTURE_TARGET_1D_ARRAY, NVN_FORMAT_RGBA8, 256, 8, 1, 4, 4096, direct);
     }
+    first_sampled_mip(0, NVN_FORMAT_RGBA_DXT1); first_sampled_mip(0, NVN_FORMAT_RGBA8); first_sampled_mip(1, NVN_FORMAT_RGBA_DXT1); copy_reduced_asset();
+    CHECK(!atomic_load(&g_pkg_cache_stats.rebuilt) && !atomic_load(&g_pkg_cache_stats.purge_rebuilt),
+          "ordinary CPU updates and mip changes do not count as reclamation rebuilds");
+    low_memory_assets();
     cost();
+    mtl_mem_stat(300, 0);
     printf("t_partial_upload: %d checks, %d failed\n", checks, failed); return failed != 0;
 } }

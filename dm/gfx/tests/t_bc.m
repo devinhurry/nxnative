@@ -159,12 +159,17 @@ static void linear_blocks(void) {
 static void transcodes(void) {
     CHECK("transcoding test uses the fallback", g_no_bc);
     tex_t probe=texture(NVN_TEXTURE_TARGET_2D,1,10999);probe.d.format=0x41;uint32_t probe_pf=0;
-    unsetenv("DM_LOW_MEMORY");setenv("DM_NVN_BC_TRANSCODE","1",1);g_bc_transcode_on=-1;
-    CHECK("component flag cannot bypass the low-memory preset",!bc_sampled_format(&probe,&probe_pf));
-    setenv("DM_LOW_MEMORY","1",1);setenv("DM_NVN_BC_TRANSCODE","0",1);g_bc_transcode_on=-1;
-    CHECK("explicit disable preserves decoding in low-memory mode",!bc_sampled_format(&probe,&probe_pf));
-    unsetenv("DM_NVN_BC_TRANSCODE");g_bc_transcode_on=-1;
-    CHECK("low-memory mode selects transcoding on the no-BC path",bc_sampled_format(&probe,&probe_pf)&&probe_pf==MTLPixelFormatASTC_4x4_LDR);
+    const char *modes[] = {NULL, "0", "1"};
+    for (unsigned i=0;i<3;i++) {
+        if(modes[i])setenv("DM_LOW_MEMORY",modes[i],1);else unsetenv("DM_LOW_MEMORY");
+        unsetenv("DM_NVN_BC_TRANSCODE");g_bc_transcode_on=-1;
+        CHECK("no-BC transcoding defaults on independently of low-memory mode",bc_sampled_format(&probe,&probe_pf)&&probe_pf==MTLPixelFormatASTC_4x4_LDR);
+        setenv("DM_NVN_BC_TRANSCODE","0",1);g_bc_transcode_on=-1;
+        CHECK("explicit disable preserves decoded fallback in every memory mode",!bc_sampled_format(&probe,&probe_pf));
+    }
+    setenv("DM_LOW_MEMORY","0",1);unsetenv("DM_NVN_BC_TRANSCODE");g_bc_transcode_on=-1;
+    int fallback=g_no_bc;g_no_bc=0;
+    CHECK("native BC bypasses fallback transcoding",!bc_sampled_format(&probe,&probe_pf));g_no_bc=fallback;
     const unsigned formats[] = {0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48,0x49,0x4b,0x4d,0x4e};
     for (unsigned fi=0;fi<sizeof formats/sizeof *formats;fi++) {@autoreleasepool {
         unsigned f=formats[fi]; int bw,bh,bb=nvn_fmt_bpb(f,&bw,&bh); uint8_t block[16]={0};
@@ -176,7 +181,7 @@ static void transcodes(void) {
         void *mem=NULL;CHECK("transcode pool allocated",!posix_memalign(&mem,getpagesize(),65536));memset(mem,0,65536);
         pool_t pool={.magic=MAGIC('P','O','O','L'),.mem=mem,.size=65536,.flags=NVN_MEMORY_POOL_FLAGS_CPU_CACHED|NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
         tex_t t={.magic=MAGIC('T','E','X',0),.serial=11000+f,.pool=&pool,.mem=mem,.has_layout=1};
-        t.d=(nvn_texdesc){.target=NVN_TEXTURE_TARGET_2D_ARRAY,.format=f,.width=12,.height=8,.depth=2,.levels=3,.samples=1};nvn_tex_layout(&t.d,&t.L);
+        t.d=(nvn_texdesc){.target=NVN_TEXTURE_TARGET_2D_ARRAY,.format=f,.width=12,.height=8,.depth=2,.levels=3,.samples=1};t.d.flags=NVN_TEXTURE_FLAGS_IMAGE;nvn_tex_layout(&t.d,&t.L);
         for(unsigned lv=0;lv<3;lv++)for(unsigned sl=0;sl<2;sl++) {
             unsigned w=MAX(12u>>lv,1u),h=MAX(8u>>lv,1u);size_t row=((w+3)/4)*bb,n=row*((h+3)/4);uint8_t bytes[96];
             for(size_t i=0;i<n;i+=bb)memcpy(bytes+i,block,bb);
@@ -227,8 +232,117 @@ static void transcodes(void) {
     g_no_bc=0;t.d.format=0x41;
     CHECK("native BC bypasses transcoding",!bc_sampled_format(&t,&pf));g_no_bc=1;
 }
+// The large-array shape from memory diagnostics: sample only a few pixels per
+// layer so the probe itself does not allocate a full RGBA32F readback image.
+static void gpu_initial_fill(void) {
+    tex_t t={.magic=MAGIC('T','E','X',0),.serial=12400};
+    t.d=(nvn_texdesc){.target=NVN_TEXTURE_TARGET_2D_ARRAY,.format=0x46,.width=12,.height=8,.depth=2,.levels=4,.samples=1,.flags=NVN_TEXTURE_FLAGS_IMAGE};
+    nvn_tex_layout(&t.d,&t.L);void *mem=NULL;size_t size=(t.L.size+getpagesize()-1)&~(size_t)(getpagesize()-1);
+    CHECK("GPU-only initial source allocated",!posix_memalign(&mem,getpagesize(),size));memset(mem,0,size);
+    uint8_t plane[48],block[8]={0,0xf8,0,0,0,0,0,0};for(unsigned i=0;i<sizeof plane;i+=8)memcpy(plane+i,block,8);
+    for(unsigned l=0;l<4;l++)for(unsigned a=0;a<2;a++)CHECK("GPU-only initial source swizzled",!nvn_swizzle(&t.d,l,a,plane,((MAX(12u>>l,1u)+3)/4)*8,mem));
+    pool_t pool={.magic=MAGIC('P','O','O','L'),.mem=mem,.size=size,.flags=NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS|NVN_MEMORY_POOL_FLAGS_GPU_CACHED};t.mem=mem;t.pool=&pool;
+    mtl_pool_add(mem,size);mtl_tex_init(&t);mtl_sub_begin();id<MTLTexture> image=tex_mtl(&t);finish();
+    CHECK("GPU-only initial fill keeps its writable decoded destination",image.pixelFormat==MTLPixelFormatRGBA8Unorm_sRGB);
+    for(unsigned l=0;l<4;l++) {
+        id<MTLBuffer> out=pixels(image,l);const float *values=out.contents;int good=1;
+        for(NSUInteger i=0;i<out.length/sizeof(float);i++)good&=isfinite(values[i])&&fabsf(values[i]-(i%4==0||i%4==3))<.006f;
+        CHECK("GPU-only initial fill preserves every layer and mip",good);
+    }
+    mtl_tex_release(&t);mtl_alias_drop_pool(&pool);mtl_pool_del(mem);mtl_drain();free(mem);
+}
+static void sampled_mips(int image_hint, int late) {
+    CHECK("sampled mip regression uses independent texture optimization with BC fallback", texture_optimization_on() && g_no_bc);
+    tex_t t={.magic=MAGIC('T','E','X',0),.serial=12500,.has_layout=1};
+    t.d=(nvn_texdesc){.target=NVN_TEXTURE_TARGET_2D_ARRAY,.format=0x46,.width=1024,.height=1024,.depth=83,.levels=11,.samples=1};
+    if(image_hint)t.d.flags|=NVN_TEXTURE_FLAGS_IMAGE;
+    nvn_tex_layout(&t.d,&t.L);
+    size_t size=(t.L.size+getpagesize()-1)&~(size_t)(getpagesize()-1);void *mem=NULL;
+    CHECK("large BC array source allocated",!posix_memalign(&mem,getpagesize(),size));memset(mem,0,size);
+    pool_t pool={.magic=MAGIC('P','O','O','L'),.mem=mem,.size=size,.flags=NVN_MEMORY_POOL_FLAGS_CPU_CACHED|NVN_MEMORY_POOL_FLAGS_GPU_CACHED};
+    t.pool=&pool;t.mem=mem;
+    uint8_t *plane=malloc(1024*1024/2),block[8]={0,0xf8,0,0,0,0,0,0};
+    for(size_t i=0;i<1024*1024/2;i+=8)memcpy(plane+i,block,8);
+    for(unsigned l=0;l<t.d.levels;l++)for(unsigned a=0;a<t.d.depth;a++)
+        CHECK("large BC array source swizzled",!nvn_swizzle(&t.d,l,a,plane,((MAX(1024u>>l,1u)+3)/4)*8,mem));
+    free(plane);mtl_pool_add(mem,size);nvn_dirty_add_range(mem,size);mtl_tex_init(&t);mtl_reg_tex(701,&t,NULL);
+    if(late) {
+        mtl_sub_begin();id<MTLTexture> initial=tex_mtl(&t);finish();
+        CHECK("unclassified first use already omits mip 0",initial.width==512&&initial.mipmapLevelCount==10);
+        mtl_sub_begin();void *cached=NULL;os_unfair_lock_lock(&g_rmu);tex_fast_rid(701,&cached);os_unfair_lock_unlock(&g_rmu);finish();
+        CHECK("unknown descriptor also keeps the reduced copy",((__bridge id<MTLTexture>)cached).width==512);
+        printf("unclassified BC1 array: %llu KiB at the first unclassified lookup\n",(unsigned long long)(initial.allocatedSize>>10));
+    }
+    mtl_sub_begin();void *view=NULL;os_unfair_lock_lock(&g_rmu);tex_fast_rid(701,&view);os_unfair_lock_unlock(&g_rmu);
+    id<MTLTexture> reduced=(__bridge id<MTLTexture>)view;finish();
+    CHECK("mip-0 binding first allocates the 512 array",reduced.width==512&&reduced.height==512&&reduced.arrayLength==83&&reduced.mipmapLevelCount==10);
+    CHECK("reduced BC1 sampling uses ASTC sRGB",reduced.pixelFormat==MTLPixelFormatASTC_4x4_sRGB);
+    CHECK("reduced sampled allocation stays below 32 MiB",reduced.allocatedSize<(32ull<<20));
+    printf("sampled BC1 1024x1024x83: sampled copy %llu KiB, retained blocks %llu KiB (512x512x83)\n",(unsigned long long)(reduced.allocatedSize>>10),(unsigned long long)(bc_info(reduced)->blocks.length>>10));
+    NSError *error=nil;
+    NSString *source=@"#include <metal_stdlib>\nusing namespace metal;kernel void probe(texture2d_array<float> t[[texture(0)]],device float4* o[[buffer(0)]],device uint4* dims[[buffer(1)]],uint3 p[[thread_position_in_grid]]){if(p.x==0&&p.y==0)dims[0]=uint4(t.get_width(),t.get_height(),t.get_num_mip_levels(),t.get_array_size());constexpr sampler s(coord::normalized,address::clamp_to_edge,filter::nearest);o[p.y*83+p.x]=(t.sample(s,float2(.25,.75),p.x,level(p.y))+t.read(uint2(0),p.x,p.y))*.5f;}";
+    id<MTLLibrary> lib=[g_dev newLibraryWithSource:source options:nil error:&error];
+    id<MTLComputePipelineState> ps=[g_dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"probe"] error:&error];
+    CHECK("normalized sampling probe compiles",ps!=nil);
+    for(int full=0;full<2;full++) {
+        id<MTLTexture> image=reduced;
+        if(full) {
+            mtl_sub_begin();os_unfair_lock_lock(&g_rmu);tex_fast_rid(701,&view);os_unfair_lock_unlock(&g_rmu);image=(__bridge id<MTLTexture>)view;finish();
+            CHECK("unknown integer/size-query binding keeps the same reduced allocation",image==reduced&&image.width==512&&image.arrayLength==83&&image.mipmapLevelCount==10);
+        }
+        id<MTLBuffer> out=[g_dev newBufferWithLength:83*image.mipmapLevelCount*16 options:MTLResourceStorageModeShared];
+        id<MTLBuffer> dims=[g_dev newBufferWithLength:16 options:MTLResourceStorageModeShared];
+        id<MTLCommandBuffer> cb=q_cb();id<MTLComputeCommandEncoder> e=[cb computeCommandEncoder];
+        [e setComputePipelineState:ps];[e setTexture:image atIndex:0];[e setBuffer:out offset:0 atIndex:0];[e setBuffer:dims offset:0 atIndex:1];
+        [e dispatchThreads:MTLSizeMake(83,image.mipmapLevelCount,1) threadsPerThreadgroup:MTLSizeMake(8,1,1)];
+        [e endEncoding];[cb commit];[cb waitUntilCompleted];
+        CHECK("sampling and integer-read probe completes",cb.status==MTLCommandBufferStatusCompleted);
+        const uint32_t *shape=dims.contents;
+        CHECK("shader dimensions describe the reduced copy",shape[0]==512&&shape[1]==512&&shape[2]==10&&shape[3]==83);
+        const float *values=out.contents;int good=1;
+        for(NSUInteger i=0;i<out.length/sizeof(float);i++)good&=isfinite(values[i])&&fabsf(values[i]-(i%4==0||i%4==3))<.006f;
+        CHECK("every layer and mip retains the expected sampled colour",good);
+    }
+    if(late) {
+        NvPkg *pkg=tex_get(t.serial);
+        uint64_t evicted=atomic_load(&g_pkg_cache_stats.evicted), rebuilt_count=atomic_load(&g_pkg_cache_stats.rebuilt);
+        uint64_t rebuilt_bytes=atomic_load(&g_pkg_cache_stats.rebuilt_bytes);
+        up_wait_zero(&g_up_pending,WS_OLDQ);g_sub_serial+=PKG_PURGE_IDLE;
+        pkg_trim_current(reduced.allocatedSize,PKG_PURGE_IDLE,g_done,0);
+        CHECK("idle compressed copy is retired and its descriptor invalidated",!pkg->tex&&!g_treg[701].view);
+        mtl_sub_begin();os_unfair_lock_lock(&g_rmu);tex_fast_rid(701,&view);os_unfair_lock_unlock(&g_rmu);finish();
+        id<MTLTexture> rebuilt=(__bridge id<MTLTexture>)view;
+        CHECK("pressure rebuild retains reduced dimensions and compressed format",rebuilt!=reduced&&rebuilt.width==512&&rebuilt.mipmapLevelCount==10&&rebuilt.pixelFormat==MTLPixelFormatASTC_4x4_sRGB&&pkg->mip_base==1);
+        CHECK("compressed cache counts one eviction and one successful rebuild",atomic_load(&g_pkg_cache_stats.evicted)==evicted+1&&atomic_load(&g_pkg_cache_stats.rebuilt)==rebuilt_count+1);
+        CHECK("compressed rebuild bytes use the smaller ASTC allocation",atomic_load(&g_pkg_cache_stats.rebuilt_bytes)==rebuilt_bytes+rebuilt.allocatedSize);
+        id<MTLBuffer> color=[g_dev newBufferWithLength:16 options:MTLResourceStorageModeShared];
+        id<MTLBuffer> dims=[g_dev newBufferWithLength:16 options:MTLResourceStorageModeShared];
+        id<MTLCommandBuffer> cb=q_cb();id<MTLComputeCommandEncoder> e=[cb computeCommandEncoder];
+        [e setComputePipelineState:ps];[e setTexture:rebuilt atIndex:0];[e setBuffer:color offset:0 atIndex:0];[e setBuffer:dims offset:0 atIndex:1];
+        [e dispatchThreads:MTLSizeMake(1,1,1) threadsPerThreadgroup:MTLSizeMake(1,1,1)];[e endEncoding];[cb commit];[cb waitUntilCompleted];
+        const float *c=color.contents;
+        CHECK("rebuilt ASTC copy samples original guest content",cb.status==MTLCommandBufferStatusCompleted&&fabsf(c[0]-1)<.006f&&fabsf(c[1])<.006f&&fabsf(c[2])<.006f&&fabsf(c[3]-1)<.006f);
+    }
+    uint8_t raw[8];NVNcopyRegion r={0,0,0,4,4,1};mtl_read_texels(&t,0,0,&r,raw,8,8);
+    CHECK("CPU readback still returns original mip-0 BC data",!memcmp(raw,block,8));
+    CHECK("reading guest bytes does not recreate the full GPU copy",((NvPkg *)tex_get(t.serial))->mip_base==1);
+    if(image_hint) {
+        mtl_sub_begin();id<MTLTexture> full=tex_mtl_full(&t);tex_gpu_wrote(&t);
+        id<MTLTexture> writable=tex_upgrade(&t,full,MTLTextureUsageShaderWrite,full.pixelFormat);finish();
+        CHECK("actual image-write intent restores full-sized writable pixels",writable.width==1024&&writable.pixelFormat==MTLPixelFormatRGBA8Unorm_sRGB&&(writable.usage&MTLTextureUsageShaderWrite));
+        CHECK("actual writes exclude later sampled mip reduction",((NvPkg *)tex_get(t.serial))->gpu_written);
+        mtl_sub_begin();os_unfair_lock_lock(&g_rmu);tex_fast_rid(701,&view);os_unfair_lock_unlock(&g_rmu);finish();
+        CHECK("a GPU-written array stays full sized",((__bridge id<MTLTexture>)view).width==1024);
+    }
+    mtl_reg_tex(701,NULL,NULL);mtl_tex_release(&t);mtl_alias_drop_pool(&pool);nvn_dirty_remove_range(mem);mtl_pool_del(mem);mtl_drain();free(mem);
+    gpu_initial_fill();
+}
 int main(int argc,char **argv){@autoreleasepool{mtl_init();if(!g_dev.supportsBCTextureCompression){puts("native BC differential reference unavailable");return 77;}
-    if(argc>1&&!strcmp(argv[1],"--transcode"))transcodes();
+    if(argc>1&&!strcmp(argv[1],"--sampled-mips"))sampled_mips(0,0);
+    else if(argc>1&&!strcmp(argv[1],"--sampled-mips-image"))sampled_mips(1,0);
+    else if(argc>1&&!strcmp(argv[1],"--sampled-mips-late"))sampled_mips(0,1);
+    else if(argc>1&&!strcmp(argv[1],"--sampled-mips-image-late"))sampled_mips(1,1);
+    else if(argc>1&&!strcmp(argv[1],"--transcode"))transcodes();
     else {g_bc_transcode_on=0;formats();copies();render_blocks(NVN_TEXTURE_TARGET_2D_ARRAY,2,9993);render_blocks(NVN_TEXTURE_TARGET_3D,3,9994);linear_blocks();alias_blocks();}
     printf("t_bc (%s): %d checks, %d failed\n",g_no_bc?"fallback":"native",checks,failed);return failed!=0;
 }}
