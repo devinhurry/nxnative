@@ -386,14 +386,23 @@ For a replaced DSP renderer the size query keeps the service's work-buffer contr
 
 - **Symptom:** the light limiter crashed on a null state pointer (`ApplyLightLimiterEffect`, `sdk+0x228494`).
 - **Cause:** an effect's "needs init" parameter state is set only in the update where the game flags it new; the next update copies the game's value over it. Mario updates twice in a row at start-up; with a real audio device the first frame came after both.
-- **Fix:** the `AudioRenderSystem::Update` hook renders a catch-up frame first when nothing was rendered since the last update.
+- **Fix:** clear the event actually signalled by the CPU/manual renderer on a successful SDK update, atomically against rendering. This follows Horizon event ordering and discards stale signals without synchronous catch-up frames (upstream `67e6714`). The former catch-up queue is removed.
 - **Found on:** [Super Mario Bros. Wonder](../../dm/games/010015100B514000/README.md).
-- **Check:** `DM_AUDREN_TRACE=1` logs every update with the number of frames rendered since the previous one.
+- **Check:** `t_audren_layout` covers successful/failed updates, repeated polls without rendering, a concurrent update during the paced wait, and event-driven refill at 48 kHz/240 and 512 frames. `DM_AUDREN_TRACE=1` retains its initial-update trace.
 
 ### A sound driver that never waits on the renderer event
 
 - **Symptom:** the sound runs about 50 times faster than the output; the loop runs 11,000 updates a second on one core.
 - **Cause:** Square Enix's `SQEX::Sd::Driver::Core::CoreAudioOut` (its loop at `main+0x442c5c0`) appends a wave buffer, mixes the next block on the same thread, calls `RequestUpdate` and takes the next released buffer. It waits on the renderer event only when no buffer is released. Every update there finds no frame rendered since the last one and renders a catch-up frame, which releases the buffer just appended, so the loop never waits. When a full catch-up queue discarded the frame, the loop ran unchecked.
-- **Fix:** an update with a full queue waits (at most 50 ms) for the render thread to play one queued frame, so catch-up frames keep real time (`hle_audren.c`). The render thread then only plays queued frames, and the driver's updates render every frame. A queued frame does not signal the renderer event (the SDK signals it in each render): signalled, an ordinary game woke, updated with nothing rendered since and rendered the next catch-up frame, so every frame became one ([Big Brain Academy: Brain vs. Brain](../../dm/games/0100620012D6E000/README.md), about 38,000 catch-up renders instead of 37).
+- **Fix:** remove synchronous catch-up rendering and its full-queue wait. A successful update clears the renderer event; the polling driver consumes released wave buffers, then waits for a fresh render when none is free. Only the output-paced render thread advances audio. The former queue is historical, not current behaviour.
 - **Found on:** [DRAGON QUEST XI S: Echoes of an Elusive Age – Definitive Edition](../../dm/games/01006C300E9F0000/README.md).
 - **Check:** `audren: rendered 12000 frames, N of them not silent` shows whether a game's sound reaches the output.
+
+
+### Audio timing under load
+
+- **Symptom:** normal gameplay audio crackles despite a full output queue and fast mixing; alternatively a delayed producer can drain the queue despite fast mixing.
+- **Cause:** stale renderer events and back-to-back fresh renders can bunch updates, while ordinary interactive QoS gives a 5 ms producer no deadline. A full output queue only rules out host zero-padding in that reported window, not malformed timing in the audio it contains.
+- **Fix:** backport upstream `79f28b0` pacing, `2edad1828de2` producer scheduling and `67e6714` event clearing. Keep four output buffers, space fresh renders by at least 4.5 ms after prefill, and request preemptible real-time scheduling (5 ms period/constraint, 1 ms requested computation). The kernel can adjust the accepted budget. Set `DM_AUDREN_RT=0` to compare default scheduling; a rejected request preserves PCM output. Device setup and teardown run outside real-time scheduling. No mixer, volume or codec changes.
+- **Found on:** [Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md), iPhone report and static SDK audit; causal attribution of its audible distortion and on-device acceptance remain open. Upstream scheduling was first reported on Ocarina of Time (#3059), and burst pacing on Animal Crossing: New Horizons (#2983).
+- **Check:** `t_audren_layout` verifies ordered stereo PCM without simulated underruns at 44.1 kHz/256 frames and 48 kHz/512 frames, stale-event removal, and policy success/rejection/opt-out plus real Mach set/read/reset. Host fixtures do not prove iPhone playback or power behaviour.

@@ -146,3 +146,29 @@ General host changes first needed here; each applies to every game:
 - Ground textures drawn as a checkerboard of blocks at different levels of detail that fill in over a few seconds (iPad Pro M5, GitHub issue #471, second part); the only red line is `texture type mismatch: shader 9808aabbd3219e97_b (stage 1) declares slot 1 as Metal type 2, texture ID … is type 7`. Not investigated.
 - Texture layout: NVN's automatic block height now truncates for every game (`pick_tile(ah * 3 / 16)`). That changes layouts at 6–10, 17–21, 38–42 and 81–85 block rows, which matters for this game's flushed textures. Not re-checked here.
 - `game.tsv` still describes the game as "In bring-up", and some memory values as "Breath of the Wild's", not measured for this game.
+
+
+## Audio timing audit (2026-11-24)
+
+An iPhone A19 Pro report built with TouchNX `c401ddc` and backend `27e9670b`
+keeps four output blocks and zero underruns in normal late-game windows. Mixing
+averages 0.06-0.22 ms of a 5 ms budget; the last window adds 17 catch-up frames.
+Large underrun windows align with settings pauses/backgrounding, and are not
+proof of the normal-play distortion. Heat and the enabled frame interpolator
+are correlated settings, not an established cause.
+
+Static audit of the player's SDK 20.5.22 (1.4.3) confirms the mismatch addressed
+by upstream `67e6714`: `AudioRenderSystem::UpdateImpl` at `sdk+0x229c24`
+locks `sys+0x2d0` and calls `ClearSystemEvent(*(sys+0x2a0))` at `+0x229d3c`.
+CPU/manual `OpenAudioRenderer` (`+0x2218c0`) instead creates a separate event,
+kept through `handle[1]`; public Execute signals that object at `+0x221ec0`.
+The host now clears the actual event atomically against rendering, removes
+synchronous catch-up, and adopts upstream burst pacing and producer scheduling:
+[Audio timing under load](../../../docs/reference/audio.md#audio-timing-under-load).
+
+Validation: both audio fixture suites pass with TOTK and BOTW profiles; ASan/UBSan
+and TSan pass, as do the six documentation checks. The changed audio source compiles
+for both iOS profiles. The environment-switch audit has the same pre-existing
+failures as backend `27e9670b`, with no new finding. No Mac gameplay was run for
+this iOS task. iPhone playback, thermal behaviour and confirmation that these
+defects caused the reported distortion remain unverified. No shader inputs or game executable patches change.

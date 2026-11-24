@@ -106,6 +106,8 @@ void hle_bind_system_event(void *ev, int ac) {
     assert(ev == sdk_event && ac == 1 && event_destroys == 2 * event_binds + 1);   // after the open destroys the SDK's local event (each earlier Close destroyed one more)
     event_binds++;
 }
+void dm_host_lock(pthread_mutex_t *m) { pthread_mutex_lock(m); }
+void hle_clear_system_event(void *ev) { assert(ev == sdk_event); }
 uint32_t hle_dup_readable_handle(uint32_t h) { assert(h == 0x1002); return 0x1003; }
 
 int main(void) {
@@ -153,6 +155,7 @@ int main(void) {
         assert(handle[0] != work && map_value == backing);
         assert(((uint8_t *)work)[0] == 0xa5 && ((uint8_t *)work)[SERVICE_WORK - 1] == 0xa5);
         assert(!memcmp(param, saved, sizeof param));
+        assert(g_ar[0].ev == (route ? sdk_event : NULL) && g_ar[0].ev_kernel == !!route);
         if (route) {
             assert((uint8_t *)sdk_event >= (uint8_t *)g_rev && (uint8_t *)sdk_event < (uint8_t *)(g_rev + 4));
             assert(g_ar[0].handle[1] == (event_in_handle ? sdk_event : (uint8_t *)sdk_work + 0x80));
@@ -161,6 +164,7 @@ int main(void) {
         int d = event_destroys;
         h_ar_Close(handle[0], handle[1]);
         assert(!backing && !map_key && allocations == frees && closes == c + 1 && joins == starts);
+        assert(!g_ar[0].ev && !g_ar[0].ev_kernel);
         assert(event_destroys == d + !!route && !rev_find(handle[0]));   // Close destroys the renderer's event and frees its slot
     }
     event_in_handle = nested = 0;
