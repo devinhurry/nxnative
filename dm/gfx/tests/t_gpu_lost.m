@@ -16,7 +16,7 @@ static int checks, failed;
 static NSError *nested(NSString *domain, NSInteger code, NSError *under) {   // as Metal 4 reports a command buffer's error: the cause under NSUnderlyingErrorKey and NSMultipleUnderlyingErrorsKey
     return [NSError errorWithDomain:domain code:code userInfo:under ? @{NSUnderlyingErrorKey: under, NSMultipleUnderlyingErrorsKey: @[under]} : nil];
 }
-static int revoked(NSError *e) { return gpu_err_has(e, MTL4CommandQueueErrorAccessRevoked, 0); }
+static int revoked(NSError *e) { return gpu_access_revoked(e); }
 static uint64_t submit_wait(int *ok, double *ms) {   // one empty submission and the game's SyncWait on it
     mtl_sub_begin(); uint64_t f = mtl_sub_commit();
     uint64_t t0 = now_ns(); *ok = mtl_wait(f, WAIT_NS); *ms = (now_ns() - t0) / 1e6;
@@ -33,7 +33,7 @@ static tex_t picture(void) {
     // NOLINTEND(clang-analyzer-osx.cocoa.RetainCount)
 }
 static int present_asks(const tex_t *t) { int before = atomic_load(&g_layer_asks); mtl_present_wait(mtl_present(t, 1. / 60, NULL, NULL)); return atomic_load(&g_layer_asks) - before; }
-int main(void) { @autoreleasepool {
+int main(int argc, char **argv) { @autoreleasepool {
     alarm(60); setvbuf(stdout, NULL, _IONBF, 0);
     setenv("DM_TEST_GPU_LOST", "3", 1);
     setenv("DM_PRESENT_LINK", "0", 1); setenv("DM_PRESENT_SNAP", "0", 1);   // presents on the present thread, straight from the game's texture
@@ -44,6 +44,11 @@ int main(void) { @autoreleasepool {
     CHECK("a page fault is not taken for it", !revoked(nested(mtl4, MTL4CommandQueueErrorTimeout, nested(mtl4, MTL4CommandQueueErrorNotPermitted, nested(iogpu, 11, nil)))));
     CHECK("a hang is not taken for it", !revoked(nested(mtl4, MTL4CommandQueueErrorTimeout, nested(mtl4, MTL4CommandQueueErrorTimeout, nested(iogpu, 3, nil)))));
     CHECK("no error is not taken for it", !revoked(nil));
+    CHECK("classic queue access revocation is recognized", revoked(nested(MTLCommandBufferErrorDomain, MTLCommandBufferErrorAccessRevoked, nil)));
+    CHECK("nested classic queue access revocation is recognized", revoked(nested(mtl4, MTL4CommandQueueErrorTimeout, nested(MTLCommandBufferErrorDomain, MTLCommandBufferErrorAccessRevoked, nil))));
+    CHECK("a classic background access denial permits recovery", !revoked(nested(MTLCommandBufferErrorDomain, MTLCommandBufferErrorNotPermitted, nil)));
+    CHECK("a classic isolated timeout permits recovery", !revoked(nested(MTLCommandBufferErrorDomain, MTLCommandBufferErrorTimeout, nil)));
+    CHECK("an IOGPU code matching classic access revocation is innocent", !revoked(nested(iogpu, MTLCommandBufferErrorAccessRevoked, nil)));
 
     mtl_init();
     tex_t pic = picture();
@@ -52,6 +57,8 @@ int main(void) { @autoreleasepool {
     CHECK("submissions before run as before", ok && !atomic_load(&g_gpu_lost) && !atomic_load(&test_gpu_lost_calls) && !mtl_last_commit_error());
     CHECK("a present before asks for the layer", present_asks(&pic) == 1);
 
+    if (argc > 1 && !strcmp(argv[1], "--classic"))
+        gpu_lost_check(nested(MTLCommandBufferErrorDomain, MTLCommandBufferErrorAccessRevoked, nil), "keep-alive");
     f = submit_wait(&ok, &ms);
     printf("submission %llu (revoked): SyncWait %s in %.1f ms, shared event at %llu\n", (unsigned long long)f, ok ? "returned" : "timed out", ms, (unsigned long long)g_ev.signaledValue);
     CHECK("the front end is told", atomic_load(&g_gpu_lost) && atomic_load(&test_gpu_lost_calls) == 1);

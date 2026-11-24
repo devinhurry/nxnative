@@ -120,6 +120,7 @@ DM_MOTION_HID	switch	On the Mac, `0` disables the passive Switch Pro Controller 
 DM_MOTION_LOG	diagnostic	`=1` logs player 1's mapped motion sample once a second per source (phone / GameController / controller HID; acceleration in G, gyro in revolutions/s), for checking the axes: flat and still reads acc 0 0 -1
 DM_MOVIE_TRACE	diagnostic	When set, the movie decoder logs every call with its thread and decoder (by default the first 12 calls, then every 2^k-th)
 DM_MSL_DIR	path	Parent folder of the shader libraries: NVN loads from `b-<chain version>/` or the one file `b-<chain version>.img` beneath it, Vulkan from `vk/`, GL from `gl/`; the app and the Mac launcher set it
+DM_NATIVE_30_GPU_KEEPALIVE	player	GPU keep-alive between heavy native 30 fps frames on iOS (on by default). Set to 0 to disable.
 DM_NDVE_ENGINE	switch	`0` runs nn::ndve's movie network (Ocarina of Time's title and opening movies) as the game's 12 translated dispatches after its colour conversion instead of the host's kernels (dm/gfx/msl/ndve_engine.metal, on by default: the same output, about half the frame's GPU time on an M4 Pro); `ab` alternates with DM_AB; `check` runs the game's dispatches and the host's network beside them and logs every 300 frames how many texels of the two differ. The host's kernels take only the model they were written for, bound by its shaders' keys and its weights' layout (docs/reference/shaders.md, The NDVE movie network by the host)
 DM_NICK	switch	The account nickname the game sees (default `Player`)
 DM_NRO	switch	`0` turns off loading of the NRO modules the game's NRR files register (on by default): every `nn::ro::LoadModule` then fails
@@ -265,7 +266,7 @@ DM_NVN_VSDUMP	path	Output file for post-vertex captures; used with DM_NVN_VSDUMP
 DM_NVN_VSDUMP_FROM	diagnostic	First presented frame eligible for a post-vertex capture (default 0)
 DM_NVN_VSDUMP_KEY	diagnostic	Vertex key to capture, or `*` for all eligible vertex shaders; storage-writing shaders are excluded
 DM_NVN_VSDUMP_MAX	diagnostic	Maximum post-vertex captures (default 1, or 256 for the wildcard key)
-DM_NVN_WAITS	diagnostic	`=1` turns on the wait ledger: every place a host or game thread waits on the CPU for the GPU or the encode thread, counted per frame
+DM_NVN_WAITS	diagnostic	`=1` turns on the wait ledger: every place a host or game thread waits on the CPU for the GPU or the encode thread, counted per frame; also enables the native-30 GPU keep-alive summary every 300 source frames
 DM_NVN_XV	switch	`0` turns off the cross-submission attachment validity ledger, which skips write-backs of colour attachments cleared before their next use (on by default, only with `DM_NVN_TBDR` on)
 DM_NVN_ZBLOCK	diagnostic	`=1` logs (`[zb]`) the all-zero blocks per level of each ASTC texture uploaded on the CPU (magenta when drawn); `=<folder>` also writes the raw storage of the first one per format and size
 DM_NVN_ZSKIP	switch	`0` turns off the zero-source skip, which drops a draw whose fragment shader is proven to write 0 over targets already 0 (on by default, only with `DM_NVN_TBDR` on)
@@ -355,7 +356,10 @@ DM_RESOURCE_TITLE	switch	Game profile title ID, written to `Gen/resources.env` b
 DM_RESOURCE_VERSION	switch	Display version, written to `Gen/resources.env` by `gen_resources.py`; with `DM_COPY_ROMFS=NO` the copy phase puts it in the `version=` field of the app's `romfs.id`
 DM_RES_CHECK	diagnostic	`=1` prints the first 40 textures or buffers a shader reaches through its argument block that are not in the residency set (textures attributed to their parent allocation)
 DM_RES_WARM	switch	`0` disables background residency preparation (default on); native commits still apply their queues and synchronize resources; restart required
+DM_REWRITE_EXTENSION	path	Optional Python extension loaded by the offline module rewriter.
+DM_REWRITE_INPUTS	path	Extra input paths recorded in the offline rewrite fingerprint, separated by the platform path separator.
 DM_REWRITE_J	switch	`=<positive integer>`: worker processes per module for `patch_nso.py`'s x18 scan and spin wait search; `=1` runs serially. Default: one per core directly, an automatic per-module budget in the NSP script. An explicit value overrides that budget
+DM_REWRITE_OUTPUTS	path	Additional output files required to reuse an offline rewrite, separated by the platform path separator.
 DM_ROMFS	path	The game's RomFS folder, mounted read-only as `rom` (default `$DM_ROOT/romfs`); the Mac launcher, the iOS app and the NSP script set it
 DM_ROMFS_OVERLAY	path	`=<dir>[:<dir>…]`: RomFS reads look in these folders first, in order, and fall back to `DM_ROMFS` (for a modified copy of some files)
 DM_ROOT	path	Workspace root (default `~/dm-work`): the host's and tools' default paths (RomFS, temporary storage, shader libraries under `build/cache/metal_shader_cache`, probe dumps) are under it
@@ -413,6 +417,7 @@ DM_TEST_KEYRACE	diagnostic	`=<n>` creates up to n (at most 512) pthread keys on 
 DM_TEST_KILL_AT	diagnostic	`=write:<n>` exits the process (`_exit(9)`) at the nth save write, imitating a kill mid-write
 DM_TEST_LEAK_GPU	diagnostic	`=1` allocates and keeps a 1 MB shared Metal buffer every 100 ticks: a GPU memory leak on demand
 DM_TEST_LINK_STALL	diagnostic	`=<start s>,<duration s>`: counting from the first present, pauses the display link at that point for that long, to check the present fallback
+DM_TEST_METADATA_SHADER	test	Shader used by the partial-upload test for its metadata probe.
 DM_TEST_NO_BC	diagnostic	`=1` forces capability-selected GPU BC1-7 decoding on a device with native BC support; test uploads, raw copies, views and block render targets without changing shader libraries
 DM_TEST_NO_METAL4	diagnostic	`=1` treats the GPU as one without Metal 4, as on a virtual Mac: the NVN layer starts only its classic part and drops every present
 DM_TEST_PRESENT_LAG	diagnostic	`=<every n>,<ms>[,<in a row>][;…]` sleeps that long before every nth present (and the ones after it in the run): a slow frame on demand

@@ -224,22 +224,27 @@ static _Atomic int g_up_pending;
 // discarded as the victim of another's error comes back with a timeout too while the game goes on, as it did in #1326's second run
 static _Atomic int g_gpu_lost;
 void front_gpu_lost(void);
-__attribute__((weak)) void front_gpu_lost(void) { MDIE("GPU access revoked: macOS runs none of this process's GPU work any more"); }   // the Mac front end leaves full screen, says why and quits
+__attribute__((weak)) void front_gpu_lost(void) { MDIE("GPU access revoked: Metal runs none of this process's GPU work any more"); }   // the Mac front end leaves full screen, says why and quits
 static void gpu_lost_release(void) {
     static os_unfair_lock lk = OS_UNFAIR_LOCK_INIT;   // never lower it
     os_unfair_lock_lock(&lk); uint64_t f = atomic_load(&g_done); if (g_ev && g_ev.signaledValue < f) g_ev.signaledValue = f; os_unfair_lock_unlock(&lk);
 }
 // Metal 4 reports a commit's error as MTL4CommandQueueErrorTimeout with no text, and the command buffer's own error underneath (NSUnderlyingErrorKey, NSMultipleUnderlyingErrorsKey):
-// every command buffer error in both #1326 logs has that shape. Only this domain counts: an innocent victim's IOGPU error underneath has code 5 too
-static int gpu_err_has(NSError *e, NSInteger code, int depth) {
+// every command buffer error in both #1326 logs has that shape. Match the domain as well as its code: an innocent victim's IOGPU error underneath has code 5 too.
+// The classic command queue used by keep-alive reports its own MTLCommandBufferErrorDomain.
+static int gpu_err_has(NSError *e, NSString *domain, NSInteger code, int depth) {
     if (!e || depth > 3) return 0;
-    if (e.code == code && [e.domain isEqualToString:MTL4CommandQueueErrorDomain]) return 1;
-    for (NSError *u in e.underlyingErrors) if (gpu_err_has(u, code, depth + 1)) return 1;
+    if (e.code == code && [e.domain isEqualToString:domain]) return 1;
+    for (NSError *u in e.underlyingErrors) if (gpu_err_has(u, domain, code, depth + 1)) return 1;
     return 0;
 }
+static int gpu_access_revoked(NSError *e) {
+    return gpu_err_has(e, MTL4CommandQueueErrorDomain, MTL4CommandQueueErrorAccessRevoked, 0) ||
+        gpu_err_has(e, MTLCommandBufferErrorDomain, MTLCommandBufferErrorAccessRevoked, 0);
+}
 static void gpu_lost_check(NSError *e, const char *where) {
-    if (!e || atomic_load(&g_gpu_lost) || !gpu_err_has(e, MTL4CommandQueueErrorAccessRevoked, 0) || atomic_exchange(&g_gpu_lost, 1)) return;
-    MLOG("[RED] GPU access revoked: the %s command buffer was ignored (fences back %llu of %llu); macOS runs none of this process's GPU work any more, so the game stops", where,
+    if (!e || atomic_load(&g_gpu_lost) || !gpu_access_revoked(e) || atomic_exchange(&g_gpu_lost, 1)) return;
+    MLOG("[RED] GPU access revoked: the %s command buffer was ignored (fences back %llu of %llu); Metal runs none of this process's GPU work any more, so the game stops", where,
          (unsigned long long)atomic_load(&g_done), (unsigned long long)atomic_load(&g_fence));
     gpu_lost_release();
     front_gpu_lost();
@@ -2591,6 +2596,10 @@ static void post_complete(uint64_t fence, uint64_t c0, uint64_t c1) {
     nvn_queue_gpu_progress();
 }
 static _Atomic int g_seg_inflight;   // main command buffers committed and not reported back yet (sub_cut)
+static _Atomic int g_present_discard;
+static id<MTLSharedEvent> g_snap_ev;
+static _Atomic uint64_t g_snap_v;   // latest snapshot copy; the event signals after it finishes
+#include "nvn_native30_idle.inc"
 static void rt_preserve_bound(void);
 static void queue_program_preserve(void);
 static void vc_ghost_commit(void);
@@ -2619,7 +2628,12 @@ uint64_t mtl_sub_commit(void) {
     NSArray<dispatch_block_t> *commit_blocks = [g_commit_blocks copy];
     MTL4CommitOptions *o = [MTL4CommitOptions new];
     atomic_fetch_add(&g_seg_inflight, 1);
-    [o addFeedbackHandler:^(id<MTL4CommitFeedback> f) { (void)f; atomic_fetch_sub(&g_seg_inflight, 1); for (dispatch_block_t block in commit_blocks) block(); }];
+    native30_idle_yield();
+    [o addFeedbackHandler:^(id<MTL4CommitFeedback> f) {
+        (void)f;
+        if (atomic_fetch_sub(&g_seg_inflight, 1) == 1) native30_idle_wake();
+        for (dispatch_block_t block in commit_blocks) block();
+    }];
     uint64_t gpu_f = atomic_load(&g_cur_frame); gpu_tag_begin(gpu_f);
     NSString *cctx = @(cctx_snap());
     cbs_list *cbs = cbs_take(); cbs_fly_put(fence, cbs);
@@ -3207,7 +3221,7 @@ static void up_retire(NSMutableArray *staging, NSMutableArray *views, unsigned s
             res_commit();
         }
         atomic_store(&g_up_alloc_busy[slot], 0);
-        atomic_fetch_sub(&g_up_pending, 1);
+        if (atomic_fetch_sub(&g_up_pending, 1) == 1) native30_idle_wake();
         up_wake();
 }
 static void up_flush(void) {
@@ -3241,6 +3255,7 @@ static void up_flush(void) {
     static int lost_at = -2; static uint64_t batch_n; if (lost_at == -2) { const char *e = getenv("DM_TEST_UP_LOST"); lost_at = e ? atoi(e) : -1; } int fake_lost = dsts.count && lost_at > 0 && (int)++batch_n == lost_at;
     MTL4CommitOptions *o = [MTL4CommitOptions new];
     atomic_fetch_add(&g_up_pending, 1);
+    native30_idle_yield();
     [o addFeedbackHandler:^(id<MTL4CommitFeedback> f) {
         if (f.error) { MLOG("[RED] upload command buffer execution error: %s", f.error.description.UTF8String); res_top_once(f.error); gpu_lost_check(f.error, "upload"); }
         if (f.error || fake_lost) {
@@ -16568,8 +16583,9 @@ static void sub_cut(void) {
     cbs_list *cbs = cbs_take(); uint64_t cbs_fence = g_fence + 1; cbs_fly_put(cbs_fence, cbs);
     MTL4CommitOptions *o = [MTL4CommitOptions new];
     atomic_fetch_add(&g_seg_inflight, 1);
+    native30_idle_yield();
     [o addFeedbackHandler:^(id<MTL4CommitFeedback> cb) {
-        atomic_fetch_sub(&g_seg_inflight, 1);
+        if (atomic_fetch_sub(&g_seg_inflight, 1) == 1) native30_idle_wake();
         gpu_tag_done(f, cb.GPUStartTime, cb.GPUEndTime);
         if (sc) { if (k < SEG_CLK_N) { atomic_store(&sc->t[k][0], gpu_s_guest_ns(cb.GPUStartTime)); atomic_store(&sc->t[k][1], gpu_s_guest_ns(cb.GPUEndTime)); } seg_clk_put(sc); }
         if (cb.error) { atomic_store(&g_last_commit_error, 1); static int k; if (k++ < 8) MLOG("[RED] segment command buffer execution error: %s", cb.error.description.UTF8String); res_top_once(cb.error); }
@@ -17691,7 +17707,6 @@ static void present_gpu_note(double s, int fx) {
     n[fx] = 0;
 }
 static double g_link_it_tin;   // Enqueue time of this source frame, owned by the active present thread / display-link callback
-static _Atomic int g_present_discard;
 int front_screen_max_fps(void);
 #include "nvn_fg.inc"
 static uint64_t g_present_serial;   // allocator fences count every image; game tickets count only real frames
@@ -17792,10 +17807,12 @@ static int present_now_image(const tex_t *t, double period, uint64_t frame, uint
         pthread_mutex_lock(&g_pq_mu); if (!generated && ticket > g_pq_done) g_pq_done = ticket; if (serial > g_present_alloc_done[alloc_i]) g_present_alloc_done[alloc_i] = serial; g_pq_inflight--; pthread_cond_broadcast(&g_pq_cv);
         NSArray *retire = nil; if (!g_pq_inflight && g_ext_retire.count) { retire = g_ext_retire; g_ext_retire = nil; }   // every present committed before their release has completed
         present_gpu_note(f.GPUEndTime - f.GPUStartTime, fx_kind); pthread_mutex_unlock(&g_pq_mu);
+        native30_idle_wake();
         if (retire) ext_retire(retire);
     }];
     id<MTL4CommandBuffer> buffers[] = {cb};
     pthread_mutex_lock(&g_pq_mu); g_pq_inflight++; pthread_mutex_unlock(&g_pq_mu);
+    native30_idle_yield();
     [g_q4 commit:buffers count:1 options:o];
     if (target_ts > 0) {
         static double leads[300], e2e[300];   // e2e: game enqueue -> system-scheduled present (including the time waiting in the queue for the display-link callback), the full span of input latency that our side can read
@@ -18075,6 +18092,9 @@ static void link_sync(void) {   // Called every frame by the game's present thre
 // waiting as-is for "the present queue to empty" would wait forever, the enter-background callback would not return, and the system would kill the process (the process disappears within 22 seconds after switching to another App).
 // These frames will not be seen anyway: discard them directly (accounted as dropped frames) and only wait for the one present already submitted to the GPU to finish.
 static void present_drop_for_suspend(void) {
+    atomic_store(&g_native30_idle_suspended, 1);
+    native30_idle_stop();
+    native30_idle_drain();
     fg_suspend();
     pthread_mutex_lock(&g_pq_mu);
     if (g_link_owns_layer) {
@@ -18121,7 +18141,22 @@ void mtl_link_pause(int on);
 // (hle_nvn.c nvnWindowAcquireTexture -> mtl_present_wait). Without clearing, the game cannot advance a single tick during those 2.5 seconds of waiting for the save, and the save is not written (the same pattern three times in player logs: 3 frames queued, 0 submits)
 void mtl_present_discard(int on) { atomic_store(&g_present_discard, on != 0); if (on) present_drop_for_suspend(); }
 static uint64_t present_enqueue(const tex_t *t, double period, const int crop[4], uint64_t ev_val, uint64_t *copy);
-uint64_t mtl_present(const tex_t *t, double period, const int crop[4], uint64_t *copy) { return present_enqueue(t, period, crop, 0, copy); }
+uint64_t mtl_present(const tex_t *t, double period, const int crop[4], uint64_t *copy) {
+    uint64_t ticket = present_enqueue(t, period, crop, 0, copy);
+    if (ticket && native30_idle_enabled()) {
+        // Only NVN game presents reach this hook; the replay queue serializes it.
+        static unsigned hold;
+        uint64_t frame = atomic_load(&g_cur_frame);
+        if (fg_source_limit() == 30 && mtl_fps_target() == 30 && !mtl_realtime_clock() && !mtl_framegen_enabled()) {
+            if (frame >= 8) native30_idle_frame(&hold, mtl_gpu_ms(frame - 8));
+            native30_idle_diag(frame);
+        } else {
+            hold = 0;
+            native30_idle_stop();
+        }
+    }
+    return ticket;
+}
 void *mtl_device(void) { mtl_init(); return (__bridge void *)g_dev; }
 void *mtl_device_classic(void) { g_classic_ok = 1; return mtl_device(); }   // the GL and Vulkan layers: a device without Metal 4 is taken too, with presents dropped (mtl_init)
 // An external producer's texture (the Vulkan layer's swapchain images, the GL layer's window surface): a serial the present path resolves (serial_put), resident for the Metal 4
@@ -18169,7 +18204,7 @@ extern _Atomic uint64_t dm_present_ns;   // hle_thread.c (DM_HITCH_DUMP); the NV
 // old: the slot's texture before the presented size or format last changed, resident until the slot's next use (snap_take)
 static struct { id<MTLTexture> tex, old; uint64_t serial; _Atomic uint64_t ticket, ev; } g_snap[SNAP_MAX];
 static id<MTL4CommandAllocator> g_snap_alloc[SNAP_MAX]; static id<MTL4CommandBuffer> g_snap_cb[SNAP_MAX];
-static id<MTLResidencySet> g_snap_res; static id<MTLSharedEvent> g_snap_ev; static uint64_t g_snap_v;
+static id<MTLResidencySet> g_snap_res;
 static _Atomic uint64_t g_snap_next, g_snap_cmt;   // g_snap_cmt: the last copy the encode thread has committed (its g_snap_v)
 static int g_snap_n = 2;
 int mtl_snap_on(void) {
@@ -18247,6 +18282,7 @@ static uint64_t snap_take(const tex_t *t) {
     [ce barrierAfterStages:MTLStageBlit beforeQueueStages:MTLStageAll visibilityOptions:resource_vis()];   // the game's next writes to its texture come after the copy
     [ce endEncoding]; [cb endCommandBuffer];
     uint64_t v = ++g_snap_v;
+    native30_idle_yield();
     if (rec_on() && g_rb_started) {   // a block of the encode thread's queue, behind the frame's work (see above)
         if (on_sub_thread()) rec_publish();   // what the submitting thread recorded outside a submission goes first
         rec_blk *b = rec_own_begin();
