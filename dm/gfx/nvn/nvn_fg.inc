@@ -118,10 +118,15 @@ int mtl_framegen_enabled(void) {
 int mtl_framegen_set(int on) {
     if (on && !mtl_framegen_supported()) return 0;
     int was = atomic_exchange(&g_fg_requested, on != 0);
+    if (on) native30_idle_stop();
     fg_queue_init(); dispatch_async(g_fg_wq, ^{ F.failed = 0; if (!on && was > 0) fg_leave("setting_off", 0); }); return 1;
 }
 void mtl_framegen_reset(void) { atomic_store(&g_fg_reset, 1); }
 void mtl_framegen_resume(void) {
+    if (atomic_load(&g_native30_idle_suspended)) {
+        native30_idle_stop();
+        atomic_store(&g_native30_idle_suspended, 0);
+    }
     if (!g_fg_wq) return;
     // Suspend resets cadence and history. Rearm startup on the same worker
     // before the resumed renderer queues frames, preserving the user's choice.

@@ -1,5 +1,5 @@
 // Display-link presents with the GPU held back: a present must not reset a command allocator whose own present has not run yet. Real Metal 4 queue and offscreen
-// drawables; the link's callback is called by hand (no window, no game files). Two cases: a dropped frame (two presents in flight) and one frame per tick (three in flight).
+// drawables; the link's callback is called by hand (no window, no game files). Two cases: a dropped frame and one frame per tick (three actual presents in flight).
 #include "../nvn/nvn_mtl.m"
 @interface FakeLinkUpdate : NSObject
 @property id<CAMetalDrawable> drawable;
@@ -47,11 +47,12 @@ static id<CAMetalDrawable> g_held; static dispatch_semaphore_t g_held_done;
 static void *held_tick(void *arg) { (void)arg; @autoreleasepool { tick_with(g_held); } dispatch_semaphore_signal(g_held_done); return NULL; }
 static void reuse_case(id<CAMetalDrawable> dr, id<MTLSharedEvent> gate, uint64_t open, uint64_t ticket, int inflight, uint64_t old) {
     char name[160];
+    uint64_t serial = g_present_serial + 1;   // Dropped tickets do not encode a command buffer or consume an allocator.
     g_held = dr; g_held_done = dispatch_semaphore_create(0); pthread_t th; pthread_create(&th, NULL, held_tick, NULL);
     int returned = dispatch_semaphore_wait(g_held_done, dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_MSEC)) == 0;
     pthread_mutex_lock(&g_pq_mu); int inside = g_pq_read == ticket && g_pq_inflight == inflight; pthread_mutex_unlock(&g_pq_mu);
     snprintf(name, sizeof name, "ticket %llu reached present_now", (unsigned long long)ticket); CHECK(name, returned || inside);
-    snprintf(name, sizeof name, "allocator %llu is not reused while ticket %llu is on the GPU", (unsigned long long)(ticket % 3), (unsigned long long)old); CHECK(name, !returned);
+    snprintf(name, sizeof name, "allocator %llu is not reused while ticket %llu is on the GPU", (unsigned long long)(serial % 3), (unsigned long long)old); CHECK(name, !returned);
     gate.signaledValue = open;
     if (!returned) returned = dispatch_semaphore_wait(g_held_done, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)) == 0;
     snprintf(name, sizeof name, "ticket %llu is presented once the GPU gets to ticket %llu", (unsigned long long)ticket, (unsigned long long)old); CHECK(name, returned);
@@ -86,7 +87,7 @@ int main(void) { @autoreleasepool {
     // Every callback moves g_pq_done to ticket - 1, so it is no guard for the allocator: the presents below wait only if the allocator's own completion is checked.
     // On main both cases fail the reuse check, and the earlier ticket's drawable reads back black (0 in every pixel): its command buffer was encoded again before the GPU ran it
 
-    // A dropped frame: ticket 1 on allocator 1, then 3 (2 dropped) on allocator 0, then 4 on allocator 1 again with two presents in flight
+    // A dropped frame: tickets 1, 3 (2 dropped), 4 consume allocators 1, 2, 0. Ticket 5 must wait for allocator 1, used by ticket 1.
     [g_q4 waitForEvent:gate value:1];   // nothing committed to the Metal 4 queue from here runs until the gate opens
     present_enqueue(&a, 1. / 60, NULL, 0, NULL);
     id<CAMetalDrawable> first = tick();
@@ -94,21 +95,22 @@ int main(void) { @autoreleasepool {
     tick();
     printf("after the drop: read %llu, done %llu, in flight %d\n", (unsigned long long)g_pq_read, (unsigned long long)g_pq_done, g_pq_inflight);
     CHECK("ticket 1 has not completed", g_pq_inflight == 2);
-    reuse_case(drawable(), gate, 1, 4, 2, 1);
+    tick(); present_enqueue(&c, 1. / 60, left_half, 0, NULL);
+    reuse_case(drawable(), gate, 1, 5, 3, 1);
     int bad = bad_pixels(first.texture, 50, 150); printf("ticket 1 drawable: %d of 64 pixels wrong\n", bad);
     CHECK("ticket 1 shows its own picture", bad == 0);
 
-    // One frame per tick, nothing dropped: tickets 5, 6 and 7 on allocators 2, 0 and 1, then 8 on allocator 2 again with three presents in flight
+    // One frame per tick, nothing dropped: tickets 6, 7 and 8 on allocators 2, 0 and 1, then 9 on allocator 2 again with three presents in flight
     [g_q4 waitForEvent:gate value:2];
-    present_enqueue(&a, 1. / 60, NULL, 0, NULL); id<CAMetalDrawable> fifth = tick();
+    present_enqueue(&a, 1. / 60, NULL, 0, NULL); id<CAMetalDrawable> sixth = tick();
     present_enqueue(&b, 1. / 60, NULL, 0, NULL); tick();
     present_enqueue(&b, 1. / 60, NULL, 0, NULL); tick();
     present_enqueue(&c, 1. / 60, left_half, 0, NULL);
     printf("one per tick: read %llu, done %llu, in flight %d, dropped %llu\n", (unsigned long long)g_pq_read, (unsigned long long)g_pq_done, g_pq_inflight, (unsigned long long)g_link_dropped);
-    CHECK("tickets 5-7 have not completed", g_pq_inflight == 3 && g_link_dropped == 1);
-    reuse_case(drawable(), gate, 2, 8, 3, 5);
+    CHECK("tickets 6-8 have not completed", g_pq_inflight == 3 && g_link_dropped == 1);
+    reuse_case(drawable(), gate, 2, 9, 3, 6);
     CHECK("no frame dropped after ticket 2", g_link_dropped == 1);
-    bad = bad_pixels(fifth.texture, 50, 150); printf("ticket 5 drawable: %d of 64 pixels wrong\n", bad);
-    CHECK("ticket 5 shows its own picture", bad == 0);
+    bad = bad_pixels(sixth.texture, 50, 150); printf("ticket 6 drawable: %d of 64 pixels wrong\n", bad);
+    CHECK("ticket 6 shows its own picture", bad == 0);
     printf("present allocators: %d checks, %d failed\n", checks, failed); return failed != 0;
 } }

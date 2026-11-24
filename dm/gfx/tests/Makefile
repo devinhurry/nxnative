@@ -243,10 +243,19 @@ t_present_alloc: t_present_alloc.m $(MTL_T_DEP)
 .PHONY: check_t_present_alloc
 check_t_present_alloc: t_present_alloc
 	MTL_DEBUG_LAYER=1 ./t_present_alloc
+t_present_queue: t_present_queue.m t_present_rescue_focus.c $(MTL_T_DEP)
+	clang $(CFLAGS) -fobjc-arc -o $@ t_present_queue.m t_present_rescue_focus.c $(MTL_T_SRC) $(FW)
+.PHONY: check_t_present_queue
+check_t_present_queue: t_present_queue
+	env -u DM_NATIVE_30_GPU_KEEPALIVE MTL_DEBUG_LAYER=1 ./t_present_queue
+	DM_NATIVE_30_GPU_KEEPALIVE=0 MTL_DEBUG_LAYER=1 ./t_present_queue --off
 # A GPU whose access macOS revoked (DM_TEST_GPU_LOST, set by the test): the front end told once, the game's waits released, presents stopped
 t_gpu_lost: t_gpu_lost.m t_gpu_lost_front.c $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_gpu_lost.m t_gpu_lost_front.c $(MTL_T_SRC) $(FW)
-check_t_gpu_lost: RUN_ENV = MTL_DEBUG_LAYER=1
+.PHONY: check_t_gpu_lost
+check_t_gpu_lost: t_gpu_lost
+	MTL_DEBUG_LAYER=1 ./t_gpu_lost
+	MTL_DEBUG_LAYER=1 ./t_gpu_lost --classic
 t_present_snap: t_present_snap.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_present_snap.m ../../host/crash.c ../../host/hle_bigstack.c t_host_stubs.c $(filter-out ../nvn/nvn_mtl.m,$(GFX)) $(FW)
 .PHONY: check_t_present_snap
