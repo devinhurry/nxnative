@@ -1,5 +1,7 @@
 # Notes for agents
 
+- TOTK backend work integrates on `totk-integration`; merge `touchnx-integration` updates and other TOTK backend changes there promptly, then update the pinned backend in TouchNX's `totk-native` worktree.
+
 - This repository runs Nintendo Switch games natively on Apple platforms: the game's own code runs, rewritten only where Apple's kernel requires it (`dm/tools/patch_nso.py`), on a host that answers Horizon's SVCs and the SDK's services (`dm/host`) and implements NVN, Vulkan and NVIDIA's desktop OpenGL on Metal (`dm/gfx/nvn`, `dm/gfx/vk`, `dm/gfx/gl`). Per-game builds, SDKs, status and validation are in the [games table](dm/games/README.md#games) and its linked game notes. [README.md](README.md) is the player-facing page (games, packing, playing); [docs/development.md](docs/development.md) has the internals, the script's options, building by hand, prewarm lists and power.
 - Where to start:
 
