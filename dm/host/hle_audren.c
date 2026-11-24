@@ -92,6 +92,9 @@ HLE_FORCE("_ZN2nn5audio30GetAudioRendererWorkBufferSizeERKNS0_22AudioRendererPar
 // One renderer's state. Only the render thread and the updates of this renderer touch it, apart from the one lock over all renderers' rendering (g_render_mu). Until 2026-11-04 this was one set of
 // globals: a second renderer's updates rendered catch-up frames into the first one's output queue, about 10% of its frames (Mario & Luigi: Brothership), and its own frames were never rendered otherwise
 enum { AR_MAX = 4, RENDER_MIN_NS = 4500000 };   // AR_MAX as g_rev below
+typedef struct {
+    uint64_t no_render_updates, paced_waits, render_lock_max, update_hold_max, startup_frames, recoveries;
+} ar_stats;
 typedef struct { void *ptr; uint64_t cap, size; } gbuf;       // same as the front of hle_audio.c's AudioOutBuffer
 typedef struct {
     void *handle[2];                         // AudioRendererHandle (renderer object, client state); handle[0] NULL: a free slot
@@ -102,6 +105,11 @@ typedef struct {
     int16_t frame[FRAME_MAX * 2]; int frame_n;   // the latest frame (stereo int16)
     _Atomic uint64_t frames, nonsilent, updates, renders;
     uint64_t last_r; int updated;            // for DM_AUDREN_TRACE
+    uint64_t applied_updates, last_applied_render, exec_update;
+    int steady, startup_pending, startup_n;
+    int16_t startup_pcm[FRAME_MAX * 2];       // one initialization-protection frame; played in order by render_main
+    ar_stats stats;
+    uint64_t rt_actual_ns; int rt_active, rt_known;
     // Serialize SDK rendering + event signalling against SDK Update + event clearing; wake the paced wait on Close.
     // Use dm_host_lock so a woken guest thread waiting here releases the scheduler's same-core handoff.
     pthread_mutex_t mu; pthread_cond_t cv;
@@ -129,7 +137,7 @@ static ar_t *ar_of_sys(uint8_t *sys) {
 
 // Adopted from upstream 2edad1828de2: interactive QoS alone does not bound this producer's wakeup delay.
 // Request a preemptible deadline after device setup; restore standard scheduling before device teardown.
-static int render_rt(void) {
+static int render_rt(ar_t *a) {
     const char *e = getenv("DM_AUDREN_RT");
     if (e && atoi(e) == 0) { LOG("audren: render thread keeps its default policy (DM_AUDREN_RT=0)"); return 0; }
     mach_timebase_info_data_t tb;
@@ -137,13 +145,23 @@ static int render_rt(void) {
     if (kr == KERN_SUCCESS) {
         thread_time_constraint_policy_data_t p = {
             .period = (uint32_t)(5000000ull * tb.denom / tb.numer),
-            .computation = (uint32_t)(1000000ull * tb.denom / tb.numer),
+            .computation = (uint32_t)(2500000ull * tb.denom / tb.numer),
             .constraint = (uint32_t)(5000000ull * tb.denom / tb.numer), .preemptible = TRUE
         };
         kr = thread_policy_set(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&p, THREAD_TIME_CONSTRAINT_POLICY_COUNT);
     }
-    LOG("%saudren: render thread time-constraint policy (requested period 5 ms, computation 1 ms) %s (%d)", kr == KERN_SUCCESS ? "" : "[RED] ",
-        kr == KERN_SUCCESS ? "set" : "failed to set; keeping default policy", (int)kr);
+    a->rt_active = kr == KERN_SUCCESS;
+    if (a->rt_active) {
+        thread_time_constraint_policy_data_t actual = {0};
+        mach_msg_type_number_t n = THREAD_TIME_CONSTRAINT_POLICY_COUNT; boolean_t def = FALSE;
+        kern_return_t got = thread_policy_get(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY,
+                                             (thread_policy_t)&actual, &n, &def);
+        a->rt_known = got == KERN_SUCCESS && !def;
+        if (a->rt_known) a->rt_actual_ns = (uint64_t)actual.computation * tb.numer / tb.denom;
+        LOG("audren: render deadline requested period 5 ms computation 2.5 ms constraint 5 ms; actual known %d period %.3f ms computation %.3f ms constraint %.3f ms",
+            a->rt_known, a->rt_known ? (double)actual.period * tb.numer / tb.denom / 1e6 : 0,
+            a->rt_actual_ns / 1e6, a->rt_known ? (double)actual.constraint * tb.numer / tb.denom / 1e6 : 0);
+    } else LOG("[RED] audren: render deadline requested period 5 ms computation 2.5 ms constraint 5 ms; failed (%d), keeping default policy", (int)kr);
     return kr == KERN_SUCCESS;
 }
 static void render_rt_end(void) {
@@ -160,36 +178,58 @@ static void render_main(void *arg) {
     dm_pcmout_start(out);
     LOG("audren: render thread %d started (%d buffers in flight, paced by the output)", ar_index(a), NBUF);
     uint64_t next_exec = 0;
-    int prefill = NBUF;
-    int rt = render_rt();
+    int prefill = NBUF, recovery = 0, window_blocks = 0;
+    int rt = render_rt(a);
     while (atomic_load(&a->open)) {
-        while (!nfree) {   // wait for the output to hand a block back (silent sink / sound card, one every 5 ms); it signals each release, so the thread sleeps until then (it used to poll every 1 ms)
-            gbuf *b = dm_pcmout_released(out);
-            if (b) { free_list[nfree++] = b; break; }
+        // Collect every returned block: taking only one made an empty output indistinguishable from normal playback.
+        while (atomic_load(&a->open)) {
+            gbuf *b;
+            while (nfree < NBUF && (b = dm_pcmout_released(out))) free_list[nfree++] = b;
+            if (nfree) break;
             dm_pcmout_wait(out, 10);
-            if (!atomic_load(&a->open)) break;
         }
         if (!nfree) break;
+        uint64_t wait_start = now_ns();
         dm_host_lock(&a->mu);
+        uint64_t waited = now_ns() - wait_start;
+        if (waited > a->stats.render_lock_max) a->stats.render_lock_max = waited;
+        if (!prefill && !recovery && nfree == NBUF) { recovery = 2; a->stats.recoveries++; }
         // Keep the output-driven refill count, but do not bunch renderer events after a late/burst callback (upstream 79f28b0).
-        while (!prefill && atomic_load(&a->open)) {
+        // After a drain, refill at most two blocks faster, and only when a new successful Update supplied fresh state.
+        while (!prefill && !a->startup_pending && atomic_load(&a->open)) {
             uint64_t now = now_ns();
-            if (now >= next_exec) break;
+            if (now >= next_exec || (recovery && a->applied_updates != a->exec_update)) break;
             struct timespec delay = { .tv_nsec = (long)(next_exec - now) };
+            a->stats.paced_waits++;
             pthread_cond_timedwait_relative_np(&a->cv, &a->mu, &delay);
         }
         if (!atomic_load(&a->open)) { pthread_mutex_unlock(&a->mu); break; }
-        next_exec = now_ns() + RENDER_MIN_NS;
-        a->frame_n = 0;
-        exec(a->handle[0], a->handle[1]);   // generate commands, process, then signal the game's renderer event
-        int got = a->frame_n;
-        pthread_mutex_unlock(&a->mu);
+        const int16_t *src; int got;
+        if (a->startup_pending) {
+            src = a->startup_pcm; got = a->startup_n; a->startup_pending = 0;
+        } else {
+            next_exec = now_ns() + RENDER_MIN_NS;
+            a->frame_n = 0;
+            exec(a->handle[0], a->handle[1]);   // generate commands, process, then signal the game's renderer event
+            if (a->applied_updates) a->steady = 1;
+            a->exec_update = a->applied_updates;
+            src = a->frame; got = a->frame_n;
+        }
         int n = got ? got : 240;
         gbuf *b = free_list[--nfree];
-        if (got) memcpy(b->ptr, a->frame, (size_t)n * 4); else memset(b->ptr, 0, (size_t)n * 4);
+        if (got) memcpy(b->ptr, src, (size_t)n * 4); else memset(b->ptr, 0, (size_t)n * 4);
         b->size = (uint64_t)n * 4;
+        int report = ++window_blocks == 2000;
+        ar_stats snapshot = {0};
+        if (report) { snapshot = a->stats; memset(&a->stats, 0, sizeof a->stats); window_blocks = 0; }
+        pthread_mutex_unlock(&a->mu);
         if (!dm_pcmout_append(out, b)) free_list[nfree++] = b;
         else if (prefill) prefill--;
+        else if (recovery) recovery--;
+        if (report) LOG("audren #%d last 2000 output blocks: no-render updates %llu, paced waits %llu, render-lock max %.3f ms, update-hold max %.3f ms, startup frames %llu, recoveries %llu; RT requested 2.5 ms actual %.3f ms (active %d known %d)",
+            ar_index(a), (unsigned long long)snapshot.no_render_updates, (unsigned long long)snapshot.paced_waits,
+            snapshot.render_lock_max / 1e6, snapshot.update_hold_max / 1e6, (unsigned long long)snapshot.startup_frames,
+            (unsigned long long)snapshot.recoveries, a->rt_actual_ns / 1e6, a->rt_active, a->rt_known);
     }
     if (rt) render_rt_end();
     dm_pcmout_close(out);   // the output would otherwise keep its sound card callback or silent sink running and hold one of the AudioOut slots after the renderer closes
@@ -594,7 +634,7 @@ HLE_FORCE("_ZN2nn5audio6server17AudioRenderSystem29ExecuteAudioRendererRendering
 // Upstream 67e6714: Horizon Update clears its renderer event before returning RES_OK. The CPU/manual open
 // creates a separate event, so the SDK update otherwise clears an unused internal event while the game's wait
 // sees stale work. Serialize SDK Update + clearing the actual event against exec() + SignalSystemEvent.
-// This restores the service ordering without synchronous catch-up rendering or waiting for output queue space.
+// This restores service ordering without steady-state catch-up or output-queue waits; startup protection below handles updates without event waits.
 HLE_FORCE("_ZN2nn5audio6server17AudioRenderSystem6UpdateEPvmS3_mPKvm", "renderer update: run the SDK update and clear the renderer event atomically against rendering, as Horizon's service does",
           Result, h_ars_Update, uint8_t *sys, void *o, size_t on, void *p, size_t pn, const void *in, size_t inn) {
     static Result (*orig)(void *, void *, size_t, void *, size_t, const void *, size_t); if (!orig) orig = gsym("_ZN2nn5audio6server17AudioRenderSystem6UpdateEPvmS3_mPKvm");
@@ -602,9 +642,22 @@ HLE_FORCE("_ZN2nn5audio6server17AudioRenderSystem6UpdateEPvmS3_mPKvm", "renderer
     if (!a) return orig(sys, o, on, p, pn, in, inn);
     uint64_t u = atomic_fetch_add(&a->updates, 1) + 1;
     dm_host_lock(&a->mu);
+    uint64_t hold_start = now_ns();
     uint64_t r = atomic_load(&a->renders);
+    if (a->updated && r == a->last_r) a->stats.no_render_updates++;
+    // Event clearing cannot protect a driver that performs its first two updates without waiting.
+    // Protect only this initial pending update, including empty renders before Update #1; retain its PCM for ordered playback.
+    if (!a->steady && a->applied_updates && r == a->last_applied_render) {
+        Result boot = render_once(a, sys, a->startup_pcm, &a->startup_n);
+        if (boot == RES_OK) { a->startup_pending = 1; a->steady = 1; a->stats.startup_frames++; r = atomic_load(&a->renders); }
+    }
     if (u < 200 && getenv("DM_AUDREN_TRACE")) LOG("audren update #%llu t=%.3f ms, %llu frames rendered since the last update", (unsigned long long)u, now_ns() / 1e6, (unsigned long long)(r - (a->updated ? a->last_r : 0)));
     Result res = orig(sys, o, on, p, pn, in, inn);
+    if (res == RES_OK) {
+        a->applied_updates++;
+        a->last_applied_render = atomic_load(&a->renders);
+        pthread_cond_broadcast(&a->cv);   // a drained output can resume early only after this fresh update
+    }
     if (res == RES_OK && a->ev) {
         if (a->ev_kernel) hle_clear_system_event(a->ev);
         else {
@@ -614,6 +667,8 @@ HLE_FORCE("_ZN2nn5audio6server17AudioRenderSystem6UpdateEPvmS3_mPKvm", "renderer
         }
     }
     a->last_r = r; a->updated = 1;
+    uint64_t held = now_ns() - hold_start;
+    if (held > a->stats.update_hold_max) a->stats.update_hold_max = held;
     pthread_mutex_unlock(&a->mu);
     return res;
 }

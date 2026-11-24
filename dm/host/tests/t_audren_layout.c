@@ -11,18 +11,37 @@
 #include <unistd.h>
 static int wait_for_render(pthread_cond_t *, pthread_mutex_t *, const struct timespec *);
 static kern_return_t render_policy_set(thread_t, thread_policy_flavor_t, thread_policy_t, mach_msg_type_number_t);
+static kern_return_t render_policy_get(thread_t, thread_policy_flavor_t, thread_policy_t, mach_msg_type_number_t *, boolean_t *);
 #define pthread_cond_timedwait_relative_np wait_for_render
 #define thread_policy_set render_policy_set
+#define thread_policy_get render_policy_get
 #include "../hle_audren.c"
 #undef thread_policy_set
+#undef thread_policy_get
 #undef pthread_cond_timedwait_relative_np
 
 // Synthetic render loops must not promote the test runner. One short-lived pthread below exercises the real Mach boundary.
-static struct { int live, started, active, fail, sets, resets; } policy;
+static struct { int live, started, active, fail, fail_get, sets, resets; } policy;
+static kern_return_t render_policy_get(thread_t thread, thread_policy_flavor_t flavor, thread_policy_t p, mach_msg_type_number_t *n, boolean_t *def) {
+    if (policy.live) return thread_policy_get(thread, flavor, p, n, def);
+    assert(policy.active && flavor == THREAD_TIME_CONSTRAINT_POLICY && *n == THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+    if (policy.fail_get) return KERN_FAILURE;
+    mach_timebase_info_data_t tb; assert(mach_timebase_info(&tb) == KERN_SUCCESS);
+    thread_time_constraint_policy_data_t *actual = (void *)p;
+    actual->period = actual->constraint = (uint32_t)(5000000ull * tb.denom / tb.numer);
+    actual->computation = (uint32_t)(2500000ull * tb.denom / tb.numer); actual->preemptible = TRUE;
+    *def = FALSE; return KERN_SUCCESS;
+}
 static kern_return_t render_policy_set(thread_t thread, thread_policy_flavor_t flavor, thread_policy_t p, mach_msg_type_number_t n) {
     if (policy.live) return thread_policy_set(thread, flavor, p, n);
     assert(policy.started);
     if (flavor == THREAD_TIME_CONSTRAINT_POLICY) {
+        assert(n == THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+        thread_time_constraint_policy_data_t *requested = (void *)p;
+        mach_timebase_info_data_t tb; assert(mach_timebase_info(&tb) == KERN_SUCCESS);
+        assert((uint64_t)requested->period * tb.numer / tb.denom == 5000000);
+        assert((uint64_t)requested->computation * tb.numer / tb.denom == 2500000);
+        assert(requested->constraint == requested->period && requested->preemptible);
         assert(!policy.active); policy.sets++;
         if (policy.fail) return KERN_FAILURE;
         policy.active = 1;
@@ -39,6 +58,10 @@ static struct {
     int rate, device_frames, callbacks, played, released, appended, rendered, bursts, waits, target_blocks;
     Result update_rc;
     int ev_clears;
+    int init_check, init_pending, init_lost, initialized;
+    uint64_t update_delay;
+    int stall_at, stalled, missing, suppress_updates;
+    uint64_t stall_end, refill_done;
     void *last_cleared_ev;
     uint64_t now, last_exec, min_spacing;
     gbuf *output[NBUF];
@@ -83,6 +106,10 @@ int dm_pcmout_append(void *k, void *b) {
             assert(pcm[0] == expected && pcm[1] == -expected);
         assert(pace.appended - pace.released < NBUF);
         pace.output[pace.appended++ % NBUF] = b;
+        if (pace.stalled) {
+            if (!pace.refill_done && pace.appended * SAMPLES - pace.played >= 2 * SAMPLES) pace.refill_done = pace.now;
+            if (!pace.suppress_updates) assert(h_ars_Update(pace_sys, NULL, 0, NULL, 0, NULL, 0) == RES_OK);
+        }
         int limit = pace.target_blocks ? pace.target_blocks : PACE_BLOCKS;
         if (pace.appended == limit) {
             atomic_store(&t_ar->open, 0);
@@ -110,14 +137,24 @@ static uint64_t next_callback(void) { return (uint64_t)(pace.callbacks + 1) * pa
 static void pace_advance(uint64_t until) {
     while (next_callback() <= until) {
         int before = pace.played / SAMPLES;
-        pace.played = (int)((uint64_t)++pace.callbacks * pace.device_frames * 48000 / pace.rate);
-        assert(pace.played <= pace.appended * SAMPLES);   // no zero-fill needed
+        int demand = (int)((uint64_t)++pace.callbacks * pace.device_frames * 48000 / pace.rate) - pace.missing;
+        if (demand > pace.appended * SAMPLES) {
+            assert(pace.stalled);   // only the deliberate stall may zero-fill
+            pace.missing += demand - pace.appended * SAMPLES;
+            demand = pace.appended * SAMPLES;
+        }
+        pace.played = demand;
         if (pace.played / SAMPLES - before > 1) pace.bursts++;
     }
     pace.now = until;
 }
 void *dm_pcmout_released(void *k) {
     (void)k;
+    if (pace.stall_at && !pace.stalled && pace.appended >= pace.stall_at) {
+        pace.stalled = 1;
+        pace_advance(pace.now + 40000000);
+        pace.stall_end = pace.now;
+    }
     return pace.released < pace.played / SAMPLES ? pace.output[pace.released++ % NBUF] : NULL;
 }
 void dm_pcmout_wait(void *k, int ms) {
@@ -333,7 +370,8 @@ static void test_renderer_blocks(void) {
 static void *policy_thread(void *unused) {
     (void)unused;
     assert(!pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0));
-    assert(render_rt());
+    ar_t a = {0};
+    assert(render_rt(&a) && a.rt_active && a.rt_known && a.rt_actual_ns >= 2500000);
     thread_time_constraint_policy_data_t p = {0};
     mach_msg_type_number_t n = THREAD_TIME_CONSTRAINT_POLICY_COUNT; boolean_t def = FALSE;
     thread_t self = pthread_mach_thread_np(pthread_self());
@@ -342,7 +380,7 @@ static void *policy_thread(void *unused) {
     fprintf(stderr, "Mach audio policy readback: period %u computation %u constraint %u, timebase %u/%u\n", p.period, p.computation, p.constraint, tb.numer, tb.denom);
     assert((uint64_t)p.period * tb.numer / tb.denom == 5000000);
     // XNU may raise computation to half the constraint; the accepted budget is not guaranteed to equal the request.
-    assert((uint64_t)p.computation * tb.numer / tb.denom >= 1000000 && p.computation <= p.constraint);
+    assert((uint64_t)p.computation * tb.numer / tb.denom >= 2500000 && p.computation <= p.constraint);
     assert(p.constraint == p.period && p.preemptible);
     render_rt_end();
     thread_extended_policy_data_t extended = {0}; n = THREAD_EXTENDED_POLICY_COUNT; def = FALSE;
@@ -361,6 +399,9 @@ static void test_render_policy(void) {
     policy.live = 1;
     pthread_t thread; assert(!pthread_create(&thread, NULL, policy_thread, NULL));
     assert(!pthread_join(thread, NULL)); policy.live = 0;
+    ar_t a = {0}; policy.started = 1; policy.fail_get = 1;
+    assert(render_rt(&a) && a.rt_active && !a.rt_known && !a.rt_actual_ns);
+    render_rt_end(); policy.fail_get = 0; policy.started = 0;
     puts("audren scheduling: real worker policy set/read/reset; setup/teardown outside real-time; PCM preserved on rejection and opt-out");
 }
 
@@ -416,6 +457,7 @@ static void test_update_lock(void) {
 
 static span_t pace_generate(void *sys, void *cl, size_t n) {
     (void)sys; (void)cl; (void)n;
+    if (pace.init_pending) { pace.initialized++; pace.init_pending = 0; }
     if (dq.on) {
         pthread_mutex_lock(&dq.mu);
         assert(dq.queued > 0);
@@ -433,6 +475,12 @@ static void pace_setup(void *p, const void *cl, size_t n) { (void)p; (void)cl; (
 static Result pace_update(void *sys, void *o, size_t on, void *p, size_t pn, const void *in, size_t inn) {
     (void)sys; (void)on; (void)p; (void)pn; (void)inn;
     if (pace.update_rc) return pace.update_rc;
+    if (pace.update_delay) pace.now += pace.update_delay;
+    if (pace.init_check) {
+        // Model the SDK's NeedsInit field: a second update overwrites it before GenerateCommand consumes it.
+        if (pace.init_pending) pace.init_lost++;
+        pace.init_pending = in != NULL;
+    }
     if (dq.on) {
         pthread_mutex_lock(&dq.mu);
         if (in) dq.queued++;
@@ -446,7 +494,10 @@ static void pace_exec(void *sys, void *state) {
     (void)state;
     if (pace.appended >= NBUF) {
         uint64_t gap = pace.now - pace.last_exec;
-        assert(gap >= 4500000);
+        if (gap < 4500000) {
+            assert(pace.stalled && t_ar->applied_updates != t_ar->exec_update);
+            assert(pace.appended * SAMPLES - pace.played < 2 * SAMPLES);
+        }
         if (gap < pace.min_spacing) pace.min_spacing = gap;
     }
     pace.last_exec = pace.now;
@@ -499,6 +550,7 @@ static void test_update_clears_event(void) {
     pace.rate = 48000;
     *(int32_t *)(pace_sys + 0x48) = *(int32_t *)(pace_sys + 0x4c) = 1;
     a->sys = pace_sys; a->handle[0] = pace_sys; a->ev = &ev_storage; a->ev_kernel = 1;
+    a->steady = 1;   // steady-state polls; first-update initialization is checked separately below
     pthread_mutex_init(&a->mu, NULL); pthread_cond_init(&a->cv, NULL);
     atomic_store(&a->open, 1);
 
@@ -511,8 +563,11 @@ static void test_update_clears_event(void) {
     pace.update_rc = RES_OK;
 
     a->ev_kernel = 0;   // SDK-owned local CPU-auto event uses the SDK clear, not a kernel binding.
+    pace.update_delay = 1700000;
     assert(h_ars_Update(pace_sys, NULL, 0, NULL, 0, NULL, 0) == RES_OK);
     assert(pace.ev_clears == 13 && pace.last_cleared_ev == &ev_storage);
+    assert(a->stats.update_hold_max == 1700000 && a->stats.no_render_updates >= 12);
+    pace.update_delay = 0;
 
     a->ev = NULL;
     assert(h_ars_Update(pace_sys, NULL, 0, NULL, 0, NULL, 0) == RES_OK);
@@ -559,6 +614,7 @@ static void test_event_paced_driver(int rate, int frames) {
     pthread_mutex_init(&dq.mu, NULL); pthread_cond_init(&dq.ev_cv, NULL); pthread_cond_init(&dq.sleep_cv, NULL);
     *(int32_t *)(pace_sys + 0x48) = *(int32_t *)(pace_sys + 0x4c) = 1;
     a->sys = pace_sys; a->handle[0] = pace_sys; a->ev = &ev_storage; a->ev_kernel = 1;
+    a->steady = 1;   // this driver fixture checks established event pacing, not bootstrap
     pthread_mutex_init(&a->mu, NULL); pthread_cond_init(&a->cv, NULL);
     atomic_store(&a->open, 1);
 
@@ -582,6 +638,32 @@ static void test_event_paced_driver(int rate, int frames) {
     memset(&pace, 0, sizeof pace);
     memset(a, 0, sizeof *a);
 }
+static void test_startup_initialization(void) {
+    for (int prefetched = 0; prefetched <= NBUF; prefetched += NBUF) {
+        ar_t *a = &g_ar[0];
+        memset(a, 0, sizeof *a); memset(&pace, 0, sizeof pace);
+        pace.rate = 48000; pace.device_frames = 240; pace.target_blocks = NBUF; pace.init_check = 1;
+        *(int32_t *)(pace_sys + 0x48) = *(int32_t *)(pace_sys + 0x4c) = 1;
+        a->sys = pace_sys; a->handle[0] = pace_sys;
+        atomic_store(&a->renders, prefetched);   // empty prefill before the first update must not disable initialization protection
+        atomic_store(&a->open, 1);
+        pthread_mutex_init(&a->mu, NULL); pthread_cond_init(&a->cv, NULL);
+        lock_plt_stub(); lock_got = (void *)pace_noop;
+        lock_fn(F_IMPL, 0x2d0, F_STUB);
+        lock_syms[0] = (typeof(lock_syms[0])){"_ZN2nn2os12SdkMutexType4LockEv", (void *)pace_noop};
+        lock_syms[1] = (typeof(lock_syms[0])){"_ZN2nn5audio6server17AudioRenderSystem10UpdateImplEPvmS3_mPKvm", lock_code + F_IMPL};
+        assert(h_ars_Update(pace_sys, NULL, 0, NULL, 0, (void *)1, 0) == RES_OK);
+        // Deliberately do not wait on an event between these calls.
+        assert(h_ars_Update(pace_sys, NULL, 0, NULL, 0, NULL, 0) == RES_OK);
+        fprintf(stderr, "startup without event wait (prefill %d): initialized %d, lost %d\n", prefetched, pace.initialized, pace.init_lost);
+        assert(pace.initialized == 1 && pace.init_lost == 0);
+        render_main(a);   // guarded PCM must be played before newly generated PCM, not discarded
+        assert(pace.appended == NBUF && pace.rendered == NBUF);
+        pthread_cond_destroy(&a->cv); pthread_mutex_destroy(&a->mu);
+        memset(&pace, 0, sizeof pace); memset(a, 0, sizeof *a);
+    }
+}
+
 static void test_render_cadence(int rate, int frames) {
     ar_t *a = &g_ar[0];
     uint8_t ev_storage = 0;
@@ -605,7 +687,30 @@ static void test_render_cadence(int rate, int frames) {
     memset(&pace, 0, sizeof pace);
 }
 
+static void test_drain_recovery(int supply_updates) {
+    ar_t *a = &g_ar[0];
+    memset(a, 0, sizeof *a); memset(&pace, 0, sizeof pace);
+    pace.rate = 48000; pace.device_frames = 240; pace.target_blocks = 128;
+    pace.stall_at = 32; pace.suppress_updates = !supply_updates; pace.min_spacing = UINT64_MAX;
+    *(int32_t *)(pace_sys + 0x48) = *(int32_t *)(pace_sys + 0x4c) = 1;
+    a->sys = pace_sys; a->handle[0] = pace_sys;
+    pthread_mutex_init(&a->mu, NULL); pthread_cond_init(&a->cv, NULL);
+    atomic_store(&a->open, 1);
+    render_main(a);
+    assert(pace.stalled && pace.missing > 0 && a->stats.recoveries == 1);
+    assert(pace.refill_done >= pace.stall_end);
+    if (supply_updates) assert(pace.refill_done - pace.stall_end < 5000000);
+    else assert(pace.min_spacing >= 4500000);   // no rapid rendering of the same unacknowledged update
+    printf("audren drain recovery: new updates %d, ordered PCM, two blocks restored in %.3f ms\n", supply_updates, (pace.refill_done - pace.stall_end) / 1e6);
+    pthread_cond_destroy(&a->cv); pthread_mutex_destroy(&a->mu);
+    memset(&pace, 0, sizeof pace); memset(a, 0, sizeof *a);
+}
+
 int main(int argc, char **argv) {
+    if (argc == 2 && !strcmp(argv[1], "--startup")) { test_startup_initialization(); return 0; }
+    if (argc == 2 && !strcmp(argv[1], "--recovery")) {
+        test_render_cadence(44100, 256); test_drain_recovery(1); test_drain_recovery(0); return 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--cadence")) {
         test_render_cadence(44100, 256);
         test_render_cadence(48000, 512);
@@ -638,6 +743,8 @@ int main(int argc, char **argv) {
     test_update_clears_event();
     test_event_paced_driver(48000, 240);
     test_event_paced_driver(48000, 512);
+    test_startup_initialization();
+    test_drain_recovery(1); test_drain_recovery(0);
     puts("audren layout: update lock read off Update or UpdateImpl, renderers' own blocks, bounded histograms, malformed-list rejection, unaligned and truncated headers, SDK 4/5/6/16/21 stereo PCM and empty/incomplete startup recovery passed");
     return 0;
 }

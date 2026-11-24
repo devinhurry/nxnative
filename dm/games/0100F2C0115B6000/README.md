@@ -172,3 +172,13 @@ for both iOS profiles. The environment-switch audit has the same pre-existing
 failures as backend `27e9670b`, with no new finding. No Mac gameplay was run for
 this iOS task. iPhone playback, thermal behaviour and confirmation that these
 defects caused the reported distortion remain unverified. No shader inputs or game executable patches change.
+
+
+Audio review follow-up: an adversarial SDK NeedsInit fixture fails on `e5948df9`
+when two startup updates run without an event wait. Protect that initial state
+with one ordered PCM frame, including renderers whose empty prefill ran first.
+Normal polling stays asynchronous. A completely drained output now collects all
+returned buffers and restores up to two blocks early only after new successful
+updates. Request 2.5 ms computation within the 5 ms deadline and log the policy
+actually read back. Per-window lock/update/refill diagnostics support the next
+iPhone check; no phone audio acceptance is implied.

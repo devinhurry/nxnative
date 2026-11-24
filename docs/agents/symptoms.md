@@ -520,6 +520,7 @@ One line per symptom in the [subsystem references](../reference/): what you see 
 - the light limiter crashed on a null state pointer (`ApplyLightLimiterEffect`, `sdk+0x228494`). → [At least one rendered frame between two updates](../reference/audio.md#at-least-one-rendered-frame-between-two-updates)
 - the sound runs about 50 times faster than the output; the loop runs 11,000 updates a second on one core. → [A sound driver that never waits on the renderer event](../reference/audio.md#a-sound-driver-that-never-waits-on-the-renderer-event)
 - normal gameplay audio crackles despite a full output queue and fast mixing; alternatively a delayed producer can drain the queue despite fast mixing. → [Audio timing under load](../reference/audio.md#audio-timing-under-load)
+- a driver can overwrite an effect's pending initialization with two startup updates that do not wait on the event. After an output drain, fixed 4.5 ms pacing restores queue depth slowly. → [Startup initialization and recovery after a drained output](../reference/audio.md#startup-initialization-and-recovery-after-a-drained-output)
 
 ## Frame rate
 
