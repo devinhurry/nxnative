@@ -1,6 +1,6 @@
 # Notes for agents
 
-- This repository runs Nintendo Switch games natively on Apple platforms: the game's own code runs, rewritten only where Apple's kernel requires it (`dm/tools/patch_nso.py`), on a host that answers Horizon's SVCs and the SDK's services (`dm/host`) and implements NVN, Vulkan and NVIDIA's desktop OpenGL on Metal (`dm/gfx/nvn`, `dm/gfx/vk`, `dm/gfx/gl`). Every game in the [games table](dm/games/README.md#games) is playable, tested on the Mac or the iPhone (a Mac gameplay test is enough to count); the table lists each with its build, SDK, engine and graphics API, and links its note, `dm/games/<id>/README.md`: what its profile needs and why, what was found on it, how to drive it on the Mac, what is open. [README.md](README.md) is the player-facing page (games, packing, playing); [docs/development.md](docs/development.md) has the internals, the script's options, building by hand, prewarm lists and power.
+- This repository runs Nintendo Switch games natively on Apple platforms: the game's own code runs, rewritten only where Apple's kernel requires it (`dm/tools/patch_nso.py`), on a host that answers Horizon's SVCs and the SDK's services (`dm/host`) and implements NVN, Vulkan and NVIDIA's desktop OpenGL on Metal (`dm/gfx/nvn`, `dm/gfx/vk`, `dm/gfx/gl`). Per-game builds, SDKs, status and validation are in the [games table](dm/games/README.md#games) and its linked game notes. [README.md](README.md) is the player-facing page (games, packing, playing); [docs/development.md](docs/development.md) has the internals, the script's options, building by hand, prewarm lists and power.
 - Where to start:
 
   | Task | Read first |
@@ -30,3 +30,5 @@
 - A change to the chain, host or tools runs `scripts/regress.py check --games` on the five local games it is most likely to reach (`regress.py impact` helps): more only when truly needed, fewer when its reach is narrow and clear. Its report, naming the games and why, goes into the PR ([06-dev-loop.md](docs/agents/06-dev-loop.md)).
 - iOS builds are unsigned IPAs that the user sideloads and tests; diagnostics come back as the app's `Documents/log.txt`. Do not sign or install builds on the user's devices.
 - Commit completed changes automatically. For small related follow-ups, use `git commit --amend` only when HEAD is unpushed and contains the same work; otherwise create a new commit. The message opens with `area/component: summary` ([Commit messages](docs/agents/06-dev-loop.md#8-commit-messages)), and a change a front end must act on takes a `Front-ends:` line.
+
+- TouchNX TOTK uses `totk-integration`: merge local `touchnx-integration` and completed current TOTK backend branches into it before starting or delivering TOTK work.
